@@ -186,8 +186,8 @@ def is_genuine_user_turn(event: dict[str, Any]) -> bool:
 
     A chip (the summary request itself, a nudge), a hidden framework line (``/welcome``), or a
     permission verdict is not one. The handoff prompt is, although it renders as a chip: it
-    carries the message the user switched with and the pointer to the summary, so a successor
-    that has only received it has context to hand on.
+    carries the message the user switched with and the summary, so a successor that has only
+    received it has context to hand on.
     """
     if event.get("type") != "user_message":
         return False

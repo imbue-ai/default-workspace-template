@@ -1604,10 +1604,19 @@ describe("agent switches", () => {
     expect(opening.user_event).toBeNull();
     expect(opening.items.map((i) => i.kind)).toEqual([]);
     expect(opening.trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
-    // A fresh start's switch made the node itself; the prompt still lands on it. Any other chip
-    // after a switch is the successor's own.
-    const fresh = buildSections([agentSwitch("t4", "sw1"), prompt], new Map(), true);
+    // A fresh start's switch made the node itself; the prompt still lands on it, past the hidden
+    // lines a model pick sends the successor first. A reply before it means the successor's own
+    // turn has begun, and a later chip is the successor's own.
+    const modelPick = userMsg("t4a", "/model claude-opus-5", "u-m", { display: "hidden" });
+    const pickOutput = userMsg("t4b", "<local-command-stdout>Set model</local-command-stdout>", "u-o", {
+      display: "hidden",
+    });
+    const fresh = buildSections([agentSwitch("t4", "sw1"), modelPick, pickOutput, prompt], new Map(), true);
     expect(handoffNodeOf(fresh[0].items[0]).prompt?.event_id).toBe("u-p");
+    expect(fresh[1].items).toEqual([]);
+    const replied = buildSections([agentSwitch("t4", "sw1"), assistantText("t5", "hi"), prompt], new Map(), true);
+    expect(handoffNodeOf(replied[0].items[0]).prompt).toBeNull();
+    expect(replied[1].items.map((i) => i.kind)).toEqual(["chip"]);
     const other = buildSections([agentSwitch("t4", "sw1"), chip], new Map(), true);
     expect(handoffNodeOf(other[0].items[0]).prompt).toBeNull();
     expect(other[1].items.map((i) => i.kind)).toEqual(["chip"]);

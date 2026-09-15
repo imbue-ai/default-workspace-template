@@ -482,12 +482,11 @@ export function buildSections(
     return section;
   };
 
-  // The node a switch just closed, until the successor's first event: the handoff prompt lands
-  // on it rather than in the successor's section.
+  // The node a switch just closed, until the successor's first turn-making event: the handoff
+  // prompt lands on it rather than in the successor's section. Hidden lines the successor's
+  // setup sends before the prompt (a model pick's slash commands) leave it armed.
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
-    const switched = lastSwitched;
-    lastSwitched = null;
     if (e.type === "agent_switch") {
       // The chat moved to another agent. The switch closes the handoff node the summary
       // request opened (the node stays where the request was, at the end of the retiring
@@ -508,13 +507,15 @@ export function buildSections(
       continue;
     }
     if (e.type === "user_message") {
-      if (switched !== null && isHandoffPromptChip(e)) {
-        // The successor's first message: the prompt the switch started it with. It belongs to
-        // the handoff, so the node shows it and the successor's section opens on its reply.
-        switched.prompt = e;
+      if (lastSwitched !== null && isHandoffPromptChip(e)) {
+        // The prompt the switch started the successor with: it belongs to the handoff, so the
+        // node shows it and the successor's section opens on its reply.
+        lastSwitched.prompt = e;
+        lastSwitched = null;
         continue;
       }
       if (isHandoffSummaryRequest(e)) {
+        lastSwitched = null;
         // The chat app asked the agent for its handoff summary: the node opens here and takes
         // the agent's answer, so the pause reads as one thing rather than a chip and a write.
         if (current === null) current = ensureSection(null, "section-pre");
@@ -540,6 +541,7 @@ export function buildSections(
       // break-with-no-bubble applies either way.
       const resolution = resolutionOf(e);
       if (resolution !== null) {
+        lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
         carryover = current === null ? [] : openStepsAtEnd(current);
@@ -565,11 +567,13 @@ export function buildSections(
 
       // Real user turn: close the prior section (carrying open steps) and open
       // a new one.
+      lastSwitched = null;
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
       continue;
     }
     if (e.type === "assistant_message") {
+      lastSwitched = null;
       if (current === null) current = ensureSection(null, "section-pre");
       if (current.open_handoff !== null) {
         // The retiring agent's answer to the summary request, whole: the node shows it.
