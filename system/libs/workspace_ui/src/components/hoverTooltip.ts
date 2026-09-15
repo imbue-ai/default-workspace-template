@@ -304,7 +304,7 @@ const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
  * ``text`` is ``null`` for no tooltip; pass that rather than swapping these
  * attrs for ``{}``. Mithril patches the same element across redraws and runs
  * only the current vnode's hooks, so attrs that disappear leave the listeners,
- * and the text they were created with, on the element.
+ * and the last text they took, on the element.
  */
 export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
   return {
