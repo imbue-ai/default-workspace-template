@@ -507,8 +507,12 @@ LANE_OPENROUTER = Lane(
         PasteMethod(
             id="api_key",
             label="Paste your OpenRouter key",
-            description="From openrouter.ai/keys.",
+            # Where the key comes from is the whole of what there is to say here, and
+            # `signup_url` is how a lane says that -- as a link the panel can render, rather
+            # than as an address in prose that a reader has to retype into a browser.
+            description="",
             sink=PasteSink.PI_AUTH_JSON,
+            signup_url="https://openrouter.ai/keys",
         ),
     ),
     key_providers=(

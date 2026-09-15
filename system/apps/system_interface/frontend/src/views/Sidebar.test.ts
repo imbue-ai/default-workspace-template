@@ -8,7 +8,7 @@ import m from "mithril";
 import type { AppRecord } from "../models/Inventory";
 import { applyApps, resetInventoryForTesting } from "../models/Inventory";
 import { EVERYTHING_VIEW_ID } from "../models/Projects";
-import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, placeMenu, shortcutLabel } from "./Sidebar";
+import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, shortcutLabel } from "./Sidebar";
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 import { appRecord, instanceRecord, projectRecord } from "../testing/records";
@@ -21,32 +21,6 @@ function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
 }
 
 const project = projectRecord;
-
-describe("placeMenu", () => {
-  const viewport = { width: 1000, height: 800 };
-  const size = { width: 200, height: 100 };
-
-  it("hangs below the anchor and flips above when the bottom would overflow", () => {
-    const anchor = { left: 50, right: 250, top: 100, bottom: 130, width: 200 };
-    expect(placeMenu(anchor, size, viewport, "below")).toEqual({ left: 50, top: 130 });
-    const low = { left: 50, right: 250, top: 760, bottom: 790, width: 200 };
-    expect(placeMenu(low, size, viewport, "below")).toEqual({ left: 50, top: 660 });
-  });
-
-  it("sits beside the anchor and flips left when the right edge would overflow", () => {
-    const anchor = { left: 50, right: 250, top: 100, bottom: 130, width: 200 };
-    expect(placeMenu(anchor, size, viewport, "right")).toEqual({ left: 250, top: 100 });
-    const farRight = { left: 850, right: 950, top: 100, bottom: 130, width: 100 };
-    expect(placeMenu(farRight, size, viewport, "right")).toEqual({ left: 650, top: 100 });
-  });
-
-  it("clamps inside the window margin", () => {
-    const anchor = { left: 0, right: 10, top: 0, bottom: 10, width: 10 };
-    expect(placeMenu(anchor, size, viewport, "below")).toEqual({ left: 0, top: 10 });
-    const tall = { width: 200, height: 2000 };
-    expect(placeMenu(anchor, tall, viewport, "below").top).toBe(6);
-  });
-});
 
 describe("shortcuts", () => {
   it("resolves a project's rail against the inventory, dropping what the machine no longer offers", () => {
@@ -213,7 +187,7 @@ describe("Sidebar", () => {
     expand();
     root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
     m.redraw.sync();
-    const items = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
       el.textContent?.trim(),
     );
     expect(items).toEqual([
@@ -225,7 +199,7 @@ describe("Sidebar", () => {
       "Stop terminal one",
       "Delete terminal one",
     ]);
-    root.querySelector<HTMLElement>('[role="menuitem"]:last-child')!.click();
+    document.querySelector<HTMLElement>('[role="menuitem"]:last-child')!.click();
     expect(attrs.onDeleteRow).toHaveBeenCalledWith(expect.objectContaining({ address: "app:terminal?instance=one" }));
   });
 
@@ -234,7 +208,7 @@ describe("Sidebar", () => {
     expand();
     root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
     m.redraw.sync();
-    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
       .find((el) => el.textContent?.trim() === "Stop terminal one")!
       .click();
     expect(attrs.onInstanceLifecycle).toHaveBeenCalledWith(
@@ -243,7 +217,7 @@ describe("Sidebar", () => {
     );
     root.querySelector<HTMLElement>('[aria-label="Actions for chat one"]')!.click();
     m.redraw.sync();
-    const chatItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+    const chatItems = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
       el.textContent?.trim(),
     );
     expect(chatItems).toContain("Start chat one");
@@ -255,11 +229,11 @@ describe("Sidebar", () => {
     expand();
     root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
     m.redraw.sync();
-    const items = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
       el.textContent?.trim(),
     );
     expect(items).toContain("Stop Terminal");
-    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
       .find((el) => el.textContent?.trim() === "Stop Terminal")!
       .click();
     expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
@@ -291,8 +265,9 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>(".project-rail-all-apps")!.click();
       m.redraw.sync();
-      // terminal is pinned in this fixture, so the popover offers chat.
-      root.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
+      // terminal is pinned in this fixture, so the popover offers chat. The popover is a row
+      // of the shared menu, which portals to <body>.
+      document.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
       m.redraw.sync();
       expect(attrs.onRunAppAction).toHaveBeenCalled();
       expect(isExpanded()).toBe(false);
@@ -303,7 +278,7 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
       m.redraw.sync();
-      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         .find((el) => el.textContent?.trim() === "Focus last Terminal")!
         .click();
       m.redraw.sync();
@@ -343,7 +318,7 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>(".project-rail-header")!.click();
       m.redraw.sync();
-      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         .find((el) => el.textContent?.includes("Beta"))!
         .click();
       m.redraw.sync();
@@ -356,7 +331,7 @@ describe("Sidebar", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>(".project-rail-header")!.click();
     m.redraw.sync();
-    const items = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
     items.find((el) => el.textContent?.includes("Beta"))!.click();
     expect(attrs.onSelectView).toHaveBeenCalledWith("beta");
   });
