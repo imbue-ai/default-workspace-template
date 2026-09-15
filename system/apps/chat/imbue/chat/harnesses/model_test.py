@@ -76,6 +76,12 @@ def test_read_model_identity_effort_none_when_absent(tmp_path: Path) -> None:
     assert live.effort is None
 
 
+def test_read_model_identity_extracts_antigravity_effort_from_display_name(tmp_path: Path) -> None:
+    path = tmp_path / "model_state.json"
+    path.write_text(json.dumps({"model": "Gemini 3.7 Flash (High)"}))
+    assert read_model_identity(path) == ModelIdentity(model_id="Gemini 3.7 Flash (High)", effort="high", fast=False)
+
+
 def test_read_model_identity_tolerates_the_old_codex_schema(tmp_path: Path) -> None:
     # An installed codex binary that still writes {model, reasoning_effort, service_tier}
     # must NOT crash: the model chip lights (model is unchanged), effort is None (unknown
