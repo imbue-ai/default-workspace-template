@@ -720,3 +720,21 @@ def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_
         auth_flows._write_paste(
             PasteSink.ANTIGRAVITY_GEMINI_ENV, account_path, "AIzaSyValid", None, get_lane("google")
         )
+
+
+@pytest.mark.parametrize(
+    "pasted",
+    ("AIzaSyValid\nGEMINI_PROJECT=someone-elses", "AIza Sy Valid", "AIzaSyValid\n", ""),
+    ids=("a second variable", "a space", "a trailing newline", "nothing"),
+)
+def test_a_gemini_key_that_would_not_fit_one_dotenv_line_is_refused(
+    service: AuthFlowService, tmp_path: Path, pasted: str
+) -> None:
+    """mngr merges the whole key file into every agent bound to the account, so a value with a
+    line break in it would define variables of its own there."""
+    started = service.start("google", "api_key")
+
+    with pytest.raises(FlowError, match="single token"):
+        service.submit_key(started.flow_id, pasted, "google")
+
+    assert not list((tmp_path / ".minds" / "accounts").glob("*/gemini.env"))
