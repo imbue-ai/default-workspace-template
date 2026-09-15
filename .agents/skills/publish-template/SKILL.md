@@ -591,14 +591,25 @@ worktree to a clean template base and deletes gitignored state -- including
 
 ## Reporting back
 
-Follow `.agents/shared/references/worker-reporting.md` for the full report
-procedure. Substitutions for this task:
+Take the frontmatter parse, the report frontmatter, and the body shapes from
+`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/launch-task/<slug>/task.md`). Valid `name:` values: `question`
+(mid-flight gate, valid at any point of the run), `done` / `stuck` (terminal).
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
-- `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/launch-task/<slug>/reports/` (recreate
-  it with `mkdir -p` -- the assembly script deleted `data/`)
-- Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
-  (terminal).
+Deliver the report **by hand**, not with the launcher's `report` subcommand:
+step 1's reset replaces your whole checkout -- this task file and
+`.agents/skills/launch-task/` with it -- with the template base, which may
+predate that subcommand. The delivery is a copy either way, so write the report
+file yourself and place it, using the `LEAD_WORK_DIR` / `FINISH_REPORT_PATH` you
+parsed before the reset:
+
+```bash
+mkdir -p data/.tasks/launch-task/<slug>/reports   # the assembly deleted data/
+# write the frontmatter + body to
+# data/.tasks/launch-task/<slug>/reports/report.md, then:
+cp data/.tasks/launch-task/<slug>/reports/report.md \
+    "$LEAD_WORK_DIR/$FINISH_REPORT_PATH"
+```
 
 In a `done` report body, include your worktree's absolute path (from
 `git rev-parse --show-toplevel`) and the branch `mngr/<slug>` -- the lead
@@ -629,8 +640,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ```
 
 **Handle the report** per `.agents/shared/references/lead-proxy.md` (proxy or
-answer any `question` gate, consume reports into `consumed/`, diagnose
-liveness on a timeout) -- with one critical override:
+answer any `question` gate, re-arm the poll -- `await` has already archived the
+report it printed under `reports/consumed/` -- and diagnose liveness on a
+timeout) -- with one critical override:
 
 - `name: stuck` -> the assembly script refused for one of §5's reasons.
   Surface the quoted stderr to the user plainly and stop (or fix the input --
