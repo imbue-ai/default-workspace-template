@@ -968,6 +968,13 @@ def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Pa
         raise
 
 
+# What a pasted Gemini key may hold: base64url, plus the punctuation that passes unchanged
+# through a dotenv value, an unquoted shell assignment and an ASCII HTTP header. An allowlist
+# rather than a list of characters to refuse, because every layer below has its own metacharacters
+# and a miss in any of them is silent. See the ANTIGRAVITY_GEMINI_ENV arm of `_write_paste`.
+_GEMINI_KEY_CHARSET: Final = re.compile(r"[A-Za-z0-9._+/=-]+")
+
+
 def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane) -> str:
     """Write a pasted credential and return the provider noun the account is named after."""
     match sink:
@@ -995,21 +1002,29 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
         case PasteSink.ANTIGRAVITY_GEMINI_ENV:
             if not api_key:
                 raise FlowError("Paste a Gemini API key.")
-            # The key becomes one line of a dotenv file, and mngr merges that file WHOLE into
-            # the environment of every agent bound to the account -- so a value carrying a line
-            # break would define variables of its own there. Refused rather than quoted: a
-            # Gemini key is a single token, so whitespace in one is a bad paste either way (the
-            # field next door takes a `KEY=value` block, which is what gets pasted here).
+            # Matched against what the value survives rather than against what a key looks like,
+            # because a character outside the set is acted on somewhere below instead of being
+            # carried:
             #
-            # Non-ASCII goes with it, for a second reason: the promote probe sends the key as an
-            # HTTP header value, which httpx encodes as ASCII, and the UnicodeEncodeError that
-            # raises is not an httpx error, so nothing downstream answers it. A smart dash or a
-            # zero-width space is how one arrives -- the key was copied out of a document rather
-            # than from AI Studio -- and `'​'.isspace()` is False, so the test above misses it.
-            if any(character.isspace() for character in api_key) or not api_key.isascii():
+            # - It becomes one line of a dotenv file that mngr merges WHOLE into the environment
+            #   of every agent bound to the account, so a line break in it would define variables
+            #   of its own there. python-dotenv interpolates, so `${HOME}` is substituted -- and
+            #   substituted against the agent's environment, not the one the key was checked in.
+            # - mngr writes that environment to a file the agent launcher sources (`set -a`, then
+            #   `.`), quoting only values holding whitespace or quotes, so a backtick or a `$(` in
+            #   one is a command the shell runs on every agent start.
+            # - The promote probe sends the key as an HTTP header value, which httpx encodes as
+            #   ASCII, and the UnicodeEncodeError that raises is not an httpx error, so nothing
+            #   downstream answers it. A smart dash or a zero-width space is how one arrives --
+            #   the key was copied out of a document rather than from AI Studio -- and
+            #   `'​'.isspace()` is False, so a whitespace test alone misses it.
+            #
+            # An AI Studio key is `AIza` and base64url, well inside the set, and the field next
+            # door is the one that takes a `KEY=value` block.
+            if _GEMINI_KEY_CHARSET.fullmatch(api_key) is None:
                 raise FlowError(
-                    "A Gemini API key is a single ASCII token, with no spaces, line breaks or "
-                    "typographic characters in it."
+                    "A Gemini API key is a single ASCII token of letters, digits and `._-`: no "
+                    "spaces, line breaks, typographic characters or shell punctuation."
                 )
             try:
                 write_gemini_api_key(account_path, api_key)
