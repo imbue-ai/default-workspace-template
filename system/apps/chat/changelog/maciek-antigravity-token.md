@@ -1,6 +1,6 @@
 The Google provider offers "Use a Gemini API key" alongside its two browser sign-ins: paste an AI Studio key and the account is signed in, with nobody at a browser. This is the only way to put a workspace on Antigravity unattended.
 
-The key is checked against Google the moment it is pasted, not merely written: agy lists the same Gemini models for any key at all, valid or not, and answers an invalid one at turn time by opening a sign-in page nobody is there to complete -- so a mistyped key is refused at the field rather than surfacing later as a chat that cannot take a turn.
+The key is checked against Google the moment it is pasted, not merely written: agy lists the same Gemini models for any key at all, valid or not, and answers an invalid one at turn time by opening a sign-in page nobody is there to complete -- so a mistyped key is refused at the field rather than surfacing later as a chat that cannot take a turn. A key that is not a single ASCII token is refused at the field too, with a message saying why: whitespace would split it across dotenv lines, and a smart dash or a zero-width space -- what a key copied out of a document carries -- cannot be sent in the request that checks it.
 
 The account is called "Google Gemini", so it reads apart from the browser accounts on the same provider, and it works like any other: re-auth, deletion, the default pin, and binding a chat to it.
 
