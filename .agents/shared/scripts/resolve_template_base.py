@@ -24,8 +24,9 @@ Usage (cwd = the repo, or pass ``--repo``):
 Prints the base's full sha on stdout and exits 0; exits 1 with a message on
 stderr when HEAD's first-parent history has no marker.
 
-``migrate-workspace`` imports :func:`find_template_base` to apply the same rule
-to a remote workspace's log.
+To apply the rule to a log read some other way (such as over SSH), run ``git``
+with :data:`FIRST_PARENT_LOG_ARGS` and pass its lines to
+:func:`find_template_base`.
 """
 
 from __future__ import annotations
