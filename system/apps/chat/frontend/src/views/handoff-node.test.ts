@@ -25,6 +25,8 @@ const SWITCH: AgentSwitchEvent = {
   from_harness: "claude",
   to_harness: "codex",
   seq: 1,
+  message_id: null,
+  message: null,
 };
 const REQUEST: UserMessageEvent = {
   timestamp: "t1",

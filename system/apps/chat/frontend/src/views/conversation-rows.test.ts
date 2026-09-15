@@ -124,6 +124,8 @@ describe("buildConversationRows", () => {
       from_harness: "claude",
       to_harness: "codex",
       seq: 1,
+      message_id: null,
+      message: null,
     };
     const events: TranscriptEvent[] = [
       userMsg("t1", "hello"),

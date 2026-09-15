@@ -489,6 +489,10 @@ class ChatSegmentInfo(FrozenModel):
         description="The segment's main-transcript event count recorded when the agent was archived; None for the live one"
     )
     ended_at: datetime | None = Field(description="When the agent was archived; None for the live one")
+    opening_message_id: str | None = Field(
+        default=None, description="The send-time id of the message the user switched to this agent with, if folded into its prompt"
+    )
+    opening_message: str | None = Field(default=None, description="That message's text, for the switch marker")
 
 
 class ChatListResponse(FrozenModel):

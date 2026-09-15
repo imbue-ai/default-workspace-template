@@ -71,6 +71,20 @@ class ChatAgentEntry(FrozenModel):
     final_event_count: int | None = Field(
         default=None, ge=0, description="The agent's main-transcript event count, recorded when it was archived"
     )
+    opening_message_id: str | None = Field(
+        default=None,
+        description=(
+            "The send-time id of the message the user switched with, when a handoff folded it into this agent's "
+            "first prompt; None for a chat's first agent and for a fresh start, whose message is a turn of its own"
+        ),
+    )
+    opening_message: str | None = Field(
+        default=None,
+        description=(
+            "That message's text, carried on the switch marker before this agent's segment: folded into the prompt, "
+            "it never appears in the transcript as a turn of its own"
+        ),
+    )
 
 
 class ChatTransitionRecord(FrozenModel):

@@ -791,7 +791,12 @@ class HandoffRunner:
     def _adopt_successor(
         self, chat_id: ChatId, handoff_id: str, retiring: ChatAgentEntry, handoff: ChatHandoffRecord
     ) -> None:
-        """Make the tracked successor the chat's agent: append its entry to the record and emit the chip."""
+        """Make the tracked successor the chat's agent: append its entry to the record and emit the chip.
+
+        The entry keeps the message the user switched with when the prompt folded it in (a
+        fresh start delivers it as a turn of its own instead), so the chip can show it.
+        """
+        is_message_folded = not handoff.is_fresh_start and bool(handoff.trigger_text)
         successor = ChatAgentEntry(
             seq=handoff.next_seq,
             agent_id=handoff.next_agent_id,
@@ -799,6 +804,8 @@ class HandoffRunner:
             account_id=handoff.target_account_id,
             harness=handoff.target_harness,
             started_at=self._deps.now(),
+            opening_message_id=handoff.trigger_message_id if is_message_folded else None,
+            opening_message=handoff.trigger_text if is_message_folded else None,
         )
         self._deps.update_record(
             chat_id,
@@ -825,6 +832,8 @@ class HandoffRunner:
                         seq=successor.seq,
                         recorded_event_count=None,
                         ended_at=None,
+                        opening_message_id=successor.opening_message_id,
+                        opening_message=successor.opening_message,
                     ),
                 )
             ],

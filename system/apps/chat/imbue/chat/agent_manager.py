@@ -1145,6 +1145,8 @@ class AgentManager:
                     is_active=is_active,
                     recorded_event_count=None if is_active else entry.final_event_count,
                     ended_at=None if is_active else entry.ended_at,
+                    opening_message_id=entry.opening_message_id,
+                    opening_message=entry.opening_message,
                 )
             )
         return segments

@@ -438,6 +438,21 @@ export function hasUserTurn(events: readonly TranscriptEvent[]): boolean {
   return events.some(isGenuineUserTurn);
 }
 
+/** The successor's opening turn, built from the switch that carries the message the user switched
+ *  with: folded into the successor's prompt, that message is no event of the transcript's own. Null
+ *  for a switch that carries none (a fresh start's message arrives as a turn of its own). */
+export function openingTurnOf(event: AgentSwitchEvent): UserMessageEvent | null {
+  if (event.message === null || event.message_id === null) return null;
+  return {
+    type: "user_message",
+    event_id: `${event.event_id}:message`,
+    timestamp: event.timestamp,
+    source: event.source,
+    role: "user",
+    content: event.message,
+  };
+}
+
 /** Whether the transcript's live segment holds a summary request no switch has closed: the handoff
  *  node the walk builds from it is then the one showing the switch's progress, and the page needs
  *  no node of its own for it. */
@@ -492,7 +507,8 @@ export function buildSections(
       // request opened (the node stays where the request was, at the end of the retiring
       // agent's last turn); with no request (a fresh start) the switch is the node. The new
       // agent starts fresh, so the switch is a turn boundary: the prior section closes,
-      // carrying whatever was still open, and a bubble-less section opens.
+      // carrying whatever was still open, and the successor's opens on the message the user
+      // switched with when the switch carries it, else with no bubble.
       if (current === null) current = ensureSection(null, "section-pre");
       if (current.open_handoff !== null) {
         current.open_handoff.switch = e;
@@ -503,7 +519,7 @@ export function buildSections(
         current.entries.push({ kind: "handoff", node: lastSwitched });
       }
       carryover = openStepsAtEnd(current);
-      current = ensureSection(null, `section-switch-${e.event_id}`);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
       continue;
     }
     if (e.type === "user_message") {

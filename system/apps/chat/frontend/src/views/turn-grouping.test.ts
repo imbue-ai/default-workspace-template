@@ -1479,7 +1479,13 @@ describe("permission resolutions", () => {
 
 // --- Agent switches -------------------------------------------------------------------
 
-function agentSwitch(ts: string, id: string, fromHarness = "claude", toHarness = "codex"): AgentSwitchEvent {
+function agentSwitch(
+  ts: string,
+  id: string,
+  fromHarness = "claude",
+  toHarness = "codex",
+  message: [string, string] | null = null,
+): AgentSwitchEvent {
   return {
     timestamp: ts,
     type: "agent_switch",
@@ -1491,6 +1497,8 @@ function agentSwitch(ts: string, id: string, fromHarness = "claude", toHarness =
     from_harness: fromHarness,
     to_harness: toHarness,
     seq: 1,
+    message_id: message === null ? null : message[0],
+    message: message === null ? null : message[1],
   };
 }
 
@@ -1620,6 +1628,30 @@ describe("agent switches", () => {
     const other = buildSections([agentSwitch("t4", "sw1"), chip], new Map(), true);
     expect(handoffNodeOf(other[0].items[0]).prompt).toBeNull();
     expect(other[1].items.map((i) => i.kind)).toEqual(["chip"]);
+  });
+
+  it("opens the successor's section on the message the switch carries", () => {
+    // The message the user switched with rides inside the successor's prompt, so the switch
+    // marker carries it and the section it opens shows it as the user's bubble; a marker with
+    // none (a fresh start, whose message arrives as a turn of its own) opens a bubble-less one.
+    const carried = agentSwitch("t4", "sw1", "claude", "codex", ["m-trigger", "Carry on in Codex"]);
+    const prompt = userMsg("t5", 'You are continuing the chat "Chat 1" (chat id agent-a). Carry on in Codex', "u-p", {
+      display: "chip",
+      display_label: "Handoff prompt",
+    });
+    const sections = buildSections(
+      [userMsg("t1", "do it"), summaryRequest("t3"), carried, prompt, assistantText("t6", "on it")],
+      new Map(),
+      true,
+    );
+    expect(sections).toHaveLength(2);
+    const opening = sections[1];
+    expect(opening.user_event?.content).toBe("Carry on in Codex");
+    expect(opening.user_event?.event_id).toBe("sw1:message");
+    expect(opening.trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+    expect(handoffNodeOf(sections[0].items[0]).prompt?.event_id).toBe("u-p");
+    const bare = buildSections([userMsg("t1", "do it"), agentSwitch("t4", "sw1")], new Map(), true);
+    expect(bare[1].user_event).toBeNull();
   });
 
   it("carries a step still open at the switch over into the new agent's section", () => {

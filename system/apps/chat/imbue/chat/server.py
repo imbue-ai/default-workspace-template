@@ -252,6 +252,8 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
                 seq=segment.seq,
                 recorded_event_count=segment.recorded_event_count,
                 ended_at=segment.ended_at,
+                opening_message_id=segment.opening_message_id,
+                opening_message=segment.opening_message,
             )
             for segment in segments
         ),

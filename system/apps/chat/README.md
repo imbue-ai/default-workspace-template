@@ -119,7 +119,9 @@ chat" opens a chat on that account and model instead, with the draft moved
 over. A chat that has had no user turn skips the dialog: it switches at once,
 with no summary and no handoff prompt, since there is nothing to hand over.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends`, one handoff node in the transcript shows the switch's
+`handoff.held_sends` (the message the user switched with stands down once the
+`agent_switch` marker carrying it is on the transcript, where it renders as the
+successor's opening bubble), one handoff node in the transcript shows the switch's
 progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed), the activity strip and the placeholder say
