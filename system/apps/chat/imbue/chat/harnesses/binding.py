@@ -43,6 +43,7 @@ from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import agent_credential_path
+from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
 from imbue.chat.harnesses.antigravity.auth import GEMINI_MODE_SETTING
 from imbue.chat.harnesses.antigravity.auth import gemini_env_path
 from imbue.chat.harnesses.antigravity.auth import has_gemini_api_key
@@ -118,6 +119,24 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
         # agy never reads it.
         return ["--env-file", str(gemini_env_path(account_dir)), "--setting", GEMINI_MODE_SETTING]
 
+    if harness is HarnessType.ANTIGRAVITY:
+        # The workspace's create defaults carry the key-mode binding whenever the DEFAULT account
+        # is on a pasted key, and `--env-file` accumulates rather than being overridden -- so
+        # without this an agy chat bound to a browser account inherits that account's key and runs
+        # on it. An explicit `--env` outranks every env file, and an empty value is what agy sees
+        # when nobody has pasted a key at all.
+        #
+        # This only takes the key away. The mode flag rides `--setting`, which accumulates too, so
+        # such a chat starts in key mode with no key and agy stops at once saying so -- loud, and
+        # attributable, where before it quietly spent another account's key. Binding the mode
+        # through a channel a per-chat create can override is the real fix.
+        return ["--env", f"{GEMINI_API_KEY_ENV_VAR}=", *_credential_link_args(harness, account_dir, agent_state_dir)]
+
+    return _credential_link_args(harness, account_dir, agent_state_dir)
+
+
+def _credential_link_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) -> list[str]:
+    """The provision command that repoints an agent's credential symlink at the account's copy."""
     source = account_credential_path(harness, account_dir)
     dest = agent_credential_path(harness, agent_state_dir)
     if source is None or dest is None:

@@ -81,7 +81,8 @@ def test_claude_binds_through_the_env_file(tmp_path: Path) -> None:
 
 def test_the_others_bind_by_replacing_the_provisioned_symlink(tmp_path: Path) -> None:
     for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
-        flag, command = create_args(harness, tmp_path, tmp_path / "state")
+        args = create_args(harness, tmp_path, tmp_path / "state")
+        flag, command = args[-2:]
         assert flag == "--extra-provision-command"
         # `ln -sfn` replaces whatever provisioning linked -- the same operation mngr used.
         assert "ln -sfn" in command
@@ -105,8 +106,18 @@ def test_an_agy_account_on_a_pasted_key_binds_by_the_env_file_and_the_mode(tmp_p
 def test_an_agy_account_without_a_key_still_binds_by_the_symlink(tmp_path: Path) -> None:
     """The two sign-ins on this lane share a harness and nothing else, so the file that says
     which one this account had is what decides how it binds."""
-    (flag, _command) = create_args(HarnessType.ANTIGRAVITY, tmp_path, tmp_path / "state")
-    assert flag == "--extra-provision-command"
+    args = create_args(HarnessType.ANTIGRAVITY, tmp_path, tmp_path / "state")
+    assert "--extra-provision-command" in args
+
+
+def test_a_browser_agy_account_is_bound_with_no_key_whatever_the_default_account_holds(tmp_path: Path) -> None:
+    """The workspace's create defaults carry a key file whenever the DEFAULT account is on a
+    pasted key, and `--env-file` accumulates -- a per-chat binding cannot take it away. An
+    explicit `--env` outranks every env file, so this is what stops a chat on a browser account
+    inheriting another account's key and spending it."""
+    args = create_args(HarnessType.ANTIGRAVITY, tmp_path, tmp_path / "state")
+
+    assert args[:2] == ["--env", "GEMINI_API_KEY="]
 
 
 def test_the_provision_command_quotes_paths(tmp_path: Path) -> None:
