@@ -181,10 +181,13 @@ git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <
 
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
 is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
-its tab refreshed. The calling skill's end-of-pass work (post-crystallize
+its tab refreshed. You do that refresh -- never hand it to the user as a step
+they have to take. The calling skill's end-of-pass work (post-crystallize
 migration, closing the ticket) still waits for `done`.
 
-Tell the user in one line and in non-technical language what's been updated: 
+Tell the user in one line and in non-technical language what's been updated. The
+report body you just read is written for you, not for them: say what they can
+now do, never what was tested, found or fixed.
   "Added a reusable skill."
   "Created an MVP app, using it now while it continues to be improved."
 
