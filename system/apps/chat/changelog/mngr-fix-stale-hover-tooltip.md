@@ -1,1 +1,1 @@
-The model card's row tooltips now follow the row's current state. Before, a row that gained or lost its explanation between redraws could keep showing the old text, or show none.
+The model card's rows now follow the card's current state. Before, a row explaining that a read-only harness switches its model from its own terminal kept saying so after the harness reported a catalog it could switch, and a row that gained an explanation while the card was open showed none.
