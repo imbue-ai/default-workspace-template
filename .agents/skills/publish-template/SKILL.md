@@ -251,9 +251,9 @@ It walks HEAD's first-parent history for the NEWEST template-state marker:
   on). The base is the merge's **second parent**, the upstream template commit
   it merged. **Never the merge commit itself**: its tree is the upstream
   template merged with everything the mind had built by then, and its
-  first-parent history is the mind's own. Using it as the base once shipped a
-  whole other app, and the mind's full pre-update history, inside a template
-  the user meant to hold one app.
+  first-parent history is the mind's own, so as a base it would ship every
+  other creation the mind had built, and its pre-update history, inside a
+  template meant to hold only what the user chose.
 - **`Initial workspace commit`** -- written by bootstrap on the mind's very
   first boot (always present -- it is created `--allow-empty` by
   `system/libs/bootstrap` -- and it snapshots exactly what the workspace started
