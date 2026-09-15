@@ -171,6 +171,11 @@ class PasteMethod(FrozenModel):
     # is single-flight, so an abandoned one is in the way of the next. Shorter than a browser
     # method's, because there is no round trip to wait out -- the field is already on screen.
     flow_deadline_s: float = 600.0
+    # Whether a credential this method writes is COPIED into a chat when the chat is created,
+    # rather than read from the account folder at every turn. Where it is, re-keying reaches
+    # chats created afterwards only, and the modal's re-auth success screen has to say so --
+    # the alternative is telling the owner of a revoked key that every chat is working again.
+    is_reauth_new_chats_only: bool = False
 
 
 class KeyProvider(FrozenModel):
@@ -388,6 +393,9 @@ LANE_GOOGLE = Lane(
             ),
             sink=PasteSink.ANTIGRAVITY_GEMINI_ENV,
             signup_url="https://aistudio.google.com/apikey",
+            # mngr flattens the key file into each agent's own env at create, so this is the
+            # one method whose re-auth does not reach the chats already on the account.
+            is_reauth_new_chats_only=True,
         ),
         PtyMethod(
             id="gcloud",

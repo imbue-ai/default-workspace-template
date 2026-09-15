@@ -95,6 +95,7 @@ const PI_KEY_LANE = lane({
       signup_url: "",
       shape: "paste",
       is_primary: true,
+      is_reauth_new_chats_only: false,
     },
   ],
   key_providers: [
@@ -119,6 +120,7 @@ const GOOGLE_LANE = lane({
       signup_url: "",
       shape: "url_then_code",
       is_primary: true,
+      is_reauth_new_chats_only: false,
     },
     {
       id: "api_key",
@@ -127,6 +129,8 @@ const GOOGLE_LANE = lane({
       signup_url: "https://aistudio.google.com/apikey",
       shape: "paste",
       is_primary: false,
+      // The key is copied into each chat at create, so a re-key reaches new chats only.
+      is_reauth_new_chats_only: true,
     },
   ],
   key_providers: [{ provider_id: "google", display: "Google Gemini", env_var: "GEMINI_API_KEY", hint: "AIza..." }],
@@ -256,6 +260,49 @@ describe("the provider chooser", () => {
     const field = root.querySelector('[data-e2e="api-key-input"]') as HTMLInputElement;
     expect(field.placeholder).toBe("AIza...");
     expect(root.textContent).toContain("Saved as GEMINI_API_KEY for this mind.");
+  });
+
+  it("promises a re-key only what a copied credential can deliver", async () => {
+    // agy's key rides each chat's own environment, so a re-key reaches chats started
+    // afterwards and leaves the running ones alone -- which the method says on the screen
+    // before this one. The blanket sentence here contradicted it, to the one person most
+    // likely to read it: whoever's key just stopped working.
+    state.lanes = [GOOGLE_LANE];
+    state.accounts = [
+      {
+        id: "g1",
+        lane: "google",
+        harness: "antigravity",
+        provider: "Google Gemini",
+        harness_label: "Antigravity CLI",
+        seq: 1,
+        name: "",
+        label: "Google Gemini (Antigravity CLI)",
+      },
+    ];
+    const root = document.createElement("div");
+    const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    draw();
+
+    const again = [...root.querySelectorAll("button")].find((button) => button.textContent === "Sign in again");
+    (again as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // A re-auth lands on the lane's primary method, so the paste is one more click in.
+    (root.querySelector('[data-e2e="method-api_key"]') as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    state.flow = {
+      flow_id: "f1",
+      shape: "paste",
+      status: { state: "ok", detail: null, account_id: "g1" },
+    };
+    draw();
+
+    expect(root.textContent).toContain("keep the key they started with");
+    expect(root.textContent).not.toContain("Every chat on this provider can take a turn once more");
   });
 
   it("renders a live flow's spinner", () => {
