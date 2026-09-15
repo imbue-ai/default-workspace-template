@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Deterministic helpers for pulling an old Minds workspace into this one.
+"""Deterministic helpers for pulling an old Mind workspace into this one.
 
 The migration is mostly agent judgement -- deciding what a user-authored file
 *means* in the new tree, whether a migrated app actually shows the user's own

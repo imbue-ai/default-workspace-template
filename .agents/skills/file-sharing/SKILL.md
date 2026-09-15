@@ -14,7 +14,7 @@ Use this skill when the user asks you to work with files located directly on the
 1. **Use `latchkey curl`** calls to communicate with the remote WebDAV server. (They are the same as normal curl calls, just going through the Latchkey Gateway.)
 2. **Check existing access first.** Sometimes important context can be revealed simply by observing which directories or files the user already shared. See the "Check existing access" example below.
 3. **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when the curl request comes back with the "request not permitted by the user" message. See the "Ask for user permission" example below.
-4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Minds app. Restarting the Minds app should usually help.
+4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Mind app. Restarting the Mind app should usually help.
 
 The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files`. Only the user's home directory and the user's system temp directory are accessible. MOVE and COPY operations are not supported.
 
@@ -69,4 +69,4 @@ After posting, wait for an automated system message indicating whether the user 
 ## Notes
 
 - Users may run macOS or Linux, possible even other OSes.
-- In the permission request dialog that pops up in the Minds app on their machine, users can adjust the path, overriding the originally requested one. There are no other sharing settings the user can configure.
+- In the permission request dialog that pops up in the Mind app on their machine, users can adjust the path, overriding the originally requested one. There are no other sharing settings the user can configure.

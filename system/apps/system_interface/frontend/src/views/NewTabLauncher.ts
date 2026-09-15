@@ -96,7 +96,7 @@ export function adoptTemplateMessage(template: CatalogTemplate): string {
 /** Have a new machine made from a template: the first message of the chat that action starts. */
 export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
   return (
-    `Please create a new Minds machine for me from the template at ${template.repository_url} ` +
+    `Please create a new Mind machine for me from the template at ${template.repository_url} ` +
     "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
     "or accounts, and tell me when it is ready."
   );

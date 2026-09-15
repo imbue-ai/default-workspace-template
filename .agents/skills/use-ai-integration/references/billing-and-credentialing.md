@@ -56,7 +56,7 @@ folder, not the shared one.
 - **Keyed integrations pin their key at setup.** A keyed integration
   snapshots `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
   `data/.secrets/anthropic.env` when it is set up
-  (`write_anthropic_env_snapshot()` in `system/scripts/claude_p.py`), and
+  (`write_anthropic_env_snapshot()` in the skill's `scripts/claude_p.py`), and
   `read_workspace_ai_credentials()` resolves that snapshot first, then the
   settings env, then the process env. So a built service keeps billing
   against the key it was set up with even after the user switches the

@@ -45,8 +45,43 @@ SKILL.md.
   headings, cross-references, and `## Conventions` / `## Gotchas` -- every place
   that names or summarizes the changed material.
 
+## Skills that drive an app
+
+A skill that calls an app's routes, its CLI, or its store belongs to that app's
+footprint, and the app's manifest is where the link lives: one `[[references]]`
+entry in `system/apps/<package>/app.toml` whose `path` is
+`.agents/skills/<name>` and whose `note` names the surface used ("calls `POST
+/api/ingest`; writes `data/.apps/<name>/`"). The link is one-directional -- the
+skill declares nothing about the app -- so check for the entry by reverse
+lookup and add it to the app's `app.toml` as part of this change when it is
+missing:
+
+```bash
+uv run app-manifest references --for-path .agents/skills/<name>
+```
+
+One JSON line per app that claims the skill; no output means none does.
+
+The scope file's `context` lists the primary directory of every app that claims
+this skill. Read those to verify the invocation contract the skill relies on --
+the routes in `src/<package>/runner.py`, the CLI entry points in
+`pyproject.toml`, `app.toml` -- and read them only: the `[[references]]` entry
+above is the sole edit this run makes inside an app's directory, and a fix that
+belongs to the app itself is that app's own pass.
+
 ## Testing a skill
 
+- Run the skill's own tests by path. The root pytest config recurses into
+  `.agents/`, so a bare root `uv run pytest` would collect the entire monorepo
+  to reach them:
+
+  ```bash
+  uv run pytest .agents/skills/<name>
+  ```
+
+  If the reverse lookup above found an app that claims this skill, that app's
+  suite exercises the surface the skill calls, so run it too:
+  `cd system/apps/<package> && uv run pytest`.
 - Validate with `uv run .agents/shared/scripts/validate_skill.py
   .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
   checks).
