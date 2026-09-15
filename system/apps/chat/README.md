@@ -92,12 +92,13 @@ for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
 by. An agy account signed in with a pasted Gemini key binds differently, because
 in that mode agy reads no credential file at all: `env_file__extend` names the
 account's key file and `setting__extend` puts the agent's own agy in key mode
-(`harnesses/antigravity/auth.py`). The pin and the most recently used account stay in `index.json`; the file is
-derived from them and nobody is expected to edit it, though keys outside the
-managed ones survive every rewrite. With no usable account the managed keys are
-removed, and a create in the workspace is then refused by
-`system/scripts/require_create_account.py` (mngr's `pre_command_scripts.create`
-entry in `.mngr/settings.toml`) with a message that says to sign in.
+(`harnesses/antigravity/auth.py`). The pin and the most recently used account
+stay in `index.json`; the file is derived from them and nobody is expected to
+edit it, though keys outside the managed ones survive every rewrite. With no
+usable account the managed keys are removed, and a create in the workspace is
+then refused by `system/scripts/require_create_account.py` (mngr's
+`pre_command_scripts.create` entry in `.mngr/settings.toml`) with a message that
+says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
 (the Minds app's update and help chats) has its tab surfaced by this app
