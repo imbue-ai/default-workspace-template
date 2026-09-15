@@ -73,6 +73,12 @@ confirmation here, because the data sample confirms the data *shape*, not the UI
 shape. Render the handed-off `sample.json` in the mock so the user judges the UI
 against real data.
 
+If you were **not** sent here and the app reads records that come from outside
+itself -- an upload, an export, an API, a third-party service -- stop and run
+`fetch-process-show` first; come back with its confirmed sample. Reading and
+normalizing those records is its job. An app whose ingestion you wrote here
+instead has no entry point anyone can re-run when the next batch lands.
+
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
@@ -290,7 +296,8 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
-  Invoke the `frontend-design` skill before writing the markup (see Step 2).
+  Invoke the `frontend-design:frontend-design` skill before writing the markup
+  (see Step 2).
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
@@ -338,8 +345,10 @@ by separate threads -- no asyncio needed.
 
 If your service renders HTML that a person will look at (anything
 beyond a pure JSON API, a webhook receiver, or a transparent proxy of
-a third-party tool), you must invoke the `frontend-design` skill **before**
-writing the markup. Always do this before working on UI, regardless of the scope of the work.
+a third-party tool), you must invoke the `frontend-design:frontend-design`
+skill **before** writing the markup. Always do this before working on UI,
+regardless of the scope of the work. It ships as a plugin: the bare name
+`frontend-design` does not resolve.
 
 Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --

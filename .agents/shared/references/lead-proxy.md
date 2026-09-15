@@ -4,6 +4,11 @@ Generic mechanics for driving a worker to completion and surfacing gate/status
 reports to the user. The caller supplies flow-specific substitutions (worker
 name, branch, runtime path, which gate names and terminal statuses apply).
 
+**None of this machinery reaches the user.** Leases, polls, `await`, milestones,
+merges, review gates and worker names are how the work gets done, not what got
+done, so they belong in no chat message and no progress step -- "Fresh, no lease.
+Merging the milestone" names plumbing nobody can see. Say what changed, or nothing.
+
 ## Polling for the next report
 
 Start a background poll for the report file with `create_worker.py await`. It
@@ -30,6 +35,30 @@ wait. The tool output is the report contents: YAML frontmatter (`type`, `name`)
 plus a body. If await exits non-zero (timeout) without printing a report, do
 *not* immediately treat it as a terminal failure -- see "Diagnose worker
 liveness" below.
+
+### Never sleep on a worker
+
+Once the poll is armed, **end your turn**: its completion wakes you with the
+report in seconds, while a `sleep N` is a guess at someone else's finishing time
+and every second between the report landing and the sleep expiring is dead time
+on the critical path. Ending your turn is safe -- a worker with a live
+sub-worker of its own never counts as idle, so the liveness check below will not
+mistake you for a wedged one.
+
+**A worker's report is never polled.** Sleeping on a `find` over its reports
+directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
+same guess in a different command; an armed `await` plus ending the turn is the
+only sanctioned wait on a sibling.
+
+With several workers out, arm one poll per worker before ending the turn. Each
+completion wakes you separately, so you act on whichever reports first and merge
+it while the others are still running.
+
+Your own backgrounded commands are the one exception. Nothing else holds your
+turn open there, so a worker that ends its turn waiting on its own command is
+declared wedged after three idle polls -- about fifteen seconds. Wait on those
+with `sleep 60`, repeated until the output lands: it stays clear of that
+threshold and bounds the overshoot.
 
 `await` also returns **milestone** reports: any file under
 `<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
@@ -96,8 +125,7 @@ On `type: gate`:
 - **Answer yourself** for implementation details: script structure, naming
   conventions, which utility to reuse, file layout, agentskills.io compliance,
   or anything you can determine from reading files or applying the calling
-  skill's own guidelines. The user does not care about technical details --
-  do not surface them.
+  skill's own guidelines.
 - **Escalate to the user** for user intent, scope, subjective preference, or
   domain knowledge you do not have. `final-creation` gates always escalate.
   `outline-approval` gates default to answer-yourself; only escalate if the
@@ -162,10 +190,13 @@ git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <
 
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
 is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
-its tab refreshed. The calling skill's end-of-pass work (post-crystallize
-migration, closing the ticket) still waits for `done`.
+its tab refreshed. You do that refresh -- never hand it to the user. The calling
+skill's end-of-pass work (post-crystallize migration, closing the ticket) still
+waits for `done`.
 
-Tell the user in one line and in non-technical language what's been updated: 
+Tell the user in one line and in non-technical language what's been updated. The
+report body you just read is written for you, not them -- say what they can now
+do, never what was tested, found or fixed:
   "Added a reusable skill."
   "Created an MVP app, using it now while it continues to be improved."
 
