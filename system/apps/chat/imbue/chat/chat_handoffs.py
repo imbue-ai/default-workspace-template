@@ -47,6 +47,7 @@ from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.chat_transcript import agent_switch_event
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import HANDOFF_PROMPT_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import TranscriptReader
@@ -180,12 +181,17 @@ def summary_request_message(path: Path) -> str:
 
 @pure
 def is_genuine_user_turn(event: dict[str, Any]) -> bool:
-    """Whether a transcript event is a user turn the user typed: a ``user_message`` with no display decision.
+    """Whether a transcript event is a turn that carries the user's own words: a ``user_message`` with no
+    display decision, or a handoff prompt.
 
     A chip (the summary request itself, a nudge), a hidden framework line (``/welcome``), or a
-    permission verdict is not one.
+    permission verdict is not one. The handoff prompt is, although it renders as a chip: it
+    carries the message the user switched with and the pointer to the summary, so a successor
+    that has only received it has context to hand on.
     """
-    return event.get("type") == "user_message" and event.get("display") is None
+    if event.get("type") != "user_message":
+        return False
+    return event.get("display") is None or event.get("display_label") == HANDOFF_PROMPT_LABEL
 
 
 @pure

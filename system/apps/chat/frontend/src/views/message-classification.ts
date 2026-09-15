@@ -108,6 +108,14 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
+/** The opening words of the prompt a handoff's successor is started with (the backend's
+ *  ``HANDOFF_PROMPT_PREFIX``): a chip on the wire, but a turn that carries the user's own words. */
+const HANDOFF_PROMPT_PREFIX = 'You are continuing the chat "';
+
+export function isHandoffPromptChip(event: ClassifiableUserMessage): boolean {
+  return event.display === "chip" && event.content.trimStart().startsWith(HANDOFF_PROMPT_PREFIX);
+}
+
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
 }

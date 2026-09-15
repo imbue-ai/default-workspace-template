@@ -9,3 +9,5 @@ Phase 8 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`): the
 - `POST /api/chats/<chat-id>/handoff` takes `model` (model id, effort, fast); a rebind refuses one. The successor is created silent, the pick is applied through the harness's own switch path before its first message, then the handoff prompt goes to it through the send path, then the held messages. A pick the successor cannot take fails the switch at that step (`failed_step: model` on the snapshot's `handoff`): the page reads "Could not set the model on Codex", and a retry on the same account reruns only the pick and the deliveries, adopting the successor under its pre-minted id. `POST /api/chats/create` takes `model` too, for a new chat started from the dialog.
 
 - `GET /api/accounts/<account-id>/model-options` answers what a new agent on that account could run on: the catalog for a static harness, the options the account's last agent was offered for codex.
+
+- The handoff prompt the successor starts with shows as a collapsed "Handoff prompt" chip in its transcript rather than as the user's own bubble.

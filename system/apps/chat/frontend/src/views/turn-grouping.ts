@@ -77,6 +77,7 @@ import type {
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import {
+  isHandoffPromptChip,
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
   isSystemChipUserMessage,
@@ -420,11 +421,14 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
   };
 }
 
-/** True for a transcript event the user typed: a ``user_message`` with no display decision. The
- *  backend's rule for whether a handoff has anything to summarize (``has_user_turn``), read here so
- *  the page can tell a fresh chat, whose switch needs no dialog, from one with context. */
+/** True for a transcript event that carries the user's own words: a ``user_message`` with no display
+ *  decision, or the handoff prompt a successor started with (a chip that holds the message the user
+ *  switched with). The backend's rule for whether a handoff has anything to summarize
+ *  (``has_user_turn``), read here so the page can tell a fresh chat, whose switch needs no dialog,
+ *  from one with context. */
 export function isGenuineUserTurn(event: TranscriptEvent): boolean {
-  return event.type === "user_message" && event.display === undefined;
+  if (event.type !== "user_message") return false;
+  return event.display === undefined || isHandoffPromptChip(event);
 }
 
 export function hasUserTurn(events: readonly TranscriptEvent[]): boolean {

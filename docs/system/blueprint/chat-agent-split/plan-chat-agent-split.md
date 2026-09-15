@@ -425,6 +425,7 @@ As landed in phase 8, which revised the flow above after use:
 - A chat with no genuine user turn (by the rule `has_user_turn` shares with the summary freshness check) gets no dialog: the switch runs at once as a fresh start (5.5, 5.8), with the draft left in the composer.
 - The handoff is one node in the transcript rather than a chip and a write: "Handing off to Codex…" while it runs (from the snapshot until the summary request is on the stream, then anchored on it), "Handed off from Claude to Codex" once the `agent_switch` event lands, expandable to the summary turn, "Handoff called off" for a cancelled one. The held bubbles read "Sending…" like any send.
 - The failed page names the step: "Could not start Codex" or "Could not set the model on Codex".
+- The handoff prompt, now a user message in the successor's transcript (it arrives through the send path), renders as a collapsed "Handoff prompt" chip; it still counts as a genuine user turn for the fresh-start rule, since it carries the message the user switched with and the summary pointer.
 
 ### 5.2 Trigger and preconditions
 

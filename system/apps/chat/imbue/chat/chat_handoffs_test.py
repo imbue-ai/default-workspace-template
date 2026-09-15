@@ -817,6 +817,19 @@ def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_t
     assert has_user_turn([]) is False
     typed = [*welcome_only, {"event_id": "u-1", "type": "user_message", "timestamp": "2026-09-13T11:02:00+00:00"}]
     assert has_user_turn(typed) is True
+    # A successor's handoff prompt is a chip on the wire but carries the user's message, so a chat
+    # that has only received it still has context to hand on.
+    prompted = [
+        *welcome_only,
+        {
+            "event_id": "u-p",
+            "type": "user_message",
+            "display": "chip",
+            "display_label": "Handoff prompt",
+            "timestamp": "2026-09-13T11:03:00+00:00",
+        },
+    ]
+    assert has_user_turn(prompted) is True
 
 
 def test_a_half_made_successor_is_destroyed_and_created_again(tmp_path: Path) -> None:

@@ -1583,6 +1583,21 @@ describe("agent switches", () => {
     const chip = userMsg("t2", "Stop hook feedback:\nx", "u-c", { display: "chip" });
     expect(hasUserTurn([welcome, assistantText("t3", "hi"), chip])).toBe(false);
     expect(hasUserTurn([welcome, userMsg("t4", "hello")])).toBe(true);
+    // A successor's handoff prompt is a chip that carries the user's own message: context to hand on.
+    const prompt = userMsg("t5", 'You are continuing the chat "Chat 1" (chat id agent-a). Read the summary.', "u-p", {
+      display: "chip",
+      display_label: "Handoff prompt",
+    });
+    expect(hasUserTurn([welcome, prompt])).toBe(true);
+    // And it folds into the successor's opening section rather than starting a turn of its own.
+    const sections = buildSections(
+      [agentSwitch("t4", "sw1"), prompt, assistantText("t6", "hello from codex")],
+      new Map(),
+      true,
+    );
+    const opening = sections[sections.length - 1];
+    expect(opening.user_event).toBeNull();
+    expect(opening.items.map((i) => i.kind)).toEqual(["chip"]);
   });
 
   it("carries a step still open at the switch over into the new agent's section", () => {
