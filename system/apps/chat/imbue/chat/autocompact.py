@@ -98,15 +98,28 @@ class ChatAutoCompactor:
         """Run `mngr autocompact run <agent_name>` for a single agent."""
         command = [self._mngr_binary, "autocompact", "run", agent_name]
         try:
-            return self._runner(
+            result = self._runner(
                 command=command,
                 cwd=None,
-                is_checked=True,
+                is_checked=False,
                 timeout=self._command_timeout_seconds,
             )
         except (ProcessError, OSError) as e:
             logger.warning("Failed to run autocompact for {}: {}", agent_name, e)
             return None
+
+        if result.returncode == 0:
+            return result
+        if result.returncode == 1:
+            logger.debug("Failed to run autocompact for {}: {}", agent_name, result.stderr)
+            return None
+        logger.warning(
+            "Failed to run autocompact for {}: return code {}, stderr: {}",
+            agent_name,
+            result.returncode,
+            result.stderr,
+        )
+        return None
 
     def _run_sweep(self) -> None:
         """Background loop executing sweeps on interval until stopped."""

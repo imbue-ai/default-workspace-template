@@ -52,21 +52,18 @@ def test_check_agent_success() -> None:
     assert result is not None
     assert result.returncode == 0
     assert recorded_commands == [["mngr-custom", "autocompact", "run", "chat-1"]]
-    assert recorded_kwargs.get("is_checked") is True
+    assert recorded_kwargs.get("is_checked") is False
 
 
-def test_check_agent_nonzero_exit_handled_gracefully() -> None:
+def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> None:
     def fake_runner(
-        command: Sequence[str], is_checked: bool = True, **kwargs: object
+        command: Sequence[str], is_checked: bool = False, **kwargs: object
     ) -> FinishedProcess:
-        res = _make_finished_process(
+        return _make_finished_process(
             command=command,
             returncode=1,
             stderr="Agent 'chat-1' does not support context compaction",
         )
-        if is_checked:
-            res.check()
-        return res
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-1"],
@@ -75,9 +72,36 @@ def test_check_agent_nonzero_exit_handled_gracefully() -> None:
     result = compactor.check_agent("chat-1")
 
     assert result is None
+    debug_logs = [log for log in loguru_records if log.startswith("DEBUG") and "chat-1" in log]
+    assert len(debug_logs) == 1
+    assert "does not support context compaction" in debug_logs[0]
+    warning_logs = [log for log in loguru_records if log.startswith("WARNING")]
+    assert len(warning_logs) == 0
 
 
-def test_check_agent_process_setup_error_handled_gracefully() -> None:
+def test_check_agent_other_nonzero_exit_logged_as_warning(loguru_records: list[str]) -> None:
+    def fake_runner(
+        command: Sequence[str], is_checked: bool = False, **kwargs: object
+    ) -> FinishedProcess:
+        return _make_finished_process(
+            command=command,
+            returncode=2,
+            stderr="invalid syntax",
+        )
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-1"],
+        runner=fake_runner,
+    )
+    result = compactor.check_agent("chat-1")
+
+    assert result is None
+    warning_logs = [log for log in loguru_records if log.startswith("WARNING") and "chat-1" in log]
+    assert len(warning_logs) == 1
+    assert "return code 2" in warning_logs[0]
+
+
+def test_check_agent_process_setup_error_handled_gracefully(loguru_records: list[str]) -> None:
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         raise ProcessSetupError(
             command=tuple(command),
@@ -93,6 +117,8 @@ def test_check_agent_process_setup_error_handled_gracefully() -> None:
     result = compactor.check_agent("chat-1")
 
     assert result is None
+    warning_logs = [log for log in loguru_records if log.startswith("WARNING") and "chat-1" in log]
+    assert len(warning_logs) == 1
 
 
 def test_sweep_checks_all_running_chat_agents() -> None:
