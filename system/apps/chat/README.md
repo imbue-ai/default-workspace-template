@@ -142,7 +142,11 @@ the claude version check the in-container mngr would otherwise fail the create
 on), and `should_wait`, which holds the answer until `mngr create` has finished:
 the chat's identity when it landed, a 500 carrying the create's own reason when
 it failed, a 504 if it is still running at the wait's ceiling. The script falls
-back to a plain `mngr create --template chat` on the same terms as the send.
+back to a plain `mngr create --template chat` on the send's terms plus one of
+its own: a chat app that cannot be reached, one with no create route, and one
+whose create route predates these fields, which it tells apart by the 400 naming
+the field it does not know (a workspace that has taken a template update and has
+not restarted its chat app yet).
 
 ## Provider accounts
 
