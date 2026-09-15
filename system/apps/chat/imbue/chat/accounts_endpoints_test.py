@@ -62,7 +62,15 @@ def test_lanes_carry_every_key_the_chooser_reads() -> None:
         }
         assert lane["harness_label"], "the sign-in header has nothing to name the harness with"
         for method in lane["methods"]:
-            assert set(method) == {"id", "label", "description", "signup_url", "shape", "is_primary"}
+            assert set(method) == {
+                "id",
+                "label",
+                "description",
+                "signup_url",
+                "shape",
+                "is_primary",
+                "is_reauth_new_chats_only",
+            }
         for key_provider in lane["key_providers"]:
             assert set(key_provider) == {"provider_id", "display", "env_var", "hint"}
 
@@ -73,6 +81,35 @@ def test_exactly_one_method_per_lane_is_primary() -> None:
         lanes = client.get("/api/lanes").get_json()["lanes"]
     for lane in lanes:
         assert [m["is_primary"] for m in lane["methods"]].count(True) == 1
+
+
+def test_the_google_lane_offers_a_paste_beside_its_browser_methods() -> None:
+    """The modal renders a lane generically: a paste method among PTY ones opens the key form,
+    and one key provider makes that form a single field carrying the provider's hint rather
+    than a picker."""
+    with _client() as client:
+        lanes = client.get("/api/lanes").get_json()["lanes"]
+    (google,) = [lane for lane in lanes if lane["id"] == "google"]
+    shapes = {method["id"]: method["shape"] for method in google["methods"]}
+    assert shapes["oauth"] == "url_then_code"
+    assert shapes["api_key"] == "paste"
+    (key_provider,) = google["key_providers"]
+    assert key_provider["env_var"] == "GEMINI_API_KEY"
+    assert key_provider["hint"]
+
+
+def test_only_a_method_whose_credential_is_copied_says_a_re_key_reaches_new_chats_only() -> None:
+    """The modal's re-auth success screen branches on this rather than on a lane id, so it has
+    to ride every method -- false on the ones whose credential the harness reads afresh."""
+    with _client() as client:
+        lanes = client.get("/api/lanes").get_json()["lanes"]
+    new_chats_only = {
+        (lane["id"], method["id"])
+        for lane in lanes
+        for method in lane["methods"]
+        if method["is_reauth_new_chats_only"]
+    }
+    assert new_chats_only == {("google", "api_key")}
 
 
 def test_accounts_carry_every_key_the_picker_reads() -> None:

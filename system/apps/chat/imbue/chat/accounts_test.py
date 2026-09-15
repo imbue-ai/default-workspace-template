@@ -440,6 +440,25 @@ def test_a_reauth_backup_of_a_file_that_did_not_exist_removes_it_again(tmp_path:
     assert not credential.exists()
 
 
+def test_a_reauth_backup_restores_a_credential_that_lives_in_a_subdirectory(tmp_path: Path) -> None:
+    """Not every credential sits at the top of the account folder: agy keeps its token and the
+    settings that say which kind of credential it has under `.gemini/`. Restored flat, they land
+    where nothing reads them and the account looks repaired without working."""
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "google", "Google", tmp_path)
+    folder = account_dir(account_id, tmp_path)
+    credential = folder / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    credential.parent.mkdir(parents=True)
+    credential.write_bytes(b"live-token")
+
+    save_reauth_backup(account_id, {credential: credential.read_bytes()}, tmp_path)
+    credential.unlink()
+
+    reconcile(tmp_path)
+    assert credential.read_bytes() == b"live-token"
+    assert not (folder / credential.name).exists(), "restored to the folder's top level"
+
+
 def test_clearing_a_reauth_backup_stops_boot_undoing_a_commit(tmp_path: Path) -> None:
     account_id, _ = mint_account_dir(tmp_path)
     commit_account(account_id, "anthropic", "Anthropic", tmp_path)

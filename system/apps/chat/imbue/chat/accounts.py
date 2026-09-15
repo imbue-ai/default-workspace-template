@@ -431,6 +431,13 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
     answering until it next restarts -- observed, not assumed. What stops immediately is
     anything that reads the folder afresh, which includes starting a new chat on it.
 
+    That last rule covers a credential the harness reads from this folder, which is all of them
+    but one: an agy account signed in with a pasted Gemini key is bound by COPY, because mngr
+    folds the key file into each agent's own env file at create and re-sources that file on
+    every restart. Deleting such an account therefore does not take the key away from the chats
+    already on it, restart or no restart -- the same limit re-keying one has (see
+    `harnesses/binding.py`).
+
     Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
     their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
     over re-authenticating in place. Killing them instead would be worse -- it destroys a chat
@@ -543,20 +550,26 @@ def _reauth_backup_dir(account_id: str, home: Path | None = None) -> Path:
 def save_reauth_backup(account_id: str, files: Mapping[Path, bytes | None], home: Path | None = None) -> None:
     """Park the credential a re-auth is about to delete, so it outlives this process.
 
-    Keyed by file NAME rather than by path: every credential a harness reads sits directly in
-    the account folder, and a name is what survives being written to disk and read back by a
-    later process that has no memory of the flow. A file that did not exist is recorded as an
-    empty marker, so the restore knows to remove rather than to write.
+    The backup mirrors each file's path RELATIVE to the account folder, because not every
+    credential sits directly in it -- agy keeps both its token and the settings that say which
+    kind of credential it has under `.gemini/`. A flat key would restore those to the folder's
+    top level, where nothing reads them: the account would look repaired and still not work.
+    A file that did not exist is recorded as an empty marker, so the restore knows to remove
+    rather than to write.
     """
     backup = _reauth_backup_dir(account_id, home)
+    folder = account_dir(account_id, home)
     shutil.rmtree(backup, ignore_errors=True)
     backup.mkdir(parents=True, exist_ok=True)
     backup.chmod(0o700)
     for path, content in files.items():
-        target = backup / path.name
+        # Every caller parks files of one account. A path from elsewhere has no place to be
+        # restored to, so it raises here rather than landing somewhere arbitrary later.
+        target = backup / path.relative_to(folder)
+        target.parent.mkdir(parents=True, exist_ok=True)
         if content is None:
             target.write_bytes(b"")
-            (backup / f"{path.name}{_ABSENT_SUFFIX}").write_bytes(b"")
+            target.with_name(f"{target.name}{_ABSENT_SUFFIX}").write_bytes(b"")
         else:
             target.write_bytes(content)
         target.chmod(0o600)
@@ -581,14 +594,15 @@ def restore_reauth_backup(account_id: str, home: Path | None = None) -> int:
         shutil.rmtree(backup, ignore_errors=True)
         return 0
     restored = 0
-    for child in sorted(backup.iterdir()):
-        if child.name.endswith(_ABSENT_SUFFIX):
+    for child in sorted(backup.rglob("*")):
+        if child.is_dir() or child.name.endswith(_ABSENT_SUFFIX):
             continue
-        target = folder / child.name
-        if (backup / f"{child.name}{_ABSENT_SUFFIX}").exists():
+        target = folder / child.relative_to(backup)
+        if child.with_name(f"{child.name}{_ABSENT_SUFFIX}").exists():
             # It did not exist before the flow, so putting it "back" means removing it.
             target.unlink(missing_ok=True)
         else:
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(child.read_bytes())
             target.chmod(0o600)
         restored += 1

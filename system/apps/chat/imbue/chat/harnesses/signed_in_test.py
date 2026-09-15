@@ -8,11 +8,15 @@ the runner is injected rather than shelling out to whatever binaries this machin
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
@@ -118,3 +122,96 @@ def test_a_harness_with_no_probe_is_taken_at_its_word(tmp_path: Path) -> None:
         raise AssertionError("nothing to ask")
 
     assert is_signed_in(HarnessType.OPENCODE, tmp_path, run) is SignedIn.YES
+
+
+# ----- agy with a pasted key: agy itself cannot answer, so Google does ----------------------
+
+
+def _refusing_runner(**_kwargs: Any) -> _Finished:
+    raise AssertionError("a key account must not be judged by the CLI")
+
+
+def _responder(response: httpx.Response, seen: dict[str, Any] | None = None) -> Callable[..., httpx.Response]:
+    def get(url: str, **kwargs: Any) -> httpx.Response:
+        if seen is not None:
+            seen.update({"url": url, **kwargs})
+        return response
+
+    return get
+
+
+def test_a_pasted_gemini_key_is_validated_against_google_not_against_agy(tmp_path: Path) -> None:
+    """`agy models` lists the same eleven Gemini ids for ANY key -- a bogus one included -- so
+    asking agy would promote a typo, and agy answers the typo at turn time by opening a browser
+    OAuth flow that nobody is there to complete."""
+    write_gemini_api_key(tmp_path, "AIzaSyValid")
+    seen: dict[str, Any] = {}
+    http_get = _responder(httpx.Response(200, json={"models": [{"name": "models/gemini-3.1-pro"}]}), seen)
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, http_get) is SignedIn.YES
+    assert seen["headers"] == {"x-goog-api-key": "AIzaSyValid"}
+    assert seen["url"].startswith("https://generativelanguage.googleapis.com/")
+
+
+@pytest.mark.parametrize("status_code", (400, 401, 403))
+def test_a_key_google_refuses_is_signed_out(tmp_path: Path, status_code: int) -> None:
+    write_gemini_api_key(tmp_path, "AIzaSyBogus")
+    http_get = _responder(httpx.Response(status_code, json={"error": {"status": "INVALID_ARGUMENT"}}))
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, http_get) is SignedIn.NO
+
+
+def test_a_status_that_is_not_about_the_key_is_unknown(tmp_path: Path) -> None:
+    """A rate limit or a 5xx is the service having a bad moment; throwing away a key the user
+    just pasted on the strength of it would be the worse mistake."""
+    write_gemini_api_key(tmp_path, "AIzaSyValid")
+    http_get = _responder(httpx.Response(503, text="backend unavailable"))
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, http_get) is SignedIn.UNKNOWN
+
+
+def test_a_key_an_http_header_cannot_carry_is_signed_out(tmp_path: Path) -> None:
+    """httpx encodes a header value as ASCII, and the UnicodeEncodeError that raises is not an
+    httpx error -- so without its own arm it escapes this module's three-way answer and reaches
+    the endpoint as a 500. A key the request cannot carry is a verdict, not a blank."""
+    write_gemini_api_key(tmp_path, "AIzaSy—Valid")
+
+    def get(url: str, **kwargs: Any) -> httpx.Response:
+        # Building the request is where httpx encodes the header, and where the real
+        # `httpx.get` raises; nothing reaches the network.
+        httpx.Request("GET", url, headers=kwargs["headers"])
+        raise AssertionError("a key that cannot be encoded never gets sent")
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, get) is SignedIn.NO
+
+
+def test_a_check_that_cannot_reach_google_is_unknown(tmp_path: Path) -> None:
+    write_gemini_api_key(tmp_path, "AIzaSyValid")
+
+    def get(_url: str, **_kwargs: Any) -> httpx.Response:
+        raise httpx.ConnectTimeout("no route")
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, get) is SignedIn.UNKNOWN
+
+
+def test_a_key_file_that_names_no_key_is_signed_out_rather_than_asked_of_agy(tmp_path: Path) -> None:
+    """The file's presence is what puts an agent into key mode, so a file that lost its key still
+    binds that way and agy exits before its first turn. Falling through to the CLI probe, which says
+    yes to any key, would call such an account healthy."""
+    gemini_env_path(tmp_path).write_text("# nothing here\n")
+
+    def no_fetch(_url: str, **_kwargs: Any) -> httpx.Response:
+        raise AssertionError("there is no key to validate")
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, no_fetch) is SignedIn.NO
+
+
+def test_an_agy_account_without_a_key_is_still_asked_through_the_cli(tmp_path: Path) -> None:
+    """The browser sign-in writes no key file, and there is nothing for Google to answer about
+    an OAuth login -- so the two account kinds on this lane take different routes."""
+
+    def no_fetch(_url: str, **_kwargs: Any) -> httpx.Response:
+        raise AssertionError("an OAuth account has no key to validate")
+
+    runner = _runner_returning(_Finished(returncode=0, stdout="gemini-3.1-pro-high"))
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, runner, no_fetch) is SignedIn.YES

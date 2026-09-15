@@ -44,6 +44,9 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.antigravity.auth import AntigravitySettingsError
+from imbue.chat.harnesses.antigravity.auth import gemini_credential_paths
+from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
@@ -299,6 +302,12 @@ class AuthFlowService:
                 accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
+                # The workspace's create defaults name the files this just unlinked, and a
+                # create that names no account reads them. `--env-file` on a path that is not
+                # there fails the create outright, so the defaults are rewritten for the window
+                # -- an account with no key binds agy's credential symlink instead, which is
+                # the dangling-link degradation every other harness already has here.
+                accounts.regenerate_create_defaults(self._home)
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit. It still
@@ -624,6 +633,9 @@ class AuthFlowService:
             _restore_credentials(session.cleared_credentials)
         session.cleared_credentials = {}
         accounts.clear_reauth_backup(session.account_id, self._home)
+        # Every ending comes through here -- abort, expiry, rejection, commit -- so this is
+        # where the create defaults go back to describing what the folder now holds.
+        accounts.regenerate_create_defaults(self._home)
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
         # The sign-in wrote a new credential over the cleared one, so there is nothing to
@@ -873,6 +885,8 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
             return (account_path / "auth.json",)
         case PasteSink.CLAUDE_ENV:
             return (account_path / "settings.json",)
+        case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            return gemini_credential_paths(account_path)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -888,6 +902,12 @@ def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple
     linked = account_credential_path(harness, account_path)
     if linked is not None:
         paths.append(linked)
+    if harness is HarnessType.ANTIGRAVITY:
+        # An agy account is signed in one of two unrelated ways, and a re-auth may switch
+        # between them, so both have to go. The settings flag counts: left behind with the key
+        # gone, agy refuses to start at all rather than falling back to the browser flow, so a
+        # re-auth from a key to an OAuth login would drive a CLI that exits immediately.
+        paths.extend(gemini_credential_paths(account_path))
     if harness is HarnessType.CLAUDE:
         # What `claude auth login` / `setup-token` write themselves.
         paths.append(account_path / ".credentials.json")
@@ -948,6 +968,13 @@ def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Pa
         raise
 
 
+# What a pasted Gemini key may hold: base64url, plus the punctuation that passes unchanged
+# through a dotenv value, an unquoted shell assignment and an ASCII HTTP header. An allowlist
+# rather than a list of characters to refuse, because every layer below has its own metacharacters
+# and a miss in any of them is silent. See the ANTIGRAVITY_GEMINI_ENV arm of `_write_paste`.
+_GEMINI_KEY_CHARSET: Final = re.compile(r"[A-Za-z0-9._+/=-]+")
+
+
 def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane) -> str:
     """Write a pasted credential and return the provider noun the account is named after."""
     match sink:
@@ -972,5 +999,43 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
         case PasteSink.CLAUDE_ENV:
             write_claude_env(account_path, claude_env_from_paste(api_key))
             return lane.provider_name
+        case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            if not api_key:
+                raise FlowError("Paste a Gemini API key.")
+            # Matched against what the value survives rather than against what a key looks like,
+            # because a character outside the set is acted on somewhere below instead of being
+            # carried:
+            #
+            # - It becomes one line of a dotenv file that mngr merges WHOLE into the environment
+            #   of every agent bound to the account, so a line break in it would define variables
+            #   of its own there. python-dotenv interpolates, so `${HOME}` is substituted -- and
+            #   substituted against the agent's environment, not the one the key was checked in.
+            # - mngr writes that environment to a file the agent launcher sources (`set -a`, then
+            #   `.`), quoting only values holding whitespace or quotes, so a backtick or a `$(` in
+            #   one is a command the shell runs on every agent start.
+            # - The promote probe sends the key as an HTTP header value, which httpx encodes as
+            #   ASCII, and the UnicodeEncodeError that raises is not an httpx error, so nothing
+            #   downstream answers it. A smart dash or a zero-width space is how one arrives --
+            #   the key was copied out of a document rather than from AI Studio -- and
+            #   `'​'.isspace()` is False, so a whitespace test alone misses it.
+            #
+            # An AI Studio key is `AIza` and base64url, well inside the set, and the field next
+            # door is the one that takes a `KEY=value` block.
+            if _GEMINI_KEY_CHARSET.fullmatch(api_key) is None:
+                raise FlowError(
+                    "A Gemini API key is a single ASCII token of letters, digits and `._-`: no "
+                    "spaces, line breaks, typographic characters or shell punctuation."
+                )
+            try:
+                write_gemini_api_key(account_path, api_key)
+            except AntigravitySettingsError as e:
+                # Carried through as a flow failure so the endpoint answers 400 with the
+                # message naming the file, as it does for every other refused paste. A bare
+                # RuntimeError here is a 500 with nothing the modal can show.
+                raise FlowError(str(e)) from e
+            # Its own noun rather than the lane's: the browser methods on this lane mint
+            # "Google" accounts, and a key account runs on different models and a different
+            # bill, so two rows reading "Google" would be the wrong two rows.
+            return next((k.display for k in lane.key_providers), lane.provider_name)
         case _ as unreachable:
             assert_never(unreachable)

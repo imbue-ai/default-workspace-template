@@ -47,6 +47,11 @@ chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create ti
 naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
 antigravity, `PI_CODING_AGENT_DIR` for pi. Nothing rebinds a chat afterwards.
 
+The one credential that does not live in the folder a chat points at is an antigravity account
+signed in with a pasted Gemini API key: agy reads no credential file in that mode, so the key is
+copied out of the account folder into the chat's own environment when the chat is created. A
+helper that wants such a chat's key reads `GEMINI_API_KEY` from the chat's environment.
+
 This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
 why the resolver below reaches for a shared file. The shared path still exists and is still what
 a bare `claude` in a terminal uses; it is no longer where a CHAT's credential lives. A helper

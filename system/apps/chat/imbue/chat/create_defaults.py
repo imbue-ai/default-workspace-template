@@ -4,9 +4,10 @@ Every `mngr create` in the workspace that names no harness and no account -- the
 Mind app starts from outside, workers, automations, the caretaker -- resolves through
 `.mngr/settings.local.toml`, mngr's git-ignored local config layer, which sits above the
 committed `.mngr/settings.toml` and below the CLI. Its managed `[commands.create]` keys name
-the default account's harness as `type`, its binding (the variable claude is scoped by, or
-for the other harnesses the credential symlink over `$MNGR_AGENT_STATE_DIR`, which needs no
-agent id), and the `account=<id>` label a re-auth restarts agents by.
+the default account's harness as `type`, its binding (the variable claude is scoped by; the
+env file and settings override an agy account signed in with a pasted key runs on; otherwise
+the credential symlink over `$MNGR_AGENT_STATE_DIR`, which needs no agent id), and the
+`account=<id>` label a re-auth restarts agents by.
 
 The account store owns the file: it is rewritten from the index on every index write and at
 the chat app's boot, and is derived output only -- the pin and the most recently used account
@@ -32,6 +33,9 @@ from tomlkit.items import Table
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import account_env
 from imbue.chat.harnesses.account_scope import agent_credential_relative_path
+from imbue.chat.harnesses.antigravity.auth import GEMINI_MODE_SETTING
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import has_gemini_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -49,11 +53,17 @@ TYPE_KEY: Final = "type"
 # `__extend` rather than a bare assignment: mngr refuses a local-layer assignment that would
 # drop entries the committed file sets, and extending never can.
 ENV_KEY: Final = "env__extend"
+ENV_FILE_KEY: Final = "env_file__extend"
+SETTING_KEY: Final = "setting__extend"
 PROVISION_COMMAND_KEY: Final = "extra_provision_command__extend"
 LABEL_KEY: Final = "label__extend"
+# Every key a rewrite removes before writing the current account's. A binding key missing from
+# this tuple survives a switch to another account and binds the new one to the old credential.
 MANAGED_KEYS: Final[tuple[str, ...]] = (
     TYPE_KEY,
     ENV_KEY,
+    ENV_FILE_KEY,
+    SETTING_KEY,
     PROVISION_COMMAND_KEY,
     LABEL_KEY,
 )
@@ -110,6 +120,12 @@ def managed_create_settings(defaults: CreateDefaults) -> dict[str, Any]:
         settings[ENV_KEY] = [
             f"{name}={value}" for name, value in account_env(defaults.harness, defaults.account_dir).items()
         ]
+    elif defaults.harness is HarnessType.ANTIGRAVITY and has_gemini_api_key(defaults.account_dir):
+        # agy in key mode reads no credential file, so there is nothing to link: the key comes
+        # in as an env file mngr merges into the agent's own, and the mode as a config override
+        # that reaches the per-agent settings.json mngr writes at provision.
+        settings[ENV_FILE_KEY] = [str(gemini_env_path(defaults.account_dir))]
+        settings[SETTING_KEY] = [GEMINI_MODE_SETTING]
     else:
         link = _credential_link_command(defaults.harness, defaults.account_dir)
         if link is not None:
