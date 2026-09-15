@@ -403,8 +403,6 @@ assert _resolve_template_base_spec.loader is not None
 _resolve_template_base = importlib.util.module_from_spec(_resolve_template_base_spec)
 _resolve_template_base_spec.loader.exec_module(_resolve_template_base)
 
-find_template_base = _resolve_template_base.find_template_base
-
 
 class BaselineEntry(NamedTuple):
     """One file the user authored or changed relative to the source's template base."""
@@ -1196,7 +1194,7 @@ def _cmd_baseline_diff(args: argparse.Namespace) -> int:
             _shell_quote(arg) for arg in _resolve_template_base.FIRST_PARENT_LOG_ARGS
         ),
     ).splitlines()
-    base = find_template_base(log_lines)
+    base = _resolve_template_base.find_template_base(log_lines)
     if base is None:
         print(
             json.dumps(

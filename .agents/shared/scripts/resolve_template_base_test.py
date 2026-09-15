@@ -1,15 +1,21 @@
-"""Tests for ``resolve_template_base.py``, run against real git histories.
+"""Tests for ``resolve_template_base.py``.
 
 The base decides what a published template contains and what history it ships,
-so these build the commit shapes bootstrap and update-self actually write and
-assert on the content the resolved base carries.
+so the script tests build the commit shapes bootstrap and update-self actually
+write and assert on the content the resolved base carries. The
+``find_template_base`` tests cover log shapes that are awkward to build in git.
 """
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 _SCRIPT = Path(__file__).with_name("resolve_template_base.py")
+_spec = importlib.util.spec_from_file_location("resolve_template_base", _SCRIPT)
+assert _spec is not None and _spec.loader is not None
+resolve_template_base = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(resolve_template_base)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -108,3 +114,38 @@ def test_a_history_without_markers_exits_nonzero_for_the_callers_fallback(
 
     assert completed.returncode == 1
     assert completed.stdout == ""
+
+
+def test_find_template_base_takes_the_newest_marker() -> None:
+    log = [
+        "aaa1111\tbbb2222\tAdd the email triage app",
+        "bbb2222\tccc3333 up09999\tupdate-self: merge upstream template (minds-v0.3.9)",
+        "ccc3333\tddd4444\tTweak the welcome skill",
+        "ddd4444\teee5555 up06666\tupdate-self: merge upstream template (minds-v0.3.6)",
+        "eee5555\tfff6666\tInitial workspace commit",
+    ]
+    # update-self's origin-line walk takes the OLDEST marker instead.
+    assert resolve_template_base.find_template_base(log) == "up09999"
+
+
+def test_find_template_base_returns_none_without_a_marker() -> None:
+    assert resolve_template_base.find_template_base([]) is None
+    assert (
+        resolve_template_base.find_template_base(
+            ["aaa1111\t\tInitial commit", "", "  "]
+        )
+        is None
+    )
+
+
+def test_find_template_base_ignores_a_marker_that_is_not_the_subject_prefix() -> None:
+    # A commit merely *mentioning* update-self is not a template-state marker;
+    # only the `update-self:` subject prefix is.
+    log = ["aaa1111\tbbb2222\tFix the update-self skill's conflict triage"]
+    assert resolve_template_base.find_template_base(log) is None
+
+
+def test_find_template_base_reads_past_an_empty_subject_commit() -> None:
+    # `git commit --allow-empty-message` leaves nothing after the last tab.
+    log = ["aaa1111\tbbb2222\t", "bbb2222\tccc3333\tInitial workspace commit"]
+    assert resolve_template_base.find_template_base(log) == "bbb2222"
