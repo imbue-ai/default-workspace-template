@@ -88,6 +88,12 @@ def _gemini_key_verdict(api_key: str, http_get: Callable[..., httpx.Response]) -
             headers={_GEMINI_API_KEY_HEADER: api_key},
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
+    except UnicodeEncodeError:
+        # httpx encodes a header value as ASCII, and this is a ValueError rather than an
+        # httpx error, so the clause below never sees it. A key the request cannot even
+        # carry is not one Google could accept, which makes it a verdict and not a blank.
+        logger.warning("Gemini key check refused a key carrying a character an HTTP header cannot hold")
+        return SignedIn.NO
     except httpx.HTTPError as e:
         logger.warning("Gemini key check could not reach Google: {}", e)
         return SignedIn.UNKNOWN

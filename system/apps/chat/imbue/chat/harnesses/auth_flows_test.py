@@ -724,18 +724,37 @@ def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_
 
 
 @pytest.mark.parametrize(
-    "pasted",
-    ("AIzaSyValid\nGEMINI_PROJECT=someone-elses", "AIza Sy Valid", "AIzaSyValid\n", ""),
-    ids=("a second variable", "a space", "a trailing newline", "nothing"),
+    "pasted,message",
+    (
+        ("AIzaSyValid\nGEMINI_PROJECT=someone-elses", "single ASCII token"),
+        ("AIza Sy Valid", "single ASCII token"),
+        ("AIzaSyValid\n", "single ASCII token"),
+        # Copied out of a document rather than from AI Studio. Both would reach the promote
+        # probe's HTTP header, which cannot carry them, and the zero-width space is not
+        # whitespace as far as `str.isspace` is concerned.
+        ("AIzaSy—Valid", "single ASCII token"),
+        ("AIzaSy​Valid", "single ASCII token"),
+        ("", "Paste a Gemini API key"),
+    ),
+    ids=(
+        "a second variable",
+        "a space",
+        "a trailing newline",
+        "an em-dash",
+        "a zero-width space",
+        "nothing",
+    ),
 )
 def test_a_gemini_key_that_would_not_fit_one_dotenv_line_is_refused(
-    service: AuthFlowService, tmp_path: Path, pasted: str
+    service: AuthFlowService, tmp_path: Path, pasted: str, message: str
 ) -> None:
     """mngr merges the whole key file into every agent bound to the account, so a value with a
-    line break in it would define variables of its own there."""
+    line break in it would define variables of its own there -- and the promote probe sends the
+    key as an HTTP header, which only carries ASCII. An empty paste gets its own message, or it
+    is answered with one about spaces it does not have."""
     started = service.start("google", "api_key")
 
-    with pytest.raises(FlowError, match="single token"):
+    with pytest.raises(FlowError, match=message):
         service.submit_key(started.flow_id, pasted, "google")
 
     assert not list((tmp_path / ".minds" / "accounts").glob("*/gemini.env"))
