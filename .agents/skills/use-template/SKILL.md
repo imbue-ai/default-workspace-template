@@ -41,7 +41,7 @@ the published repo ships its own template-specific `/welcome` skill
 (generated into the snapshot by the publish flow, replacing the template's
 generic welcome), so the booting agent's first response is a custom welcome
 naming the template's title and one-line description (instead of the generic
-"Welcome to Minds" message), followed in the same turn — without waiting to be
+"Welcome to Mind" message), followed in the same turn — without waiting to be
 asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
 A v2 repo has exactly one `template.md`, so there is nothing to choose:

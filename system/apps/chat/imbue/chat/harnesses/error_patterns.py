@@ -63,7 +63,7 @@ _TYPE_KINDS: dict[str, str] = {
 }
 
 # Kinds that mean the model provider's servers failed, not our request -- these
-# earn the "not Minds' fault" note on the frontend.
+# earn the "not Mind's fault" note on the frontend.
 _PROVIDER_FAULT_KINDS: frozenset[str] = frozenset({"api_error", "overloaded"})
 
 # ``API Error: <code> ...`` -- the surface form Claude Code writes for a failed request.
@@ -119,6 +119,6 @@ def kind_for_status(status: int | None) -> str | None:
 
 def is_provider_fault(kind: str | None) -> bool:
     """True when ``kind`` is a model-provider-side failure (a 5xx / overloaded)
-    rather than a client-side one -- the ones that earn the "not Minds' fault"
+    rather than a client-side one -- the ones that earn the "not Mind's fault"
     note."""
     return kind in _PROVIDER_FAULT_KINDS

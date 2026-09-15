@@ -376,14 +376,14 @@ def test_a_seeded_chat_leaves_the_first_chat_claim_for_a_plain_one(
     it launches without the ``first`` template, carrying its message, and the claim stays."""
     q = broadcaster.register()
 
-    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Minds")
+    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
     agent_manager.stop()
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["chat_id"] == seeded.chat_id
-    assert proto_msg["message"] == "Teach me about Minds"
+    assert proto_msg["message"] == "Teach me about Mind"
     # The claim is still there for the next plain chat.
     assert claim_first_chat() is True
 
