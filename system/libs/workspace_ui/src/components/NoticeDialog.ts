@@ -100,8 +100,6 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
           ...body
             .filter((line): line is string => line !== null && line !== "")
             .map((line) => m("p", { class: NOTICE_BODY_CLASS }, line)),
-          // Anything passed as the notice's own children (a picker the actions read at the press)
-          // renders under the body paragraphs.
           vnode.children,
         ],
       );
