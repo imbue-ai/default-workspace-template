@@ -54,7 +54,8 @@ class TranscriptSegment(FrozenModel):
     )
     ended_at: datetime | None = Field(description="When its agent was archived; None for the live segment")
     opening_message_id: str | None = Field(
-        default=None, description="The send-time id of the message the user switched to this agent with, if one was folded into its prompt"
+        default=None,
+        description="The send-time id of the message the user switched to this agent with, if one was folded into its prompt",
     )
     opening_message: str | None = Field(
         default=None, description="That message's text, which the switch marker before this segment carries"
