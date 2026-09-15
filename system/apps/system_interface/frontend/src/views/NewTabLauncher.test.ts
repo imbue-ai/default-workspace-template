@@ -250,9 +250,10 @@ describe("NewTabLauncher", () => {
     element.dispatchEvent(new MouseEvent("mouseenter"));
     vi.runAllTimers();
     const bubble = document.querySelector<HTMLElement>(".hover-tooltip");
-    const text = bubble !== null && bubble.style.visibility === "visible" && bubble.style.display !== "none"
-      ? bubble.textContent
-      : null;
+    const text =
+      bubble !== null && bubble.style.visibility === "visible" && bubble.style.display !== "none"
+        ? bubble.textContent
+        : null;
     element.dispatchEvent(new MouseEvent("mouseleave"));
     return text;
   }
