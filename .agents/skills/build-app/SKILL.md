@@ -73,6 +73,12 @@ confirmation here, because the data sample confirms the data *shape*, not the UI
 shape. Render the handed-off `sample.json` in the mock so the user judges the UI
 against real data.
 
+If you were **not** sent here and the app reads records that come from outside
+itself -- an upload, an export, an API, a third-party service -- stop and run
+`fetch-process-show` first; come back with its confirmed sample. Reading and
+normalizing those records is its job. An app whose ingestion you wrote here
+instead has no entry point anyone can re-run when the next batch lands.
+
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
@@ -119,7 +125,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   label: the tab renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates). Short and
+  prefixes are reserved for workspace hostname coordinates), and it must not
+  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+  `host`, `env`), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used by an existing program (`system_interface`, `browser`, etc.
   are reserved by the scaffolder, which also refuses a name any
@@ -186,7 +194,9 @@ What gets generated:
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
-  editing it).
+  editing it). Anything you build for this app outside `system/apps/<package>/`
+  -- a skill that drives it, a script, a doc -- is registered in the same file
+  under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
   the app's own tool environment exposes.
@@ -286,7 +296,8 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
-  Invoke the `frontend-design` skill before writing the markup (see Step 2).
+  Invoke the `frontend-design:frontend-design` skill before writing the markup
+  (see Step 2).
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
@@ -334,8 +345,10 @@ by separate threads -- no asyncio needed.
 
 If your service renders HTML that a person will look at (anything
 beyond a pure JSON API, a webhook receiver, or a transparent proxy of
-a third-party tool), you must invoke the `frontend-design` skill **before**
-writing the markup. Always do this before working on UI, regardless of the scope of the work.
+a third-party tool), you must invoke the `frontend-design:frontend-design`
+skill **before** writing the markup. Always do this before working on UI,
+regardless of the scope of the work. It ships as a plugin: the bare name
+`frontend-design` does not resolve.
 
 Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --
@@ -482,7 +495,7 @@ Reading the confirmation signal:
 
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic `harden-worker`,
+task file (set `type: app`), launching the generic worker,
 polling, merging on `done`, and refreshing the tab after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker

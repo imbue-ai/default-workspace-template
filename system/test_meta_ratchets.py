@@ -17,7 +17,7 @@ _VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
 
 # Directory names pruned during filesystem walks: non-source trees (venvs,
 # node_modules, git internals) that can hold tens of thousands of files.
-_PRUNED_DIR_NAMES = frozenset({".git", ".venv", "node_modules"})
+_PRUNED_DIR_NAMES = frozenset({".git", ".venv", "node_modules", ".test_output"})
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 
