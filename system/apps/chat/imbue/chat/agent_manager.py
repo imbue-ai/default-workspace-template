@@ -646,7 +646,7 @@ class AgentManager:
     _observe_process: RunningProcess | None
     _creation_cg: ConcurrencyGroup
     # Set once a chat's creation thread has settled its record, whichever way; what
-    # ``wait_for_chat_creation`` waits on.
+    # ``wait_for_chat_creation`` waits on, dropped once waited on or with the record.
     _creation_settled_by_chat: dict[ChatId, threading.Event]
     _mngr_binary: str
     _host_dir: Path
@@ -2016,6 +2016,7 @@ class AgentManager:
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
             del self._provisional_chats[parsed]
+            self._creation_settled_by_chat.pop(parsed, None)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._nudger.nudge()
         return True
@@ -2070,8 +2071,9 @@ class AgentManager:
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's tab opened (``auto_open``); one that restates a label the app
         sets itself (``APP_OWNED_LABEL_KEYS``) is refused. ``is_installation_check_skipped``
-        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Neither
-        is recorded on a reservation, so a launch by ``chat_id`` refuses both.
+        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Both are
+        kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
+        page's "Try again") creates on the same terms and refuses new ones.
         """
         extra_labels = dict(labels or {})
         try:
@@ -2110,6 +2112,8 @@ class AgentManager:
                 display_name = reserved.name
                 project_id = reserved.project_id
                 message = reserved.message
+                extra_labels = dict(reserved.labels)
+                is_installation_check_skipped = reserved.is_installation_check_skipped
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 taken_names = self._taken_names_locked()
@@ -2133,6 +2137,8 @@ class AgentManager:
                 project_id=project_id,
                 account_id=account.id,
                 message=message,
+                labels=extra_labels,
+                is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
             )
             self._provisional_chats[launched_chat_id] = provisional
@@ -2218,6 +2224,7 @@ class AgentManager:
         if settled is None or not settled.wait(timeout):
             return None
         with self._lock:
+            self._creation_settled_by_chat.pop(chat_id, None)
             if str(chat_id) in self._agents:
                 return ChatCreationOutcome(is_created=True)
             provisional = self._provisional_chats.get(chat_id)

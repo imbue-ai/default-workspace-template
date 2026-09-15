@@ -94,6 +94,9 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
+  // The terms a create from outside the page asked for, kept for a retry; the page reads neither.
+  labels?: Record<string, string>;
+  is_installation_check_skipped?: boolean;
 }
 
 type WsEvent =

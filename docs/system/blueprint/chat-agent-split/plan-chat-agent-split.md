@@ -245,7 +245,8 @@ The auto-name word stays per lane or harness until phase 7, when it becomes a la
 ### 4.5 Addressing a chat from inside the workspace
 
 Every chat agent the chat app creates carries `MINDS_CHAT_ID=<chat id>` in its env file (`mngr create --env`), the first agent included.
-Agents created outside the chat app (a `mngr create --template chat` from a terminal, the minds app's assist and update-self chats, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
+Agents created outside the chat app (a `mngr create --template chat` from a terminal, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
+The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the tab-opening labels, the claude version-check waiver, and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create.
 Those creates are no longer unbound: a create that names no harness and no account resolves the workspace's default account through `.mngr/settings.local.toml` (written by the chat app's `create_defaults.py` from the account store), carries its `account=<id>` label, and is refused by `system/scripts/require_create_account.py` when no account is signed in.
 That changes what they run on, not what they are: they remain own chats with no `MINDS_CHAT_ID`.
 
@@ -608,7 +609,7 @@ Where the minds repo is touched, the paired branch is named.
 | minds e2e runner (`e2e_workspace_runner.py`) | finds the chat frame by `/agent-<hex>/` | unchanged (chat ids keep the prefix) | unchanged |
 | minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events` | served by the aliases | retargeted to `/api/chats/...` |
 | minds deployment tests | `/api/agents/...` | aliases | retargeted |
-| minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID` | unchanged |
+| minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID`; then, after phase 4, created through the chat app by `message_chat.py --create` (4.5), so they are chat-app chats with `MINDS_CHAT_ID` | unchanged |
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |
