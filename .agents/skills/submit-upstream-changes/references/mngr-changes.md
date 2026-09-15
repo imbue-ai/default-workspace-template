@@ -43,7 +43,7 @@ usually needs to carry nothing but that pin bump, if anything.
        --with-editable .external_worktrees/mngr/libs/mngr_claude   # plus the other plugins you need
    # ...test...
    # restore the build pyproject.toml calls for
-   bash system/scripts/build_mngr_tools.sh
+   python3 system/scripts/install_mngr.py
    ```
 
 3. Commit in the checkout and follow mngr's own conventions from there (its
@@ -53,4 +53,4 @@ usually needs to carry nothing but that pin bump, if anything.
 
 4. After it merges: bump the pin here by editing the `rev` under
    `[tool.uv.sources]` in `pyproject.toml` to the public-mirror commit that
-   carries it, then `uv lock` and `bash system/scripts/build_mngr_tools.sh`.
+   carries it, then `uv lock` and `python3 system/scripts/install_mngr.py`.

@@ -34,7 +34,7 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 # The reserved latchkey host an agent POSTs to when asking the user to approve an
 # action, and the POST method flag that distinguishes filing a request from reading
 # the queue. The host is verbatim `PERMISSION_REQUEST_HOST` from
-# system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py, the
+# system/apps/chat/imbue/chat/harnesses/tool_output.py, the
 # reader this gate exists for (the wrapper names the rest of that seam). The method
 # match is a superset of that parser's `-X\s*POST|--request\s*POST`: token-wise, and
 # accepting the `=` form, so `--request=POST` -- which curl honors -- is gated too.
@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         "Re-run with just the one request, in the foreground, output untouched:\n"
         "  latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \\\n"
         "    -H 'Content-Type: application/json' \\\n"
-        '    -d \'{"agent_id": "\'"$MNGR_AGENT_ID"\'", ...}\'\n\n'
+        '    -d \'{"agent_id": "\'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"\'", ...}\'\n\n'
         "Filing another request straight after this one is fine -- it just needs a "
         "tool call of its own.\n"
     )

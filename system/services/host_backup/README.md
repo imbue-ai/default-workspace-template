@@ -11,7 +11,7 @@ an encrypted restic repo on cheaper object storage.
 ## Behavior
 
 - Single long-running tick loop run as the `host-backup` supervisord program
-  (defined in `system/supervisord.conf`, started by supervisord after `bootstrap`).
+  (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
 - The repository is created (and keyed) by the minds app, not by
   host_backup: minds runs `restic init` from outside the workspace -- the
@@ -59,9 +59,19 @@ an encrypted restic repo on cheaper object storage.
     `<btrfs-mount>/snapshots/<timestamp>` -- never a reused path. Under the
     sandbox's file gofer a reused path serves a stale, deleted subvolume, so
     only the first post-boot backup would capture data; unique names avoid
-    that. After the backup, the oldest snapshots beyond `max_local_snapshots`
-    (default 5) are deleted by name via a `cleanup` request that carries the
-    snapshot name as `target`.
+    that. As soon as restic has finished reading, the snapshot is deleted by
+    name via a `cleanup` request that carries the snapshot name as `target`,
+    so no snapshot exists between ticks: the local snapshot is only restic's
+    consistent read source (history lives in the repository), and a retained
+    one would pin the copy-on-write delta of everything deleted since it was
+    taken -- under the slice data disk's quota, space the workspace could not
+    reclaim until the next tick. A leftover from a crashed tick is swept the
+    same way before the next snapshot is taken. The snapshot is checked for
+    the subtree restic is about to read (`read_subpath`, `home`) before restic
+    runs: without it the tick fails a step later with restic complaining about
+    its own arguments, saying nothing about the snapshot they came from, so a
+    missing subtree instead aborts the tick with a `snapshot_failed` event
+    naming what the snapshot does hold.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
@@ -70,9 +80,14 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
-- After every successful backup, `restic forget --keep-hourly N --keep-daily
-  M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
-  once per `prune_interval_hours` (default 24) we additionally run
+- After every successful backup, `restic forget --group-by '' --keep-hourly N
+  --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
+  Grouping is disabled because restic applies the keep-* policy per group and
+  its default grouping (`host,paths`) would put every snapshot in a group of
+  its own -- `outer_trigger` reads each tick from a uniquely-named snapshot
+  path, and a container rebuild changes the hostname -- so the whole
+  repository (which belongs to this one workspace) is thinned as a unit. At
+  most once per `prune_interval_hours` (default 24) we additionally run
   `restic prune` (the slow data deletion step); gated by
   `data/.state/last-restic-prune` (a timestamp file under data/, covered by
   the opt-in GitHub sync when enabled).
@@ -136,7 +151,7 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `capabilities_detected` (once at service startup)
 - `backup_started`, `snapshot_created`, `snapshot_failed` (the snapshot step
   aborted the tick before restic ran), `snapshot_deleted` (one per deleted
-  snapshot -- `outer_trigger` may emit several per tick during keep-N pruning)
+  snapshot -- `outer_trigger` may emit several per tick when it sweeps leftovers)
 - `restic_backup_succeeded`, `restic_backup_failed`
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)
 - `forget_completed`, `prune_completed`, `prune_skipped`
@@ -177,7 +192,7 @@ never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this
 library alone:
 
-- the `[program:host-backup]` block in `system/supervisord.conf`,
+- the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
 - the `uv run host-backup` / `uv run host-backup-now` entry points.
 

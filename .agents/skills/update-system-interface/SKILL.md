@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
 metadata:
   author: imbue
 ---
@@ -8,7 +8,7 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). A broken build here is
+(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -219,12 +219,16 @@ If the user **approves** the preview:
    verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/apps/system_interface/` has not changed since the worker branched (for
-   example, another pass merged in the meantime):
+   `system/apps/system_interface/`, `system/apps/chat/frontend/`, the shared
+   `system/libs/workspace_ui/`, and the npm lockfile (the trees the shell's and
+   the chat's bundles are stamped over; the apply installs the worker's bundles
+   only as a pair, so a stale chat stamp costs the shell's bundle too) have not
+   changed since the worker branched (for example, another pass merged in the
+   meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/apps/chat/frontend/ system/libs/workspace_ui/ system/package-lock.json
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
@@ -260,7 +264,8 @@ WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-$SLUG" \
-    --worker-bundle "$WORK_DIR/system/apps/system_interface/imbue/system_interface/static"
+    --worker-bundle "system_interface=$WORK_DIR/system/apps/system_interface/imbue/system_interface/static" \
+    --worker-bundle "chat=$WORK_DIR/system/apps/chat/imbue/chat/static"
 ```
 
 That single command owns the whole go-live as one deterministic, self-healing
@@ -297,10 +302,12 @@ Interpret the exit code and report it to the user:
   a rollback whose own git steps failed). The interface may be down; escalate
   immediately. The pre-apply copies are kept under
   `data/.state/update-apply/snapshots/`, and when the apply touched the
-  frontend the stderr names the bundle copy -- copying it back over
-  `system/apps/system_interface/imbue/system_interface/static/` needs neither
-  `npm` nor a registry, so pass that path on with the escalation. Read the
-  stderr rather than assuming a path is there. This exit also leaves a durable
+  frontend the stderr names a copy per bundle (the shell's and the chat's) --
+  copying each back over its own served directory
+  (`system/apps/system_interface/imbue/system_interface/static/` and
+  `system/apps/chat/imbue/chat/static/`) needs neither `npm` nor a registry,
+  so pass both paths on with the escalation. Read the stderr rather than
+  assuming a path is there. This exit also leaves a durable
   `data/.state/update-apply/emergency.json` (reason, the agent that drove the
   apply, where the copies are) and the system interface shows a banner off it
   until it is gone, so deleting that file once the workspace is verified

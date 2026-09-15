@@ -15,7 +15,7 @@ grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/e
 
 Revival guidelines when a worker was shed:
 
-- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`mngr message <worker> -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or `mngr message` will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
+- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`uv run .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or a message will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
 - **If the same worker has already been shed twice** (two `process_shed` lines naming it): stop. Do not keep reviving -- surface to the user with the ledger details, because something about this worker's footprint is incompatible with the current memory budget. Reviving again will most likely just be shed a third time.
 
 If the worker was *not* in the ledger, it died for some other reason (e.g. a claude crash); proceed with the normal restart path below, where a plain `mngr start` suffices.
@@ -31,8 +31,12 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 2. Once it reaches `WAITING`, message it like any live agent -- ask it to continue, finish, or submit:
 
    ```bash
-   mngr message <worker> -m "your previous run died. inspect git status and continue / submit as appropriate."
+   uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+       --task-file data/.tasks/launch-task/<worker>/task.md \
+       -m "your previous run died. inspect git status and continue / submit as appropriate."
    ```
+
+   `reply` reaches the worker's chat through the chat app by the agent id `launch` stamped into the task file (never by the worker's name); a task file from an older launcher takes `--name <worker>`.
 
 3. From here it's a normal worker again -- finalize via `submit-upstream-changes` when done.
 

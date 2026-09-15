@@ -38,10 +38,17 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../imbue/system_interface/static"),
     emptyOutDir: true,
+    rollupOptions: {
+      // The shell document. The browser-side contract module is a separate library build
+      // (vite.contract.config.ts); the chat page is the chat app's own build.
+      input: {
+        index: path.resolve(__dirname, "index.html"),
+      },
+    },
   },
   server: {
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": { target: "http://localhost:8000", ws: true },
     },
   },
 });

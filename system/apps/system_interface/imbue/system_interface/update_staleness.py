@@ -73,37 +73,48 @@ _GIT_TIMEOUT_SECONDS = 10.0
 # holds nothing worth a graceful exit, and this runs on a request thread.
 _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
-# What makes THIS running process stale: the code it holds in memory, the
-# manifests its environment was resolved from, and the settings file it
-# re-reads with long-lived parsing code. Deliberately NOT the frontend (the
-# served bundle is rebuilt on disk without a restart), docs, skills, tests, or
-# anything else agents routinely commit. (The update apply itself restarts the
+# What makes THIS running process stale: the code it holds in memory and the
+# manifests its environment was resolved from. Deliberately NOT the frontend
+# (the served bundle is rebuilt on disk without a restart), docs, skills,
+# tests, the other apps (separate processes, restarted with this one by every
+# apply), the mngr settings file (never read by this process), the root
+# lockfile (see ``_BACKEND_MANIFESTS``), or anything else agents routinely
+# commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
 # a tree moved by anything else.)
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the OOM banding library (``agent_manager``,
-# ``oom_prioritizer``) and the tk command parser (the claude/codex/pi-coding tool
-# labels). All are editable installs resolving straight into these trees, so the
-# moment one advances this process is running old code. mngr (imported in-process
-# and shelled out to) is installed from the commit pyproject.toml pins, so a move
-# of that pin reaches this list through the root manifests below.
+# from: its own backend and the instances and manifest libraries. All are editable
+# installs resolving straight into these trees, so the moment one advances this
+# process is running old code. mngr (imported in-process and shelled out to) is
+# installed from the commit pyproject.toml pins, so a move of that pin reaches
+# this list through the root manifests below.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
-    "system/services/oom_priority/",
-    "system/libs/tk_command_parsing/",
+    "system/libs/app_instances/",
+    "system/libs/app_manifest/",
 )
-_LIVE_SETTINGS_FILE = ".mngr/settings.toml"
+# The manifests this environment was resolved from. The root ``uv.lock`` is
+# deliberately absent: scaffolding an app relocks it (``uv sync
+# --all-packages``, so the root lockfile learns the new workspace member),
+# which moves nothing this process resolved but would raise the banner on every
+# app a user builds. The root ``pyproject.toml`` stays -- the scaffold no
+# longer edits it, since the ``system/apps/*`` member glob picks a new package
+# up, so it still catches a ``[tool.uv.sources]`` re-point or a
+# ``[tool.uv.workspace]`` members/exclude edit. That leaves this list a
+# deliberate narrowing away from the apply's ``_is_backend_manifest`` in
+# ``.agents/skills/update-self/scripts/update_classification.py``, which it
+# otherwise mirrors: over-counting costs the apply one extra reinstall, and
+# costs this banner the trust it only gets to spend once.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
-        "system/services/oom_priority/pyproject.toml",
-        "system/libs/tk_command_parsing/pyproject.toml",
+        "system/libs/app_instances/pyproject.toml",
+        "system/libs/app_manifest/pyproject.toml",
         "pyproject.toml",
-        "uv.lock",
     }
 )
 
@@ -115,7 +126,7 @@ def _is_test_file(path: str) -> bool:
 
 def _is_path_relevant_to_this_server(path: str) -> bool:
     """Whether a change to ``path`` leaves this running server stale."""
-    if path == _LIVE_SETTINGS_FILE or path in _BACKEND_MANIFESTS:
+    if path in _BACKEND_MANIFESTS:
         return True
     if path.startswith(_IMPORTED_SOURCE_PREFIXES):
         return path.endswith(".py") and not _is_test_file(path)

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Zenbox: unread Slack messages as aging potted plants in a zen garden">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#243b53"/>
+      <stop offset="1" stop-color="#334e68"/>
+    </linearGradient>
+    <linearGradient id="sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#efe4cf"/>
+      <stop offset="1" stop-color="#e2d3b3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- frame + night sky -->
+  <rect width="240" height="160" rx="12" fill="url(#sky)"/>
+
+  <!-- raked sand bed -->
+  <path d="M0 66 L240 52 L240 160 L0 160 Z" fill="url(#sand)"/>
+  <g fill="none" stroke="#d3c09c" stroke-width="1.4" stroke-linecap="round" opacity="0.85">
+    <path d="M6 96 Q120 84 234 92"/>
+    <path d="M6 108 Q120 96 234 104"/>
+    <path d="M6 120 Q120 108 234 116"/>
+    <path d="M6 132 Q120 120 234 128"/>
+    <path d="M6 144 Q120 132 234 140"/>
+  </g>
+
+  <!-- fresh green plant (recent unread) -->
+  <g>
+    <ellipse cx="52" cy="120" rx="20" ry="5" fill="#000000" opacity="0.10"/>
+    <path d="M52 96 C42 84 44 74 50 66" fill="none" stroke="#3ba55d" stroke-width="3.4" stroke-linecap="round"/>
+    <path d="M52 98 C60 88 62 80 60 72" fill="none" stroke="#3ba55d" stroke-width="3.4" stroke-linecap="round"/>
+    <path d="M52 100 C50 90 50 82 52 74" fill="none" stroke="#4fc27a" stroke-width="3.4" stroke-linecap="round"/>
+    <ellipse cx="49" cy="66" rx="6" ry="9" fill="#4fc27a" transform="rotate(-24 49 66)"/>
+    <ellipse cx="61" cy="72" rx="6" ry="9" fill="#3ba55d" transform="rotate(26 61 72)"/>
+    <ellipse cx="52" cy="72" rx="5" ry="9" fill="#57cf85"/>
+    <path d="M40 102 L64 102 L61 120 L43 120 Z" fill="#c26b3f"/>
+    <rect x="38" y="98" width="28" height="7" rx="2" fill="#d67c4d"/>
+  </g>
+
+  <!-- yellowing plant (a few hours old) -->
+  <g>
+    <ellipse cx="120" cy="126" rx="20" ry="5" fill="#000000" opacity="0.10"/>
+    <path d="M120 104 C112 94 112 86 116 80" fill="none" stroke="#c9a227" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M120 106 C128 98 129 90 127 84" fill="none" stroke="#c9a227" stroke-width="3.2" stroke-linecap="round"/>
+    <ellipse cx="115" cy="80" rx="6" ry="8" fill="#e2c541" transform="rotate(-30 115 80)"/>
+    <ellipse cx="128" cy="84" rx="6" ry="8" fill="#cdb02f" transform="rotate(30 128 84)"/>
+    <ellipse cx="121" cy="82" rx="5" ry="8" fill="#d9be3a"/>
+    <path d="M108 108 L132 108 L129 126 L111 126 Z" fill="#c26b3f"/>
+    <rect x="106" y="104" width="28" height="7" rx="2" fill="#d67c4d"/>
+  </g>
+
+  <!-- drooping brown plant (over a day old) -->
+  <g>
+    <ellipse cx="188" cy="122" rx="20" ry="5" fill="#000000" opacity="0.10"/>
+    <path d="M188 102 C182 96 176 94 170 96" fill="none" stroke="#8a6a45" stroke-width="3" stroke-linecap="round"/>
+    <path d="M188 104 C194 100 200 100 205 104" fill="none" stroke="#8a6a45" stroke-width="3" stroke-linecap="round"/>
+    <ellipse cx="168" cy="97" rx="6" ry="7" fill="#9a7b4f" transform="rotate(64 168 97)"/>
+    <ellipse cx="206" cy="105" rx="6" ry="7" fill="#856a44" transform="rotate(-58 206 105)"/>
+    <ellipse cx="188" cy="94" rx="5" ry="7" fill="#7f6540" transform="rotate(8 188 94)"/>
+    <path d="M176 104 L200 104 L197 122 L179 122 Z" fill="#c26b3f"/>
+    <rect x="174" y="100" width="28" height="7" rx="2" fill="#d67c4d"/>
+  </g>
+
+  <text x="14" y="26" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#e8eef4">Zenbox</text>
+  <text x="14" y="42" font-family="sans-serif" font-size="8.5" fill="#9fb3c8" letter-spacing="0.4">unread Slack, wilting with age</text>
+</svg>

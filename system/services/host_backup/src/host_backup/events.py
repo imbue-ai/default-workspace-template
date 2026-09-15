@@ -139,6 +139,10 @@ class SnapshotFailedEvent(BackupEvent):
     error_message: str = Field(
         description="Failure detail (for outer_trigger, includes the helper's exit code + stderr)"
     )
+    consecutive_failures: int = Field(
+        default=0,
+        description="How many ticks in a row have now failed (1 on the first failure)",
+    )
 
 
 class SnapshotDeletedEvent(BackupEvent):

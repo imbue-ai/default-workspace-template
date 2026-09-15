@@ -9,9 +9,12 @@
 #                                                   frontend bundles at build time
 #   libs/mngr_ttyd/imbue/mngr_ttyd/resources/       the OSC 52-capable ttyd client
 #                                                   the terminal app serves
+#   style_guide.md                                  the base code style guide,
+#                                                   docs/system/style_guide.md
 #
 # At a git pin, a sparse, blob-filtered fetch pulls only those paths and the result
-# carries a .commit marker, so re-running at the same pin is a no-op. With a local
+# carries a .commit marker naming the pin and the asset list, so re-running with
+# both unchanged is a no-op. With a local
 # mngr tree (system/vendor/mngr, while developing against a checkout) they are
 # copied from it every time, since that tree changes without a commit.
 set -euo pipefail
@@ -21,16 +24,19 @@ ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
     libs/mngr_ttyd/imbue/mngr_ttyd/resources
+    style_guide.md
 )
 
 read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
+asset_list_hash="$(printf '%s\n' "${ASSET_PATHS[@]}" | shasum | cut -c1-12)"
 
 if [ -z "${REV:-}" ]; then
     # A local tree prints a single path.
     source_tree="$GIT_URL"
     marker="local"
 else
-    if [ -f "$ASSETS_DIR/.commit" ] && [ "$(cat "$ASSETS_DIR/.commit")" = "$REV" ]; then
+    marker="$REV $asset_list_hash"
+    if [ -f "$ASSETS_DIR/.commit" ] && [ "$(cat "$ASSETS_DIR/.commit")" = "$marker" ]; then
         exit 0
     fi
     source_tree="$(mktemp -d)"
@@ -40,7 +46,6 @@ else
     git -C "$source_tree" sparse-checkout set --no-cone "${ASSET_PATHS[@]}"
     git -C "$source_tree" fetch -q --depth=1 --filter=blob:none origin "$REV"
     git -C "$source_tree" checkout -q FETCH_HEAD
-    marker="$REV"
 fi
 
 staging="$ASSETS_DIR.tmp"

@@ -1,4 +1,4 @@
-"""Standalone system-interface server over a real tool-heavy transcript, for
+"""Standalone chat-app server over a real tool-heavy transcript, for
 manually verifying the transcript smooth-scroll engine in a browser.
 
 Mirrors test_e2e's harness: fake agent state dirs, a fixture claude config dir
@@ -14,14 +14,14 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.config import Config
-from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.server import create_application
-from imbue.system_interface.testing import RecordingMngrMessenger, build_test_state
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from imbue.system_interface.wsgi import make_threaded_server
+from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_manager import AgentManager
+from imbue.chat.config import Config
+from imbue.chat.models import AgentStateItem
+from imbue.chat.server import create_application
+from imbue.chat.testing import RecordingMngrMessenger, build_test_state
+from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.chat.wsgi import make_threaded_server
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8642
 # One or more source session JSONLs, served as consecutive sessions of one
@@ -79,7 +79,7 @@ def main() -> None:
             },
         ),
         patch(
-            "imbue.system_interface.server.discover_agents", return_value=[agent_info]
+            "imbue.chat.server.discover_agents", return_value=[agent_info]
         ),
     ):
         broadcaster = WebSocketBroadcaster()
@@ -94,7 +94,7 @@ def main() -> None:
             )
         manager._ensure_activity_tracking(agent_info.id)
 
-        config = Config(system_interface_host="127.0.0.1", system_interface_port=PORT)
+        config = Config(chat_host="127.0.0.1", chat_port=PORT)
         app = create_application(build_test_state(config=config, agent_manager=manager))
         server = make_threaded_server("127.0.0.1", PORT, app)
         print(f"serving http://127.0.0.1:{PORT} agent={AGENT_ID}", flush=True)
