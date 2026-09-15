@@ -8,6 +8,7 @@ the agent quietly running on the shared credential instead.
 from pathlib import Path
 
 import pytest
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import commit_account
@@ -100,6 +101,25 @@ def test_an_agy_account_on_a_pasted_key_binds_by_the_env_file_and_the_mode(tmp_p
     assert args == ["--env-file", str(gemini_env_path(tmp_path)), "--setting", GEMINI_MODE_SETTING]
     # The setting names the mngr agent type, not agy's `agy` alias, or it resolves to nothing.
     assert GEMINI_MODE_SETTING == 'agent_types.antigravity.settings_overrides__extend={"modelProvider":"gemini"}'
+
+
+def test_every_binding_is_accepted_by_the_live_mngr_cli(tmp_path: Path) -> None:
+    """The tests above compare these arguments to a hand-written copy of themselves, so they
+    drift with the code that produces them. This one confronts them with the live CLI.
+
+    The key-mode `--setting` is the fragment that needs it: click sees an opaque string in a
+    `-S` value, while mngr resolves the key path against its config model at startup and
+    fails the whole create when it does not resolve -- so a renamed `settings_overrides`, or
+    an `__extend` the field stops accepting, breaks every agy key-mode create at runtime with
+    nothing here to notice.
+    """
+    key_account = tmp_path / "agy-key"
+    write_gemini_api_key(key_account, "AIzaSyValid")
+    bindings = [create_args(harness, tmp_path / harness.value, tmp_path / "state") for harness in _BOUND_HARNESSES]
+    bindings.append(create_args(HarnessType.ANTIGRAVITY, key_account, tmp_path / "state"))
+
+    for account_args in bindings:
+        assert_mngr_argv_valid(["mngr", "create", *account_args])
 
 
 def test_an_agy_account_without_a_key_still_binds_by_the_symlink(tmp_path: Path) -> None:
