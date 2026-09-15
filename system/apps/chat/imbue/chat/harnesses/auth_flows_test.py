@@ -15,11 +15,11 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
 from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.harnesses import auth_flows
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
 from imbue.chat.harnesses.antigravity.auth import gemini_env_path
 from imbue.chat.harnesses.antigravity.auth import read_gemini_api_key
-from imbue.chat.harnesses import auth_flows
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
