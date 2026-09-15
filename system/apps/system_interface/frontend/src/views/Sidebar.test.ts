@@ -265,8 +265,9 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>(".project-rail-all-apps")!.click();
       m.redraw.sync();
-      // terminal is pinned in this fixture, so the popover offers chat.
-      root.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
+      // terminal is pinned in this fixture, so the popover offers chat. The popover is a row
+      // of the shared menu, which portals to <body>.
+      document.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
       m.redraw.sync();
       expect(attrs.onRunAppAction).toHaveBeenCalled();
       expect(isExpanded()).toBe(false);
@@ -277,7 +278,7 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
       m.redraw.sync();
-      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         .find((el) => el.textContent?.trim() === "Focus last Terminal")!
         .click();
       m.redraw.sync();
@@ -317,7 +318,7 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>(".project-rail-header")!.click();
       m.redraw.sync();
-      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         .find((el) => el.textContent?.includes("Beta"))!
         .click();
       m.redraw.sync();
