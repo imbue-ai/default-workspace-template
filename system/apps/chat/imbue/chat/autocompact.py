@@ -89,7 +89,9 @@ class ChatAutoCompactor:
                     results.append(result)
         return results
 
-    def _check_agent_for_sweep(self, agent_name: str) -> tuple[bool, FinishedProcess | None]:
+    def _check_agent_for_sweep(
+        self, agent_name: str
+    ) -> tuple[bool, FinishedProcess | None]:
         if self._stop_event.is_set():
             return (False, None)
         return (True, self.check_agent(agent_name))
@@ -111,7 +113,10 @@ class ChatAutoCompactor:
         if result.returncode == 0:
             return result
         if result.returncode == 1:
-            logger.debug("Failed to run autocompact for {}: {}", agent_name, result.stderr)
+            # `mngr autocompact run` returns exit code 1 if the agent does not support compaction.
+            logger.debug(
+                "Failed to run autocompact for {}: {}", agent_name, result.stderr
+            )
             return None
         logger.warning(
             "Failed to run autocompact for {}: return code {}, stderr: {}",
