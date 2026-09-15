@@ -993,13 +993,24 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
             write_claude_env(account_path, claude_env_from_paste(api_key))
             return lane.provider_name
         case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            if not api_key:
+                raise FlowError("Paste a Gemini API key.")
             # The key becomes one line of a dotenv file, and mngr merges that file WHOLE into
             # the environment of every agent bound to the account -- so a value carrying a line
             # break would define variables of its own there. Refused rather than quoted: a
             # Gemini key is a single token, so whitespace in one is a bad paste either way (the
             # field next door takes a `KEY=value` block, which is what gets pasted here).
-            if not api_key or any(character.isspace() for character in api_key):
-                raise FlowError("A Gemini API key is a single token, with no spaces or line breaks in it.")
+            #
+            # Non-ASCII goes with it, for a second reason: the promote probe sends the key as an
+            # HTTP header value, which httpx encodes as ASCII, and the UnicodeEncodeError that
+            # raises is not an httpx error, so nothing downstream answers it. A smart dash or a
+            # zero-width space is how one arrives -- the key was copied out of a document rather
+            # than from AI Studio -- and `'​'.isspace()` is False, so the test above misses it.
+            if any(character.isspace() for character in api_key) or not api_key.isascii():
+                raise FlowError(
+                    "A Gemini API key is a single ASCII token, with no spaces, line breaks or "
+                    "typographic characters in it."
+                )
             try:
                 write_gemini_api_key(account_path, api_key)
             except AntigravitySettingsError as e:

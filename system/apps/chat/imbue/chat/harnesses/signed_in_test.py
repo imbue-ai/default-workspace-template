@@ -170,6 +170,21 @@ def test_a_status_that_is_not_about_the_key_is_unknown(tmp_path: Path) -> None:
     assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, http_get) is SignedIn.UNKNOWN
 
 
+def test_a_key_an_http_header_cannot_carry_is_signed_out(tmp_path: Path) -> None:
+    """httpx encodes a header value as ASCII, and the UnicodeEncodeError that raises is not an
+    httpx error -- so without its own arm it escapes this module's three-way answer and reaches
+    the endpoint as a 500. A key the request cannot carry is a verdict, not a blank."""
+    write_gemini_api_key(tmp_path, "AIzaSy—Valid")
+
+    def get(url: str, **kwargs: Any) -> httpx.Response:
+        # Building the request is where httpx encodes the header, and where the real
+        # `httpx.get` raises; nothing reaches the network.
+        httpx.Request("GET", url, headers=kwargs["headers"])
+        raise AssertionError("a key that cannot be encoded never gets sent")
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, get) is SignedIn.NO
+
+
 def test_a_check_that_cannot_reach_google_is_unknown(tmp_path: Path) -> None:
     write_gemini_api_key(tmp_path, "AIzaSyValid")
 
