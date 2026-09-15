@@ -36,6 +36,7 @@ every parser:
 
 import json
 import re
+import shlex
 from typing import Any
 from typing import Final
 
@@ -92,7 +93,18 @@ def is_tk_lifecycle_anywhere(command: str) -> bool:
     another command's quoted argument is not mistaken for a real lifecycle call.
     """
     parsed = parse_command(command)
-    return parsed is not None and any(s.tk_verb in _TK_LIFECYCLE_VERBS for s in parsed.segments)
+    if parsed is None:
+        return False
+    for segment in parsed.segments:
+        if segment.tk_verb in _TK_LIFECYCLE_VERBS:
+            return True
+        # Workspace instructions run commands through uv. The shell parser deliberately
+        # knows only shell syntax; unwrap this runner before asking it about the command.
+        if segment.words[:2] == ("uv", "run"):
+            wrapped = parse_command(shlex.join(segment.words[2:]))
+            if wrapped is not None and any(s.tk_verb in _TK_LIFECYCLE_VERBS for s in wrapped.segments):
+                return True
+    return False
 
 
 _PERMISSION_REQUEST_ID_KEY = '"request_id"'

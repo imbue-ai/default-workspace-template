@@ -132,9 +132,9 @@ def _js_string_argument(js: str, *keys: str) -> str | None:
         # quote -- e.g. codex serialising ``cmd: "tk create --step \"Title\""`` -- is captured
         # WHOLE, not clipped at the first ``\"``. (A bare ``[^"]*`` stopped there, defeating the
         # tk-command / apply_patch recognition and mangling the exec caption.)
-        match = re.search(rf'["\']?{re.escape(key)}["\']?\s*:\s*"((?:\\.|[^"\\])*)"', js)
+        match = re.search(rf"""["']?{re.escape(key)}["']?\s*:\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')""", js)
         if match:
-            return _unescape_js_string(match.group(1))
+            return _unescape_js_string(match.group(1) if match.group(1) is not None else match.group(2))
     return None
 
 
@@ -269,6 +269,23 @@ def shell_command(tool_name: str, raw_input: str) -> str | None:
     if call_match is None or call_match.group(1) != "exec_command":
         return None
     return _js_string_argument(raw_input, "cmd")
+
+
+@pure
+def shell_commands(tool_name: str, raw_input: str) -> tuple[str, ...]:
+    """Literal shell commands in a code-mode batch, including calls after other work."""
+    if tool_name != CODE_MODE_TOOL_NAME:
+        return ()
+    calls = list(_CODE_MODE_CALL_RE.finditer(raw_input))
+    commands: list[str] = []
+    for index, call in enumerate(calls):
+        if call.group(1) != "exec_command":
+            continue
+        end = calls[index + 1].start() if index + 1 < len(calls) else len(raw_input)
+        command = _js_string_argument(raw_input[call.end() : end], "cmd")
+        if command is not None:
+            commands.append(command)
+    return tuple(commands)
 
 
 @pure
