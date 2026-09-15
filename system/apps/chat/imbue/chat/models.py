@@ -446,6 +446,31 @@ class CreateChatRequest(FrozenModel):
         description="The first message the chat sends once it is running; empty sends none "
         "(a chat minted earlier keeps the message it was minted with)",
     )
+    labels: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra labels for the chat's agent (an ``auto_open`` that pops its tab, say); "
+        "the labels the app sets itself (``user_created``, ``display_name``, ``account``, ``project``) "
+        "are refused, and a chat minted earlier takes none",
+    )
+    is_installation_check_skipped: bool = Field(
+        default=False,
+        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
+        "for a caller that is about to repair that (the update run); a chat minted earlier takes none",
+    )
+    should_wait: bool = Field(
+        default=False,
+        description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
+        "failed, instead of as soon as the create has started",
+    )
+
+
+class ChatCreationOutcome(FrozenModel):
+    """How a chat's ``mngr create`` ended, for a caller that waited for it."""
+
+    is_created: bool = Field(description="Whether the chat now runs on its agent")
+    error: str = Field(
+        default="", description="Why the create failed, as the provisional record holds it; '' on success"
+    )
 
 
 class ProvisionalChatPhase(LowerCaseStrEnum):
