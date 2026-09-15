@@ -10,7 +10,8 @@ exists; you are not redesigning it, just repairing it.
 
 ## Valid report `name:` values
 
-- Gate: `final-creation` (Stage 6).
+- Gates: `final-creation` (Stage 6), and `question` mid-flight, whenever the
+  answer is not in your task file or the repo.
 - Terminal statuses: `done`, `stuck`.
 
 **System-interface exception.** When the creation is the system interface, emit
@@ -79,6 +80,8 @@ Fixed `<name>`:
 - Root cause: <one-sentence>
 - Change: <one-sentence>
 - Scenarios run: <list, all pass>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
 
 **App or service:**
@@ -88,7 +91,12 @@ Fixed app or service `<name>`:
 - Change: <one-sentence (root cause + fix)>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
+
+The last two lines come from the scope file (`harden-creation.md`); a
+creation with no footprint writes `none` for both.
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
 terminal report.

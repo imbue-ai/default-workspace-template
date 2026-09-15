@@ -106,7 +106,8 @@ assert the DOM actually has that shape (so the test can't silently pass against
 the wrong tree), and confirm it **fails before your fix and passes after** by
 reverting the change. If you genuinely cannot reach the named agent (it isn't
 discoverable from your instance), raise a `question` gate rather than falling back
-to a guessed fixture.
+to a guessed fixture. `question` is valid on every run, including the
+system-interface runs whose operation reference fires no approval gate at all.
 
 If the task says there is **no real scenario** (net-new work with no precedent in
 any existing conversation), build a representative synthetic fixture as usual --

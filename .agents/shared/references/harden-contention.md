@@ -46,16 +46,18 @@ grep -E "(update|heal) $TARGET" /tmp/harden-inflight.txt
     tk add-note <their-ticket-id> "Commits <range> also change $TARGET; this pass is now stale. Coalesce at merge time per harden-contention.md."
     ```
   - **Abandoned** (worker session gone, no report, holder agent not
-    running): take it over. Destroy the worker, delete its branch, close
-    their ticket with a note saying you superseded it, then dispatch your own
-    pass covering the union (see "Superseding a stale pass").
+    running): take it over. Destroy the worker with the launcher
+    (`--delete-branches`, which also takes its sub-workers and their branches),
+    close their ticket with a note saying you superseded it, then dispatch
+    your own pass covering the union (see "Superseding a stale pass").
 
 Do not queue a second pass behind a live one. Queued passes verify obsolete
 states; the newest pass always covers the union instead.
 
-## Before merge (on `done`): lease, freshness, conflicts
+## Before merge: lease, freshness, conflicts
 
-Run these in order before `git merge`:
+Run these in order before any merge from a worker branch -- the merge on `done`
+or a provisional milestone merge:
 
 1. **Wait out the foreground lease (apps and services only).** If the creation is
    an app or service and another agent holds its editing lease (an open/in-progress
@@ -65,23 +67,39 @@ Run these in order before `git merge`:
    will usually make your pass stale anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if the creation has not
-   changed since the worker branched:
+   changed since the worker branched. The paths to diff are the creation's
+   whole footprint, not just the files the worker touched, which is what the
+   worker's scope file holds. That file lives under the worker's own `data/`
+   (gitignored, and only the reports directory syncs back), so recompute it on
+   your side with the same command:
 
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
-   git diff --name-only "$BASE" HEAD -- <CREATION_PATHS>
+   SCOPE=$(mktemp)
+   # an app with a manifest:
+   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
+   # a skill:
+   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
+
+   PATHS=$(jq -r '[.primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
+   [ -n "$PATHS" ] || exit 1
+   git diff --name-only "$BASE" HEAD -- $PATHS
    ```
 
-   `<CREATION_PATHS>` is the creation's whole footprint, not just the files
-   the worker touched: for an app,
-   `system/apps/<package>/ system/supervisord.conf.d/<name>.conf`
-   (a standalone service likewise, under `system/services/<package>/`);
-   for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path; for the system interface, `system/apps/system_interface/` (that
-   creation's merge lives in `update-system-interface` Step 4, which applies
-   this same check). Empty output means fresh: merge normally. Any output
-   means the base moved under the worker: the pass is stale -- do not merge;
-   supersede it (below).
+   The two guards matter: with an empty `$PATHS` the diff covers the whole
+   tree, and any commit anywhere reads as a moved base. If the footprint
+   command fails (a reference the manifest names no longer exists, say), fix
+   the manifest on your branch first and rerun; do not treat the failure as
+   staleness. When the worker's `done` report lists paths under `References
+   registered:`, add them to `$PATHS` as well -- your tree's manifest predates
+   them.
+   A creation with no manifest is diffed at its own path: a standalone service
+   under `system/services/<package>/` (plus `system/supervisord.conf.d/<name>.conf`), a shared
+   script or reference at its path, the system interface at
+   `system/apps/system_interface/` (that creation's merge lives in
+   `update-system-interface` Step 4, which applies this same check). Empty
+   output means fresh: merge normally. Any output means the base moved under
+   the worker: the pass is stale -- do not merge; supersede it (below).
 
    No shared *authored* file remains in that footprint -- a creation's
    supervisord program lives in its own drop-in rather than in the shared
@@ -124,21 +142,52 @@ Run these in order before `git merge`:
    nothing is being chosen by hand. If anything *outside* the lockfiles also
    conflicts, the carve-out does not apply -- abort and supersede.
 
+### Provisional milestone merges
+
+A worker can declare a **milestone** mid-pass: a commit it says is already worth
+using (`worker-reporting.md` for the worker's side, `lead-proxy.md`'s
+"Milestone reports: provisional merge" for the lead's). Merging one runs the
+same three checks above, with the target pinned to the milestone's `commit:`
+rather than the branch tip.
+
+This is the **one sanctioned way not-yet-hardened work reaches the lead's
+branch**. The merge commit says so (`Provisional merge of <worker> at milestone
+<name>`), and it is verified only as far as the milestone's `## Tested` states.
+
+The freshness rule composes: the provisional merge advances
+`git merge-base HEAD "$WORKER_BRANCH"` to the milestone commit, so at `done` the
+same check covers exactly the window since that merge, and a foreground edit
+inside it makes the pass stale by the usual rule.
+
 ## Superseding a stale pass (coalescing)
 
 Whoever finds the staleness -- the pass owner at merge time, or the agent
 taking over an abandoned pass -- replaces it with **one** new pass:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name>
-git branch -D <worker-branch>
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
 tk close <old-ticket-id> "Superseded -- base moved under the pass; re-dispatched covering the union."
 ```
 
-Deleting the branch is deliberate: its verification ran against a base that
-no longer exists, so nothing on it is trustworthy to keep. Then dispatch a
+Deleting the branches is deliberate: the verification ran against a base
+that no longer exists, so nothing on the pass or its sub-workers is worth
+keeping. Then dispatch a
 fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
 scope covers **everything since the last hardened merge**: at minimum the
 `$BASE..HEAD` commits touching the creation, plus whatever any notes on the
 old ticket describe. One superseding pass validates the union of all pending
 changes together -- which is the only combination that will actually run.
+
+Two wrinkles when the pass had already delivered a provisional milestone
+merge:
+
+- **A provisionally merged milestone survives.** It is already a commit on your
+  own branch, so deleting the worker branch does not take it back out; only the
+  hardening done after that milestone is lost, and the superseding pass redoes
+  it.
+- **A reverted milestone must be reinstated or superseded.** If you rolled a
+  provisional merge back with `git revert -m 1 <merge-commit>`, the reverted
+  commits are still ancestors of HEAD, so any later merge from that branch
+  silently omits them. Reinstate them with `git revert <revert-commit>` before
+  merging from that branch again, or supersede the pass so a fresh one rebuilds
+  the work from the current base.
