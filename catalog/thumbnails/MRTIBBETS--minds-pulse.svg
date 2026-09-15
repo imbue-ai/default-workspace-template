@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Mind Pulse">
-  <!-- Bespoke thumbnail: a heartbeat/pulse line crossing a cost stat tile, in Mind green on an off-white card. Mock data only. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Minds Pulse">
+  <!-- Bespoke thumbnail: a heartbeat/pulse line crossing a cost stat tile, in Minds green on an off-white card. Mock data only. -->
   <rect width="240" height="160" rx="14" fill="#fafaf8"/>
   <rect x="0.75" y="0.75" width="238.5" height="158.5" rx="13.25" fill="none" stroke="#e4e6e1" stroke-width="1.5"/>
 
@@ -9,7 +9,7 @@
   <circle cx="34" cy="30" r="4.5" fill="#2f6b4f"/>
 
   <!-- title -->
-  <text x="56" y="27" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#20372c">Mind Pulse</text>
+  <text x="56" y="27" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#20372c">Minds Pulse</text>
   <text x="56" y="41" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#6b7a72">host-wide AI cost + system activity</text>
 
   <!-- stat tile -->
