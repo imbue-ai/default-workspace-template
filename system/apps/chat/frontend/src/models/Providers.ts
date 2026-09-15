@@ -31,6 +31,9 @@ export interface LaneMethod {
   signup_url: string;
   shape: FlowShape;
   is_primary: boolean;
+  /** Whether a credential this method writes is copied into a chat at create time, so
+   *  re-keying reaches chats started afterwards and leaves the running ones alone. */
+  is_reauth_new_chats_only: boolean;
 }
 
 export interface KeyProvider {

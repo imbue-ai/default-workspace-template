@@ -126,6 +126,9 @@ def test_the_google_lane_can_also_be_signed_in_by_pasting_a_gemini_key() -> None
     assert method.sink is PasteSink.ANTIGRAVITY_GEMINI_ENV
     # The subscription stays primary: someone in the chooser is at a UI already.
     assert LANE_GOOGLE.methods[0].id == "oauth"
+    # mngr copies this key into each chat's own environment at create, unlike every other
+    # credential, which its harness reads from the account folder at every turn.
+    assert method.is_reauth_new_chats_only
 
 
 def test_the_google_key_provider_names_the_variable_agy_reads() -> None:
