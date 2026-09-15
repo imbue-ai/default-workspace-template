@@ -44,6 +44,7 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.antigravity.auth import AntigravitySettingsError
 from imbue.chat.harnesses.antigravity.auth import gemini_credential_paths
 from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.binding import seed_account
@@ -983,7 +984,13 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
             write_claude_env(account_path, claude_env_from_paste(api_key))
             return lane.provider_name
         case PasteSink.ANTIGRAVITY_GEMINI_ENV:
-            write_gemini_api_key(account_path, api_key)
+            try:
+                write_gemini_api_key(account_path, api_key)
+            except AntigravitySettingsError as e:
+                # Carried through as a flow failure so the endpoint answers 400 with the
+                # message naming the file, as it does for every other refused paste. A bare
+                # RuntimeError here is a 500 with nothing the modal can show.
+                raise FlowError(str(e)) from e
             # Its own noun rather than the lane's: the browser methods on this lane mint
             # "Google" accounts, and a key account runs on different models and a different
             # bill, so two rows reading "Google" would be the wrong two rows.

@@ -18,12 +18,15 @@ from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
 from imbue.chat.harnesses.antigravity.auth import gemini_env_path
 from imbue.chat.harnesses.antigravity.auth import read_gemini_api_key
+from imbue.chat.harnesses import auth_flows
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import PasteSink
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
@@ -702,3 +705,18 @@ def test_an_abandoned_key_re_auth_puts_both_files_back(tmp_path: Path) -> None:
 
     assert read_gemini_api_key(account_path) == "AIzaSyGood"
     assert _gemini_settings(account_path)["modelProvider"] == "gemini"
+
+
+def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_request(tmp_path: Path) -> None:
+    """A credential the sink refuses to write is a flow failure, which the endpoint answers with
+    the message naming the file. A bare RuntimeError out of the writer is a 500 with nothing in
+    it, which is the one thing that tells the user which file to go and look at."""
+    account_path = tmp_path / "account"
+    settings = account_path / ".gemini" / "antigravity-cli" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"enableTips": tru')
+
+    with pytest.raises(FlowError, match="malformed JSON"):
+        auth_flows._write_paste(
+            PasteSink.ANTIGRAVITY_GEMINI_ENV, account_path, "AIzaSyValid", None, get_lane("google")
+        )
