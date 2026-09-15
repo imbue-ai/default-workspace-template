@@ -449,8 +449,9 @@ class CreateChatRequest(FrozenModel):
     labels: dict[str, str] = Field(
         default_factory=dict,
         description="Extra labels for the chat's agent (an ``auto_open`` that pops its tab, say); "
-        "the labels the app sets itself (``user_created``, ``display_name``, ``account``, ``project``) "
-        "are refused, and a chat minted earlier keeps the ones it was minted with",
+        "the labels the app sets itself (``APP_OWNED_LABEL_KEYS``: ``user_created``, ``display_name``, "
+        "``account``, ``project``, ``first``, ``chat_id``, ``chat_seq``) are refused, and a chat minted "
+        "earlier keeps the ones it was minted with",
     )
     is_installation_check_skipped: bool = Field(
         default=False,
