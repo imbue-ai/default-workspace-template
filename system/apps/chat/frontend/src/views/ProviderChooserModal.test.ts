@@ -107,7 +107,7 @@ const PI_KEY_LANE = lane({
 // are generic -- a mixed lane files its non-primary methods under "other ways to sign in", and a
 // single provider makes the key form one field rather than a picker -- so this is here to keep
 // them that way.
-const MIXED_LANE = lane({
+const GOOGLE_LANE = lane({
   id: "google",
   provider_name: "Google",
   harness: "antigravity",
@@ -234,7 +234,7 @@ describe("the provider chooser", () => {
   });
 
   it("offers a lane's paste method beside its browser ones", async () => {
-    state.lanes = [MIXED_LANE];
+    state.lanes = [GOOGLE_LANE];
     const root = document.createElement("div");
     const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
     draw();
