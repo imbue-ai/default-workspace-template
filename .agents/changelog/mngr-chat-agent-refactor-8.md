@@ -1,0 +1,1 @@
+The successor's first message after a handoff now carries the predecessor's summary in full, with the path it is kept at, rather than only the path: the `continue-chat` reference takes the summary's text, and the `handoff-summary` skill tells the retiring agent that what it writes goes into the successor's first message.
