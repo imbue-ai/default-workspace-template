@@ -1,0 +1,1 @@
+The minds-evals harness-arms spec (`specs/minds-eval-harbor/harness_arms.md`) now documents the `google` provider lane as runnable: it takes a pasted key through the accounts flow like the other single-provider lanes, derives its key variable as `GEMINI_API_KEY`, and accepts no `model`, `effort` or `fast`, because antigravity's model bar is read-only.

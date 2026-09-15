@@ -69,6 +69,7 @@ MOCK_HARNESS_BY_LANE: Final[Mapping[str, str]] = {
     "api-key": "pi-coding",
     "openrouter": "pi-coding",
     "opencode-go": "pi-coding",
+    "google": "antigravity",
 }
 
 # The exchange the workspace's first chat is given on creation. Every first chat gets it, so it is

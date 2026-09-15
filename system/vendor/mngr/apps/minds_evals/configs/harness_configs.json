@@ -56,6 +56,11 @@
       "effort": "low"
     },
     {
+      "name": "agy-default",
+      "is_nightly": false,
+      "lane": "google"
+    },
+    {
       "name": "opus-standard",
       "is_nightly": false,
       "lane": "anthropic",

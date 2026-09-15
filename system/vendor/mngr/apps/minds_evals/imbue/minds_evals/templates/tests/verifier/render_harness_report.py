@@ -138,13 +138,25 @@ FAILURE_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
 # failure. An errored result is scanned whatever tool produced it, since the error is the harness
 # speaking rather than the content the agent asked for.
 # A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
-# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, and codex in code mode runs every
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, antigravity calls it
+# `run_command`, and codex in code mode runs every
 # tool from inside an `exec` program, whose output is whatever that program printed -- and hands back
 # the rest of a program still running at its yield through `wait`, which is where a slow command's
 # failure arrives. `shell`, `shell_command` and `exec_command` are codex's shell with code mode off,
 # and `write_stdin` hands back the rest of an `exec_command` still running, as `wait` does for a program.
 EXECUTING_TOOLS: frozenset[str] = frozenset(
-    {"Bash", "BashOutput", "bash", "shell", "shell_command", "exec_command", "write_stdin", "exec", "wait"}
+    {
+        "Bash",
+        "BashOutput",
+        "bash",
+        "run_command",
+        "shell",
+        "shell_command",
+        "exec_command",
+        "write_stdin",
+        "exec",
+        "wait",
+    }
 )
 
 
@@ -328,8 +340,8 @@ def _recorded_harness(document: dict[str, Any]) -> str:
 
 
 def harness_of_document(document: dict[str, Any]) -> str:
-    """Which agent harness one ATIF document was written by -- `claude`, `pi-coding`, `codex` -- or
-    claude when nothing in it says.
+    """Which agent harness one ATIF document was written by -- `claude`, `pi-coding`, `codex`,
+    `antigravity` -- or claude when nothing in it says.
 
     A captured document's own ``agent.name`` is the harness that wrote it, which is the claim these
     claude-shaped criteria care about, so it decides wherever it is there. The driver's hand-built

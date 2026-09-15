@@ -21,12 +21,14 @@ from imbue.minds_evals.trajectory import build_hand_built_trajectory
 from imbue.minds_evals.usage import summarize_workspace_usage
 
 # The argument each tool carries its payload under, so a step reads the way the real document does.
-# `bash` is pi-coding's name for the shell claude calls `Bash`. codex runs in code mode, where every
+# `bash` is pi-coding's name for the shell claude calls `Bash`, and `run_command` is antigravity's,
+# which carries its command under `cmd`. codex runs in code mode, where every
 # call is the unified `exec` tool and the invocation is a whole JavaScript program under `_raw`;
 # with code mode off the same shell is `shell_command`, under `command`, or `exec_command`, under `cmd`.
 PAYLOAD_KEYS = {
     "Bash": "command",
     "bash": "command",
+    "run_command": "cmd",
     "shell_command": "command",
     "exec_command": "cmd",
     "exec": "_raw",
@@ -476,6 +478,26 @@ def test_pis_lowercase_shell_output_is_read_as_testimony_about_the_harness(
             command="uv run pytest",
             observation="ModuleNotFoundError: No module named 'playwright'",
             tool="bash",
+        )
+    ]
+
+    report, counts = harness_report_renderer.render_harness_report(steps, "LEAD AGENT")
+
+    assert counts == {"missing_module": 1}
+    assert "No module named 'playwright'" in report
+
+
+def test_antigravitys_shell_output_is_read_as_testimony_about_the_harness(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # antigravity names the shell `run_command` and carries the command under `cmd`, and what it
+    # prints is the same evidence the other harnesses' output is.
+    steps = [
+        _step(
+            1,
+            command="uv run pytest",
+            observation="ModuleNotFoundError: No module named 'playwright'",
+            tool="run_command",
         )
     ]
 

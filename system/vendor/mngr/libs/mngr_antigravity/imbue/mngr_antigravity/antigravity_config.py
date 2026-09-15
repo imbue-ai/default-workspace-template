@@ -327,12 +327,17 @@ ACTIVE_MARKER_FILENAME: str = "active"
 
 # Per-agent file (in ``$MNGR_AGENT_STATE_DIR``) recording every agy conversation
 # ID this agent has touched -- the root agent's and its subagents' -- one per
-# line, appended the first time each is seen (see ``capture_conversation_id.sh``).
-# Its unique lines are the full set ``stream_transcript.sh`` tails. This is the
-# transcript-scoping set only; the agent's *main* conversation for resume is
-# tracked separately in ``ROOT_CONVERSATION_FILENAME`` (the conversation-ids file
-# is unsuitable for resume because subagents also land in it). The capture script
-# hardcodes this same literal; keep them in sync.
+# line, appended the first time each is seen. Two writers: the ``PreInvocation``
+# capture hook (``capture_conversation_id.sh``, the only source of subagent ids)
+# and the ``statusLine`` command (``statusline.sh``, the root id only). The
+# statusLine writes it because agy never invokes that hook when signed in with a
+# Gemini API key (``modelProvider: "gemini"``), while its statusLine still fires;
+# without that second writer such an agent has no transcript at all. Its unique lines are
+# the full set ``stream_transcript.sh`` tails. This is the transcript-scoping set
+# only; the agent's *main* conversation for resume is tracked separately in
+# ``ROOT_CONVERSATION_FILENAME`` (the conversation-ids file is unsuitable for
+# resume because subagents also land in it). Both scripts hardcode this same
+# literal; keep them in sync.
 CONVERSATION_IDS_FILENAME: str = "antigravity_conversation_ids"
 
 # Script (provisioned into ``$MNGR_AGENT_STATE_DIR/commands/``) that the

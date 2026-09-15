@@ -101,13 +101,25 @@ def _as_the_client_reads_it(message: str) -> str:
 # the agent did not write and the client never saw, and rendering them as the agent's progress-view
 # copy grades it on someone else's words.
 # A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
-# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, and codex in code mode runs every
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, antigravity calls it
+# `run_command`, and codex in code mode runs every
 # tool from inside an `exec` program, whose output is whatever that program printed -- and hands back
 # the rest of a program still running at its yield through `wait`, which is where a slow command's
 # output arrives. `shell`, `shell_command` and `exec_command` are codex's shell with code mode off,
 # and `write_stdin` hands back the rest of an `exec_command` still running, as `wait` does for a program.
 EXECUTING_TOOLS: frozenset[str] = frozenset(
-    {"Bash", "BashOutput", "bash", "shell", "shell_command", "exec_command", "write_stdin", "exec", "wait"}
+    {
+        "Bash",
+        "BashOutput",
+        "bash",
+        "run_command",
+        "shell",
+        "shell_command",
+        "exec_command",
+        "write_stdin",
+        "exec",
+        "wait",
+    }
 )
 
 
@@ -211,8 +223,9 @@ def code_mode_commands(program: str) -> list[str]:
 def commands_in(arguments: dict[str, Any]) -> list[str]:
     """The shell commands one executing tool call runs, whichever shape its harness uses.
 
-    claude and pi-coding pass the command as an argument of the call; codex passes a code-mode
-    program under `_raw` and runs the shell from inside it.
+    claude, pi-coding and antigravity pass the command as an argument of the call -- under `cmd`
+    where antigravity's `run_command` puts it; codex passes a code-mode program under `_raw` and runs
+    the shell from inside it.
     """
     for key in ("command", "cmd"):
         value = arguments.get(key)

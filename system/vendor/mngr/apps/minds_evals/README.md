@@ -198,10 +198,10 @@ against a dataset shares its one image build and one generation.
 The harness follows the **provider lane** the workspace is signed in on, because that is how the
 product itself decides it; the model, effort and speed tier are then set through the product's own
 model endpoint before turn 1. The lanes that can be signed in without a human are `anthropic` (the
-claude harness), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
-Each of them offers a pasted-key sign-in, which is the only kind a run can drive; the workspace's
-one other lane, `google` (antigravity), offers only browser flows on a PTY and so needs a person at
-it.
+claude harness), `openai` (codex), `google` (antigravity), and `api-key`, `openrouter` and
+`opencode-go` (all pi-coding). Each of them offers a pasted-key sign-in, which is the only kind a
+run can drive; a lane whose every sign-in method is a browser or device flow on a PTY needs a
+person at it and cannot be named here at all.
 
 | kwarg | meaning | default |
 |---|---|---|
@@ -221,6 +221,14 @@ neither derived nor named are all refused when the driver is constructed -- befo
 rather than five minutes into a run. `--ak proxy=true` is refused off the `anthropic` lane too,
 because the in-box proxy can only meter that one; see
 [Token and cost accounting](#token-and-cost-accounting).
+
+**The `google` lane takes no model choice at all**, so `model`, `effort` and `fast` are refused
+there the same way: antigravity's model bar is read-only and the workspace's model endpoint answers
+a switch on it by saying so, which leaves the default harness config -- a lane and its key and
+nothing else -- as the only config the lane can run. Such a trial runs on whatever agy's own default
+is, a Flash tier the product does not name; in API-key mode agy's catalog is Gemini-only
+(`gemini-3.1-pro` at `low` and `high`, and `gemini-3.5`, `gemini-3.6` and `gemini-3.7-flash` at
+`low`, `medium` and `high`), but nothing here can select from it.
 
 **The default harness config** is a lane and its credentials and nothing else: no `model`, no
 `effort`, no `fast`. It makes no switch and changes no setting of the workspace, so the chat runs
@@ -269,17 +277,20 @@ OPENAI_API_KEY=... just minds-evals-run $DS codex-sol-low 3 --ak lane=openai \
 # codex on the 5.6 line's everyday model, at that model's own default effort
 OPENAI_API_KEY=... just minds-evals-run $DS codex-terra 3 --ak lane=openai \
   --ak model=gpt-5.6-terra --ak effort=medium
+# antigravity on agy's own default model, which is the only config the lane takes
+GEMINI_API_KEY=... just minds-evals-run $DS agy-default 3 --ak lane=google
 ```
 
 One dataset serves every harness config, and each run needs its own job name, because harbor refuses
-to reuse one. The `openai` lane also needs a workspace template that offers it a pasted-key sign-in,
-which default-workspace-template `main` does from `ea2fbc2cd` (2026-09-09) on: a dataset pinned to an
-older template (the `dwt_branch` its [eval config](#eval-config) pins, or `--dwt-ref` at generation)
-gets its sign-in refused on every trial, naming the lane.
+to reuse one. Two lanes also need a workspace template new enough to offer them a pasted-key
+sign-in: `openai` needs default-workspace-template `main` from `ea2fbc2cd` (2026-09-09) on, and
+`google` a template at or after the change that adds the paste method to that lane. A dataset pinned
+to an older template (the `dwt_branch` its [eval config](#eval-config) pins, or `--dwt-ref` at
+generation) gets its sign-in refused on every trial, naming the lane.
 
 **The named harness configs** live in `configs/harness_configs.json`: `default`, `haiku`,
-`pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash`, `codex-sol-low`, `codex-terra`, `codex-astra-low`
-and `opus-standard`, each a name, an `is_nightly` flag and the kwargs above. It is the list the
+`pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash`, `codex-sol-low`, `codex-terra`, `codex-astra-low`,
+`agy-default` and `opus-standard`, each a name, an `is_nightly` flag and the kwargs above. It is the list the
 [scheduled CI](#scheduled-ci) composes its cells from, and the place to look for a config that is
 known to work -- an entry's kwargs are exactly the flags to append to a `just minds-evals-run`
 line to drive the same arm locally, and the entry's own name is a job name that says which arm the
@@ -289,14 +300,16 @@ run was.
 
 The driver reads the workspace's key from the variable `key_env` names. Left unset, it derives one:
 `ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENAI_API_KEY` on the `openai` lane,
-`OPENROUTER_API_KEY` on the `openrouter` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane,
-upper-cased with dashes turned into underscores (`key_provider=openrouter` derives
-`OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives `ANT_LING_API_KEY`). The derivation is a
-convenience, not a contract with the workspace template: the template names the variable per
-provider and does not always follow the pattern (`google` reads `GEMINI_API_KEY`), and
-`opencode-go` has no derived default at all. Name the variable with `key_env` in those two cases. A
-variable that is unset stops the run at construction, naming the variable and the lane; a lane
-outside the table above is refused there too, and no `key_env` makes one runnable.
+`OPENROUTER_API_KEY` on the `openrouter` lane, `GEMINI_API_KEY` on the `google` lane -- the variable
+the template reads that provider's key from, which the lane id does not give away -- and
+`<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores
+(`key_provider=openrouter` derives `OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives
+`ANT_LING_API_KEY`). That last derivation is a convenience rather than a contract with the workspace
+template, which names the variable per provider and does not always follow the pattern (its `google`
+provider reads `GEMINI_API_KEY` there too), and `opencode-go` has no derived default at all. Name
+the variable with `key_env` in those two cases. A variable that is unset stops the run at
+construction, naming the variable and the lane; a lane outside the table above is refused there too,
+and no `key_env` makes one runnable.
 
 `just minds-evals-run` still requires only `ANTHROPIC_API_KEY` and does not learn about the other
 variables; the decider and the judges need it on every arm, and the driver's own check is what
@@ -402,6 +415,15 @@ trial's conversation carries a second record the harness config does not read. S
 account for its spend either, for a separate reason and with a separate owner (see
 [Token and cost accounting](#token-and-cost-accounting)).
 
+**An antigravity trial observes no model either, and asks for none.** The `google` lane refuses a
+model choice at construction, so such a trial records an empty `model`, `effort` and `fast` and
+`model_choice_switch: "skipped"` -- there was nothing to apply. mngr's antigravity transcript
+emitter stamps no per-step model name and no token metrics, and the workspace's own antigravity
+session parser reports the model as `unknown` with no usage, so `observed_models` and
+`welcome_model` stay empty, `is_model_confirmed` is `null`, and `usage.json` prices nothing: the
+trial's spend is unknown rather than zero, exactly as a codex trial's is. Neither renderer calls it
+unconfirmed, for the same reason neither calls a codex trial unconfirmed.
+
 A trial that silently ran on the wrong model is the failure worth catching, so read
 `is_model_confirmed` before reading a comparison. [`check-run`](#checking-a-finished-run) fails a
 trial whose `false` says it answered on another model, so a switch that did not take breaks the run
@@ -411,9 +433,9 @@ loudly instead of skewing a comparison quietly.
 
 An arm changes the system under test, in either half. A run with `fast=false` is not comparable to
 a run that left the template's fast mode on -- which is what the default harness config does -- and
-a pi-coding run is not comparable to a claude run on any dimension but cost. A codex run is not
-comparable on cost either: its spend is unknown rather than measured, so it belongs in no cost
-comparison at all (see [Token and cost accounting](#token-and-cost-accounting)). Two arms that
+a pi-coding run is not comparable to a claude run on any dimension but cost. A codex or antigravity
+run is not comparable on cost either: its spend is unknown rather than measured, so it belongs in no
+cost comparison at all (see [Token and cost accounting](#token-and-cost-accounting)). Two arms that
 differ in both their pair and their harness config attribute nothing to either, so vary one at a
 time. Grading differs too: `harness_quality` is not scored on a harness other than claude, and the
 reward drops its share (see [Reward composition](#reward-composition)). Version or flag result sets
@@ -1611,8 +1633,8 @@ nights is the pair of SHAs.
 `configs/harness_configs.json` is the checked-in list of named harness configs, and it is where the
 spend decision lives: every entry carries an `is_nightly` flag, and a schedule runs exactly the
 entries that set it. `default`, `haiku`, `pi-gpt-5-mini`, `codex-sol-low` and `codex-terra` are
-nightly; `pi-haiku`, `pi-glm-4.7-flash`, `codex-astra-low` and `opus-standard` are not, and run only
-when a dispatch names one. The file's order is the order the run's cells are decided in, and so the
+nightly; `pi-haiku`, `pi-glm-4.7-flash`, `codex-astra-low`, `agy-default` and `opus-standard` are
+not, and run only when a dispatch names one. The file's order is the order the run's cells are decided in, and so the
 order of the grid's columns in the Slack report -- which is why arms worth reading against each
 other, `haiku` beside `pi-haiku`, are listed side by side. Everything else in an entry is one of the
 run line's own [kwargs](#harness-and-model-arms), with the same default an unset kwarg has, so
@@ -1629,6 +1651,10 @@ The first two are nightly; `codex-astra-low` runs only when a dispatch names it.
 exercised at one price point, not a controlled comparison against the others: they differ in
 effort as well as model, and codex's effort ladder does not line up with claude's or pi-coding's
 rung for rung.
+
+`agy-default` is the antigravity arm, and it names nothing but its lane because the lane accepts
+nothing else. It is not nightly: its cell needs `mngr/ci/GEMINI_API_KEY` in Vault and a template
+carrying the lane's paste method, so it runs when a dispatch names it until both hold.
 
 Both nightly codex cells report on the **main** pair alone for as long as no release carries the
 template method they need. A nightly set is run against every pair, and the `openai` lane's
@@ -1822,9 +1848,10 @@ their own runs in; the staging Minds tier the box activates is reached over HTTP
 workspace is independent of it. A cell whose harness config reads its lane's key from another
 variable fetches `mngr/ci/<key_env>` on top of that, and only that cell does -- a lane's key is
 never exported into a cell that does not sign in on that lane. So the `pi-gpt-5-mini` cell needs
-`mngr/ci/OPENROUTER_API_KEY` to exist in Vault, and the two codex cells need
-`mngr/ci/OPENAI_API_KEY`; without it such a cell fails at the fetch step, before a box is built,
-and the other cells are unaffected.
+`mngr/ci/OPENROUTER_API_KEY` to exist in Vault, the two codex cells need `mngr/ci/OPENAI_API_KEY`,
+and an `agy-default` cell needs `mngr/ci/GEMINI_API_KEY` -- which has to be there before that config
+is made nightly. Without the secret such a cell fails at the fetch step, before a box is built, and
+the other cells are unaffected.
 
 ### CI environments and cleanup
 

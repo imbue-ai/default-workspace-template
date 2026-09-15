@@ -17,7 +17,14 @@
 #   1. Parses `agent_state` and `conversation_id` (POSIX grep/sed only -- no jq;
 #      jq may be absent on remote hosts).
 #   2. Records the (root) `conversation_id` in `root_conversation` when present
-#      -- the only consumer is the resume prelude in assemble_command.
+#      (its only consumer is the resume prelude in assemble_command) and appends
+#      it once to `antigravity_conversation_ids`, the transcript-scoping set the
+#      PreInvocation capture hook also writes. Both write it because agy never
+#      invokes that hook when it is signed in with a Gemini API key
+#      (`modelProvider: "gemini"`; measured on agy 1.1.22 across text-only and
+#      tool-using turns), while the statusLine still fires -- without this line
+#      such an agent's transcript stays empty.
+#      The hook remains the only source of subagent ids.
 #   3. Maintains the `active` marker BaseAgent reads for RUNNING/WAITING: active
 #      iff `agent_state` is NOT in {idle, initializing, authenticating, ""}
 #      (a denylist, so any present/future busy state counts as RUNNING; `idle`
@@ -47,6 +54,7 @@ fi
 
 marker_file="$MNGR_AGENT_STATE_DIR/active"
 root_file="$MNGR_AGENT_STATE_DIR/root_conversation"
+ids_file="$MNGR_AGENT_STATE_DIR/antigravity_conversation_ids"
 model_state_file="$MNGR_AGENT_STATE_DIR/model_state.json"
 
 payload=$(cat)
@@ -72,6 +80,12 @@ conv_id=$(
 # keeps `root_conversation` pointed at the true root for resume.
 if [ -n "$conv_id" ]; then
     printf '%s' "$conv_id" > "$root_file"
+    # Same append-once rule as capture_conversation_id.sh: the readers take the
+    # file's unique set, and `grep -qxF` on a missing file fails, so the first id
+    # is appended.
+    if ! grep -qxF "$conv_id" "$ids_file" 2>/dev/null; then
+        printf '%s\n' "$conv_id" >> "$ids_file"
+    fi
 fi
 
 # Parse the model agy reports and mirror it to the uniform model_state.json the workspace's

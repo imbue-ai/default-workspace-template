@@ -85,6 +85,17 @@ def test_the_checked_in_file_holds_a_default_config_that_requests_no_model() -> 
     assert ci_matrix.harbor_args_for(default) == ("--ak", "lane=anthropic", "--ak", "key_env=ANTHROPIC_API_KEY")
 
 
+def test_the_checked_in_file_holds_an_antigravity_config_that_can_only_request_nothing() -> None:
+    """The google lane runs antigravity, whose model bar is read-only, so its entry names no model,
+    effort or speed tier -- and its key is read from the variable the template names for that
+    provider, which a cell fetches from Vault under that same name."""
+    entries = ci_matrix.load_harness_configs(ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH)
+
+    agy = next(entry for entry in entries if entry.name == "agy-default")
+    assert (agy.model, agy.effort, agy.fast) == ("", "", None)
+    assert ci_matrix.harbor_args_for(agy) == ("--ak", "lane=google", "--ak", "key_env=GEMINI_API_KEY")
+
+
 def test_every_nightly_config_that_names_a_model_runs_the_standard_speed_tier() -> None:
     """Arms compared night over night have to differ in one axis at a time, and the fast tier is a
     different model behind the same catalog id -- so a named-model arm asks for the standard one."""

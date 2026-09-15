@@ -382,9 +382,12 @@ def derive_key_env(lane: HarnessLane, key_provider: str) -> str:
     """Which environment variable a lane's key is read from when the run names none, or empty when
     the lane has no default.
 
-    The derivation is a convenience, not a contract with the workspace template: the template names
-    the variable per provider and does not always follow the pattern (`google` reads
-    `GEMINI_API_KEY`), so those cases are run with an explicit `key_env`.
+    Each single-provider lane names the variable its own template reads, since the template names it
+    per provider and follows no pattern the lane id gives away (`google` reads `GEMINI_API_KEY`). The
+    api-key lane has no such answer, because the provider is the run's to name: its
+    `<KEY_PROVIDER>_API_KEY` is a guess at the template's table, and a provider whose variable is
+    spelled otherwise is run with an explicit `key_env`, as is the opencode-go lane, which derives
+    nothing at all.
     """
     match lane:
         case HarnessLane.ANTHROPIC:
@@ -393,6 +396,8 @@ def derive_key_env(lane: HarnessLane, key_provider: str) -> str:
             return "OPENAI_API_KEY"
         case HarnessLane.OPENROUTER:
             return "OPENROUTER_API_KEY"
+        case HarnessLane.GOOGLE:
+            return "GEMINI_API_KEY"
         case HarnessLane.API_KEY:
             return "{}_API_KEY".format(key_provider.upper().replace("-", "_"))
         case HarnessLane.OPENCODE_GO:
@@ -414,14 +419,23 @@ def parse_harness_config(
     workspace would refuse later.
 
     The model endpoint takes no model without an effort level and applies no axis at all without a
-    model, and the api-key lane is the only one that pairs a key with a provider. Each of these is
-    knowable from the kwargs alone, so refusing them here costs no workspace.
+    model, the api-key lane is the only one that pairs a key with a provider, and the google lane
+    takes no model choice at all. Each of these is knowable from the kwargs alone, so refusing them
+    here costs no workspace.
     """
     parsed_lane = parse_lane(lane)
     parsed_key_provider = _agent_kwarg_text(key_provider)
     parsed_model = _agent_kwarg_text(model)
     parsed_effort = _agent_kwarg_text(effort)
     fast_text = _agent_kwarg_text(fast)
+    # Refused ahead of the pairing rules below, because on this lane no pairing of them is runnable:
+    # antigravity's model bar is read-only and the workspace's model endpoint answers a switch on it
+    # with a refusal, so the only config the lane can drive is the one that requests nothing.
+    if parsed_lane is HarnessLane.GOOGLE and (parsed_model or parsed_effort or fast_text):
+        raise AgentKwargError(
+            "lane google takes no model, effort or fast: antigravity's model bar is read-only, so the "
+            "lane runs agy's default model only"
+        )
     if parsed_model and not parsed_effort:
         raise AgentKwargError(
             "model {!r} needs an effort: the workspace's model endpoint refuses a model without one".format(
@@ -502,6 +516,10 @@ def _reported_model_name(lane: HarnessLane, catalog_id: str) -> str:
             return _REPORTED_MODEL_BY_CATALOG_ID.get(catalog_id, "")
         case HarnessLane.OPENAI:
             return catalog_id
+        # The google lane refuses a model at construction, so nothing on it ever has a catalog id to
+        # resolve; empty is what its harness would report anyway, since antigravity names no model.
+        case HarnessLane.GOOGLE:
+            return ""
         case HarnessLane.API_KEY | HarnessLane.OPENROUTER | HarnessLane.OPENCODE_GO:
             _provider, separator, model = catalog_id.partition("/")
             return model if separator and model else ""
@@ -529,6 +547,11 @@ def _is_observed_model_the_requested_one(lane: HarnessLane, requested_reported_n
     match lane:
         case HarnessLane.OPENAI:
             return observed_model == requested_reported_name
+        # Nothing reaches this on the google lane: it takes no model, so no request on it resolves to
+        # a name to compare against. A name that did arrive here came from no config this lane could
+        # have been given, and matching it would report a chat as running what nothing asked for.
+        case HarnessLane.GOOGLE:
+            return False
         case HarnessLane.ANTHROPIC | HarnessLane.API_KEY | HarnessLane.OPENROUTER | HarnessLane.OPENCODE_GO:
             return observed_model.startswith(requested_reported_name)
         case _ as unreachable:

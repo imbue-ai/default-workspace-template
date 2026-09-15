@@ -16,9 +16,11 @@ Out of scope: a metering proxy for non-Anthropic lanes, setting the model at cre
 Four facts about the workspace template (default-workspace-template `main@112ee09b4`) shape the design.
 
 - **The account decides the harness.** `POST /api/agents/create-chat` takes `name`, `account_id`, `agent_id` and `message` only; the chat runs on the harness of the lane its account was minted on.
-  Lanes that can be minted without a human today: `anthropic` (claude), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
-  Each of them accepts a pasted API key through the accounts flow, which is the only kind of sign-in a run can drive; the one lane left out, `google` (antigravity), offers only browser flows on a PTY and so needs a person at it.
+  Lanes that can be minted without a human today: `anthropic` (claude), `openai` (codex), `google` (antigravity), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
+  Each of them accepts a pasted API key through the accounts flow, which is the only kind of sign-in a run can drive; a lane offering only browser or device flows on a PTY needs a person at it and cannot be run here.
   `openai`'s pasted-key method is newer than the commit pinned above, which offers that lane only codex's device-auth flow; it is on `main` from `ea2fbc2cd` (2026-09-09), and a run on the `openai` lane needs a template at or after that.
+  `google`'s is newer still -- a run on that lane needs a template at or after the change that adds the paste method to it -- and the lane carries one key provider, `google`, whose key the template reads from `GEMINI_API_KEY`.
+  Antigravity's model bar is read-only and `POST /api/agents/<id>/model` refuses a switch on it, so the `google` lane runs agy's own default model and no harness config on it may name `model`, `effort` or `fast`.
 - **Model, effort and speed are set after create.** `POST /api/agents/<id>/model {model_id, effort, fast, axes}` is harness-blind and validated against the agent's catalog.
   `effort` is required whenever the model has an effort axis, even for a model-only change.
   There is no HTTP readback of the live choice; the loopback `GET /api/agents` lists `id`, `name` and `state` only.
@@ -59,14 +61,14 @@ It rides in on harbor agent kwargs through the `just minds-evals-run <dataset> <
 
 | kwarg | meaning | default |
 |---|---|---|
-| `--ak lane=<id>` | the provider lane to sign the workspace in on: `anthropic`, `openai`, `api-key`, `openrouter`, `opencode-go` | `anthropic` |
+| `--ak lane=<id>` | the provider lane to sign the workspace in on: `anthropic`, `openai`, `google`, `api-key`, `openrouter`, `opencode-go` | `anthropic` |
 
 "Lane" is the workspace template's own term, not one coined here: its chat app defines a lane as an AI provider reached through a particular harness (`system/apps/chat/imbue/chat/harnesses/lanes.py`), the accounts API takes it as `lane_id`, and the UI shows lanes under the label "provider".
 The kwarg keeps the wire name so the spec, the driver and the template's API all say the same word.
 It is not an authentication method: each lane lists its own sign-in methods (`api_key`, device auth), and the driver always uses `api_key`.
 | `--ak key_provider=<id>` | for the `api-key` lane only, which provider the key belongs to (`anthropic`, `openai`, `openrouter`, ...) | required on `api-key`, rejected elsewhere |
 | `--ak key_env=<VAR>` | the environment variable holding the lane's key | derived, see "Credentials" |
-| `--ak model=<id>` | the catalog id to switch the chat to before turn 1 | unset: no switch |
+| `--ak model=<id>` | the catalog id to switch the chat to before turn 1 | unset: no switch; refused on the `google` lane, whose model bar is read-only |
 | `--ak effort=<level>` | the effort or thinking level to set with the model | required with `model` |
 | `--ak fast=<bool>` | the speed tier to set with the model | `false` when `model` is given; without `model` there is no switch and the template's tier stands |
 
@@ -119,9 +121,9 @@ The decider, the judges and the UI-flow agent keep using `ANTHROPIC_API_KEY`; th
 The workspace's key is a separate concern, because the lane decides which provider it must belong to.
 
 The driver reads the workspace key from the variable named by `key_env`.
-The default is `ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENAI_API_KEY` on the `openai` lane, `OPENROUTER_API_KEY` on the `openrouter` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores (`key_provider=openrouter` derives `OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives `ANT_LING_API_KEY`).
-The derivation is a convenience, not a contract with the template: the template's own table names the variable per provider and does not always follow the pattern (`google` reads `GEMINI_API_KEY`), and the `opencode-go` lane has no derived default.
-Those two cases are run with an explicit `key_env`.
+The default is `ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENAI_API_KEY` on the `openai` lane, `OPENROUTER_API_KEY` on the `openrouter` lane, `GEMINI_API_KEY` on the `google` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores (`key_provider=openrouter` derives `OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives `ANT_LING_API_KEY`).
+Each single-provider lane names the variable the template reads that provider's key from, which the lane id need not give away -- `google` reads `GEMINI_API_KEY`.
+The api-key lane's derivation is a convenience rather than a contract with the template: the provider is the run's to name, the template's own table names the variable per provider, and a provider whose variable is spelled otherwise is run with an explicit `key_env`, as is the `opencode-go` lane, which has no derived default.
 A missing variable fails the run at construction with a message naming the variable and the lane; a lane outside the table is refused there as well, and no `key_env` makes one runnable.
 
 The `just minds-evals-run` recipe keeps requiring `ANTHROPIC_API_KEY` (the decider and judges need it) and does not learn about the other variables; the driver's own check covers them.
@@ -164,7 +166,7 @@ Every other failure marks the trial `timed_out` with a `timed_out_reason` that n
 | failure | when | reason text |
 |---|---|---|
 | key variable unset | construction | run refused, no trial: `no <VAR> to sign the workspace in on lane <lane>` |
-| `model` without `effort`, `effort` or `fast` without `model`, `key_provider` off the `api-key` lane or missing on it, an unknown lane | construction | run refused |
+| `model` without `effort`, `effort` or `fast` without `model`, `key_provider` off the `api-key` lane or missing on it, an unknown lane, any of `model`, `effort` and `fast` on the `google` lane | construction | run refused |
 | accounts flow does not start (non-2xx) | step 3 | `the workspace refused to start a sign-in on lane <lane>: <detail>` |
 | flow settles `failed` | step 3 | `the workspace rejected the key for lane <lane>: <detail>` |
 | flow still `pending` at the deadline | step 3 | readiness reason, as for the other waits |
@@ -282,10 +284,11 @@ A cell is one arm, and two cells that differ in both halves attribute nothing to
 Only `name` and `is_nightly` are required; every other field is one of the run line's own kwargs from the table above and carries the same default an unset kwarg has, so an entry that names nothing beyond its lane is the default harness config.
 A name matches `^[a-z0-9][a-z0-9.-]*$`, is at most 30 characters, is unique in the file, and is never `oracle`, because it labels a job, a concurrency group, an artifact and a line of the report, beside the oracle's own.
 Dots are in the pattern because a model version is part of what names an arm (`pi-glm-4.7-flash`), and a job name, a concurrency group, an artifact name and a cache key all take one.
-The checked-in entries are, in file order, `default` (the `anthropic` lane and nothing else: the product exactly as it ships), `haiku` (`haiku`, effort `medium`), `pi-haiku` (the `api-key` lane on an `anthropic` key, `anthropic/claude-haiku-4-5`, effort `medium`), `pi-gpt-5-mini` (the `openrouter` lane, `openrouter/openai/gpt-5-mini`, effort `medium`), `pi-glm-4.7-flash` (the `openrouter` lane, `openrouter/z-ai/glm-4.7-flash`, effort `medium`), `codex-sol-low` (the `openai` lane, `gpt-5.6-sol`, effort `low`), `codex-terra` (the `openai` lane, `gpt-5.6-terra`, effort `medium`), `codex-astra-low` (the `openai` lane, `gpt-6-astra`, effort `low`) and `opus-standard` (`opus[1m]`, effort `high`).
+The checked-in entries are, in file order, `default` (the `anthropic` lane and nothing else: the product exactly as it ships), `haiku` (`haiku`, effort `medium`), `pi-haiku` (the `api-key` lane on an `anthropic` key, `anthropic/claude-haiku-4-5`, effort `medium`), `pi-gpt-5-mini` (the `openrouter` lane, `openrouter/openai/gpt-5-mini`, effort `medium`), `pi-glm-4.7-flash` (the `openrouter` lane, `openrouter/z-ai/glm-4.7-flash`, effort `medium`), `codex-sol-low` (the `openai` lane, `gpt-5.6-sol`, effort `low`), `codex-terra` (the `openai` lane, `gpt-5.6-terra`, effort `medium`), `codex-astra-low` (the `openai` lane, `gpt-6-astra`, effort `low`), `agy-default` (the `google` lane and nothing else, which is all that lane accepts) and `opus-standard` (`opus[1m]`, effort `high`).
 The codex configs name their models rather than leaving them unset because the catalog names no default of its own, so an unset model would move with the template's pinned codex version; each then takes the effort its own catalog entry defaults to, which is `low` for Sol and Astra and `medium` for Terra.
 That makes the two nightly codex cells a smoke check of the lane at two price points rather than a comparison against each other, since they differ in effort as well as model.
 `default`, `haiku`, `pi-gpt-5-mini`, `codex-sol-low` and `codex-terra` are nightly; the rest run only when a dispatch names them.
+`agy-default` stays off the nightly set until `mngr/ci/GEMINI_API_KEY` exists in Vault and a released template carries the lane's paste method.
 The nightly set is run against every pair, and the `openai` lane's pasted-key sign-in is newer than the tag the `released` pair pins, so until a release carries that template the two nightly codex cells report on the `main` pair alone and the released pair's are refused at sign-in, naming the lane -- a failure of those cells only, which the report must not be read as a regression.
 The file's order is the order the cells are decided in and so the order of the report's grid columns, which is why arms worth reading against each other -- `haiku` beside `pi-haiku` -- are listed side by side.
 Which configs run nightly is a spend decision, and `is_nightly` is where it is recorded: the file carries the decision rather than this spec, and a config the file lists but no night selects costs nothing to keep.

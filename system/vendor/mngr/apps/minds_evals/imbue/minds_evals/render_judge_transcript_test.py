@@ -636,6 +636,20 @@ def test_pis_lowercase_shell_puts_its_progress_steps_on_the_clients_timeline() -
     assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
 
 
+def test_antigravitys_shell_puts_its_progress_steps_on_the_clients_timeline() -> None:
+    # antigravity names the shell `run_command` and passes what it runs under `cmd`. The timeline
+    # keys a result on the tool that produced it, so a tool set that does not know the name renders
+    # an empty timeline -- which is scored a perfect 10 for copy nobody graded.
+    steps = _one_declaration_steps("run_command", "wor-step-aaaa", "Set up the to-do app")
+    steps[1]["tool_calls"][0]["arguments"] = {"cmd": 'tk create --step "Set up the to-do app"'}
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS · step declared]\nSet up the to-do app" in rendered
+    # The structural gate reads the same commands, so it must see the step verb it ran too.
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
+
+
 def _code_mode_programs(document: dict[str, Any]) -> list[str]:
     """The code-mode program of every `exec` call in the document, in step order."""
     return [

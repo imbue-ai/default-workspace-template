@@ -7,6 +7,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import HarnessConfig
 from imbue.minds_evals.data_types import HarnessLane
+from imbue.minds_evals.data_types import is_model_observable_on_lane
 from imbue.minds_evals.data_types import lane_id
 
 
@@ -29,7 +30,18 @@ def test_every_lane_is_spelled_the_way_the_command_line_and_the_workspace_spell_
         "api-key",
         "openrouter",
         "opencode-go",
+        "google",
     }
+
+
+def test_a_lane_whose_harness_names_no_model_is_reported_as_one_rather_than_as_unconfirmed() -> None:
+    """Two harnesses stamp no model on a transcript step, so their trials can never confirm what
+    answered them. Both renderers of the confirmation ask this before calling a trial unconfirmed,
+    which is what keeps that word meaning a trial whose model nothing confirmed rather than a
+    standing line under every cell of an arm that could never confirm one."""
+    assert not is_model_observable_on_lane(lane_id(HarnessLane.OPENAI))
+    assert not is_model_observable_on_lane(lane_id(HarnessLane.GOOGLE))
+    assert is_model_observable_on_lane(lane_id(HarnessLane.ANTHROPIC))
 
 
 def test_a_harness_config_requests_a_switch_exactly_when_it_names_a_model() -> None:

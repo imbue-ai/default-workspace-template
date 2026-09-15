@@ -656,6 +656,9 @@ _TRIAL_API_KEY: Final[str] = "sk-eval-test"
 # The openai lane's own key, kept distinct from the one above so a test on that lane can tell which
 # variable the derivation read.
 _OPENAI_TRIAL_API_KEY: Final[str] = "sk-eval-test-openai"
+# The google lane's key, kept distinct for the same reason, and read from the variable the template
+# names rather than one built out of the lane id.
+_GEMINI_TRIAL_API_KEY: Final[str] = "sk-eval-test-gemini"
 
 
 def _driver_kwargs(
@@ -3425,6 +3428,17 @@ def test_parse_harness_config_reads_the_openai_lane_the_workspace_runs_codex_on(
     )
 
 
+def test_parse_harness_config_reads_the_google_lane_the_workspace_runs_antigravity_on() -> None:
+    """The lane serves one provider, so it takes no key_provider and derives the variable the
+    template reads that provider's key from, which is not the one the lane id would suggest."""
+    harness_config = parse_harness_config(lane="google", key_provider="", key_env="", model="", effort="", fast="")
+
+    assert harness_config == HarnessConfig(
+        lane=HarnessLane.GOOGLE, key_provider="", key_env="GEMINI_API_KEY", model="", effort="", is_fast=False
+    )
+    assert not harness_config.is_switch_requested
+
+
 def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_command_line() -> None:
     # harbor JSON-parses every `--ak key=value`, so `fast=false` reaches the driver as a bool and
     # never as the string the CLI syntax suggests.
@@ -3459,6 +3473,11 @@ def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_com
         ({"lane": "api-key"}, "needs a key_provider"),
         ({"lane": "gemini"}, "is not a provider lane"),
         ({"lane": "opencode-go"}, "has no default key variable"),
+        # Antigravity's model bar is read-only and its endpoint refuses a switch, so every axis of a
+        # model choice is refused on the lane -- whichever of them a config names.
+        ({"lane": "google", "model": "gemini-3.1-pro", "effort": "low"}, "model bar is read-only"),
+        ({"lane": "google", "effort": "low"}, "model bar is read-only"),
+        ({"lane": "google", "fast": True}, "model bar is read-only"),
     ],
 )
 def test_parse_harness_config_refuses_a_config_the_workspace_could_never_honour(
@@ -3478,6 +3497,9 @@ def test_parse_harness_config_refuses_a_config_the_workspace_could_never_honour(
         (HarnessLane.ANTHROPIC, "", "ANTHROPIC_API_KEY"),
         (HarnessLane.OPENAI, "", "OPENAI_API_KEY"),
         (HarnessLane.OPENROUTER, "", "OPENROUTER_API_KEY"),
+        # The template reads the antigravity lane's key from the provider's own variable, which the
+        # lane id does not give away.
+        (HarnessLane.GOOGLE, "", "GEMINI_API_KEY"),
         (HarnessLane.API_KEY, "openai", "OPENAI_API_KEY"),
         (HarnessLane.API_KEY, "openrouter", "OPENROUTER_API_KEY"),
         # A provider spelled with a dash still names a variable, which cannot carry one.
@@ -3492,9 +3514,10 @@ def test_derive_key_env_names_the_variable_each_lane_reads_its_key_from(
 
 
 def test_parse_harness_config_takes_the_key_variable_the_run_names_over_the_derived_one() -> None:
-    """The derivation is a convenience, not a contract with the workspace template: the template
-    names the variable per provider and does not always follow the pattern (`google` reads
-    `GEMINI_API_KEY`), and the opencode-go lane derives nothing at all."""
+    """The derivation is a convenience, not a contract with the workspace template: on the api-key
+    lane the provider is the run's to name, so `<KEY_PROVIDER>_API_KEY` is a guess at the template's
+    own table (its `google` provider reads `GEMINI_API_KEY`), and the opencode-go lane derives
+    nothing at all."""
     named = parse_harness_config(
         lane="api-key", key_provider="google", key_env="GEMINI_API_KEY", model="", effort="", fast=""
     )
@@ -4067,6 +4090,69 @@ def _codex_turn_events() -> list[dict]:
     """
     events = _reply_events("Building it now.")
     return [*events[:-1], {**events[-1], "model": "gpt-5.5", "usage": None}]
+
+
+def _antigravity_turn_events() -> list[dict]:
+    """One turn's events in the shape the workspace's chat app reports an antigravity turn: the
+    session parser names no model it could read, so the feed carries the placeholder and no usage."""
+    events = _reply_events("Building it now.")
+    return [*events[:-1], {**events[-1], "model": "unknown", "usage": None}]
+
+
+def test_the_google_lane_runs_a_trial_on_antigravity_and_asks_the_workspace_for_nothing(
+    tmp_path: Path,
+) -> None:
+    """The lane takes a pasted key through the same accounts flow as the other single-provider
+    lanes, and the workspace answers `antigravity` for the harness the account runs.
+
+    It is the one lane that can never request a model: antigravity's model bar is read-only, so the
+    only config it accepts is the one that switches nothing and the trial records the switch as
+    skipped. Nothing observes a model either -- mngr's antigravity emitter stamps none on a step,
+    and no step reports tokens -- so the arm's observed half and the trial's spend are both silence.
+    """
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_antigravity_turn_events()])
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__armagy",
+        timeout_seconds=1800.0,
+        extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "GEMINI_API_KEY": _GEMINI_TRIAL_API_KEY},
+        downloadable_content_by_source=_switched_transcript_downloads(
+            "", welcome_model_name="", is_metrics_written=False, agent_name="antigravity"
+        ),
+        harness_kwargs={"lane": "google"},
+    )
+
+    start_command = next(
+        command
+        for command in environment.exec_commands
+        if "/api/accounts" in command and "/flow/" not in command and "lane_id" in command
+    )
+    assert '"lane_id": "google"' in start_command
+    # A lane that serves one provider is sent no key_provider; the workspace refuses the field there.
+    submit_command = next(command for command in environment.exec_commands if "/api/accounts/flow/" in command)
+    assert "key_provider" not in submit_command
+    assert '"api_key": "{}"'.format(_GEMINI_TRIAL_API_KEY) in submit_command
+
+    assert conversation.model_choice_commands == []
+    assert _harness_config_block(environment) == {
+        "lane": "google",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "antigravity",
+        "model": "",
+        "effort": "",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_SKIPPED,
+        "observed_models": [],
+        "welcome_model": "",
+        "is_model_confirmed": None,
+    }
+    # Unknown rather than free, as on every lane whose turns report no token count.
+    workspace_usage = json.loads((driver.logs_dir / "usage.json").read_text())["workspace_agent"]
+    assert workspace_usage["cost_usd"] is None
+    assert workspace_usage["message_count"] == 0
 
 
 def test_the_openai_lane_runs_a_trial_on_codex_and_reads_its_harness_back(tmp_path: Path) -> None:

@@ -127,12 +127,40 @@ def test_root_conversation_updates_to_latest_root(tmp_path: Path) -> None:
     assert _root_file(tmp_path).read_text() == _OTHER_CONV
 
 
+def _ids_file(state_dir: Path) -> Path:
+    return state_dir / "antigravity_conversation_ids"
+
+
+def test_working_appends_root_to_conversation_ids(tmp_path: Path) -> None:
+    """The statusLine is the only conversation-id source when agy runs hooks not at all
+    (a Gemini API-key sign-in), so the root id must land in the transcript-scoping set."""
+    _run(tmp_path, _payload(agent_state="working"))
+    assert _ids_file(tmp_path).read_text() == _ROOT_CONV + "\n"
+
+
+def test_repeated_payloads_record_each_conversation_once(tmp_path: Path) -> None:
+    """agy invokes the statusLine on every state change, so the same id arrives many times."""
+    _run(tmp_path, _payload(agent_state="working"))
+    _run(tmp_path, _payload(agent_state="idle"))
+    _run(tmp_path, _payload(agent_state="working", conversation_id=_OTHER_CONV))
+    _run(tmp_path, _payload(agent_state="working", conversation_id=_ROOT_CONV))
+    assert _ids_file(tmp_path).read_text().splitlines() == [_ROOT_CONV, _OTHER_CONV]
+
+
+def test_ids_file_keeps_entries_the_capture_hook_wrote(tmp_path: Path) -> None:
+    """Both writers append to one file; neither may rewrite what the other recorded."""
+    _ids_file(tmp_path).write_text(_OTHER_CONV + "\n")
+    _run(tmp_path, _payload(agent_state="working"))
+    assert _ids_file(tmp_path).read_text().splitlines() == [_OTHER_CONV, _ROOT_CONV]
+
+
 def test_garbage_stdin_records_no_root_and_clears_marker(tmp_path: Path) -> None:
     """Non-JSON stdin parses no state (-> not-working) and no id (-> no root)."""
     _marker(tmp_path).touch()
     result = _run(tmp_path, "not json at all\n")
     assert not _marker(tmp_path).exists()
     assert not _root_file(tmp_path).exists()
+    assert not _ids_file(tmp_path).exists()
     # mngr prints nothing of its own, and no user statusLine here, so stdout is empty.
     assert result.stdout == ""
 

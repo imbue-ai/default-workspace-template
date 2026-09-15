@@ -447,8 +447,9 @@ def _code_mode_commands(program: str) -> list[str]:
 def _shell_commands_in_call(tool_call: Mapping[str, Any]) -> list[str]:
     """The shell commands one tool call runs, whichever shape its harness uses.
 
-    claude and pi-coding pass the command as an argument of the call; codex passes a code-mode
-    program under ``_raw`` and runs the shell from inside it.
+    claude, pi-coding and antigravity pass the command as an argument of the call -- under ``cmd``
+    where antigravity's ``run_command`` puts it; codex passes a code-mode program under ``_raw`` and
+    runs the shell from inside it.
     """
     arguments = tool_call.get("arguments")
     if not isinstance(arguments, Mapping):

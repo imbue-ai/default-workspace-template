@@ -483,15 +483,16 @@ class HarnessLane(LowerCaseStrEnum):
     """A provider lane a workspace can be signed in on with nobody present.
 
     The lane decides the harness, because that is how the product itself decides it: a chat runs on
-    the harness of the lane its account was minted on. ANTHROPIC serves claude and OPENAI serves
-    codex; the rest serve pi-coding, differing in whose key they take. A lane is a member exactly
-    when it offers a pasted-key sign-in, because that is the only kind a run can drive; one whose
-    every method is a browser or device flow on a PTY needs a person at it, which is what leaves
-    `google` (antigravity) out.
+    the harness of the lane its account was minted on. ANTHROPIC serves claude, OPENAI serves codex
+    and GOOGLE serves antigravity; the rest serve pi-coding, differing in whose key they take. A
+    lane is a member exactly when the workspace template offers it a pasted-key sign-in, because
+    that is the only kind a run can drive: a lane whose every method is a browser or device flow on
+    a PTY needs a person at it and has no member here.
     """
 
     ANTHROPIC = auto()
     OPENAI = auto()
+    GOOGLE = auto()
     API_KEY = auto()
     OPENROUTER = auto()
     OPENCODE_GO = auto()
@@ -506,12 +507,17 @@ def lane_id(lane: HarnessLane) -> str:
 
 # Lanes whose harness names no model on a transcript step, so a trial on one can never confirm the
 # model it asked for. mngr's codex transcript emitter writes no per-step model name, which leaves
-# every `openai` trial's observed models empty.
-# CLEANUP: drop this set and the two renderers' branches that read it once mngr's codex transcript
-# emitter stamps a per-step model name. From then on an empty observation here means what it means
-# on every other lane -- a trial whose transcript said nothing -- and treating it as the lane's shape
-# would hide a real silence rather than a structural one.
-_LANES_WITH_NO_OBSERVABLE_MODEL: Final[frozenset[str]] = frozenset({lane_id(HarnessLane.OPENAI)})
+# every `openai` trial's observed models empty; its antigravity emitter writes neither a model name
+# nor step metrics, and the workspace's own antigravity session parser stamps `unknown`, which leaves
+# every `google` trial's empty for the same reason.
+# CLEANUP: drop a lane from this set once mngr's transcript emitter for that lane's harness stamps a
+# per-step model name, and drop the set and the two renderers' branches that read it once no lane is
+# left. From then on an empty observation on such a lane means what it means on every other one -- a
+# trial whose transcript said nothing -- and treating it as the lane's shape would hide a real
+# silence rather than a structural one.
+_LANES_WITH_NO_OBSERVABLE_MODEL: Final[frozenset[str]] = frozenset(
+    {lane_id(HarnessLane.OPENAI), lane_id(HarnessLane.GOOGLE)}
+)
 
 
 @pure
