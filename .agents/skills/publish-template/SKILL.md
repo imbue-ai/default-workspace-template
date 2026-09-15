@@ -307,7 +307,7 @@ commit carrying the mind's own work.
 
 (The same markers seed the version ledger's `## Workspace` origin line in
 §8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
-`scripts/update_self.py`) -- with two deliberate differences: the
+`scripts/update_ledger.py`) -- with two deliberate differences: the
 origin-line walk takes the OLDEST marker (where the mind started) where this
 section takes the NEWEST (the base the mind is on now), and it reads the marker
 commit itself rather than resolving a merge to its upstream parent. Keep them
