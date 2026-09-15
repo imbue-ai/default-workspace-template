@@ -133,7 +133,7 @@ Then, by their answer:
     scopes, and the push goes through the gateway's GitHub proxy;
   - **repo creation** -- §8 step 1 POSTs to `api.github.com/user/repos`, and
     step 1b/3 PATCH settings and set the `minds-template` topic;
-  - **the README** -- the generated "Open in Minds" button and its copyable
+  - **the README** -- the generated "Open in Mind" button and its copyable
     `/use-template` line both hardcode a `https://github.com/` prefix
     around the repo placeholder, so both need rewriting for another host. The
     trampoline itself takes any git URL, so only the prefix is wrong.
@@ -193,6 +193,14 @@ above.
 
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
+
+For an app, the paths are declared rather than deduced: `uv run app-manifest
+footprint system/apps/<package>/app.toml` prints the app's footprint -- its own
+directory (`primary`), the `system/supervisord.conf` sections that run it
+(`wiring`), and the skills, scripts and docs its manifest claims
+(`references`). Propose that set as the include paths, plus anything the user
+named that the manifest does not claim. The user still confirms it in plain
+language at the scope gate below.
 
 **The scope gate: confirm BEFORE any assembly work -- before treating the
 include set as final, and before dispatching the worker (§3). This is a hard
@@ -519,7 +527,7 @@ worktree to a clean template base and deletes gitignored state -- including
    the manifest's Requirements, is in
    `.agents/skills/publish-template/references/readme-recipe.md`. Read it
    before writing them. The hero graphic is the thumbnail you design in step 4,
-   and the "Open in Minds" button carries a placeholder repo URL the LEAD
+   and the "Open in Mind" button carries a placeholder repo URL the LEAD
    substitutes once the repo exists -- leave that alone.
 
    Do NOT render a preview yourself. The preview tab lives in the USER's
@@ -592,14 +600,25 @@ worktree to a clean template base and deletes gitignored state -- including
 
 ## Reporting back
 
-Follow `.agents/shared/references/worker-reporting.md` for the full report
-procedure. Substitutions for this task:
+Take the frontmatter parse, the report frontmatter, and the body shapes from
+`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/launch-task/<slug>/task.md`). Valid `name:` values: `question`
+(mid-flight gate, valid at any point of the run), `done` / `stuck` (terminal).
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
-- `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/launch-task/<slug>/reports/` (recreate
-  it with `mkdir -p` -- the assembly script deleted `data/`)
-- Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
-  (terminal).
+Deliver the report **by hand**, not with the launcher's `report` subcommand:
+step 1's reset replaces your whole checkout -- this task file and
+`.agents/skills/launch-task/` with it -- with the template base, which may
+predate that subcommand. The delivery is a copy either way, so write the report
+file yourself and place it, using the `LEAD_WORK_DIR` / `FINISH_REPORT_PATH` you
+parsed before the reset:
+
+```bash
+mkdir -p data/.tasks/launch-task/<slug>/reports   # the assembly deleted data/
+# write the frontmatter + body to
+# data/.tasks/launch-task/<slug>/reports/report.md, then:
+cp data/.tasks/launch-task/<slug>/reports/report.md \
+    "$LEAD_WORK_DIR/$FINISH_REPORT_PATH"
+```
 
 In a `done` report body, include your worktree's absolute path (from
 `git rev-parse --show-toplevel`) and the branch `mngr/<slug>` -- the lead
@@ -630,8 +649,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ```
 
 **Handle the report** per `.agents/shared/references/lead-proxy.md` (proxy or
-answer any `question` gate, consume reports into `consumed/`, diagnose
-liveness on a timeout) -- with one critical override:
+answer any `question` gate, re-arm the poll -- `await` has already archived the
+report it printed under `reports/consumed/` -- and diagnose liveness on a
+timeout) -- with one critical override:
 
 - `name: stuck` -> the assembly script refused for one of §5's reasons.
   Surface the quoted stderr to the user plainly and stop (or fix the input --
@@ -817,7 +837,7 @@ If the user asks to abort, stop here and leave the assembled commit intact
   them again** -- edit `$WT/README.md`, re-render, refresh the tab, and loop
   until they are happy (see `references/readme-recipe.md`). Keep the generated
   structure; their objection is almost always about the WORDS, not the shape,
-  and the Open in Minds call-to-action and its placeholder repo URL must
+  and the Open in Mind call-to-action and its placeholder repo URL must
   survive any rewrite. A go-ahead given while they are still unhappy with the
   README is not a go-ahead for the README.
 - If the user asks for thumbnail changes, YOU edit
@@ -942,7 +962,7 @@ mechanism (no token-in-URL pushes, no partial-tree API uploads -- see
 the "MUST BE BOOTABLE" callout).
 
 **Then fill in the README's repo URL (cwd = `$WT`).** The landing page's "Open
-in Minds" button and its copyable `/use-template` fallback both need
+in Mind" button and its copyable `/use-template` fallback both need
 `<owner>/<repo_name>`, which did not exist when the assembly ran, so
 `build_template.sh` wrote the placeholder `MINDS_TEMPLATE_REPO_URL` in
 both places. You now have both halves: `repo_name` from §6's confirmation, and
@@ -958,7 +978,7 @@ OWNER="$(latchkey curl -sf https://api.github.com/user | jq -r .login)"
 ( cd "$WT" \
     && sed -i "s|MINDS_TEMPLATE_REPO_URL|${OWNER}/<repo_name>|g" README.md \
     && git add README.md \
-    && git commit -m "readme: point the Open in Minds link at the published repo" )
+    && git commit -m "readme: point the Open in Mind link at the published repo" )
 ```
 
 Doing it here rather than after the push is what keeps the "never push and then
@@ -989,7 +1009,7 @@ With `repo_name` / `visibility` taken from the chat confirmation:
     still in place (the bespoke thumbnail never landed); the other patterns
     are the SVG safety rules. On ANY hit, block the push, fix the file (a
     real bespoke SVG, rules applied), commit in `$WT`, and re-run the gate.
-  - **Repo-URL gate** -- the README's "Open in Minds" button and its copyable
+  - **Repo-URL gate** -- the README's "Open in Mind" button and its copyable
     fallback are written with a placeholder, because neither the owner nor the
     final repo name exists when the assembly runs. You substituted both in §7.
     This grep must print NOTHING:
@@ -1282,7 +1302,7 @@ diagnose before retrying step 2 -- do NOT re-create the repo:
   Repository rule violations`, "push cannot contain secrets") that names a
   **Google OAuth client ID or secret** -- a `GOCSPX-...` value or a
   `...apps.googleusercontent.com` client ID, found under `system/vendor/mngr` -- is
-  EXPECTED and safe. This is the shared **Minds-provided** Google OAuth client
+  EXPECTED and safe. This is the shared **Mind-provided** Google OAuth client
   baked into the template (`MINDS_GOOGLE_OAUTH_CLIENT_ID` /
   `MINDS_GOOGLE_OAUTH_CLIENT_SECRET` in
   `system/vendor/mngr/libs/mngr_latchkey/imbue/mngr_latchkey/core.py`); it is the

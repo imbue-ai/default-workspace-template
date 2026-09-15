@@ -10,6 +10,10 @@ launcher_rank = 30
 action = "new"
 mode = "focus"
 
+# Xvfb exists only to give Chromium a display; it is the browser's wiring.
+[wiring]
+programs = ["xvfb"]
+
 [[actions]]
 id = "new"
 label = "New Browser"
