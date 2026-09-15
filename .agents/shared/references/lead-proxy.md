@@ -4,6 +4,11 @@ Generic mechanics for driving a worker to completion and surfacing gate/status
 reports to the user. The caller supplies flow-specific substitutions (worker
 name, branch, runtime path, which gate names and terminal statuses apply).
 
+**None of this machinery reaches the user.** Leases, polls, `await`, milestones,
+merges, review gates and worker names are how the work gets done, not what got
+done, so they belong in no chat message and no progress step -- "Fresh, no lease.
+Merging the milestone" names plumbing nobody can see. Say what changed, or nothing.
+
 ## Polling for the next report
 
 Start a background poll for the report file with `create_worker.py await`. It
@@ -120,8 +125,7 @@ On `type: gate`:
 - **Answer yourself** for implementation details: script structure, naming
   conventions, which utility to reuse, file layout, agentskills.io compliance,
   or anything you can determine from reading files or applying the calling
-  skill's own guidelines. The user does not care about technical details --
-  do not surface them.
+  skill's own guidelines.
 - **Escalate to the user** for user intent, scope, subjective preference, or
   domain knowledge you do not have. `final-creation` gates always escalate.
   `outline-approval` gates default to answer-yourself; only escalate if the

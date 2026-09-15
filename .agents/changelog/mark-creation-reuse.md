@@ -26,3 +26,8 @@
   in this repo, so an agent following the skill spends its first minutes hunting
   for the helper. The migrate-workspace note that documented the discrepancy is
   gone with it.
+
+- `lead-proxy.md` opens by saying none of its machinery reaches the user. Leases,
+  polls, milestones, merges, gates and worker names are how work gets done, not
+  what got done, and the quality judge scored six trials on status lines like
+  "Fresh, no lease. Merging the milestone" that name exactly that plumbing.
