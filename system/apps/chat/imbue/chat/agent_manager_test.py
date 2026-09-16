@@ -562,16 +562,20 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
         manager.stop()
 
 
-def _write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
+def _write_gated_mngr_binary(tmp_path: Path, create_exit_code: int = 0) -> tuple[str, Path, Path]:
     """A stand-in ``mngr`` whose create blocks until the returned go-file exists, so the state a
-    create leaves while it runs is observable; every other command succeeds at once."""
+    create leaves while it runs is observable, then exits ``create_exit_code``; every other
+    command succeeds at once. Every argv is appended to the returned log."""
     go_path = tmp_path / "mngr-go"
+    log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
     script.write_text(
-        f'#!/bin/sh\nif [ "$1" = "create" ]; then while [ ! -e "{go_path}" ]; do sleep 0.05; done; fi\nexit 0\n'
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n'
+        f'if [ "$1" = "create" ]; then while [ ! -e "{go_path}" ]; do sleep 0.05; done; exit {create_exit_code}; fi\n'
+        "exit 0\n"
     )
     script.chmod(0o755)
-    return str(script), go_path
+    return str(script), go_path, log_path
 
 
 def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_chat_of_its_own(
@@ -583,7 +587,7 @@ def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_
     rather than a second chat beside it."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    mngr_binary, go_path = _write_gated_mngr_binary(tmp_path)
+    mngr_binary, go_path, _argv_log = _write_gated_mngr_binary(tmp_path)
     manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
     try:
         seeded = manager.seed_chat("Getting started", _seed_turns())
@@ -654,6 +658,55 @@ def test_a_seeded_chats_failed_create_takes_its_agent_back_off_the_record(
         assert manager.discard_provisional_chat(seeded.chat_id) is True
         assert store.read(chat_id) is None
     finally:
+        manager.stop()
+
+
+def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mngr lists an agent before its create returns, so a create that fails after provisioning
+    leaves one behind that the withdrawn record no longer names: it would be listed as a chat of
+    its own, and the retry mints a fresh id, so the failure drops and destroys it, as a handoff's
+    retry does with its half-made successor."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, go_path, argv_log = _write_gated_mngr_binary(tmp_path, create_exit_code=3)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+
+    def destroys() -> list[str]:
+        # The log exists once the fake mngr has run at all, which the create's thread may not have got to yet.
+        if not argv_log.exists():
+            return []
+        return [line for line in argv_log.read_text().splitlines() if line.startswith("destroy ")]
+
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+        record = store.read(chat_id)
+        assert record is not None
+        _seed, agent = record.agents
+        listed = _agent_details(
+            "Getting-started",
+            agent_id=MngrAgentId(agent.agent_id),
+            labels={"user_created": "true", "chat_id": seeded.chat_id, "chat_seq": "2"},
+        )
+        manager._handle_observe_event(make_agent_state_event(listed))
+        assert manager.get_agent_by_id(agent.agent_id) is not None
+
+        go_path.touch()
+        assert wait_until(lambda: len(destroys()) == 1, timeout_seconds=10)
+
+        assert destroys() == [f"destroy {agent.agent_id} --force"]
+        failed = manager.get_provisional_chat(seeded.chat_id)
+        assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
+        withdrawn = store.read(chat_id)
+        assert withdrawn is not None and withdrawn.is_seed_only
+        # Neither the seeded chat (provisional, no agent) nor the orphan is a listed chat.
+        assert manager.get_agent_by_id(agent.agent_id) is None
+        assert manager.get_chat_snapshots() == []
+    finally:
+        go_path.touch()
         manager.stop()
 
 

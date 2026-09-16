@@ -1716,10 +1716,12 @@ class AgentManager:
         return HandoffPhase.SWITCHING
 
     def _discard_successor(self, chat_id: ChatId, successor_id: str) -> None:
-        """Destroy the successor a failed attempt made, once a retry moves the chat to another account.
+        """Destroy the agent a failed attempt made under an id the chat will not use again: a handoff's
+        successor once a retry moves the chat to another account, or a seeded chat's first agent
+        whose create failed after mngr had provisioned it.
 
-        Logged rather than raised when mngr refuses: the retry's create then meets the id in
-        use and runs the half-made path, which destroys and creates again.
+        Logged rather than raised when mngr refuses: a handoff retry's create then meets the id
+        in use and runs the half-made path, which destroys and creates again.
         """
         try:
             self.destroy_agent_process(successor_id)
@@ -1922,14 +1924,24 @@ class AgentManager:
         )
         return entry
 
-    def _withdraw_seeded_member_locked(self, chat_id: ChatId, record_entry: ChatAgentEntry) -> None:
+    def _withdraw_seeded_member_locked(self, chat_id: ChatId, record_entry: ChatAgentEntry) -> str | None:
         """Take a seeded chat's agent back off its record when its create failed: the chat is seed-only
-        again, as a retry and a discard expect to find it. Lock held."""
+        again, as a retry and a discard expect to find it. Lock held.
+
+        Returns the agent's id when mngr already lists it (the create provisioned it before
+        failing), for the caller to destroy once the lock is released; None otherwise. Such an
+        agent is dropped from the tracked state here, as a handoff's retry drops its half-made
+        successor: no record names it any more, so until the destroy lands it would be listed
+        as a chat of its own.
+        """
         record = self._chat_record_by_id.get(chat_id)
-        if record is None or record.entry_for(record_entry.agent_id) is None:
-            return
-        remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
-        self._write_record_locked(record.model_copy_update(to_update(record.field_ref().agents, remaining)))
+        if record is not None and record.entry_for(record_entry.agent_id) is not None:
+            remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
+            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().agents, remaining)))
+        if record_entry.agent_id not in self._agents:
+            return None
+        del self._agents[record_entry.agent_id]
+        return record_entry.agent_id
 
     def _require_transition_locked(self, record: ChatRecord | None, chat_id: ChatId, transition_id: str) -> ChatRecord:
         """The record still carrying the switch ``transition_id`` names; raises the switch's own cancelled error otherwise."""
@@ -2837,6 +2849,9 @@ class AgentManager:
         success = False
         error: str | None = None
         output_tail = CreationOutputTail()
+        # A seeded chat's agent that mngr provisioned before its create failed: destroyed below,
+        # once the lock is released, since the withdrawn record no longer names it.
+        half_made_agent_id: str | None = None
 
         try:
             _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
@@ -2870,7 +2885,7 @@ class AgentManager:
                 else:
                     self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
                     if record_entry is not None:
-                        self._withdraw_seeded_member_locked(chat_id, record_entry)
+                        half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
             # constructing AgentStateItem, so if pydantic validation (or
@@ -2887,9 +2902,12 @@ class AgentManager:
                 with self._lock:
                     self._mark_creation_failed_locked(chat_id, error)
                     if record_entry is not None:
-                        self._withdraw_seeded_member_locked(chat_id, record_entry)
+                        half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
             except (OSError, RuntimeError) as cleanup_exc:
                 _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
+
+        if half_made_agent_id is not None:
+            self._discard_successor(chat_id, half_made_agent_id)
 
         if success:
             self._ensure_activity_tracking(agent_id)
