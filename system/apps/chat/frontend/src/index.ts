@@ -6,7 +6,9 @@
 import m from "mithril";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
-import { initChats } from "./models/Chats";
+import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import { forgetPendingChoice } from "./models/ModelSettings";
+import { trackPendingLaneSettlement } from "./models/PendingLane";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
@@ -14,6 +16,7 @@ import type { LlmApi } from "./llm-api";
 import { runHook } from "./hooks";
 import { getFastModePromptChatId } from "./models/FastModePrompt";
 import { trackBackendArrivals } from "./models/OutgoingMessages";
+import { isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
 import { FastModeModal } from "./views/FastModeModal";
 import { SubagentView } from "./views/SubagentView";
@@ -54,7 +57,11 @@ async function bootstrap(): Promise<void> {
   const sessionId = getChatSessionId();
   // The chat app's own WebSocket, read for this page's own chat.
   initChats();
-  trackBackendArrivals();
+  trackBackendArrivals(isMessageCarriedBySwitch);
+  trackPendingLaneSettlement();
+  // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an
+  // optimistic pick made for the old agent would otherwise sit on the bar until its timeout.
+  addActiveAgentChangedListener((chatId) => forgetPendingChoice(chatId));
   initShellPermissionResolutions();
   // Only the chat's own page reports the chat's presence: a subagent view is a second page
   // of the same chat in the same client, and its reports would overwrite the chat page's.

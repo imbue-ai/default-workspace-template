@@ -61,6 +61,11 @@ import { ActivityIndicator } from "./ActivityIndicator";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { renderHeldSends } from "./HeldSendView";
+import { HandoffFailedNotice } from "./HandoffFailedNotice";
+import { renderHandoffTailNode } from "./handoff-node";
+import { SwitchDialog } from "./SwitchDialog";
+import { hasOpenHandoffRequest } from "./turn-grouping";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The terminal output a page shows in place of a transcript: what mngr printed when a create
@@ -540,7 +545,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // reload firing under a fresh chat replaces that bubble with a spinner or an
     // error screen.
     const tailNodes =
-      getEventCount(chatId) === 0 ? [...renderQueuedMessages(chatId), ...renderOutgoingMessages(chatId)] : [];
+      getEventCount(chatId) === 0
+        ? [
+            renderHandoffTailNode(chatId, false),
+            ...renderQueuedMessages(chatId),
+            ...renderHeldSends(chatId),
+            ...renderOutgoingMessages(chatId),
+          ].filter((node) => node !== null)
+        : [];
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
@@ -652,7 +664,16 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
+        // A switch the transcript does not show yet (draining, or restarting in place) gets its
+        // node here; once the summary request is on the stream the rows carry it. Spread rather
+        // than a hole: the list is keyed.
+        ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
+          (node) => node !== null,
+        ),
         ...renderQueuedMessages(chatId),
+        // The messages the chat app holds while the chat switches harness, then this page's
+        // own not-yet-real sends.
+        ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
       ]),
     ]);
@@ -784,6 +805,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                 ? null
                 : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
+                    // The switch dialog a provider choice opens (spec 5.1), and why a switch
+                    // failed, with a retry on any account (spec 5.10).
+                    m(SwitchDialog, { chatId }),
+                    m(HandoffFailedNotice, { chatId }),
                     isConversationNotFound(chatId)
                       ? null
                       : m(ActivityIndicator, {

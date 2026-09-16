@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import auto
 
 from app_instances.data_types import InstanceStatus
@@ -5,6 +6,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
@@ -195,8 +197,25 @@ class AgentDestroyError(RuntimeError):
     ...
 
 
+class ModelApplyError(RuntimeError):
+    """A model pick could not be applied to a running agent: the pick was not one of the agent's options, or
+    the harness refused the switch. The message is what the user sees."""
+
+
 class AgentStopError(RuntimeError):
     """Raised when ``mngr stop`` refuses or fails for a chat agent."""
+
+    ...
+
+
+class ChatConvergingError(RuntimeError):
+    """Raised when a verb is refused because the chat is in the middle of a switch, a handoff or a rebind (a 409)."""
+
+    ...
+
+
+class HandoffError(ValueError):
+    """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
     ...
 
@@ -271,21 +290,169 @@ class AgentStateItem(FrozenModel):
     )
 
 
+class HandoffFailedStep(LowerCaseStrEnum):
+    """Which step of a switch left it in the failed phase: what the failed page names and what a retry reruns."""
+
+    # The successor's ``mngr create`` (a handoff) or the agent's restart (a rebind).
+    START = auto()
+    # The successor was created, but the model the user picked for it could not be applied.
+    MODEL = auto()
+
+
+class ModelPick(FrozenModel):
+    """A model, effort, and fast-mode selection made for an agent that does not run yet: the successor a
+    switch creates, or a new chat. Validated against the agent's option set once it exists, exactly as
+    the model bar's own pick is (``validate_model_pick``)."""
+
+    model_id: str = Field(description="Model id to run on; must be one of the harness's option ids")
+    effort: str | None = Field(default=None, description="Reasoning effort; None for a model with no effort axis")
+    fast: bool = Field(default=False, description="Whether fast mode should be on")
+
+
 class HandoffPhase(LowerCaseStrEnum):
-    """Where a chat that is moving to another harness stands (``null`` on the wire while it is not)."""
+    """Where a chat that is moving to another agent or account stands (``null`` on the wire while it is not).
+
+    A handoff runs draining, summarizing, switching; a rebind runs draining, restarting. Both
+    end in failed when the agent the chat continues on (the successor, or the rebound one)
+    cannot be started.
+    """
 
     DRAINING = auto()
     SUMMARIZING = auto()
     SWITCHING = auto()
+    RESTARTING = auto()
     FAILED = auto()
 
 
-class HandoffState(FrozenModel):
-    """The in-progress handoff a chat snapshot carries while the chat is converging."""
+class TransitionKind(LowerCaseStrEnum):
+    """What a converging chat is doing: moving to another harness, or changing account in place."""
 
-    phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
+    HANDOFF = auto()
+    REBIND = auto()
+
+
+class SummaryOutcome(LowerCaseStrEnum):
+    """How the summarizing phase of a handoff ended."""
+
+    # A fresh summary already existed, so none was requested.
+    REUSED = auto()
+    # The retiring agent wrote one on request.
+    WRITTEN = auto()
+    # No summary: the request failed, the turn ended without a file, the wait ran out, or the
+    # agent was gone.
+    MISSING = auto()
+    # None was asked for: the retiring agent never received a user turn, so there was nothing to
+    # summarize and the successor starts fresh, with no handoff prompt either.
+    SKIPPED = auto()
+
+
+class HeldSendOrigin(LowerCaseStrEnum):
+    """Who sent a message the chat app held while converging."""
+
+    # A chat page (the send named its client).
+    CLIENT = auto()
+    # An in-workspace sender through ``system/scripts/message_chat.py``, or any other caller.
+    SCRIPT = auto()
+
+
+class HeldSend(FrozenModel):
+    """One message the chat app accepted while converging and will deliver once the switch is done."""
+
+    message_id: str = Field(description="The sender's stable send-time id (contract A4)")
+    text: str = Field(description="The message, verbatim")
+    origin: HeldSendOrigin = Field(description="Who sent it")
+    received_at: datetime = Field(description="When the chat app accepted it")
+
+
+class HeldSendSnapshot(FrozenModel):
+    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
+
+    message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
+    text: str = Field(description="The message, verbatim")
+
+
+class HandoffState(FrozenModel):
+    """The in-progress switch a chat snapshot carries while the chat is converging: a handoff or a rebind."""
+
+    kind: TransitionKind = Field(description="A handoff (another harness) or a rebind (another account, same agent)")
+    phase: HandoffPhase = Field(description="Which step of the switch the chat is in")
+    started_at: datetime = Field(
+        description=(
+            "When the switch was confirmed, so the page can tell this switch's summary request in the "
+            "transcript from an earlier one that was called off"
+        )
+    )
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
+    target_harness: HarnessType = Field(description="The harness the chat is moving to, for the page's phase text")
+    target_label: str = Field(
+        description="What the phase text names the destination by: the harness for a handoff, the account for a rebind"
+    )
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        default=(),
+        description=(
+            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
+            "too) keeps showing them until they land in the transcript"
+        ),
+    )
+    error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
+    failed_step: HandoffFailedStep | None = Field(
+        default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
+    )
+
+
+class SwitchChatRequest(SendMessageRequest):
+    """Request body for POST /api/chats/{id}/handoff: a send (the first message the chat sends after the
+    switch, with the sender's client fields; empty for a switch made with nothing to say yet) plus the
+    account the chat moves to, and for a handoff the model the successor should run on."""
+
+    account_id: str = Field(description="The signed-in account the chat moves to")
+    model: ModelPick | None = Field(
+        default=None,
+        description=(
+            "The model the successor runs on, applied before its first message; None for the harness's default. "
+            "Refused for a rebind, which keeps the agent's own settings"
+        ),
+    )
+
+
+class SwitchChatResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff."""
+
+    status: str = Field(description="'converging' once the switch has begun")
+    kind: TransitionKind = Field(description="Whether the target made the switch a handoff or a rebind")
+    phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
+    returned_block: str = Field(
+        description="The queued text draining took off the agent the chat was on, for the composer ('' for none)"
+    )
+
+
+class HeldSendResponse(FrozenModel):
+    """Response from the message route while the chat is converging: the send is held for the successor."""
+
+    status: str = Field(description="'held'")
+    phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class HandoffCancelResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff/cancel."""
+
+    status: str = Field(description="'cancelled'")
+    returned_block: str = Field(description="The message that confirmed the handoff, back for the composer")
+
+
+class HandoffRetryRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/handoff/retry: run a failed switch's last step again on an account
+    (a handoff's create, or a rebind's restart)."""
+
+    account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
+
+
+class HandoffRetryResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff/retry."""
+
+    status: str = Field(description="'converging' once the retry has begun")
+    phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
 
 
 class ActiveAgentSnapshot(FrozenModel):
@@ -318,6 +485,23 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
 
 
+class ChatSegmentInfo(FrozenModel):
+    """One agent of a chat as the transcript reads it: which agent, its place, and whether it is the live one."""
+
+    agent: AgentInfo = Field(description="The agent, with its resolved state and config dirs")
+    seq: int = Field(ge=1, description="The agent's 1-based position in the chat")
+    is_active: bool = Field(description="Whether this is the agent the chat runs on (its segment is the live one)")
+    recorded_event_count: int | None = Field(
+        description="The segment's main-transcript event count recorded when the agent was archived; None for the live one"
+    )
+    ended_at: datetime | None = Field(description="When the agent was archived; None for the live one")
+    opening_message_id: str | None = Field(
+        default=None,
+        description="The send-time id of the message the user switched to this agent with, if folded into its prompt",
+    )
+    opening_message: str | None = Field(default=None, description="That message's text, for the switch marker")
+
+
 class ChatListResponse(FrozenModel):
     """Response from GET /api/chats: every chat this app lists, as the pages see it."""
 
@@ -329,8 +513,8 @@ class CreateChatRequest(FrozenModel):
 
     name: str = Field(
         default="",
-        description="Display name for the new chat agent; empty mints the first free "
-        '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
+        description='Display name for the new chat agent; empty mints the first free "Chat N" server-side, '
+        "whatever harness the account runs on",
     )
     account_id: str = Field(
         default="",
@@ -344,6 +528,11 @@ class CreateChatRequest(FrozenModel):
         default="",
         description="The first message the chat sends once it is running; empty sends none "
         "(a chat minted earlier keeps the message it was minted with)",
+    )
+    model: ModelPick | None = Field(
+        default=None,
+        description="The model the chat runs on, applied once the agent is up and before its first message; "
+        "None for the harness's default",
     )
 
 
@@ -386,15 +575,6 @@ class CreateChatResponse(FrozenModel):
     """Response from POST /api/chats/create."""
 
     chat_id: str = Field(description="The chat's id (its first agent's id, minted before the create)")
-    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
-    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
-
-
-class CreateAgentResponse(FrozenModel):
-    """Response from the agent-keyed create alias, POST /api/agents/create-chat."""
-
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    agent_id: str = Field(description="The chat's id, under the alias's field name")
     name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 

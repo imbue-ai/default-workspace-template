@@ -34,10 +34,10 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   the queue actions, presence, destroy, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`. Every
-  per-chat route, `/api/chats/create`, and the subagent reads are also served
-  under their older `/api/agents/...` spelling, whose id is read as a chat id;
-  `/api/agents` stays the plain listing of every mngr agent.
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
+  `/api/agents` is the plain listing of every mngr agent (the loopback callers'
+  view of background agents too); the older `/api/agents/<id>/...` spellings of
+  the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent`) and the provisional-chat
   events (`provisional_chat_created`, `provisional_chat_completed`).
@@ -55,9 +55,90 @@ shell's client-activity route so agents can attribute a request to a client.
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
 `ChatId` in code (`primitives.py`), and every agent this app creates carries it
-as `MINDS_CHAT_ID` in its environment. Today every chat is its one agent, and
-the places that assume so are marked `CLEANUP`. The read routes go through
-`chat_transcript.py`, the chat's transcript as its agents' segments in order.
+as `MINDS_CHAT_ID` in its environment. A chat that has run on several agents
+has a record under `data/.apps/chat/chats/<chat-id>/record.json`
+(`chat_records.py`) naming its agents in order; every other agent is a chat of
+its own. The agent manager resolves every chat through the records: the
+instance list shows one chat per record, from its active agent, and never an
+archived member; stop, start, rename, and status act on the active agent, and
+destroy names every member. The read routes go through `chat_transcript.py`,
+the chat's transcript as its agents' segments in order with an `agent_switch`
+chip between them: an archived segment is read through its harness's
+`TranscriptLoader` (the watcher without the watching), loaded on the first read
+that reaches into it and dropped with the chat, and every event on the wire
+carries its `agent_id`.
+
+A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
+`POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
+for the new agent. The chat app stops the current agent's turn and hands its
+queue back (draining), asks the agent for a summary through the
+`handoff-summary` skill unless a fresh one exists (summarizing), then stops and
+archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
+its segment's length, and creates the successor under a pre-minted id with the
+chat's name, the account's binding, `chat_id`/`chat_seq` labels, and a first
+message filled in from `.agents/shared/references/continue-chat.md`
+(switching). Every step is recorded on the chat record's `handoff` entry and
+re-checked against mngr's state, so a restart of the app resumes an unfinished
+handoff where it stopped. While a chat converges its instance stays listed as
+`working` from the retiring agent; stop, start, rename, interrupt, the queue
+actions, and the model change answer 409; a send is held (202, `{"status":
+"held"}`) and delivered to the successor in order once it runs; destroy
+proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+returns the confirming message for the composer; a failed create leaves the
+chat in the `failed` phase with the reason, and `POST .../handoff/retry` with
+an `account_id` runs the create again with the same prompt. The event fan-out
+and the SSE streams are keyed by chat id, so an open page follows the chat
+through the switch and sees the chip live. The summaries and prompts live
+beside the record under `data/.apps/chat/chats/<chat-id>/`.
+
+A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
+and lane: the same route, dispatched on the target account's harness and lane
+(the answer's `kind` says which it was). The chat app drains the agent's queue
+as a handoff does, then stops the agent, repoints its binding in its own state
+dir (the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the
+chat's session files into the new account's folder so `claude --resume` and the
+watcher still find them; the credential symlink for codex, pi, and antigravity),
+rewrites its `account` label, starts it again with `mngr start --no-resume`,
+and delivers the held messages once it is up. The agent, its transcript, its tk
+steps, and its model settings stay; the record's `rebind` entry carries the
+state through a restart of the app, and a rebind on a one-agent chat drops the
+record again when it completes. There is no cancel (the agent restarts as soon
+as the switch is confirmed); a failed start leaves the chat in the `failed`
+phase, and the retry offers the accounts of the same harness and lane.
+`harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
+may be rebound on; a same-lane target on any other harness is a handoff.
+
+The page drives both from the composer's provider menu: pressing any account
+but the chat's own opens the switch dialog ("Switch to Codex?", one line for a
+rebind), which for a handoff also takes the model the successor runs on.
+"Switch this chat" arms the switch: a strip above the composer says what the
+next message does, the model bar reads as the target, and the send button
+reads "Switch and send" and carries the switch out with the typed message as
+the first the chat sends after it, with no second confirmation. "Start a new
+chat" opens a chat on that account and model instead, with the draft moved
+over. A chat that has had no user turn skips the dialog: it switches at once,
+with no summary and no handoff prompt, since there is nothing to hand over.
+While the chat converges the held messages render from the snapshot's
+`handoff.held_sends` (the message the user switched with stands down once the
+`agent_switch` marker carrying it is on the transcript, where it renders as the
+successor's opening bubble), one handoff node in the transcript shows the switch's
+progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
+expandable to the summary turn and the handoff prompt, with a rule under it
+once the switch has landed), the activity strip and the placeholder say
+what is happening, and for a handoff the Stop button is "Cancel switch" until
+the old agent is stopped; a failed start or a model pick the successor cannot
+take shows its reason over the composer with a retry (on any signed-in account
+after a handoff, on the same harness and lane after a rebind) and "Start a new
+chat instead". The verbs the app refuses meanwhile answer 409 with a detail
+written for the user, which the page and the shell's tab menu show as is.
+
+A handoff's successor is created silent: its model pick is applied first
+(`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
+goes to it through the send path, then the held messages. A new chat created
+with a pick (`POST /api/chats/create` takes `model` too) is set up the same
+way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
+successor's models from: the catalog for a static harness, the options the
+account's last agent was offered for codex.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -74,11 +155,11 @@ chat. See `docs/system/blueprint/chat-agent-split/`.
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
 signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
-binds to an account when it is created and never changes it. A launch that names
-no account (the New Tab tile, a rail shortcut, `layout.py open chat`) goes to the
-account the user pinned as the default in a chat's provider menu, else to the
-most recently used one; pressing another account in that menu offers to launch a
-new chat on it. `system/scripts/migrate_claude_auth.py` imports this package from
+binds to an account when it is created and moves to another only through a
+switch (a handoff or a rebind, above). A launch that names no account (the New
+Tab tile, a rail shortcut, `layout.py open chat`) goes to the account the user
+pinned as the default in a chat's provider menu, else to the most recently used
+one; pressing another account in that menu makes it the chat's pending lane. `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no

@@ -16,6 +16,15 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 
+# Continuing a chat that moved to you
+
+- When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, you are continuing a chat that ran on another agent before you (the chat app moved it to your harness). The user sees one unbroken conversation and does not know or care that the agent changed.
+- Your first message carries the summary your predecessor wrote, and names the file it is kept in, or says there is none. Read it before anything else.
+- If there is no summary, or it leaves you unsure, gather context yourself: list the chat's earlier agents with `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` and read their transcripts with `mngr transcript <agent-id>` or the find-transcripts skill.
+- Check `tk steps` for open steps; continue the ones that still apply and close the rest with a one-line summary.
+- Never message, start, or otherwise touch a predecessor. It is archived and kept only for its transcript.
+- Do not tell the user about any of this by default. The switch is automated and nothing they need to think about; mention it only if they ask.
+
 # Task management (CRITICAL — read this before doing real work)
 
 You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:

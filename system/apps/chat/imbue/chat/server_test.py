@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import quote
+from uuid import uuid4
 
 import pytest
 from flask import Flask
@@ -18,6 +19,7 @@ from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
@@ -25,6 +27,8 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
@@ -42,9 +46,11 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _build_fast_mode_answered_label_command
@@ -56,13 +62,20 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Generous: the first receive can take several seconds on a loaded machine even
@@ -124,28 +137,20 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
 
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """Routing-level HTTP errors pass through the unhandled-exception handler intact: a 405 stays a 405."""
-    assert client.put("/api/agents/x/destroy").status_code == 405
+    assert client.put("/api/chats/x/destroy").status_code == 405
 
 
 def test_get_events_for_unknown_agent(client: FlaskClient) -> None:
     """Getting events for a nonexistent agent returns 404."""
     with patch("imbue.chat.server.discover_agents", return_value=[]):
-        response = client.get("/api/agents/nonexistent/events")
+        response = client.get("/api/chats/nonexistent/events")
     assert response.status_code == 404
 
 
-def test_the_chat_routes_answer_beside_their_agent_keyed_aliases(client: FlaskClient) -> None:
-    """A per-chat route lives under ``/api/chats/`` and at its older ``/api/agents/`` spelling,
-    both reading their id as a chat id; the subagent read takes the chat and the agent."""
-    with patch("imbue.chat.server.discover_agents", return_value=[]):
-        by_chat = client.get("/api/chats/nonexistent/events")
-        by_alias = client.get("/api/agents/nonexistent/events")
-        subagent = client.get("/api/chats/nonexistent/agents/nonexistent/subagents/s1/events")
-        subagent_alias = client.get("/api/agents/nonexistent/subagents/s1/events")
-    assert by_chat.status_code == by_alias.status_code == 404
-    assert by_chat.get_json() == by_alias.get_json()
-    assert subagent.status_code == subagent_alias.status_code == 404
-    assert client.put("/api/chats/x/destroy").status_code == 405
+def test_the_agent_keyed_aliases_are_gone(app: Flask) -> None:
+    """Every per-chat route lives under ``/api/chats/`` alone; ``/api/agents`` is only the plain listing."""
+    agent_keyed_rules = sorted(rule.rule for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/agents"))
+    assert agent_keyed_rules == ["/api/agents"]
 
 
 def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: FlaskClient, app: Flask) -> None:
@@ -171,13 +176,14 @@ def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: Flask
     assert chat["active_agent"]["state"] == "RUNNING"
 
 
-def test_subagent_route_refuses_an_agent_that_is_not_the_chats(client: FlaskClient, tmp_path: Path) -> None:
+def test_subagent_route_refuses_an_agent_that_is_not_the_chats(
+    client: FlaskClient, app: Flask, tmp_path: Path
+) -> None:
     """The three-part subagent route names the chat's agent whose session the subagent ran
-    under: an agent id that is not the chat's active agent is 404, the active agent's reads."""
-    agent_info = _model_agent_info("agent-123", tmp_path)
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        mismatched = client.get("/api/chats/agent-123/agents/agent-456/subagents/s1/events")
-        matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
+    under: an agent id that is not one of the chat's is 404, a member's reads."""
+    _track_claude_agent(app, "agent-123", "test-agent", tmp_path / "claude_config")
+    mismatched = client.get("/api/chats/agent-123/agents/agent-456/subagents/s1/events")
+    matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
     assert mismatched.status_code == 404
     assert mismatched.get_json()["detail"] == "Chat 'agent-123' has no agent 'agent-456'"
     assert matched.status_code == 200
@@ -187,7 +193,7 @@ def test_subagent_route_refuses_an_agent_that_is_not_the_chats(client: FlaskClie
 def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     """Sending a message to a nonexistent agent returns 404."""
     with patch("imbue.chat.server.discover_agents", return_value=[]):
-        response = client.post("/api/agents/nonexistent/message", json={"message": "hello"})
+        response = client.post("/api/chats/nonexistent/message", json={"message": "hello"})
     assert response.status_code == 404
 
 
@@ -198,7 +204,7 @@ def test_send_message_is_not_ready_until_the_agent_list_is_known() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     client = create_application(build_test_state(agent_manager=manager)).test_client()
 
-    response = client.post("/api/agents/agent-00000000000000000000000000000009/message", json={"message": "hello"})
+    response = client.post("/api/chats/agent-00000000000000000000000000000009/message", json={"message": "hello"})
 
     assert response.status_code == 503
     assert "agent list" in response.get_json()["detail"]
@@ -278,14 +284,12 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     assert response.status_code == 200
 
 
-def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> None:
-    """Getting events for an agent with session files returns parsed events."""
-    # Set up agent state dir with session history
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
+def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
+    """Getting events for an agent with session files returns parsed events, each naming its agent."""
+    claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
 
     # Create a session file
-    claude_config_dir = tmp_path / "claude_config"
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
 
@@ -321,33 +325,23 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     # Write session history
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get("/api/agents/agent-123/events")
-        by_chat_route = client.get("/api/chats/agent-123/events")
+    response = client.get("/api/chats/agent-123/events")
 
     assert response.status_code == 200
     data = response.get_json()
-    assert by_chat_route.get_json() == data
     assert len(data["events"]) == 2
     assert data["events"][0]["type"] == "user_message"
     assert data["events"][0]["content"] == "Hello"
     assert data["events"][1]["type"] == "assistant_message"
     assert data["events"][1]["text"] == "Hi!"
+    assert [event["agent_id"] for event in data["events"]] == ["agent-123", "agent-123"]
 
 
-def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -> None:
+def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
     """The detail endpoint reconstructs one event's full payloads from disk, and answers a
     clean 404 (the frontend's quiet placeholder) for an unknown event."""
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
     claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
     session_id = "detail-session"
@@ -368,26 +362,18 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -
     )
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        events = client.get("/api/agents/agent-123/events").get_json()["events"]
-        result_event = next(e for e in events if e["type"] == "tool_result")
-        # Payload-free wire: the output is not on the event.
-        assert "output" not in result_event
-        assert result_event["output_chars"] == 9000
+    events = client.get("/api/chats/agent-123/events").get_json()["events"]
+    result_event = next(e for e in events if e["type"] == "tool_result")
+    # Payload-free wire: the output is not on the event.
+    assert "output" not in result_event
+    assert result_event["output_chars"] == 9000
 
-        detail = client.get(f"/api/agents/agent-123/events/{result_event['event_id']}/detail")
-        assert detail.status_code == 200
-        assert detail.get_json()["output"] == "z" * 9000
+    detail = client.get(f"/api/chats/agent-123/events/{result_event['event_id']}/detail")
+    assert detail.status_code == 200
+    assert detail.get_json()["output"] == "z" * 9000
 
-        missing = client.get("/api/agents/agent-123/events/not-a-real-event/detail")
-        assert missing.status_code == 404
+    missing = client.get("/api/chats/agent-123/events/not-a-real-event/detail")
+    assert missing.status_code == 404
 
 
 def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
@@ -433,12 +419,11 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     state.shutdown()
 
 
-def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Path) -> None:
+def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
     """The no-`before` events response is capped to the most recent N events,
     and older events remain reachable via the `before` backfill branch."""
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
     claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
 
@@ -461,64 +446,55 @@ def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Pat
     )
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
+    response = client.get("/api/chats/agent-123/events")
+    assert response.status_code == 200
+    body = response.get_json()
+    events = body["events"]
+    # Only the most recent _DEFAULT_TAIL_COUNT events are returned.
+    assert len(events) == _DEFAULT_TAIL_COUNT
+    assert events[0]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT}"
+    assert events[-1]["content"] == f"Message {total_events - 1}"
+    # offset + total place the tail window in the full conversation: the first
+    # tail event sits at index (total - tail), so offset > 0 tells the client
+    # there is older history above to page in.
+    assert body["total"] == total_events
+    assert body["offset"] == total_events - _DEFAULT_TAIL_COUNT
 
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get("/api/agents/agent-123/events")
-        assert response.status_code == 200
-        body = response.get_json()
-        events = body["events"]
-        # Only the most recent _DEFAULT_TAIL_COUNT events are returned.
-        assert len(events) == _DEFAULT_TAIL_COUNT
-        assert events[0]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT}"
-        assert events[-1]["content"] == f"Message {total_events - 1}"
-        # offset + total place the tail window in the full conversation: the first
-        # tail event sits at index (total - tail), so offset > 0 tells the client
-        # there is older history above to page in.
-        assert body["total"] == total_events
-        assert body["offset"] == total_events - _DEFAULT_TAIL_COUNT
+    # Older events are still reachable by paging backwards from the oldest
+    # event in the initial tail.
+    oldest_in_tail = events[0]["event_id"]
+    backfill = client.get(f"/api/chats/agent-123/events?before={oldest_in_tail}")
+    assert backfill.status_code == 200
+    backfill_body = backfill.get_json()
+    backfill_events = backfill_body["events"]
+    assert len(backfill_events) == total_events - _DEFAULT_TAIL_COUNT
+    assert backfill_events[0]["content"] == "Message 0"
+    assert backfill_events[-1]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT - 1}"
+    # The page reached the very first event (offset 0 => no more history above).
+    assert backfill_body["offset"] == 0
+    assert backfill_body["total"] == total_events
 
-        # Older events are still reachable by paging backwards from the oldest
-        # event in the initial tail.
-        oldest_in_tail = events[0]["event_id"]
-        backfill = client.get(f"/api/agents/agent-123/events?before={oldest_in_tail}")
-        assert backfill.status_code == 200
-        backfill_body = backfill.get_json()
-        backfill_events = backfill_body["events"]
-        assert len(backfill_events) == total_events - _DEFAULT_TAIL_COUNT
-        assert backfill_events[0]["content"] == "Message 0"
-        assert backfill_events[-1]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT - 1}"
-        # The page reached the very first event (offset 0 => no more history above).
-        assert backfill_body["offset"] == 0
-        assert backfill_body["total"] == total_events
+    # A jump lands a window at an arbitrary global offset in one request,
+    # rather than paging through everything before it.
+    jump = client.get("/api/chats/agent-123/events?offset=5&limit=4")
+    assert jump.status_code == 200
+    jump_body = jump.get_json()
+    assert [e["content"] for e in jump_body["events"]] == [f"Message {i}" for i in range(5, 9)]
+    assert jump_body["offset"] == 5
 
-        # A jump lands a window at an arbitrary global offset in one request,
-        # rather than paging through everything before it.
-        jump = client.get("/api/agents/agent-123/events?offset=5&limit=4")
-        assert jump.status_code == 200
-        jump_body = jump.get_json()
-        assert [e["content"] for e in jump_body["events"]] == [f"Message {i}" for i in range(5, 9)]
-        assert jump_body["offset"] == 5
+    # From that jumped window the client can page *newer* (toward the tail).
+    after_id = jump_body["events"][-1]["event_id"]
+    forward = client.get(f"/api/chats/agent-123/events?after={after_id}&limit=3")
+    assert forward.status_code == 200
+    forward_body = forward.get_json()
+    assert [e["content"] for e in forward_body["events"]] == [f"Message {i}" for i in range(9, 12)]
+    assert forward_body["offset"] == 9
 
-        # From that jumped window the client can page *newer* (toward the tail).
-        after_id = jump_body["events"][-1]["event_id"]
-        forward = client.get(f"/api/agents/agent-123/events?after={after_id}&limit=3")
-        assert forward.status_code == 200
-        forward_body = forward.get_json()
-        assert [e["content"] for e in forward_body["events"]] == [f"Message {i}" for i in range(9, 12)]
-        assert forward_body["offset"] == 9
-
-        # A non-positive limit must not defeat the cap (``[-0:]`` would return
-        # the whole list); it falls back to the default tail count.
-        zero_limit = client.get("/api/agents/agent-123/events?limit=0")
-        assert zero_limit.status_code == 200
-        assert len(zero_limit.get_json()["events"]) == _DEFAULT_TAIL_COUNT
+    # A non-positive limit must not defeat the cap (``[-0:]`` would return
+    # the whole list); it falls back to the default tail count.
+    zero_limit = client.get("/api/chats/agent-123/events?limit=0")
+    assert zero_limit.status_code == 200
+    assert len(zero_limit.get_json()["events"]) == _DEFAULT_TAIL_COUNT
 
 
 def test_send_message_success() -> None:
@@ -536,13 +512,39 @@ def test_send_message_success() -> None:
     manager.note_agent_list_known()
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
+    """mngr's send auto-starts a stopped claude/pi agent, and the observe stream sees the revival
+    only on its full snapshot; a delivered send flips the tracked lifecycle at once, so the UI
+    and a handoff's summary wait do not read the agent they just messaged as dead."""
+    agent_id = "agent-00000000000000000000000000000002"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="stopped-agent",
+        state="STOPPED",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="stopped-agent", state="STOPPED")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "wake up"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "wake up")]
+    tracked = manager.get_agent_by_id(agent_id)
+    assert tracked is not None and tracked.state == "WAITING"
 
 
 class _FakeCodexLedger:
@@ -630,7 +632,7 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m1"})
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m1"})
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
     assert ledger.sent == [("hi", "m1")]
@@ -656,7 +658,7 @@ def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: P
         patch("imbue.chat.server.start_agent", failing_start),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
     assert response.status_code == 503
     assert started == [agent_info.name]
 
@@ -684,7 +686,7 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
         patch("imbue.chat.server.start_agent", fake_start),
         patch.object(AgentManager, "get_or_create_session", return_value=session),
     ):
-        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
     assert response.status_code == 200
     assert ledger.sent == [("hi", "m9")]
 
@@ -715,7 +717,7 @@ def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> N
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = client.post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     assert response.get_json()["status"] == "tapped"
     assert ledger.tap_calls == 1
@@ -732,7 +734,7 @@ def test_shoulder_tap_codex_is_a_benign_200_when_a_send_is_in_flight(tmp_path: P
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = client.post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     assert response.get_json()["status"] == "send_in_flight"
 
@@ -745,7 +747,7 @@ def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = client.post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     assert response.get_json()["status"] == "no_open_turn"
 
@@ -761,7 +763,7 @@ def test_shoulder_tap_codex_resend_failure_hands_the_block_back_to_the_composer(
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = client.post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     body = response.get_json()
     assert body["status"] == "tapped"
@@ -778,7 +780,7 @@ def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> Non
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
     assert response.status_code == 200
     assert response.get_json()["block"] == "bring me back to edit"
 
@@ -791,7 +793,7 @@ def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
-        response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
     assert response.status_code == 200
     assert response.get_json()["block"] == ""
 
@@ -858,7 +860,7 @@ def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: Flask
     agent_id = "agent-00000000000000000000000000000010"
     agent_info = _model_agent_info(agent_id, tmp_path)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/powered-by")
+        response = client.get(f"/api/chats/{agent_id}/powered-by")
     assert response.status_code == 200
     assert response.get_json() == {"label": ""}
 
@@ -868,7 +870,7 @@ def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path:
     agent_id = "agent-00000000000000000000000000000011"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/powered-by")
+        response = client.get(f"/api/chats/{agent_id}/powered-by")
     assert response.status_code == 200
     assert response.get_json() == {"label": "Powered by Codex"}
 
@@ -876,7 +878,7 @@ def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path:
 def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
     """A provisional chat (not an agent yet) 404s, so the frontend shows no credit."""
     with patch("imbue.chat.server._find_active_agent", return_value=None):
-        response = client.get("/api/agents/nonexistent/powered-by")
+        response = client.get("/api/chats/nonexistent/powered-by")
     assert response.status_code == 404
 
 
@@ -892,7 +894,7 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(
-            f"/api/agents/{agent_id}/model",
+            f"/api/chats/{agent_id}/model",
             json={
                 "model_id": "sonnet[1m]",
                 "effort": "high",
@@ -912,7 +914,7 @@ def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
     manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/model", json={"model_id": "gpt-4", "effort": "high"})
+        response = client.post(f"/api/chats/{agent_id}/model", json={"model_id": "gpt-4", "effort": "high"})
 
     assert response.status_code == 400
     assert messenger.sent == []
@@ -926,7 +928,7 @@ def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(
-            f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "medium", "fast": True}
+            f"/api/chats/{agent_id}/model", json={"model_id": "sonnet", "effort": "medium", "fast": True}
         )
 
     assert response.status_code == 400
@@ -935,7 +937,7 @@ def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
 
 def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.chat.server._find_active_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/model", json={"model_id": "sonnet", "effort": "high"})
+        response = client.post("/api/chats/nonexistent/model", json={"model_id": "sonnet", "effort": "high"})
     assert response.status_code == 404
 
 
@@ -989,7 +991,7 @@ def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> 
         ),
     ):
         response = client.post(
-            f"/api/agents/{agent_id}/model",
+            f"/api/chats/{agent_id}/model",
             json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": False, "axes": ["model", "effort"]},
         )
 
@@ -1027,7 +1029,7 @@ def test_model_options_returns_full_per_agent_options_for_codex(tmp_path: Path) 
             return_value=dynamic_client,
         ),
     ):
-        response = client.get(f"/api/agents/{agent_id}/model-options")
+        response = client.get(f"/api/chats/{agent_id}/model-options")
 
     assert response.status_code == 200
     data = response.get_json()
@@ -1072,7 +1074,7 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
             return_value=picker_client,
         ),
     ):
-        options_response = client.get(f"/api/agents/{agent_id}/model-options")
+        options_response = client.get(f"/api/chats/{agent_id}/model-options")
         assert options_response.status_code == 200
         picker_ids = [opt["id"] for opt in options_response.get_json()["options"]]
 
@@ -1086,7 +1088,7 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
 
         # The newly-offered model validates on switch (200), applied over thread/settings/update.
         switch_response = client.post(
-            f"/api/agents/{agent_id}/model",
+            f"/api/chats/{agent_id}/model",
             json={
                 "model_id": "gpt-5.6-terra",
                 "effort": "high",
@@ -1157,7 +1159,7 @@ def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_p
     agent_id = "agent-00000000000000000000000000000013"
     agent_info = _model_agent_info(agent_id, tmp_path)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-options")
+        response = client.get(f"/api/chats/{agent_id}/model-options")
     assert response.status_code == 200
     data = response.get_json()
     assert data["models"] is None
@@ -1174,7 +1176,7 @@ def test_fast_mode_answered_label_argv_accepted_by_live_cli() -> None:
 
 def test_fast_mode_answered_returns_404_for_unknown_agent() -> None:
     client = create_application(build_test_state()).test_client()
-    response = client.post("/api/agents/agent-doesnotexist/fast-mode-answered")
+    response = client.post("/api/chats/agent-doesnotexist/fast-mode-answered")
     assert response.status_code == 404
 
 
@@ -1213,7 +1215,7 @@ def test_presence_endpoint_retags_a_chat_from_the_report() -> None:
     writes: list[tuple[int, int]] = []
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
 
-    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "visible"})
+    response = client.post("/api/chats/agent-c0ffee/presence", json={"client_id": "client-1", "state": "visible"})
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
@@ -1232,10 +1234,10 @@ def test_presence_endpoint_closed_report_releases_the_chat() -> None:
     """A ``closed`` report drops the client's presence, so the chat reads as closed again."""
     writes: list[tuple[int, int]] = []
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
-    client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "hidden"})
+    client.post("/api/chats/agent-c0ffee/presence", json={"client_id": "client-1", "state": "hidden"})
     open_adj = writes[-1][1]
 
-    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "closed"})
+    response = client.post("/api/chats/agent-c0ffee/presence", json={"client_id": "client-1", "state": "closed"})
 
     assert response.status_code == 200
     assert writes[-1][1] > open_adj
@@ -1248,7 +1250,7 @@ def test_presence_endpoint_rejects_a_malformed_report() -> None:
     writes: list[tuple[int, int]] = []
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
 
-    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "gone"})
+    response = client.post("/api/chats/agent-c0ffee/presence", json={"client_id": "client-1", "state": "gone"})
 
     assert response.status_code == 400
     assert "detail" in response.get_json()
@@ -1259,7 +1261,7 @@ def test_presence_endpoint_refuses_an_id_that_is_not_an_agent_id() -> None:
     writes: list[tuple[int, int]] = []
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
 
-    response = client.post("/api/agents/not-an-agent/presence", json={"client_id": "client-1", "state": "visible"})
+    response = client.post("/api/chats/not-an-agent/presence", json={"client_id": "client-1", "state": "visible"})
 
     assert response.status_code == 404
 
@@ -1289,7 +1291,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
         claude_config_dir=Path("/tmp/.claude"),
     )
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert writes[-1] == (
@@ -1303,7 +1305,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
 def test_interrupt_agent_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     """Interrupting a nonexistent agent returns 404."""
     with patch("imbue.chat.server._find_active_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/interrupt")
+        response = client.post("/api/chats/nonexistent/interrupt")
     assert response.status_code == 404
 
 
@@ -1331,7 +1333,7 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state") as mock_reset,
     ):
-        response = client.post("/api/agents/agent-123/interrupt")
+        response = client.post("/api/chats/agent-123/interrupt")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
@@ -1348,7 +1350,7 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
 
 
 def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
-    """POST /api/agents/<id>/interrupt returns 400 for the services agent.
+    """POST /api/chats/<id>/interrupt returns 400 for the services agent.
 
     Restarting the is_primary agent would stop the workspace services. The chat
     list the app pushes omits such agents; this server-side guard protects direct
@@ -1366,7 +1368,7 @@ def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
         patch("imbue.chat.server._find_active_agent", return_value=services_agent),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/services-1/interrupt")
+        response = client.post("/api/chats/services-1/interrupt")
 
     assert response.status_code == 400
     assert "is_primary" in response.get_json()["detail"]
@@ -1397,7 +1399,7 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
             return_value=fake_result,
         ),
     ):
-        response = client.post("/api/agents/agent-123/interrupt")
+        response = client.post("/api/chats/agent-123/interrupt")
 
     assert response.status_code == 500
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
@@ -1483,7 +1485,7 @@ def _fake_queue_watcher(
 
 def test_flush_queue_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.chat.server._find_active_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/flush-queue")
+        response = client.post("/api/chats/nonexistent/flush-queue")
     assert response.status_code == 404
 
 
@@ -1497,7 +1499,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
     ):
-        response = client.post("/api/agents/agent-123/flush-queue")
+        response = client.post("/api/chats/agent-123/flush-queue")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
@@ -1517,7 +1519,7 @@ def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> N
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
-        response = client.post("/api/agents/agent-123/flush-queue")
+        response = client.post("/api/chats/agent-123/flush-queue")
 
     assert response.status_code == 200
     mock_run.assert_not_called()
@@ -1532,7 +1534,7 @@ def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
         ),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/services-1/flush-queue")
+        response = client.post("/api/chats/services-1/flush-queue")
 
     assert response.status_code == 400
     assert "is_primary" in response.get_json()["detail"]
@@ -1554,7 +1556,7 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
         patch("imbue.chat.server.run_local_command_modern_version", return_value=failed),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
-        response = client.post("/api/agents/agent-123/flush-queue")
+        response = client.post("/api/chats/agent-123/flush-queue")
 
     assert response.status_code == 500
     # The restart failed, so nothing is resent.
@@ -1563,7 +1565,7 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.chat.server._find_active_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/shoulder-tap-atomic")
+        response = client.post("/api/chats/nonexistent/shoulder-tap-atomic")
     assert response.status_code == 404
 
 
@@ -1581,7 +1583,7 @@ def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp
             return_value=SimpleNamespace(native_atomic_shoulder_tap_possible=False),
         ),
     ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+        response = client.post("/api/chats/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 400
     assert "does not support an atomic shoulder tap" in response.get_json()["detail"]
@@ -1651,7 +1653,7 @@ def test_shoulder_tap_atomic_claude_nothing_queued_is_a_noop(client: FlaskClient
         patch.object(ChatAppState, "get_or_create_watcher", return_value=watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+        response = client.post("/api/chats/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "nothing_queued"
@@ -1677,7 +1679,7 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
         patch.object(ChatAppState, "get_or_create_watcher", return_value=watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = app.test_client().post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "tapped"
@@ -1709,7 +1711,7 @@ def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
         patch.object(ChatAppState, "get_or_create_watcher", return_value=watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+        response = app.test_client().post(f"/api/chats/{agent_id}/shoulder-tap-atomic")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "send_in_flight"
@@ -1727,7 +1729,7 @@ def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_pat
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+        response = client.post("/api/chats/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "tapped"
@@ -1745,7 +1747,7 @@ def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_p
         agent_state_dir=tmp_path,
     )
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post("/api/agents/services-1/shoulder-tap-atomic")
+        response = client.post("/api/chats/services-1/shoulder-tap-atomic")
 
     assert response.status_code == 400
     assert "is_primary" in response.get_json()["detail"]
@@ -1762,7 +1764,7 @@ def test_shoulder_tap_atomic_pi_no_ops_benignly_when_a_send_is_in_flight(client:
         patch("imbue.chat.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
     ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+        response = client.post("/api/chats/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "send_in_flight"
@@ -1823,7 +1825,7 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+        response = client.post("/api/chats/agent-123/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == "edit me before sending"
@@ -1862,7 +1864,7 @@ def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_p
             side_effect=lambda *_a, **_k: idle_marks.append(True),
         ),
     ):
-        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+        response = app.test_client().post(f"/api/chats/{agent_id}/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == ""
@@ -1885,7 +1887,7 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(client:
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+        response = client.post("/api/chats/agent-123/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == "bring me back to edit"
@@ -1913,7 +1915,7 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+        response = client.post("/api/chats/agent-123/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == ""
@@ -1938,7 +1940,7 @@ def test_drain_to_composer_pi_native_retract_does_not_fold_in_flight_block(
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
     ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+        response = client.post("/api/chats/agent-123/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == "queued only"
@@ -1992,7 +1994,7 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+        response = client.post("/api/chats/agent-123/drain-to-composer")
 
     assert response.status_code == 200
     # The queued block leads, the still-in-flight send follows (send order) -- the in-flight
@@ -2025,7 +2027,7 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
-        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+        response = app.test_client().post(f"/api/chats/{agent_id}/drain-to-composer")
 
     assert response.status_code == 200
     assert response.get_json()["block"] == ""
@@ -2059,7 +2061,7 @@ def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_hel
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
         patch.object(AgentManager, "reset_activity_state"),
     ):
-        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+        response = app.test_client().post(f"/api/chats/{agent_id}/drain-to-composer")
 
     assert response.status_code == 200
     # The in-flight send is recovered to the composer instead of dying silently with the SIGKILL.
@@ -2104,7 +2106,7 @@ def test_create_chat_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     test_client = create_application(build_test_state()).test_client()
     response = test_client.post(
-        "/api/agents/create-chat",
+        "/api/chats/create",
         json={"name": "test-chat"},
     )
     assert response.status_code == 400
@@ -2127,13 +2129,13 @@ def test_create_chat_mints_a_numbered_display_name_server_side(
             id="agent-1", name="Chat-1", state="RUNNING", labels={"display_name": "Chat 1"}, work_dir=None
         )
 
-    response = client.post("/api/agents/create-chat", json={})
+    response = client.post("/api/chats/create", json={})
 
     assert response.status_code == 201
     body = response.get_json()
     assert body["display_name"] == "Chat 2"
     assert body["name"] == "Chat-2"
-    assert body["agent_id"]
+    assert body["chat_id"]
 
 
 def test_create_chat_launches_a_reserved_chat_under_its_id(
@@ -2141,25 +2143,6 @@ def test_create_chat_launches_a_reserved_chat_under_its_id(
 ) -> None:
     """A chat minted while nothing was signed in is launched by naming its id: the tab the
     shell docked for it keeps its id and name, and only the phase changes."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    _register_agent(app, "agent-123", "primary", "RUNNING")
-    agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat()
-
-    response = client.post("/api/agents/create-chat", json={"agent_id": reserved.chat_id})
-
-    assert response.status_code == 201
-    body = response.get_json()
-    assert body["agent_id"] == reserved.chat_id
-    assert body["display_name"] == reserved.display_name
-
-
-def test_create_chat_route_launches_a_reserved_chat_by_chat_id(
-    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``POST /api/chats/create`` takes the minted chat under ``chat_id`` and answers the
-    chat's id under the same name, where the agent-keyed alias spells both ``agent_id``."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
@@ -2187,7 +2170,7 @@ def test_create_chat_refuses_a_message_beside_a_reserved_id(
     agent_manager: AgentManager = state_of(app).agent_manager
     reserved = agent_manager.reserve_chat(message="Teach me about Mind")
 
-    response = client.post("/api/agents/create-chat", json={"agent_id": reserved.chat_id, "message": "other"})
+    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
@@ -2211,11 +2194,11 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     assert failed_record is not None and failed_record.phase is ProvisionalChatPhase.FAILED
     pushes = agent_manager.broadcaster.register()
 
-    response = client.post("/api/agents/create-chat", json={"agent_id": failed.chat_id})
+    response = client.post("/api/chats/create", json={"chat_id": failed.chat_id})
 
     assert response.status_code == 201
     body = response.get_json()
-    assert body["agent_id"] == failed.chat_id
+    assert body["chat_id"] == failed.chat_id
     assert body["display_name"] == failed.display_name
     # The relaunch is pushed to every page before the creation thread can settle it, so the
     # push is what says the record went back to the creating phase.
@@ -2239,7 +2222,7 @@ def test_create_chat_refuses_an_id_that_was_never_reserved(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
 
-    response = client.post("/api/agents/create-chat", json={"agent_id": "never-reserved"})
+    response = client.post("/api/chats/create", json={"chat_id": "never-reserved"})
 
     assert response.status_code == 400
     assert "never-reserved" in response.get_json()["detail"]
@@ -2259,14 +2242,14 @@ def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
             id="agent-1", name="Chat-2", state="RUNNING", labels={"display_name": "Chat 2"}, work_dir=None
         )
 
-    response = client.post("/api/agents/create-chat", json={"name": "chat 2"})
+    response = client.post("/api/chats/create", json={"name": "chat 2"})
 
     assert response.status_code == 409
     assert "chat 2" in response.get_json()["detail"]
 
 
 def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hitting /api/agents/{id}/events for a Claude session with an unmatched tool_use
+    """Hitting /api/chats/{id}/events for a Claude session with an unmatched tool_use
     seeds the AgentManager's transcript-derived signals so the activity indicator
     reads ``TOOL_RUNNING`` immediately.
     """
@@ -2279,6 +2262,7 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
     state_dir.mkdir(parents=True)
 
     claude_config_dir = tmp_path / "claude_config"
+    (state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
     session_id = "test-session-id"
@@ -2319,18 +2303,10 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
     manager._ensure_activity_tracking(agent_id)
 
     app = create_application(build_test_state(agent_manager=manager))
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="seed-agent",
-        state="RUNNING",
-        agent_state_dir=state_dir,
-        claude_config_dir=claude_config_dir,
-    )
 
     try:
         test_client = app.test_client()
-        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-            response = test_client.get(f"/api/agents/{agent_id}/events")
+        response = test_client.get(f"/api/chats/{agent_id}/events")
         assert response.status_code == 200
 
         # The watcher creation path seeds transcript-derived state
@@ -2376,7 +2352,7 @@ def test_stream_filtered_events_forwards_only_matching_events() -> None:
 
 
 def test_destroy_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
-    """POST /api/agents/<id>/destroy returns 400 for the services agent.
+    """POST /api/chats/<id>/destroy returns 400 for the services agent.
 
     The chat list the app pushes omits agents carrying ``is_primary=true``; this
     server-side guard prevents direct callers (curl, scripted use, etc.)
@@ -2392,7 +2368,7 @@ def test_destroy_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> No
     )
     agent_manager._agents[services_agent.id] = services_agent
 
-    response = client.post(f"/api/agents/{services_agent.id}/destroy")
+    response = client.post(f"/api/chats/{services_agent.id}/destroy")
     assert response.status_code == 400
     assert "is_primary" in response.get_json()["detail"]
     # The guard runs *before* the destroy subprocess, so the agent is still
@@ -2412,9 +2388,23 @@ def _register_agent(app: Flask, agent_id: str, name: str, state: str) -> None:
     )
 
 
+def _track_claude_agent(app: Flask, agent_id: str, name: str, claude_config_dir: Path) -> Path:
+    """Register a claude agent whose state dir (under the test's isolated host dir) names ``claude_config_dir``.
+
+    The read routes resolve an agent through the manager, which derives the state dir from
+    the host dir and the config dir from the state dir's env file, so a test that wants the
+    routes to read its fixture transcript registers the agent this way. Returns the state dir.
+    """
+    state_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / agent_id
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
+    _register_agent(app, agent_id, name, "RUNNING")
+    return state_dir
+
+
 def test_start_unknown_agent_returns_404(client: FlaskClient) -> None:
-    """POST /api/agents/<id>/start returns 404 for an unknown agent."""
-    response = client.post("/api/agents/nonexistent/start")
+    """POST /api/chats/<id>/start returns 404 for an unknown agent."""
+    response = client.post("/api/chats/nonexistent/start")
     assert response.status_code == 404
 
 
@@ -2428,7 +2418,7 @@ def test_start_invokes_in_process_start_with_agent_name(client: FlaskClient, app
     _register_agent(app, "agent-running", "running-agent", "RUNNING")
 
     with patch("imbue.chat.server.start_agent") as mock_start:
-        response = client.post("/api/agents/agent-running/start")
+        response = client.post("/api/chats/agent-running/start")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
@@ -2443,7 +2433,7 @@ def test_start_failure_returns_500(client: FlaskClient, app: Flask) -> None:
         "imbue.chat.server.start_agent",
         side_effect=AgentStartError("stopped-agent", "boom"),
     ):
-        response = client.post("/api/agents/agent-stopped/start")
+        response = client.post("/api/chats/agent-stopped/start")
 
     assert response.status_code == 500
     assert "boom" in response.get_json()["detail"]
@@ -2453,7 +2443,7 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     """Confront the ``mngr destroy`` argv with the live ``imbue.mngr.main.cli``
     tree, so a system/vendor/mngr rename of that subcommand/flag fails here at merge
     time rather than only surfacing at runtime."""
-    assert_mngr_argv_valid(_build_chat_destroy_command("mngr", "demo"))
+    assert_mngr_argv_valid(_build_chat_destroy_command("mngr", ("agent-demo1", "agent-demo2")))
 
 
 def test_stop_argv_accepted_by_live_cli() -> None:
@@ -2463,13 +2453,13 @@ def test_stop_argv_accepted_by_live_cli() -> None:
 
 
 def test_stop_unknown_agent_returns_404(client: FlaskClient) -> None:
-    """POST /api/agents/<id>/stop returns 404 for an unknown agent."""
-    response = client.post("/api/agents/nonexistent/stop")
+    """POST /api/chats/<id>/stop returns 404 for an unknown agent."""
+    response = client.post("/api/chats/nonexistent/stop")
     assert response.status_code == 404
 
 
 def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
-    """POST /api/agents/<id>/stop returns 400 for the services agent.
+    """POST /api/chats/<id>/stop returns 400 for the services agent.
 
     Stopping the services agent would take down every supervised service in
     the workspace, so the endpoint refuses it exactly as destroy does -- and
@@ -2486,7 +2476,7 @@ def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
     )
     agent_manager._agents[services_agent.id] = services_agent
 
-    response = client.post(f"/api/agents/{services_agent.id}/stop")
+    response = client.post(f"/api/chats/{services_agent.id}/stop")
     assert response.status_code == 400
     assert "is_primary" in response.get_json()["detail"]
     assert services_agent.id in agent_manager._agents
@@ -2693,7 +2683,7 @@ def test_missing_non_image_path_is_not_a_download(client: FlaskClient, tmp_path:
 def test_create_chat_carries_the_project_id_beside_the_request_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``project_id`` is accepted on create-chat and is not mistaken for a chat field.
+    """``project_id`` is accepted on ``POST /api/chats/create`` and is not mistaken for a chat field.
 
     Chat membership rides the agent's ``project`` label rather than the member
     list, so the project a chat is created in travels with the create request.
@@ -2703,7 +2693,7 @@ def test_create_chat_carries_the_project_id_beside_the_request_model(
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     test_client = create_application(build_test_state()).test_client()
 
-    response = test_client.post("/api/agents/create-chat", json={"name": "test-chat", "project_id": "alpha"})
+    response = test_client.post("/api/chats/create", json={"name": "test-chat", "project_id": "alpha"})
 
     # Still the no-work-dir failure, i.e. the extra field reached the label path
     # rather than being rejected as an unknown request field.
@@ -2771,3 +2761,365 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert first["chat_id"] == reserved.chat_id
     assert first["phase"] == ProvisionalChatPhase.AWAITING_ACCOUNT.value
     assert second["type"] == "chats_updated"
+
+
+# --- A chat that has run on two agents: one transcript, read across both segments ---
+
+
+def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    (projects_dir / f"{session_id}.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+
+
+def _user_event(uuid: str, timestamp: str, content: str) -> dict[str, Any]:
+    return {"type": "user", "uuid": uuid, "timestamp": timestamp, "message": {"role": "user", "content": content}}
+
+
+def _two_member_chat(app: Flask, tmp_path: Path) -> tuple[str, str]:
+    """A chat that moved from a stopped, archived claude agent (two events, one a tool result with a
+    payload) to a running one (two user turns); returns the two agent ids."""
+    first, second = "agent-first-member", "agent-second-member"
+    first_state_dir = _track_claude_agent(app, first, f"archived-1-Chat-1-{first}", tmp_path / "first_config")
+    _write_claude_session(
+        tmp_path / "first_config",
+        "first-session",
+        [
+            _user_event("f-1", "2026-01-01T00:00:00Z", "Hello from the first agent"),
+            {
+                "type": "user",
+                "uuid": "f-2",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_f", "content": "z" * 900}],
+                },
+            },
+        ],
+    )
+    (first_state_dir / "claude_session_id_history").write_text("first-session\n")
+    second_state_dir = _track_claude_agent(app, second, "Chat-1", tmp_path / "second_config")
+    _write_claude_session(
+        tmp_path / "second_config",
+        "second-session",
+        [
+            _user_event("s-1", "2026-01-02T00:00:00Z", "Hello from the second agent"),
+            _user_event("s-2", "2026-01-02T00:00:01Z", "And again"),
+        ],
+    )
+    (second_state_dir / "claude_session_id_history").write_text("second-session\n")
+    manager: AgentManager = state_of(app).agent_manager
+    with manager._lock:
+        manager._agents[first] = manager._agents[first].model_copy_update(
+            to_update(manager._agents[first].field_ref().state, "STOPPED")
+        )
+    manager._chat_record_store.write(make_two_member_chat_record(first, second, first_event_count=2))
+    manager.refresh_chat_records()
+    return first, second
+
+
+def test_a_two_member_chat_reads_as_one_transcript_with_the_switch_between(
+    client: FlaskClient, app: Flask, tmp_path: Path
+) -> None:
+    first, second = _two_member_chat(app, tmp_path)
+    switch_id = agent_switch_event_id(ChatId(first), 1)
+
+    whole = client.get(f"/api/chats/{first}/events").get_json()
+    assert (whole["offset"], whole["total"]) == (0, 5)
+    assert [event["type"] for event in whole["events"]] == [
+        "user_message",
+        "tool_result",
+        "agent_switch",
+        "user_message",
+        "user_message",
+    ]
+    assert [event["agent_id"] for event in whole["events"]] == [first, first, second, second, second]
+    switch = whole["events"][2]
+    assert switch["event_id"] == switch_id
+    assert (switch["from_agent_id"], switch["to_agent_id"], switch["seq"]) == (first, second, 1)
+    first_ids = [event["event_id"] for event in whole["events"][:2]]
+    second_ids = [event["event_id"] for event in whole["events"][3:]]
+
+    # Paging older from the live segment's first event crosses the chip into the archived one.
+    before = client.get(f"/api/chats/{first}/events?before={second_ids[0]}&limit=2").get_json()
+    assert ([event["event_id"] for event in before["events"]], before["offset"]) == ([first_ids[1], switch_id], 1)
+    # A jump lands inside the live segment by chat-global offset; paging newer from the chip too.
+    jump = client.get(f"/api/chats/{first}/events?offset=3&limit=1").get_json()
+    assert ([event["event_id"] for event in jump["events"]], jump["offset"]) == ([second_ids[0]], 3)
+    after = client.get(f"/api/chats/{first}/events?after={switch_id}&limit=5").get_json()
+    assert [event["event_id"] for event in after["events"]] == second_ids
+
+    # A detail fetch resolves the segment by event id; the chip has no payload.
+    detail = client.get(f"/api/chats/{first}/events/{first_ids[1]}/detail")
+    assert detail.status_code == 200 and detail.get_json()["output"] == "z" * 900
+    assert client.get(f"/api/chats/{first}/events/{switch_id}/detail").status_code == 404
+
+    # The archived segment was loaded (and cached) rather than watched; the live one is watched.
+    state = state_of(app)
+    assert set(state.loaders) == {first} and set(state.watchers) == {second}
+    # An archived member's id names no chat of its own.
+    assert client.get(f"/api/chats/{second}/events").status_code == 404
+
+
+def test_a_two_member_chats_subagent_reads_resolve_by_member(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
+    first, second = _two_member_chat(app, tmp_path)
+    archived = client.get(f"/api/chats/{first}/agents/{first}/subagents/s1/events")
+    live = client.get(f"/api/chats/{first}/agents/{second}/subagents/s1/events")
+    stranger = client.get(f"/api/chats/{first}/agents/agent-stranger/subagents/s1/events")
+    assert (archived.status_code, live.status_code) == (200, 200)
+    assert archived.get_json() == {"events": [], "metadata": None}
+    assert stranger.status_code == 404
+    assert stranger.get_json()["detail"] == f"Chat '{first}' has no agent 'agent-stranger'"
+
+
+# The handoff routes.
+
+
+def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
+    """An app whose manager records sends instead of reaching mngr and logs the mngr argv it would run."""
+    mngr_binary, log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    # The successor's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    state = build_test_state(agent_manager=manager)
+    manager.note_agent_list_known()
+    return create_application(state), log_path
+
+
+def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> tuple[str, str]:
+    """A running claude chat of one agent whose record carries a handoff in ``phase``; returns the two agent ids."""
+    first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    _write_claude_session(
+        tmp_path / "claude_config", "one-session", [_user_event("u-1", "2026-01-01T00:00:00Z", "hi")]
+    )
+    (state_dir / "claude_session_id_history").write_text("one-session\n")
+    manager: AgentManager = state_of(app).agent_manager
+    manager._chat_record_store.write(
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(make_chat_agent_entry(1, first, is_archived=False),),
+            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=phase),
+        )
+    )
+    manager.refresh_chat_records()
+    return first, successor
+
+
+def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(f"/api/chats/{first}/message", json={"message": "and this", "message_id": "m-2"})
+    assert held.status_code == 202
+    assert held.get_json() == {"status": "held", "phase": "summarizing"}
+
+    for suffix in ("stop", "start", "interrupt", "flush-queue", "drain-to-composer", "model"):
+        refused = client.post(f"/api/chats/{first}/{suffix}", json={})
+        assert refused.status_code == 409, suffix
+        assert refused.get_json() == {
+            "detail": "This chat is switching to Codex and is summarizing; wait for the switch to finish, then try again.",
+            "phase": "summarizing",
+        }
+    again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
+    assert again.status_code == 409
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["status"], chat["handoff"]["phase"]) for chat in listed] == [
+        (first, "working", "summarizing")
+    ]
+    # The page renders the held messages and the phase text from the snapshot, so both ride it.
+    assert listed[0]["handoff"]["target_harness"] == "codex"
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+    instances = client.get("/_instances").get_json()
+    assert [(record["key"], record["status"]) for record in instances["instances"]] == [(first, "working")]
+    # The chat still reads from the agent it is leaving.
+    assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
+
+    cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.get_json() == {"status": "cancelled", "returned_block": "Carry on in Codex"}
+    manager: AgentManager = state_of(app).agent_manager
+    assert manager.get_handoff_state(ChatId(first)) is None
+    # The held send went to the agent the chat stayed on, through the ordinary send path.
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    wait_for(lambda: (first, "and this") in messenger.sent, timeout=5.0)
+    assert client.post(f"/api/chats/{first}/handoff/cancel").status_code == 400
+    assert not log_path.exists()
+
+
+def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    assert state_dir.exists()
+    seed_agent_state(state_of(app).agent_manager, first, name="Chat-1", labels={"account": signed_in_account})
+
+    missing = client.post(
+        f"/api/chats/agent-{uuid4().hex}/handoff", json={"account_id": signed_in_account, "message": "x"}
+    )
+    assert missing.status_code == 404
+    unknown_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-nope", "message": "x"})
+    assert unknown_account.status_code == 400
+    own_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": signed_in_account, "message": "x"})
+    assert own_account.status_code == 400
+    assert "already runs on account" in own_account.get_json()["detail"]
+    assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
+    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    with_pick = client.post(
+        f"/api/chats/{first}/handoff",
+        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
+    )
+    assert with_pick.status_code == 400
+    assert "keeps its model settings" in with_pick.get_json()["detail"]
+
+
+def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.FAILED)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    manager._chat_record_store.write(
+        record.model_copy_update(
+            to_update(
+                record.field_ref().handoff,
+                record.handoff.model_copy_update(
+                    to_update(record.handoff.field_ref().held_sends, ()),
+                    to_update(record.handoff.field_ref().prompt, "the stored prompt"),
+                    to_update(record.handoff.field_ref().error, "mngr create exited with code 3"),
+                ),
+            )
+        )
+    )
+    manager.refresh_chat_records()
+    openai_id, _ = mint_account_dir()
+    commit_account(openai_id, "openai", "OpenAI")
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["status"], chat["handoff"]["error"]) for chat in listed] == [
+        ("error", "mngr create exited with code 3")
+    ]
+
+    retried = client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": openai_id})
+    assert retried.status_code == 202
+    assert retried.get_json() == {"status": "converging", "phase": "switching"}
+    wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
+    argv = log_path.read_text().splitlines()
+    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
+    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    listed_after = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
+        (first, successor, [first, successor])
+    ]
+
+
+def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_cannot_be_cancelled(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": signed_in_account})
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    manager._chat_record_store.write(
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(make_chat_agent_entry(1, first, is_archived=False, account_id=signed_in_account),),
+            rebind=make_chat_rebind_record(agent_id=first, target_account_id=second),
+        )
+    )
+    manager.refresh_chat_records()
+
+    held = client.post(f"/api/chats/{first}/message", json={"message": "and this", "message_id": "m-2"})
+    assert held.status_code == 202 and held.get_json() == {"status": "held", "phase": "restarting"}
+    for suffix in ("stop", "start", "interrupt", "drain-to-composer", "model"):
+        refused = client.post(f"/api/chats/{first}/{suffix}", json={})
+        assert refused.status_code == 409, suffix
+        assert refused.get_json() == {
+            "detail": "This chat is switching to Anthropic 2 (Claude Code) and is restarting; "
+            "wait for the switch to finish, then try again.",
+            "phase": "restarting",
+        }
+    cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
+    assert cancelled.status_code == 409
+    assert "cannot be called off" in cancelled.get_json()["detail"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [
+        (chat["status"], chat["handoff"]["kind"], chat["handoff"]["phase"], chat["handoff"]["target_label"])
+        for chat in listed
+    ] == [("working", "rebind", "restarting", "Anthropic 2 (Claude Code)")]
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on on the other account"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+    assert not log_path.exists()
+
+
+def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path: Path, signed_in_account: str) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    (state_dir / "claude_session_id_history").write_text("one-session\n")
+    _write_claude_session(
+        tmp_path / "claude_config", "one-session", [_user_event("u-1", "2026-01-01T00:00:00Z", "hi")]
+    )
+    manager: AgentManager = state_of(app).agent_manager
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": signed_in_account})
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+
+    switched = client.post(
+        f"/api/chats/{first}/handoff", json={"account_id": second, "message": "Carry on here", "message_id": "m-1"}
+    )
+    assert switched.status_code == 202
+    assert switched.get_json() == {
+        "status": "converging",
+        "kind": "rebind",
+        "phase": "restarting",
+        "returned_block": "",
+    }
+    wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
+
+    argv = log_path.read_text().splitlines()
+    assert argv == ["stop Chat-1", f"label {first} --label account={second}", "start Chat-1 --no-resume"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["active_agent"]["account_id"], chat["agent_ids"]) for chat in listed] == [
+        (first, second, [first])
+    ]
+    # The env file names the new account and the session file moved into its folder.
+    assert f"CLAUDE_CONFIG_DIR={account_dir(second)}" in (state_dir / "env").read_text()
+    assert list((account_dir(second) / "projects").rglob("one-session.jsonl"))
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    wait_for(lambda: (first, "Carry on here") in messenger.sent, timeout=5.0)
+    # The chat still reads its transcript, now from the new account's folder.
+    assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
+
+
+def test_the_event_fan_out_is_keyed_by_chat(app: Flask, tmp_path: Path) -> None:
+    """A page's stream is registered under the chat id, so the successor's events reach it after a switch."""
+    first, second = _two_member_chat(app, tmp_path)
+    state = state_of(app)
+    assert state.agent_manager.chat_id_of_agent(second) == ChatId(first)
+    assert state.agent_manager.chat_id_of_agent(first) == ChatId(first)
+    # An event of an agent with no resident watcher, and a chat-level chip, both pass the main-session filter.
+    assert state.is_main_session_event({"type": "agent_switch", "agent_id": second}) is True
+    assert (
+        state.is_main_session_event({"type": "user_message", "agent_id": "agent-untracked", "session_id": "s"}) is True
+    )

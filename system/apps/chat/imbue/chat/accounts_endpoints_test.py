@@ -11,21 +11,38 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from flask.testing import FlaskClient
 
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
+from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.agent_discovery import get_host_dir
+from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
+from imbue.chat.harnesses.codex.model import get_codex_model_options_path
+from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
+from imbue.chat.state import ChatAppState
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import seed_agent_state
+from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.mngr_codex.app_server_client import CodexModel
+from imbue.mngr_codex.app_server_client import ReasoningEffortOption
 
 
 @contextmanager
 def _client(auth_flows: AuthFlowService | None = None) -> Iterator[FlaskClient]:
     yield create_application(build_test_state(auth_flows=auth_flows)).test_client()
+
+
+@contextmanager
+def _client_for(state: ChatAppState) -> Iterator[FlaskClient]:
+    yield create_application(state).test_client()
 
 
 def _signed_in_service(tmp_path: Path) -> AuthFlowService:
@@ -302,3 +319,51 @@ def test_a_non_string_name_is_refused() -> None:
     with _client() as client:
         response = client.patch(f"/api/accounts/{account_id}", json={"name": ["Work"]})
     assert response.status_code == 400
+
+
+# ----- what a new agent on an account could run on ------------------------------------------
+
+
+def test_account_model_options_offers_the_catalog_for_a_static_harness_and_a_codex_agents_last_set(
+    tmp_path: Path,
+) -> None:
+    """The switch dialog's picker for a successor that does not exist yet: a claude account offers its whole
+    catalog (``models`` null, no ``options``); a codex account with no agent yet offers nothing but the default
+    (``options`` empty); once a codex agent bound to it was offered a set, that set is the answer."""
+    claude_id, _ = mint_account_dir()
+    commit_account(claude_id, "anthropic", "Anthropic")
+    codex_id, _ = mint_account_dir()
+    commit_account(codex_id, "openai", "OpenAI")
+    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary="/bin/true")
+    with _client_for(build_test_state(agent_manager=manager)) as client:
+        static = client.get(f"/api/accounts/{claude_id}/model-options")
+        assert static.status_code == 200
+        assert static.get_json() == {"models": None, "options": None}
+
+        empty = client.get(f"/api/accounts/{codex_id}/model-options")
+        assert empty.status_code == 200
+        assert empty.get_json() == {"models": None, "options": []}
+
+        # A codex agent on the account whose sidecar holds the last ``model/list`` it was offered.
+        agent_id = f"agent-{uuid4().hex}"
+        seed_agent_state(manager, agent_id, name="Chat-2", labels={"account": codex_id}, harness=HarnessType.CODEX)
+        write_codex_model_options(
+            get_codex_model_options_path(agent_state_dir(get_host_dir(), agent_id)),
+            (
+                CodexModel(
+                    id="gpt-6-astra",
+                    model="gpt-6-astra",
+                    displayName="GPT-6 Astra",
+                    supported_reasoning_efforts=(
+                        ReasoningEffortOption(reasoningEffort="low"),
+                        ReasoningEffortOption(reasoningEffort="high"),
+                    ),
+                ),
+            ),
+        )
+        offered = client.get(f"/api/accounts/{codex_id}/model-options")
+        assert offered.status_code == 200
+        assert offered.get_json()["models"] is None
+        assert [option["id"] for option in offered.get_json()["options"]] == ["gpt-6-astra"]
+
+        assert client.get("/api/accounts/acct-nope/model-options").status_code == 404

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptEvent, ToolResultEvent, AssistantMessageEvent, UserMessageEvent } from "../models/Response";
+import type {
+  TranscriptEvent,
+  ToolResultEvent,
+  AgentSwitchEvent,
+  AssistantMessageEvent,
+  UserMessageEvent,
+} from "../models/Response";
 import { buildConversationRows, isSubagentRunning } from "./conversation-rows";
 
 // --- Event builders (mirroring turn-grouping.test.ts) ---
@@ -102,6 +108,36 @@ describe("buildConversationRows", () => {
 
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2"]);
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
+  });
+
+  // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by
+  // the switch event, between the two agents' turns.
+  it("renders an agent switch as a handoff node row between the agents' turns", () => {
+    const agentSwitch: AgentSwitchEvent = {
+      timestamp: "t3",
+      type: "agent_switch",
+      event_id: "sw1",
+      source: "chat",
+      agent_id: "agent-b",
+      from_agent_id: "agent-a",
+      to_agent_id: "agent-b",
+      from_harness: "claude",
+      to_harness: "codex",
+      seq: 1,
+      message_id: null,
+      message: null,
+    };
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "hello"),
+      assistantText("t2", "from claude", "end_turn"),
+      agentSwitch,
+      assistantText("t4", "from codex", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
+    expect(rows[2].anchorEventId).toBe("sw1");
   });
 });
 

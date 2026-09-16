@@ -307,6 +307,10 @@ class CodexModelResolver(HarnessModelResolver):
         )
         return self
 
+    def list_persisted_options(self) -> tuple[ModelOption, ...] | None:
+        """The sidecar's raw ``model/list``, mapped: the last set this agent was offered, or ``()`` with none."""
+        return codex_models_to_options(read_codex_model_options(get_codex_model_options_path(self._agent_state_dir)))
+
     def list_offered_options(self) -> tuple[ModelOption, ...] | None:
         """The per-agent picker options, fetched FRESH from ``model/list`` on every open (D2).
 

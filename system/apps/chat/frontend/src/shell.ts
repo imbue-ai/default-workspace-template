@@ -11,6 +11,7 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addressFor } from "@imbue/workspace-ui/src/addresses";
 import { createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
+import type { ModelIdentity } from "./models/ModelSettings";
 import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -106,23 +107,29 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
 }
 
 /**
- * Open a new chat on `accountId` beside this one. The combo card's provider rows call this:
- * a chat binds to its account when it is created and nothing rebinds it, so "switch
- * provider" can only mean "start a chat on that one". A chat started inside a project
- * carries that project's id in its label; the shell files its tab when it docks the page.
+ * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
+ * given and ``pick`` as the model it runs on (null for the harness's default). The switch
+ * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
+ * notice with neither. A chat started inside a project carries that project's id in its label;
+ * the shell files its tab when it docks the page.
  */
-export async function startChatOnAccount(accountId: string): Promise<void> {
+export async function startChatOnAccount(
+  accountId: string,
+  message: string = "",
+  pick: ModelIdentity | null = null,
+): Promise<boolean> {
   const viewId = shellViewId();
   const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChat;
   try {
-    created = await createChat(projectId, accountId);
+    created = await createChat(projectId, accountId, message, pick);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
-    return;
+    return false;
   }
   connection?.open(chatAddress(created.chatId));
   m.redraw();
+  return true;
 }
 
 /**
@@ -132,16 +139,16 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
  * The session belongs to the chat's active agent, which is what the app keys the view on.
  */
 export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
-  // CLEANUP: a chat the page does not list yet is its own first agent under the own-chat
-  // rule; drop the fallback once the chat record store (phase 3 of the chat-agent split)
-  // names the active agent for every chat.
-  const agentId = getChatById(chatId)?.active_agent.agent_id ?? chatId;
-  const key = `${chatId}.${agentId}.${sessionId}`;
+  // The app keys the view on the chat's active agent and answers the key it made; the page's
+  // own guess (the listed active agent, else the chat's own id) stands in only when the create
+  // failed, so the open still names the view the app would have made.
+  let key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
   try {
-    await postJson(apiUrl("/_instances"), {
+    const record = await postJson<{ key?: string }>(apiUrl("/_instances"), {
       action: "subagent",
       params: { parent: chatId, session: sessionId, description },
     });
+    if (record?.key) key = record.key;
   } catch (error) {
     console.warn(`[chat] could not create the subagent instance ${key}`, error);
   }

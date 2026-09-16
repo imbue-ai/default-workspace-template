@@ -41,8 +41,10 @@ from pydantic import PrivateAttr
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.errors import ChatCreateRefusedError
 from imbue.chat.errors import ChatDestroyFailedError
+from imbue.chat.errors import ChatMovingError
 from imbue.chat.errors import ChatRenameFailedError
 from imbue.chat.errors import ChatStartFailedError
 from imbue.chat.errors import ChatStopFailedError
@@ -53,6 +55,7 @@ from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
@@ -114,6 +117,16 @@ def instance_record_for_chat(snapshot: ChatSnapshot) -> InstanceRecord:
         renameable=True,
         stoppable=True,
     )
+
+
+def _refuse_while_moving(snapshot: ChatSnapshot) -> None:
+    """Stop, start, and rename answer 409 while the chat moves to another agent or account (contracts.md 4.3).
+
+    The snapshot's active agent is then the retiring stand-in (or the one being restarted),
+    which a start would revive and a stop or rename would act on behind the switch's back.
+    """
+    if snapshot.handoff is not None:
+        raise ChatMovingError(converging_detail(snapshot.handoff.phase, snapshot.handoff.target_label))
 
 
 _STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] = {
@@ -263,8 +276,11 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             if self._is_provisional_or_subagent(key):
                 raise NotRenameableError(f"instance {key!r} cannot be renamed until its chat exists")
             raise UnknownInstanceError(f"no instance has the key {key!r}")
+        _refuse_while_moving(snapshot)
         try:
             self.manager.rename_chat(snapshot.chat_id, title)
+        except ChatConvergingError as e:
+            raise ChatMovingError(str(e)) from e
         except AgentNameConflictError as e:
             raise ChatTitleConflictError(str(e)) from e
         except AgentRenameError as e:
@@ -277,9 +293,12 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     def stop_instance(self, key: InstanceKey) -> InstanceRecord:
         """``mngr stop`` for a chat: the process ends, the transcript and name stay, and the record answers ``stopped``."""
         snapshot = self._stoppable_chat(key)
+        _refuse_while_moving(snapshot)
         if not is_lifecycle_dead(snapshot.active_agent.state):
             try:
                 self.manager.stop_chat(snapshot.chat_id)
+            except ChatConvergingError as e:
+                raise ChatMovingError(str(e)) from e
             except AgentStopError as e:
                 raise ChatStopFailedError(str(e)) from e
         return self._record_for_chat(snapshot.chat_id, InstanceStatus.STOPPED)
@@ -287,6 +306,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     def start_instance(self, key: InstanceKey) -> InstanceRecord:
         """Ensure a chat's active agent is running, the same in-process path a send takes to revive one; a no-op for a live chat."""
         snapshot = self._stoppable_chat(key)
+        _refuse_while_moving(snapshot)
         if is_lifecycle_dead(snapshot.active_agent.state):
             try:
                 self.agent_starter(snapshot.active_agent.name)
