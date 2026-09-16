@@ -425,11 +425,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     );
   }
 
-  async function loadChat(chatId: string): Promise<void> {
+  /** Load the chat's transcript: the snapshot with the live stream, or the snapshot alone for a
+   *  seeded chat that has no agent yet (the stream follows the chat's active agent, and its seed
+   *  never changes; the reload once the first agent lands brings the stream). */
+  async function loadChat(chatId: string, isStreamed = true): Promise<void> {
     try {
-      // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
-      // snapshot replace in fetchEvents cannot drop a live event on first load.
-      await loadSnapshotWithStream(chatId);
+      if (isStreamed) {
+        // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
+        // snapshot replace in fetchEvents cannot drop a live event on first load.
+        await loadSnapshotWithStream(chatId);
+      } else {
+        await fetchEvents(chatId);
+      }
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -474,7 +481,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     }
   }
 
-  function ensureChatLoaded(chatId: string): void {
+  function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
     }
@@ -483,14 +490,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
-    loadChat(chatId);
+    loadChat(chatId, isStreamed);
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
   let notFoundRetryInFlight = false;
   // A seeded chat this page showed as provisional: once the chat list names it (its first agent
-  // landed), the transcript is reloaded so the window covers the new segment and the stream, which
-  // 404'd while the chat had no agent, is connected on the next render.
+  // landed), the transcript is reloaded so the window covers the new segment, and that load
+  // connects the stream, which had no agent to follow while the chat was provisional.
   let seededChatAwaitingReload: string | null = null;
 
   function reloadSeededChatOnceRegistered(): void {
@@ -546,11 +553,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       return renderProvisional(chatId, provisional);
     }
     if (provisional !== null) {
+      // The seed is read once and never changes, and the stream needs an active agent, which
+      // the chat has none of until its first send launches one: no stream until then.
       seededChatAwaitingReload = chatId;
+      ensureChatLoaded(chatId, false);
+    } else {
+      ensureChatLoaded(chatId, true);
+      manageStreamConnection(chatId);
     }
-
-    ensureChatLoaded(chatId);
-    manageStreamConnection(chatId);
 
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
