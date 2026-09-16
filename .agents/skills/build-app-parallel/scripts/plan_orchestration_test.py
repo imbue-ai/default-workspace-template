@@ -80,8 +80,12 @@ def test_every_worker_capability_maps_to_opus_by_default() -> None:
 def test_planner_prompt_examples_are_valid_plans() -> None:
     """The example plans the planner is shown must parse, so the prompt and the
     parser cannot drift apart."""
-    prompt = (Path(__file__).parents[1] / "references" / "planner-prompt.md").read_text()
-    example_blocks = re.findall(r"<output>\n(capability = .*?)\n</output>", prompt, re.DOTALL)
+    prompt = (
+        Path(__file__).parents[1] / "references" / "planner-prompt.md"
+    ).read_text()
+    example_blocks = re.findall(
+        r"<output>\n(capability = .*?)\n</output>", prompt, re.DOTALL
+    )
 
     assert len(example_blocks) == 2
     for block in example_blocks:
@@ -132,11 +136,15 @@ def test_parse_plan_uses_the_last_output_block() -> None:
             "access entry 1",
         ),
         (
-            _plan_text('["high", "low", "medium"]', '["a", "b", "c"]', "[[], [], [true]]"),
+            _plan_text(
+                '["high", "low", "medium"]', '["a", "b", "c"]', "[[], [], [true]]"
+            ),
             "access entry True",
         ),
         (
-            _plan_text('["high", "low", "medium"]', '["a", "b", "c"]', "[[], [], [0, 0]]"),
+            _plan_text(
+                '["high", "low", "medium"]', '["a", "b", "c"]', "[[], [], [0, 0]]"
+            ),
             "same node twice",
         ),
         (
@@ -144,16 +152,18 @@ def test_parse_plan_uses_the_last_output_block() -> None:
             "2 nodes",
         ),
         (
-            "<output>\ncapability = [\"high\"\n</output>",
+            '<output>\ncapability = ["high"\n</output>',
             "not a valid JSON list",
         ),
         (
-            "<output>\ncapability = [\"high\", \"low\", \"medium\"]\nsubtasks = [\"a\", \"b\", \"c\"]\n</output>",
+            '<output>\ncapability = ["high", "low", "medium"]\nsubtasks = ["a", "b", "c"]\n</output>',
             "no 'access list",
         ),
     ],
 )
-def test_parse_plan_rejects_malformed_plans(plan_text: str, message_fragment: str) -> None:
+def test_parse_plan_rejects_malformed_plans(
+    plan_text: str, message_fragment: str
+) -> None:
     with pytest.raises(plan_orchestration.PlanError, match=message_fragment):
         plan_orchestration.parse_plan(plan_text)
 
@@ -216,11 +226,16 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
         node_idx=2,
         task_path=Path("data/.tasks/build-app-parallel/todo/nodes/2/task.md"),
         finish_report_path=report_path,
-        report_by_node_idx={0: "Spec: items have a title.", 1: "Scaffolded todo on 8082."},
+        report_by_node_idx={
+            0: "Spec: items have a title.",
+            1: "Scaffolded todo on 8082.",
+        },
     )
 
     assert text.startswith(f"---\nfinish_report_path: {report_path}\n---\n")
-    assert "This task file: `data/.tasks/build-app-parallel/todo/nodes/2/task.md`" in text
+    assert (
+        "This task file: `data/.tasks/build-app-parallel/todo/nodes/2/task.md`" in text
+    )
     assert "## Your subtask\n\nBuild the mock." in text
     assert "### Node 0\n\n**Its subtask:** Settle the spec." in text
     assert "Spec: items have a title." in text
@@ -269,10 +284,16 @@ def test_cli_parse_ready_and_write_task_round_trip(
     run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
 
     assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
-    assert json.loads((run_dir / "plan.json").read_text())["nodes"][2]["access"] == [0, 1]
+    assert json.loads((run_dir / "plan.json").read_text())["nodes"][2]["access"] == [
+        0,
+        1,
+    ]
 
     capsys.readouterr()
-    assert plan_orchestration.main(["ready", "--run-dir", str(run_dir), "--done", "0,1"]) == 0
+    assert (
+        plan_orchestration.main(["ready", "--run-dir", str(run_dir), "--done", "0,1"])
+        == 0
+    )
     assert capsys.readouterr().out.strip() == "2,4"
 
     for idx, report in ((0, "Spec is settled."), (1, "Scaffolded.")):
@@ -280,11 +301,16 @@ def test_cli_parse_ready_and_write_task_round_trip(
         report_path.parent.mkdir(parents=True)
         report_path.write_text(report)
     assert (
-        plan_orchestration.main(["write-task", "--run-dir", str(run_dir), "--node", "2"])
+        plan_orchestration.main(
+            ["write-task", "--run-dir", str(run_dir), "--node", "2"]
+        )
         == 0
     )
     task_text = plan_orchestration.node_task_path(run_dir, 2).read_text()
-    assert f"finish_report_path: {run_dir / 'nodes' / '2' / 'reports' / 'report.md'}" in task_text
+    assert (
+        f"finish_report_path: {run_dir / 'nodes' / '2' / 'reports' / 'report.md'}"
+        in task_text
+    )
     assert "Spec is settled." in task_text
 
 
@@ -305,7 +331,9 @@ def test_cli_write_task_before_dependencies_report_fails(
     assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
 
     assert (
-        plan_orchestration.main(["write-task", "--run-dir", str(run_dir), "--node", "2"])
+        plan_orchestration.main(
+            ["write-task", "--run-dir", str(run_dir), "--node", "2"]
+        )
         == 2
     )
     assert "missing" in capsys.readouterr().err
