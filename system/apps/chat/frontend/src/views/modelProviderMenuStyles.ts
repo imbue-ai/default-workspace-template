@@ -14,6 +14,8 @@
  * `style-modules.test.ts` guards against that.
  */
 
+import { MENU_ROW_FOCUS, MENU_ROW_SLAB } from "@imbue/workspace-ui/src/components/menu";
+
 // The menu
 /** The menu and its submenus are one width: a submenu narrower than the menu it slides out of
  *  reads as a mistake at the seam where they meet. The effort slider is a fixed 128px and
@@ -150,13 +152,10 @@ export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
  *  says nothing until it is too late (the track's own rules are in style.css). */
 export const SUBMENU_SCROLL = "model-submenu-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain";
 
-/** The shared row shape (`menuRowClass`), restated: every submenu row is the same 32px slab
- *  with the same inset highlight, and the selected one keeps a steady fill. Kept in step with
- *  `menuRowClass` -- `mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2` is its inset highlight
- *  slab, and the reasoning for each part lives there. */
-const SUBMENU_ROW_SHAPE =
-  "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2 text-left " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+/** The shared row shape for the rows this menu draws itself: the menu's own slab and focus
+ *  ring (the reasoning for each part lives with them), and the selected row keeps a steady
+ *  fill. */
+const SUBMENU_ROW_SHAPE = `flex h-8 items-center gap-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
 /** An ACCOUNT row reserves its right edge for the star, the rename pencil and the bin, which are
  *  positioned against the row's WRAPPER rather than the row, so they stay put while the
  *  highlight insets around them, and the provider name never reflows when they appear. 80px is

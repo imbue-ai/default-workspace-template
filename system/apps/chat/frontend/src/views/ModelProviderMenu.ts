@@ -5,7 +5,7 @@
  * knowing about a chat.
  *
  * Everything it shows is data: the static per-harness catalog from HarnessCatalog.ts, the
- * agent's live `model_choice` pushed onto the agents store, and its `account` label resolved
+ * chat's live `model_choice` pushed onto the chats store, and its account id resolved
  * against the account list. Which rows show is decided by the matched catalog option (effort
  * iff the model declares more than one; fast iff it supports it); the switch mode decides
  * whether they are interactive.
@@ -102,7 +102,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
-  // What the last view saw, for the menu's own open hook to read: which agent this is, and
+  // What the last view saw, for the menu's own open hook to read: which chat is showing, and
   // whether its picker is the kind whose model list is worth warming.
   let viewedChatId = "";
   let viewedPickerIsFetched = false;
@@ -142,10 +142,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       resetSubmenuState();
       modelQuery = "";
     },
-    // What hover opened, hover normally dismisses -- but not over unfinished work. A rename
-    // mid-type, an armed "Remove?" or an open launch prompt (providers), and a typed search
-    // (model), must all survive the pointer wandering off the card; while one is live, only
-    // a click or Escape takes the submenu down.
+    // A rename mid-type, an armed "Remove?" or an open launch prompt (providers), and a
+    // typed search (model) are all work a drifting pointer must not throw away.
     holdsSubmenuOpen: (key) => {
       if (key === "providers") {
         return rowState.renamingId !== null || rowState.confirmingRemoval !== null || launchPromptAccountId !== null;
@@ -184,7 +182,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     }
   }
 
-  /** Load this agent's offerable models once per open. See `offeredFetchedForOpen`. */
+  /** Load the chat's offerable models once per open. See `offeredFetchedForOpen`. */
   function warmOfferedModels(chatId: string): void {
     if (offeredFetchedForOpen) return;
     offeredFetchedForOpen = true;

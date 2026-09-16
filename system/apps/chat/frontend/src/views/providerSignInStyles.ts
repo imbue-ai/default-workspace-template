@@ -135,8 +135,7 @@ export const RAW_VALUE =
   "type-helper leading-snug text-primary";
 
 /** The device flow's one-time code. Label weight in mono with a little tracking: legible
- *  enough to read aloud and retype, while the box stays level with the copy button beside
- *  it instead of towering over it. */
+ *  enough to read aloud and retype, and level with the copy button beside it. */
 export const CODE =
   "flex-1 rounded-md bg-sidebar p-2 text-center font-mono type-label tracking-[0.12em] text-primary select-all";
 

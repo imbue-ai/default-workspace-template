@@ -120,7 +120,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       copied = kind;
       copyFailed = false;
       // Copying the link is taking step 1: the user has the page in hand, so the highlight
-      // moves on to the code, just as clicking the link itself moves it.
+      // moves on to the code.
       if (kind === "link") activeStep = 2;
     } catch {
       // Insecure context or a denied permission -- reveal the raw value instead, so the
