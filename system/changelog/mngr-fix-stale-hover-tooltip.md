@@ -1,1 +1,0 @@
-The shared workspace UI library's `hoverTooltipAttrs` takes `null` for "no tooltip", and its callers always spread it instead of switching to `{}`. Mithril reuses the element across redraws and runs only the current vnode's hooks, so dropping the attrs left the old listeners and text in place. The notice dialog's action buttons pick up the fix too.
