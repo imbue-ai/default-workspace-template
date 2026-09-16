@@ -14,7 +14,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1205,7 +1204,7 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     assert "finish_report_path: " in frontmatter_template
 
 
-def test_the_staged_skill_copy_can_actually_run_on_its_own() -> None:
+def test_the_staged_skill_copy_can_actually_run_on_its_own(tmp_path: Path) -> None:
     """From Step 3 the apply runs out of a `git archive` of this skill directory.
 
     Nothing outside `.agents/skills/update-self/` is in that archive, so a
@@ -1231,20 +1230,20 @@ def test_the_staged_skill_copy_can_actually_run_on_its_own() -> None:
         text=True,
     ).stdout.split("\0")
 
-    with tempfile.TemporaryDirectory() as staged:
-        for relative in filter(None, tracked):
-            destination = Path(staged) / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(_WORKSPACE_ROOT / relative, destination)
-        entry = Path(staged) / skill_dir_rel / "scripts/update_self.py"
-        assert entry.is_file(), "the staged copy has no entry point"
+    staged = tmp_path / "skill-at-target"
+    for relative in filter(None, tracked):
+        destination = staged / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(_WORKSPACE_ROOT / relative, destination)
+    entry = staged / skill_dir_rel / "scripts/update_self.py"
+    assert entry.is_file(), "the staged copy has no entry point"
 
-        completed = subprocess.run(
-            [sys.executable, str(entry), "--help"],
-            cwd=staged,
-            capture_output=True,
-            text=True,
-        )
+    completed = subprocess.run(
+        [sys.executable, str(entry), "--help"],
+        cwd=staged,
+        capture_output=True,
+        text=True,
+    )
 
     assert completed.returncode == 0, completed.stderr
 
