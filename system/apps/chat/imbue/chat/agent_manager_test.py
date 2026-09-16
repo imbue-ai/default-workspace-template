@@ -48,6 +48,7 @@ from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
+from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -3445,9 +3446,35 @@ def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
     try:
-        with pytest.raises(AgentDestroyError, match="record could not be removed"):
+        with pytest.raises(AgentDestroyError, match="folder could not be removed"):
             manager.destroy_chat(ChatId(first))
         assert argv_log.read_text().splitlines() == [f"destroy {first} {second} --force"]
+    finally:
+        manager.stop()
+
+
+def test_destroying_or_discarding_a_chat_with_no_record_removes_its_folder(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat's fast mode lives in its folder, so a chat that never had a record still has one to remove."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    try:
+        seed_agent_state(manager, "agent-plain", name="Chat-1")
+        manager.set_fast_mode_state(ChatId("agent-plain"), ChatFastModeState(mode=FastModeMode.ON))
+        manager.destroy_chat(ChatId("agent-plain"))
+        assert not (chats_root / "agent-plain").exists()
+
+        _seed_failed_chat(manager, ChatId("failed-1"), "Chat 2")
+        manager.set_fast_mode_state(ChatId("failed-1"), ChatFastModeState(mode=FastModeMode.ON))
+        assert manager.discard_provisional_chat("failed-1") is True
+        assert not (chats_root / "failed-1").exists()
     finally:
         manager.stop()
 

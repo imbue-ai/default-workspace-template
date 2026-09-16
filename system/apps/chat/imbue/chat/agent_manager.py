@@ -2107,11 +2107,12 @@ class AgentManager:
     def destroy_chat(self, chat_id: ChatId) -> None:
         """Run one ``mngr destroy --force`` naming every agent of a chat, archived ones included, then drop them at once.
 
-        The chat's record goes with its agents. Raises ``AgentDestroyError`` when the chat is
-        unknown, mngr refuses or fails, or the record cannot be removed once the agents are
-        gone (a record left behind would resurrect the chat at the next build; the observe
-        stream drops the destroyed agents from the tracked state on its own); the caller has
-        already refused the primary services agent, which is never a chat.
+        The chat's folder (its record, if it has one, and its fast mode) goes with its agents.
+        Raises ``AgentDestroyError`` when the chat is unknown, mngr refuses or fails, or the
+        folder cannot be removed once the agents are gone (a record left behind would resurrect
+        the chat at the next build; the observe stream drops the destroyed agents from the
+        tracked state on its own); the caller has already refused the primary services agent,
+        which is never a chat.
         """
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
@@ -2122,15 +2123,14 @@ class AgentManager:
         result = self._run_mngr_destroy(agent_ids)
         if result.returncode != 0:
             raise AgentDestroyError(f"Failed to destroy chat '{chat_id}': {result.stderr.strip()}")
-        if chat.record is not None:
-            try:
-                self._chat_record_store.delete(chat_id)
-            except ChatRecordError as e:
-                raise AgentDestroyError(
-                    f"Destroyed the agents of chat '{chat_id}', but its record could not be removed: {e}"
-                ) from e
-            with self._lock:
-                self._chat_record_by_id.pop(chat_id, None)
+        try:
+            self._chat_record_store.delete(chat_id)
+        except ChatRecordError as e:
+            raise AgentDestroyError(
+                f"Destroyed the agents of chat '{chat_id}', but its folder could not be removed: {e}"
+            ) from e
+        with self._lock:
+            self._chat_record_by_id.pop(chat_id, None)
         # Reflect the destruction immediately rather than waiting for mngr observe. With the
         # record gone, the first member is its own chat again, so removing it forgets the
         # chat's per-chat records.
@@ -2635,7 +2635,8 @@ class AgentManager:
                 return False
             del self._provisional_chats[parsed]
             record = self._chat_record_by_id.get(parsed)
-            if record is not None and record.is_seed_only:
+            # A failed create has already written the chat's fast mode into its folder.
+            if record is None or record.is_seed_only:
                 self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
