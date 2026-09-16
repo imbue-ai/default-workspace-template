@@ -56,9 +56,13 @@ class ChatSettingsStore(MutableModel):
             return ChatSettings()
         try:
             payload = json.loads(self.path.read_text())
-            return ChatSettings.model_validate(payload)
-        except (OSError, ValueError, ValidationError) as e:
+        except (OSError, ValueError) as e:
             logger.warning("Ignoring an unreadable chat settings file at {}: {}", self.path, e)
+            return ChatSettings()
+        try:
+            return ChatSettings.model_validate(payload)
+        except ValidationError as e:
+            logger.warning("Ignoring a chat settings file at {} that does not fit the settings: {}", self.path, e)
             return ChatSettings()
 
     def write(self, settings: ChatSettings) -> None:
