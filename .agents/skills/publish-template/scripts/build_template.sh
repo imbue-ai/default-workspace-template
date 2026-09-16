@@ -785,9 +785,9 @@ README_EOF
 
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo
-# URLs, source commits). None of that belongs in a published template -- and
-# the template base can carry the shipped starter copy of it --
-# so drop it from the snapshot entirely. A mind created from this template
+# URLs, source commits). None of that belongs in a published template -- and the
+# template base can carry the shipped starter copy of it -- so drop it from the
+# snapshot entirely. A mind created from this template
 # grows its OWN ledger when it first runs update-self or publishes (update-self
 # and publish-template write the starter on demand if the file is absent), so
 # nothing is lost by omitting it here. `rm -f` is safe whether or not the base

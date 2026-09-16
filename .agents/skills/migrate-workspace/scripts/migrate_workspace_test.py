@@ -3,8 +3,8 @@
 Covers the pieces the flow rests on being exactly right: source-layout
 detection, the legacy path map (including the prefixes that are genuinely
 ambiguous and must NOT be silently resolved), reference rewriting, branch
-merged/unmerged classification, agent-to-session resolution,
-the recreate argv and its labels, port reconciliation, and the audit patterns.
+merged/unmerged classification, agent-to-session resolution, the recreate argv
+and its labels, port reconciliation, and the audit patterns.
 """
 
 from __future__ import annotations

@@ -731,12 +731,12 @@ stderr. What each exit means, and what you do:
   problem at once. Fix them and re-run; never publish around it.
 - **Non-template base (exit 5).** The `--base-ref` does not resolve to a tree
   in the repo, or its tree is not a bootable template: it lacks
-  `pyproject.toml`, `system/supervisord.conf`, and/or `system/supervisord.conf.d`
-  (e.g. a parallel subtree root was
-  picked instead of the real seed). Or it descends from the workspace's
-  `Initial workspace commit`, so it carries the mind's own work (e.g. an
-  `update-self:` merge commit was passed instead of its upstream parent).
-  Nothing was committed; re-resolve `BASE_REF` with §2's script and relaunch.
+  `pyproject.toml`, `system/supervisord.conf`, and/or
+  `system/supervisord.conf.d` (e.g. a parallel subtree root was picked instead
+  of the real seed). Or it descends from the workspace's `Initial workspace
+  commit`, so it carries the mind's own work (e.g. an `update-self:` merge
+  commit was passed instead of its upstream parent). Nothing was committed;
+  re-resolve `BASE_REF` with §2's script and relaunch.
 
 Every one of these is a "fix the input and relaunch the worker" situation,
 never a "publish something smaller instead" situation -- see the "MUST BE
@@ -1235,14 +1235,13 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   workspace, as the FIRST line under `## Workspace`. Resolve where the mind
   started with `uv run .agents/shared/scripts/resolve_template_base.py --origin`
   (its own `Initial workspace commit`; fall back to the first-parent root when
-  that exits 1), and resolve its
-  date/version/sha from that commit itself. **Use `git describe --tags
-  --abbrev=0 --match 'minds-v*' "$CREATION"` (reachability), NEVER `git tag
-  --points-at`** -- no tag is ever *on* a template base (an `Initial workspace
-  commit` sits on top of the cloned template; the `minds-v*` tag is always on an
-  ancestor), so a pointing-at lookup
-  comes up empty and the line would silently degrade to the unnamed `created from
-  the workspace template` fallback. Insert `- <date>  created from <version or
+  that exits 1), and resolve its date/version/sha from that commit itself.
+  **Use `git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION"`
+  (reachability), NEVER `git tag --points-at`** -- no tag is ever *on* a
+  template base (an `Initial workspace commit` sits on top of the cloned
+  template; the `minds-v*` tag is always on an ancestor), so a pointing-at
+  lookup comes up empty and the line would silently degrade to the unnamed
+  `created from the workspace template` fallback. Insert `- <date>  created from <version or
   "the workspace template">  <7-char sha>`, note padded to width 26 but never
   fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
   26 chars, so a bare pad-to-26 would land the sha flush). (This is the
