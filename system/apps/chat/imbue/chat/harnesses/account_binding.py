@@ -76,8 +76,8 @@ class AccountBinding(ABC):
         """
 
     @abstractmethod
-    def account_credential_path(self, account_dir: Path) -> Path | None:
-        """Where the credential lives inside an account folder, or None for a harness bound by environment alone."""
+    def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
+        """Every file in an account folder that says the account is signed in, whoever wrote it."""
 
     def seed_account(self, account_dir: Path, work_dir: Path) -> None:
         """Write the per-account files the harness needs before it will run unattended.
@@ -133,6 +133,9 @@ class CredentialLinkAccountBinding(AccountBinding, ABC):
     @abstractmethod
     def account_credential_path(self, account_dir: Path) -> Path:
         """Where the credential lives inside an account folder."""
+
+    def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
+        return (self.account_credential_path(account_dir),)
 
     @abstractmethod
     def agent_credential_path(self, agent_state_dir: Path) -> Path:

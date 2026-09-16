@@ -2601,6 +2601,18 @@ def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rej
         agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
 
 
+def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """Antigravity's model is changed from its terminal, so a pick for one (from a stale page, or any other caller
+    of the switch route) fails at once rather than being tried again for a rebind's whole budget."""
+    _seed_agent(agent_manager, "agent-agy", harness=HarnessType.ANTIGRAVITY)
+    agy_info = agent_manager.get_agent_info_by_id("agent-agy")
+    assert agy_info is not None
+    with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
+        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3-pro"))
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 

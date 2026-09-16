@@ -56,7 +56,7 @@ def _signed_in_service(tmp_path: Path) -> AuthFlowService:
     return AuthFlowService.create(home=None, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
 
 
-# ----- the shapes the client reads ---------------------------------------------------------
+# the shapes the client reads
 
 
 def test_lanes_carry_every_key_the_chooser_reads() -> None:
@@ -208,7 +208,7 @@ def test_a_name_longer_than_a_row_can_show_is_refused() -> None:
     assert response.status_code == 400
 
 
-# ----- the status codes the client branches on ---------------------------------------------
+# the status codes the client branches on
 
 
 def test_an_unknown_lane_is_a_404_with_a_clean_message() -> None:
@@ -246,7 +246,7 @@ def test_deleting_an_unknown_account_is_a_404() -> None:
         assert client.delete("/api/accounts/nope").status_code == 404
 
 
-# ----- one full paste round trip through the routes ----------------------------------------
+# one full paste round trip through the routes
 
 
 def test_a_key_paste_mints_an_account_and_lists_it(tmp_path: Path) -> None:
@@ -321,7 +321,7 @@ def test_a_non_string_name_is_refused() -> None:
     assert response.status_code == 400
 
 
-# ----- what a new agent on an account could run on ------------------------------------------
+# what a new agent on an account could run on
 
 
 def test_account_model_options_offers_the_catalog_for_a_static_harness_and_a_codex_agents_last_set(
@@ -367,3 +367,16 @@ def test_account_model_options_offers_the_catalog_for_a_static_harness_and_a_cod
         assert [option["id"] for option in offered.get_json()["options"]] == ["gpt-6-astra"]
 
         assert client.get("/api/accounts/acct-nope/model-options").status_code == 404
+
+
+def test_account_model_options_offers_nothing_for_a_harness_whose_model_the_chat_cannot_switch(
+    tmp_path: Path,
+) -> None:
+    """Antigravity's model is changed from its terminal, so the dialog is offered no pick it could not apply."""
+    agy_id, _ = mint_account_dir()
+    commit_account(agy_id, "google", "Google")
+    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary="/bin/true")
+    with _client_for(build_test_state(agent_manager=manager)) as client:
+        answered = client.get(f"/api/accounts/{agy_id}/model-options")
+        assert answered.status_code == 200
+        assert answered.get_json() == {"models": None, "options": []}

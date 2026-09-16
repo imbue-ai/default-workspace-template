@@ -882,14 +882,7 @@ def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple
     sign-in leaves the CLI's own store there too. Used to take an account's credential AWAY
     before re-driving its sign-in -- see `_clear_for_reauth`.
     """
-    paths = [account_path / "settings.json"] if harness is HarnessType.CLAUDE else []
-    linked = build_account_binding(harness).account_credential_path(account_path)
-    if linked is not None:
-        paths.append(linked)
-    if harness is HarnessType.CLAUDE:
-        # What `claude auth login` / `setup-token` write themselves.
-        paths.append(account_path / ".credentials.json")
-    return tuple(paths)
+    return build_account_binding(harness).credential_paths(account_path)
 
 
 def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:
