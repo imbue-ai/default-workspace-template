@@ -11,6 +11,7 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from app_instances.testing import RecordingNudger
@@ -31,6 +32,8 @@ from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.chat_records import ChatRecordError
+from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -42,9 +45,11 @@ from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import AgentCreationError
+from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -52,6 +57,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -175,9 +181,7 @@ def test_a_blank_chat_ref_names_no_chat(agent_manager: AgentManager, chat_ref: s
     seed_agent_state(agent_manager, "agent-1", name="Chat-1")
 
     assert agent_manager.get_chat_snapshot(chat_ref) is None
-    assert agent_manager.get_active_agent_info(chat_ref) is None
     assert agent_manager.get_provisional_chat(chat_ref) is None
-    assert agent_manager.has_pending_permission(chat_ref) is False
     assert agent_manager.discard_provisional_chat(chat_ref) is False
 
 
@@ -698,7 +702,7 @@ def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     q = broadcaster.register()
 
-    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+    agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
 
     assert agent_manager.get_provisional_chat("test-id") is None
     agent = agent_manager.get_agent_by_id("test-id")
@@ -720,7 +724,7 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
 
-    agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
+    agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
 
     assert agent_manager.get_agent_by_id("test-id") is None
     proto = agent_manager.get_provisional_chat("test-id")
@@ -2242,12 +2246,12 @@ def test_agent_removed_event_drops_pending_permissions_and_presence(
     with agent_manager._lock:
         agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
     agent_manager.record_presence(ChatId(str_id), "client-1", PresenceState.VISIBLE)
-    assert agent_manager.has_pending_permission(str_id)
+    assert agent_manager.has_pending_permission(ChatId(str_id))
     assert agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
     agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
-    assert not agent_manager.has_pending_permission(str_id)
+    assert not agent_manager.has_pending_permission(ChatId(str_id))
     assert not agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
 
@@ -2668,7 +2672,7 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
             "agent-1",
             [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}],
         )
-        assert agent_manager.has_pending_permission("agent-1")
+        assert agent_manager.has_pending_permission(ChatId("agent-1"))
         nudges_after_filing = nudger.nudge_count
         assert nudges_after_filing >= 1
 
@@ -2683,7 +2687,7 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
                 }
             ],
         )
-        assert not agent_manager.has_pending_permission("agent-1")
+        assert not agent_manager.has_pending_permission(ChatId("agent-1"))
         assert nudger.nudge_count > nudges_after_filing
     finally:
         agent_manager.stop()
@@ -2695,7 +2699,7 @@ def test_a_result_without_a_filed_request_leaves_nothing_pending(agent_manager: 
     agent_manager._ensure_activity_tracking("agent-1")
     try:
         agent_manager.update_session_events("agent-1", [{"type": "tool_result", "tool_call_id": "x"}])
-        assert not agent_manager.has_pending_permission("agent-1")
+        assert not agent_manager.has_pending_permission(ChatId("agent-1"))
     finally:
         agent_manager.stop()
 
@@ -2746,3 +2750,257 @@ def test_observe_events_feed_the_auto_open_reactor(
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
+
+
+# --- Chats that have run on several agents (a hand-built record; nothing writes one yet) ---
+
+
+def _recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log."""
+    log_path = tmp_path / "mngr-argv.log"
+    script = tmp_path / "fake-mngr"
+    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.chmod(0o755)
+    return str(script), log_path
+
+
+class _UnremovableChatRecordStore(InMemoryChatRecordStore):
+    """A store whose records cannot be deleted: what a read-only chat folder looks like to the file store."""
+
+    def delete(self, chat_id: ChatId) -> None:
+        raise ChatRecordError(f"chat record folder for {chat_id} could not be removed")
+
+
+def _recorded_chat(
+    broadcaster: WebSocketBroadcaster,
+    mngr_binary: str | None = None,
+    store: InMemoryChatRecordStore | None = None,
+) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
+    """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
+    store = store if store is not None else InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
+    )
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(
+        manager,
+        first,
+        name=f"archived-1-Chat-1-{first}",
+        state="STOPPED",
+        labels={
+            "account": "acct-1",
+            "archived_at": "2026-09-01T13:01:00+00:00",
+            "display_name": "Chat 1 (archived 1)",
+        },
+    )
+    seed_agent_state(
+        manager,
+        second,
+        name="Chat-1",
+        labels={"account": "acct-2", "display_name": "Chat 1", "chat_id": first, "chat_seq": "2"},
+        harness=HarnessType.CODEX,
+    )
+    store.write(make_two_member_chat_record(first, second))
+    manager.refresh_chat_records()
+    return manager, store, first, second
+
+
+def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_order(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        snapshots = manager.get_chat_snapshots()
+        assert [snapshot.chat_id for snapshot in snapshots] == [first]
+        (snapshot,) = snapshots
+        assert snapshot.agent_ids == (first, second)
+        assert snapshot.active_agent.agent_id == second
+        assert snapshot.active_agent.harness is HarnessType.CODEX
+        assert (snapshot.name, snapshot.title) == ("Chat-1", "Chat 1")
+        assert snapshot.handoff is None
+        # The chat is addressed by its own id only; an archived member's id names no chat.
+        assert manager.get_chat_snapshot(first) == snapshot
+        assert manager.get_chat_snapshot(second) is None
+        active = manager.get_active_agent_info(ChatId(first))
+        assert active is not None and active.id == second
+        assert manager.get_active_agent_info(ChatId(second)) is None
+        assert manager.get_chat_ids() == [ChatId(first)]
+    finally:
+        manager.stop()
+
+
+def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_longer_lists(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, store, first, second = _recorded_chat(broadcaster)
+    try:
+        segments = manager.get_chat_segments(ChatId(first))
+        assert segments is not None
+        assert [(s.agent.id, s.seq, s.is_active, s.recorded_event_count) for s in segments] == [
+            (first, 1, False, 7),
+            (second, 2, True, None),
+        ]
+        assert manager.get_chat_segments(ChatId(second)) is None
+
+        # An archived member mngr has forgotten leaves a gap; a forgotten active agent leaves no chat.
+        manager.remove_agent(first)
+        remaining = manager.get_chat_segments(ChatId(first))
+        assert remaining is not None and [s.agent.id for s in remaining] == [second]
+        manager.remove_agent(second)
+        assert manager.get_chat_segments(ChatId(first)) is None
+        assert manager.get_chat_snapshots() == []
+        # Nothing here destroyed the chat, so its record stands.
+        assert store.read(ChatId(first)) is not None
+    finally:
+        manager.stop()
+
+
+def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    try:
+        manager.stop_chat(ChatId(first))
+        manager.rename_chat(first, "New Name")
+        with manager._lock:
+            manager._pending_permission_ids_by_agent[second] = {"req-1"}
+        assert manager.has_pending_permission(ChatId(first))
+        assert not manager.has_pending_permission(ChatId(second))
+        # A sign-in restarts the chat's active agent and never its archived member, though
+        # both carry an ``account`` label.
+        assert manager.restart_agents_on_account("acct-1") == 0
+        assert manager.restart_agents_on_account("acct-2") == 1
+
+        manager.destroy_chat(ChatId(first))
+
+        argv_lines = argv_log.read_text().splitlines()
+        # The rename is reflected in the tracked name at once, so the restart names the new one.
+        assert argv_lines == [
+            "stop Chat-1",
+            f"rename {second} New-Name --label display_name=New Name",
+            "start New-Name --restart --no-resume",
+            f"destroy {first} {second} --force",
+        ]
+        assert store.read(ChatId(first)) is None
+        assert manager.get_agent_by_id(first) is None and manager.get_agent_by_id(second) is None
+        assert manager.get_chat_snapshots() == []
+    finally:
+        manager.stop()
+
+
+def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    try:
+        manager.remove_agent(second)
+        with pytest.raises(AgentStopError):
+            manager.stop_chat(ChatId(first))
+        with pytest.raises(AgentDestroyError):
+            manager.destroy_chat(ChatId(first))
+        assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agents are gone but the record would resurrect the chat at the next build, so the verb
+    reports the failure through the error its callers handle, not a foreign one."""
+    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
+    try:
+        with pytest.raises(AgentDestroyError, match="record could not be removed"):
+            manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {second} --force"]
+    finally:
+        manager.stop()
+
+
+def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_standing(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    try:
+        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.remove_agent(first)
+        # The chat's per-chat state (its presence, here) belongs to the chat, not the member.
+        assert manager._oom_prioritizer._presence.is_open(ChatId(first))
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
+        # The member's own resident transcript goes; the chat's active segment stays.
+        assert evicted == [first]
+
+        # The active agent stopping drops the whole chat's resident transcripts, archived
+        # segments included, and the observe stream's report of the death is what says so.
+        evicted.clear()
+        details = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
+        manager._handle_observe_event(make_agent_state_event(details))
+        stopped = details.model_copy_update(to_update(details.field_ref().state, AgentLifecycleState.STOPPED))
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert set(evicted) == {first, second}
+    finally:
+        manager.stop()
+
+
+def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
+    """A retiring agent that is still running when it is archived stops a moment later; that
+    death is the member's, not the chat's, so the active agent's watcher (which a user may be
+    viewing) stays resident."""
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    try:
+        for agent_id, name in ((second, "Chat-1"), (first, f"archived-1-Chat-1-{first}")):
+            details = _agent_details(name, agent_id=MngrAgentId(agent_id), state=AgentLifecycleState.RUNNING)
+            manager._handle_observe_event(make_agent_state_event(details))
+        assert evicted == []
+
+        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        stopped = first_details.model_copy_update(
+            to_update(first_details.field_ref().state, AgentLifecycleState.STOPPED)
+        )
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert evicted == [first]
+    finally:
+        manager.stop()
+
+
+def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
+        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        manager._handle_observe_event(make_agent_state_event(first_details))
+        manager._handle_observe_event(
+            make_agent_removed_event(first_details.id, first_details.name, first_details.host.id)
+        )
+        assert manager._oom_prioritizer._presence.is_open(ChatId(first))
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
+    finally:
+        manager.stop()
+
+
+def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        # The record names the first agent, so it is not a chat of its own either.
+        assert manager.get_chat_snapshots() == []
+        assert manager.get_chat_snapshot(first) is None
+        assert manager.get_chat_ids() == []
+    finally:
+        manager.stop()

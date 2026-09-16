@@ -62,6 +62,10 @@ export interface BaseTranscriptEvent {
   // conditional on every variant.
   message_uuid?: string;
   session_id?: string;
+  // The agent whose transcript this event came from. A chat can span several agents
+  // (docs/system/blueprint/chat-agent-split), so every event names its own; absent only on
+  // an event from a chat app that predates the split.
+  agent_id?: string;
 }
 
 /**
@@ -182,15 +186,32 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
 }
 
 /**
+ * The chat moved from one agent to the next (a handoff between harnesses): the chat-level
+ * event the backend synthesizes between two agents' segments (`chat_transcript.py`), never
+ * emitted by a harness. Rendered as a chip ("Switched from Claude to Codex") and treated as a
+ * turn boundary: the next agent starts fresh.
+ */
+export interface AgentSwitchEvent extends BaseTranscriptEvent {
+  type: "agent_switch";
+  from_agent_id: string;
+  to_agent_id: string;
+  from_harness: string;
+  to_harness: string;
+  // The retiring agent's position in the chat.
+  seq: number;
+}
+
+/**
  * A single entry in the transcript event stream, discriminated by `type`.
  * Narrow on `event.type` before touching variant-specific fields.
  *
  * The first three types are the core contract: every harness emits them with the same
  * fields, which is why no view needs to know which harness produced an event. `special`
  * is the declared extension point -- a harness may emit the kinds it registers, and
- * renderers ignore them.
+ * renderers ignore them. `agent_switch` is the chat app's own: the seam between two agents.
  */
-export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
+export type TranscriptEvent =
+  UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent | AgentSwitchEvent;
 
 // For hook compatibility
 export interface ResponseItem {

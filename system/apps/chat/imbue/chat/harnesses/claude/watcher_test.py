@@ -10,7 +10,9 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
+from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
 
 
 def _user_event(index: int, content: str | None = None) -> dict[str, Any]:
@@ -1801,3 +1803,52 @@ def test_get_event_detail_answers_none_when_the_source_is_gone(tmp_path: Path) -
     session_file.write_text(json.dumps(_user_event(7)) + "\n")
     assert watcher.get_event_detail(result["event_id"]) is None
     assert watcher.get_event_detail("unknown-event") is None
+
+
+def test_a_loader_reads_the_same_transcript_as_the_watcher_without_watching(tmp_path: Path) -> None:
+    """An archived agent's segment is read through the loader: the same discovery, parsing, and
+    payload reads as the watcher, with every event naming its agent, and no thread to stop."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    _write_session_file(
+        claude_config_dir / "projects",
+        "loader-session",
+        [
+            {
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "hi"},
+            },
+            {
+                "type": "user",
+                "uuid": "u2",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out"}],
+                },
+            },
+        ],
+    )
+    (agent_state_dir / "claude_session_id_history").write_text("loader-session\n")
+    agent_info = AgentInfo(
+        id="agent-archived",
+        name="archived-1-Chat-1-agent-archived",
+        state="STOPPED",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+
+    loader = ClaudeTranscriptLoader.build_loader(agent_info)
+    watcher = ClaudeSessionWatcher.build(agent_info, lambda _agent_id, _events: None)
+
+    events = loader.get_all_events()
+    assert [event["event_id"] for event in events] == [event["event_id"] for event in watcher.get_all_events()]
+    assert {event["agent_id"] for event in events} == {"agent-archived"}
+    assert loader.get_total_event_count() == 2
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    assert loader.get_event_detail(tool_result["event_id"]) == watcher.get_event_detail(tool_result["event_id"])
+    assert loader.get_subagent_metadata("nobody") is None
+    loader.close()

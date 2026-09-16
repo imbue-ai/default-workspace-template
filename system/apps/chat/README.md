@@ -55,9 +55,19 @@ shell's client-activity route so agents can attribute a request to a client.
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
 `ChatId` in code (`primitives.py`), and every agent this app creates carries it
-as `MINDS_CHAT_ID` in its environment. Today every chat is its one agent, and
-the places that assume so are marked `CLEANUP`. The read routes go through
-`chat_transcript.py`, the chat's transcript as its agents' segments in order.
+as `MINDS_CHAT_ID` in its environment. A chat that has run on several agents
+has a record under `data/.apps/chat/chats/<chat-id>/record.json`
+(`chat_records.py`) naming its agents in order; every other agent is a chat of
+its own. The agent manager resolves every chat through the records: the
+instance list shows one chat per record, from its active agent, and never an
+archived member; stop, start, rename, and status act on the active agent, and
+destroy names every member. The read routes go through `chat_transcript.py`,
+the chat's transcript as its agents' segments in order with an `agent_switch`
+chip between them: an archived segment is read through its harness's
+`TranscriptLoader` (the watcher without the watching), loaded on the first read
+that reaches into it and dropped with the chat, and every event on the wire
+carries its `agent_id`. Nothing writes a record yet; the handoff that does is
+the next phase of that plan.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's

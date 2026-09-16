@@ -1,9 +1,11 @@
-"""Watch raw Claude session JSONL files and emit parsed events.
+"""Read raw Claude session JSONL files into events, and watch them for new ones.
 
 Built on the shared :class:`~imbue.chat.harnesses.transcript_store` scaffolding:
 one lane per session file (main sessions plus subagents), every parsed event fully
 resident, and per-event source byte ranges kept beside the store for the on-demand payload
-reads.
+reads. :class:`ClaudeTranscriptLoader` is the read half (discovery, incremental reads,
+subagent enrichment), which an archived chat segment is read through with no thread and no
+watches; :class:`ClaudeSessionWatcher` adds the live half (the watch loop and the queue feed).
 
 What stays claude-specific:
 
@@ -17,7 +19,8 @@ What stays claude-specific:
   ledger lines. Only the LATEST main session's ledger mirrors the live process's queue,
   and -- because ``--resume`` re-appends to the same file -- enqueues stamped before the
   ``claude_process_started`` marker belong to a dead process and are excluded on replay
-  (see :func:`_is_dead_epoch_enqueue`).
+  (see :func:`_is_dead_epoch_enqueue`). The feed is the watcher's alone: a loader over an
+  archived agent has no live process whose queue could be mirrored.
 
 * **Subagent enrichment.** A parent Agent tool_call's ``subagent_metadata`` can land after
   the parent was already emitted (the subagent's meta.json shows up a cycle later, or its
@@ -51,6 +54,7 @@ from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.transcript_store import EventSource
+from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
@@ -94,70 +98,58 @@ class _FileCursor:
         self.last_mtime = 0.0
 
 
-class ClaudeSessionWatcher(StoreBackedWatcher):
-    """Watches all session files for a single mngr agent and emits parsed events."""
+class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
+    """Reads one claude agent's session files into the store: discovery, incremental reads, and subagent enrichment."""
+
+    _agent_state_dir: Path
+    _claude_config_dir: Path
+    _cursor_by_session: dict[str, _FileCursor]
+    _main_session_ids: list[str]
+    _tool_name_by_call_id: dict[str, str]
+    _subagent_metadata: dict[str, dict[str, str]]
+    _subagent_meta_read_failed: set[str]
+    _subagent_tool_use_id: dict[str, str]
+    _subagent_id_by_tool_call: dict[str, str]
+    _pending_enrichment_ids: set[str]
 
     @classmethod
-    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "ClaudeSessionWatcher":
-        """Build from the agent record. Claude needs its per-agent config dir, which is
-        where Claude Code writes the session JSONL files this watcher tails."""
-        return cls(
-            agent_id=agent_info.id,
-            agent_state_dir=agent_info.agent_state_dir,
-            claude_config_dir=agent_info.claude_config_dir,
-            on_events=on_events,
-        )
+    def build_loader(cls, agent_info: AgentInfo) -> "ClaudeTranscriptLoader":
+        loader = cls.__new__(cls)
+        loader._init_loader(agent_info.id)
+        loader._init_claude_state(agent_info.agent_state_dir, agent_info.claude_config_dir)
+        return loader
 
-    def __init__(
-        self,
-        agent_id: str,
-        agent_state_dir: Path,
-        claude_config_dir: Path,
-        on_events: Callable[[str, list[dict[str, Any]]], None],
-    ) -> None:
-        self._init_store_watcher(agent_id, on_events)
+    def _init_claude_state(self, agent_state_dir: Path, claude_config_dir: Path) -> None:
         self._agent_state_dir = agent_state_dir
         self._claude_config_dir = claude_config_dir
 
         # All guarded by the base's lock (held through _refresh_locked).
-        self._cursor_by_session: dict[str, _FileCursor] = {}
-        self._main_session_ids: list[str] = []
-        self._tool_name_by_call_id: dict[str, str] = {}
-        self._subagent_metadata: dict[str, dict[str, str]] = {}  # sub_id -> {agent_type, description}
+        self._cursor_by_session = {}
+        self._main_session_ids = []
+        self._tool_name_by_call_id = {}
+        self._subagent_metadata = {}  # sub_id -> {agent_type, description}
         # sub_ids whose meta.json we've already determined is permanently malformed.
         # Used to log the warning once per file instead of once per poll cycle.
-        self._subagent_meta_read_failed: set[str] = set()
+        self._subagent_meta_read_failed = set()
         # sub_id -> the parent Agent tool_use id, read from the subagent's `<id>.meta.json`
         # `toolUseId` field: the direct, spawn-time link between a parent Agent tool_call
         # and its subagent, written before any tool_result lands, so running subagents get
         # the rich card. (The subagent jsonl's own first line carries no usable parent
         # pointer, so the meta.json is the only pre-completion source.)
-        self._subagent_tool_use_id: dict[str, str] = {}
+        self._subagent_tool_use_id = {}
         # tool_call_id -> subagent_id, accumulated from parent tool_results as they land.
         # The fallback link for sessions recorded on Claude Code versions whose meta.json
         # omits toolUseId; only available once the subagent finishes.
-        self._subagent_id_by_tool_call: dict[str, str] = {}
+        self._subagent_id_by_tool_call = {}
         # event_ids of resident assistant messages with at least one Agent tool_call still
         # missing subagent_metadata. Retried on every refresh: linkage can land any number
         # of cycles after the parent, and a change re-broadcasts the (mutated-in-place)
         # parent so the client's card upgrades without a page refresh. An id whose linkage
         # never arrives (the subagent's transcript is gone) just stays here -- the retry is
         # a few map lookups, and the set is bounded by the transcript's Agent calls.
-        self._pending_enrichment_ids: set[str] = set()
-
-        # The queued-message populator (the only harness-specific queue code) and the last
-        # snapshot pushed to the agent manager, compared so an unchanged queue pushes
-        # nothing. The callback is set once before ``start`` and read without the lock.
-        self._queue_tracker = ClaudeQueueTracker.build()
-        self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
-        self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
+        self._pending_enrichment_ids = set()
 
     # -- base hooks -----------------------------------------------------------------------
-
-    def _watch_paths(self) -> tuple[Path, ...]:
-        # The projects tree (recursive: every session file and subagent dir under it wakes
-        # the loop, including ones created later) plus the history file's directory.
-        return (self._claude_config_dir / "projects", self._agent_state_dir / "claude_session_id_history")
 
     def _refresh_locked(self) -> None:
         self._discover_sessions_locked()
@@ -173,12 +165,16 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
         # in time, so this order matches the merged timestamp order.
         return [sid for sid in self._main_session_ids if self._store.has_lane(sid)]
 
-    def _before_broadcast(self) -> None:
-        # A3b ordering: a Queued->Delivered message leaves the queue and appears as a
-        # committed transcript turn in the SAME cycle (its LEAVE record and its ``user``
-        # record ride the same file). Push the queue snapshot (the chip REMOVAL) before the
-        # transcript turn is broadcast, so the message is never a chip and a turn at once.
-        self._broadcast_queue_snapshot_if_changed()
+    # -- the queue feed's hooks (the watcher's; a loader mirrors no live queue) ------------
+
+    def _on_new_latest_main_session_locked(self) -> None:
+        """A new latest main session was registered: the claude process restarted into a fresh session."""
+
+    def _on_latest_main_session_rewritten_locked(self) -> None:
+        """The latest main session's file was truncated or rewritten under us."""
+
+    def _feed_queue_locked(self, decoded_line: str, process_epoch_started_at: float | None) -> None:
+        """One line of the LATEST main session's ledger, for the live queue's populator."""
 
     # -- discovery ------------------------------------------------------------------------
 
@@ -228,12 +224,12 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
             self._main_session_ids.insert(insert_position, session_id)
             # A NEW latest main session means the claude process restarted into a fresh
             # session, so anything the previous session's ledger fed is a dead process's
-            # residue -- purge it now rather than waiting for the new session to emit a
-            # queue signal. A late-FOUND older session must NOT reset: the live queue
-            # derived from the still-latest session would be dropped with no replay left
-            # to rebuild it.
+            # residue -- the watcher purges it now rather than waiting for the new session
+            # to emit a queue signal. A late-FOUND older session must NOT reset: the live
+            # queue derived from the still-latest session would be dropped with no replay
+            # left to rebuild it.
             if insert_position == len(self._main_session_ids) - 1:
-                self._queue_tracker.reset()
+                self._on_new_latest_main_session_locked()
 
     def _main_session_insert_position_locked(self, session_id: str, history_positions: dict[str, int]) -> int:
         """The index in ``_main_session_ids`` that keeps history order.
@@ -241,8 +237,8 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
         A session can be FOUND late -- its file was not yet on disk when a later session
         was registered -- so a plain append would misorder the merged timeline and, worse,
         misdirect the latest-session gates (:meth:`_is_latest_main_session_locked` /
-        :meth:`get_latest_main_session_file`) at a dead session. A registered session the
-        current history file no longer lists sorts as oldest.
+        :meth:`ClaudeSessionWatcher.get_latest_main_session_file`) at a dead session. A
+        registered session the current history file no longer lists sorts as oldest.
         """
         position = history_positions.get(session_id, -1)
         for index, known_session_id in enumerate(self._main_session_ids):
@@ -338,7 +334,7 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
             self._store.reset_lane(cursor.session_id)
             cursor.byte_offset_consumed = 0
             if self._is_latest_main_session_locked(cursor.session_id):
-                self._queue_tracker.reset()
+                self._on_latest_main_session_rewritten_locked()
 
         if current_size == cursor.byte_offset_consumed and current_mtime == cursor.last_mtime:
             return
@@ -372,9 +368,7 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
                 logger.warning("UTF-8 decode error in session file {}: {}", cursor.file_path, e)
                 continue
             if is_latest_main_session:
-                queue_signal = parse_queue_signals(decoded_line)
-                if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
-                    self._queue_tracker.consume(queue_signal)
+                self._feed_queue_locked(decoded_line, process_epoch_started_at)
             line_events = parse_lines(
                 decoded_line.splitlines(),
                 existing_event_ids=None,
@@ -383,7 +377,7 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
             )
             source: EventSource = (cursor.file_path, byte_offset, byte_len)
             for event in line_events:
-                self._store.ingest(cursor.session_id, event, source)
+                self._ingest_locked(cursor.session_id, event, source)
                 self._note_linkage_and_enrich_locked(event)
 
         cursor.byte_offset_consumed += len(complete)
@@ -447,6 +441,102 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
             if _is_fully_enriched(event):
                 self._pending_enrichment_ids.discard(event_id)
 
+    # -- subagents ------------------------------------------------------------------------
+
+    def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
+        """Get metadata for a subagent by its session ID."""
+        with self._lock:
+            self._discover_sessions_locked()
+            return self._subagent_metadata.get(subagent_session_id)
+
+    # -- on-demand payload detail ---------------------------------------------------------
+
+    def _parse_detail(
+        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
+    ) -> dict[str, Any] | None:
+        if source_line is None:
+            return None
+        return parse_line_detail(source_line).get(event["event_id"])
+
+    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
+        """Scan the event's own session file for the line carrying its payloads (the
+        recorded byte range went stale: the file was rewritten under us)."""
+        session_id = event.get("session_id")
+        if not isinstance(session_id, str):
+            return None
+        with self._lock:
+            cursor = self._cursor_by_session.get(session_id)
+        if cursor is None:
+            return None
+        event_id = event["event_id"]
+        try:
+            with cursor.file_path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if line.strip() and event_id in parse_line_detail(line):
+                        return line
+        except OSError:
+            return None
+        return None
+
+
+class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
+    """Watches all session files for a single mngr agent and emits parsed events."""
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "ClaudeSessionWatcher":
+        """Build from the agent record. Claude needs its per-agent config dir, which is
+        where Claude Code writes the session JSONL files this watcher tails."""
+        return cls(
+            agent_id=agent_info.id,
+            agent_state_dir=agent_info.agent_state_dir,
+            claude_config_dir=agent_info.claude_config_dir,
+            on_events=on_events,
+        )
+
+    def __init__(
+        self,
+        agent_id: str,
+        agent_state_dir: Path,
+        claude_config_dir: Path,
+        on_events: Callable[[str, list[dict[str, Any]]], None],
+    ) -> None:
+        self._init_store_watcher(agent_id, on_events)
+        self._init_claude_state(agent_state_dir, claude_config_dir)
+
+        # The queued-message populator (the only harness-specific queue code) and the last
+        # snapshot pushed to the agent manager, compared so an unchanged queue pushes
+        # nothing. The callback is set once before ``start`` and read without the lock.
+        self._queue_tracker = ClaudeQueueTracker.build()
+        self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
+        self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
+
+    # -- base hooks -----------------------------------------------------------------------
+
+    def _watch_paths(self) -> tuple[Path, ...]:
+        # The projects tree (recursive: every session file and subagent dir under it wakes
+        # the loop, including ones created later) plus the history file's directory.
+        return (self._claude_config_dir / "projects", self._agent_state_dir / "claude_session_id_history")
+
+    def _before_broadcast(self) -> None:
+        # A3b ordering: a Queued->Delivered message leaves the queue and appears as a
+        # committed transcript turn in the SAME cycle (its LEAVE record and its ``user``
+        # record ride the same file). Push the queue snapshot (the chip REMOVAL) before the
+        # transcript turn is broadcast, so the message is never a chip and a turn at once.
+        self._broadcast_queue_snapshot_if_changed()
+
+    # -- the queue feed -------------------------------------------------------------------
+
+    def _on_new_latest_main_session_locked(self) -> None:
+        self._queue_tracker.reset()
+
+    def _on_latest_main_session_rewritten_locked(self) -> None:
+        self._queue_tracker.reset()
+
+    def _feed_queue_locked(self, decoded_line: str, process_epoch_started_at: float | None) -> None:
+        queue_signal = parse_queue_signals(decoded_line)
+        if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
+            self._queue_tracker.consume(queue_signal)
+
     # -- main/subagent routing ------------------------------------------------------------
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
@@ -461,12 +551,6 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
             return True
         with self._lock:
             return session_id in self._main_session_ids
-
-    def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
-        """Get metadata for a subagent by its session ID."""
-        with self._lock:
-            self._discover_sessions_locked()
-            return self._subagent_metadata.get(subagent_session_id)
 
     def get_latest_main_session_file(self) -> Path | None:
         """The JSONL path of the latest main session (the live process's session), or None.
@@ -531,35 +615,6 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
                 return
             self._last_broadcast_queue_snapshot = snapshot
         callback(snapshot)
-
-    # -- on-demand payload detail ---------------------------------------------------------
-
-    def _parse_detail(
-        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
-    ) -> dict[str, Any] | None:
-        if source_line is None:
-            return None
-        return parse_line_detail(source_line).get(event["event_id"])
-
-    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
-        """Scan the event's own session file for the line carrying its payloads (the
-        recorded byte range went stale: the file was rewritten under us)."""
-        session_id = event.get("session_id")
-        if not isinstance(session_id, str):
-            return None
-        with self._lock:
-            cursor = self._cursor_by_session.get(session_id)
-        if cursor is None:
-            return None
-        event_id = event["event_id"]
-        try:
-            with cursor.file_path.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if line.strip() and event_id in parse_line_detail(line):
-                        return line
-        except OSError:
-            return None
-        return None
 
 
 def _is_fully_enriched(event: dict[str, Any]) -> bool:

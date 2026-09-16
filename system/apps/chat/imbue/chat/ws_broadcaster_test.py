@@ -3,7 +3,8 @@
 import json
 import queue
 
-from imbue.chat.agent_manager import chat_snapshot_for_agent
+from imbue.chat.agent_manager import _ResolvedChat
+from imbue.chat.agent_manager import chat_snapshot_for_active_agent
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
@@ -64,7 +65,10 @@ def test_broadcast_chats_updated() -> None:
     q = broadcaster.register()
 
     agent = AgentStateItem(id="a1", name="agent-1", state="RUNNING", labels={}, work_dir=None)
-    snapshot = chat_snapshot_for_agent(agent, is_permission_pending=False, shoulder_tap_available=False)
+    own_chat = _ResolvedChat(chat_id=ChatId("a1"), member_agent_ids=("a1",), active_agent_id="a1", record=None)
+    snapshot = chat_snapshot_for_active_agent(
+        agent, own_chat, is_permission_pending=False, shoulder_tap_available=False
+    )
     broadcaster.broadcast_chats_updated([snapshot])
 
     msg = json.loads(_get_message(q))

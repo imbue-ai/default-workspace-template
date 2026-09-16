@@ -31,6 +31,8 @@ from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from contextlib import nullcontext
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -57,6 +59,8 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_records import ChatAgentEntry
+from imbue.chat.chat_records import ChatRecord
 from imbue.chat.config import Config
 from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
@@ -153,6 +157,39 @@ def seed_agent_state(
             harness=harness,
             activity_state=activity_state,
         )
+
+
+def make_chat_agent_entry(
+    seq: int,
+    agent_id: str,
+    *,
+    is_archived: bool,
+    harness: HarnessType = HarnessType.CLAUDE,
+    final_event_count: int = 7,
+) -> ChatAgentEntry:
+    """One agent of a hand-built chat record: archived (ended, named, counted) or the live one."""
+    return ChatAgentEntry(
+        seq=seq,
+        agent_id=agent_id,
+        lane="anthropic" if harness is HarnessType.CLAUDE else "openai",
+        account_id=f"acct-{seq}",
+        harness=harness,
+        started_at=datetime(2026, 9, 1, 12, seq, tzinfo=timezone.utc),
+        ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
+        archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
+        final_event_count=final_event_count if is_archived else None,
+    )
+
+
+def make_two_member_chat_record(first_id: str, second_id: str, first_event_count: int = 7) -> ChatRecord:
+    """A chat that ran on ``first_id`` (claude, archived) and moved to ``second_id`` (codex, active)."""
+    return ChatRecord(
+        chat_id=ChatId(first_id),
+        agents=(
+            make_chat_agent_entry(1, first_id, is_archived=True, final_event_count=first_event_count),
+            make_chat_agent_entry(2, second_id, is_archived=False, harness=HarnessType.CODEX),
+        ),
+    )
 
 
 class RecordingMngrMessenger(MngrMessenger):

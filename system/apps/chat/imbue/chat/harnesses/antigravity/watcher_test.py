@@ -584,3 +584,35 @@ def test_scans_hold_one_connection_and_stop_closes_it(tmp_path: Path) -> None:
 
     watcher.stop()
     assert watcher._connections == {}
+
+
+def test_a_loader_reads_a_settled_conversation_with_no_thread_and_releases_what_it_held(tmp_path: Path) -> None:
+    """An archived agy agent's segment reads through the loader: built unstarted and primed once,
+    every event naming its agent, and ``close`` drops the held connections and the per-agent
+    registries a build claims."""
+    conv = "44444444-4444-4444-4444-444444444444"
+    (tmp_path / "antigravity_conversation_ids").write_text(conv + "\n")
+    db = _conv_db_path(tmp_path, conv)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("<USER_REQUEST>\nhi\n</USER_REQUEST>")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("all done")),
+        ],
+    )
+    agent_id = f"agent-loader-{tmp_path.name}"
+    agent_info = AgentInfo(
+        id=agent_id, name="agy-archived", state="STOPPED", agent_state_dir=tmp_path, claude_config_dir=tmp_path
+    )
+
+    loader = AntigravitySessionWatcher.build_loader(agent_info)
+
+    events = loader.get_all_events()
+    assert [event["type"] for event in events] == ["user_message", "assistant_message"]
+    assert {event["agent_id"] for event in events} == {agent_id}
+    assert loader.get_total_event_count() == 2
+    assert loader._thread is None and loader._observer is None
+    assert loader._connections != {}
+    loader.close()
+    assert loader._connections == {}

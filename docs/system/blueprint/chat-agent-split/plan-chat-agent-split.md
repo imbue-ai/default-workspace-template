@@ -299,7 +299,6 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
     "agent_id": "agent-...",
     "name": "Chat-2",
     "harness": "codex",
-    "lane": "openai",
     "account_id": "...",
     "state": "RUNNING",
     "activity_state": "THINKING",
@@ -311,6 +310,7 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
 ```
 
 - `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
+  It carries no `lane`: the lane is the account's, and nothing renders it before phase 5, which adds it if the provider row needs it.
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4).
 - The Flask state holder currently named `ChatState` is renamed (to `ChatAppState`) so the name is free for chat-level state.
@@ -327,12 +327,12 @@ A chat's transcript is its segments in agent order.
   This replaces the alternative of building, priming, and stopping a watcher per archived agent, which was rejected as wasteful.
 - An archived segment is immutable, so its event count is recorded on the chat record when the agent is archived.
   Chat-global offsets and totals are sums of the recorded counts plus the live watcher's count, computed without loading anything.
-- Segment bodies load lazily, on the first read that needs them (a backfill past the live segment, a jump to an offset inside one), through a bounded thread pool so a long chat with many archived agents loads in parallel.
+- Segment bodies load lazily, on the first read that needs them (a backfill past the live segment, a jump to an offset inside one), one at a time: a read reaches back one segment at a time, and keeping archived history out of memory is the point, so phase 3 chose sequential loading over the thread pool first sketched here.
   Loaded segments are cached with the same eviction the live watcher has (a stopped or destroyed chat drops everything).
 - Every event on the wire carries `agent_id`.
   The detail endpoint resolves the segment by event id and re-reads the payload from that segment's files.
   The SSE stream carries only the active agent's events.
-- A chat-app-synthesized handoff marker event sits between segments, rendered as a chip ("Switched from Claude to Codex").
+- A chat-app-synthesized handoff marker event (`agent_switch`) sits between segments, rendered as a chip ("Switched from Claude to Codex").
   It is a chat-level event type, not a harness `SpecialEventKind`, because harnesses declare their own kinds and this one belongs to none of them.
   Its `event_id` is derived from the chat id and the retiring agent's sequence number, so it is stable across reloads and restarts, as the event-id rule in `harnesses/events.py` requires.
 - The subagent endpoints resolve the agent from the three-part key and read its files the same way.
@@ -541,11 +541,21 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 3: a chat can have several agents, read side
 
-- The chat record store (4.2), the own-chat rule, membership from the record with archived agents excluded from the instance list, the `chat_id` and `chat_seq` labels read back.
-- Status, stop, and start from the active agent; destroy over every member; the re-auth restart filtered to active agents (4.4).
-- Multi-segment transcript reads: recorded counts, lazy parallel loading, `agent_id` on every event, detail and subagent reads resolved by segment, the switch chip's event type (4.7).
-- Nothing writes a record except tests, through the store interface.
-- Exit check: a hand-built two-member record renders one continuous transcript with correct offsets, paging, jumps, detail fetches, and per-segment subagent views; stop, start, destroy, and rename act on the right agents.
+- The chat record store (4.2): `chat_records.py`, a `ChatRecord` of `ChatAgentEntry`s plus an optional handoff entry, behind a `ChatRecordStore` interface with a file implementation (`data/.apps/chat/chats/<chat_id>/record.json`, atomic writes under a per-chat lock, the version guard) and an in-memory one for tests.
+  The manager reads every record at build (`refresh_chat_records` re-reads) and resolves every chat-versus-agent crossing through them: an agent a record names belongs to that chat, every other agent is a chat of its own (the own-chat rule).
+  A record this build cannot read costs its chat the record (its agents fall under the own-chat rule) and nothing else.
+- Membership from the record: one instance per chat, keyed by its first agent, listed from its active agent; an archived member is excluded because the record names it, never because of an `archived_at` label; a record whose active agent mngr does not list lists nothing.
+  The `chat_id` and `chat_seq` labels are not consulted by the chat app in this phase (the record is the truth); they remain for `mngr list --include` from agent-side scripts.
+- Status, stop, start, rename, and the pending-permission read come from the active agent; destroy is one `mngr destroy --force` naming every member by id, after which the record is deleted with its agents (the one record write this phase makes, as part of the destroy verb); the re-auth restart skips archived members (4.4).
+  An archived member leaving the agent list (the observe stream's removal) leaves its chat's per-chat state standing; the active agent stopping drops the whole chat's resident transcripts, archived segments included.
+- Multi-segment transcript reads (4.7): each harness's watcher is split into a `TranscriptLoader` (the read side: discovery, incremental reads, payload re-parsing) and the watcher over it (the watch loop, the queue feed, the model-bar write), registered as `HarnessSpec.loader_class` beside `watcher_class`; an archived segment is read through its loader, built on the first read that reaches into it and cached on the app state beside the watchers.
+  `ChatTranscript` (`chat_transcript.py`) reads across the segments: chat-global totals and offsets from the recorded counts (the parsed count wins once a segment is loaded, with a warning on disagreement), the tail, backfill, forward, and offset reads crossing segment boundaries, the detail read resolved by event id, and every event stamped with its `agent_id` at ingest (the live stream included).
+  Loading is lazy and sequential: no thread pool, since a segment loads only when a read reaches back that far and the goal is to keep archived history out of memory.
+- The switch chip is the chat-level `agent_switch` event, synthesized between two segments with an id derived from the chat id and the retiring agent's sequence number; it carries `from_agent_id`, `to_agent_id`, `from_harness`, `to_harness`, and `seq`, counts toward the chat's total, and renders as a centered chip that opens the new agent's first section.
+- The subagent routes resolve any member of the chat, archived ones through their loaders; the page reads a subagent view's key off the `/_instances` create response.
+- Codex's few position-derived fallback event ids (a message, call, result, or turn marker codex gave no id) became content-derived, so two codex agents of one chat cannot mint one id from one line number; a repeat across segments is logged, and the earlier segment's event wins.
+- Nothing writes a record except tests and the destroy verb's delete.
+- Exit check (met in `agent_manager_test.py`, `server_test.py`, `instances_test.py`, `chat_transcript_test.py`): a hand-built two-member record renders one continuous transcript with correct offsets, paging, jumps, detail fetches, and per-segment subagent views; stop, start, destroy, and rename act on the right agents.
 
 ### Phase 4: the handoff, backend
 

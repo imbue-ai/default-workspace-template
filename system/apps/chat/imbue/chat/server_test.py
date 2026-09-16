@@ -25,6 +25,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
@@ -45,6 +46,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _build_fast_mode_answered_label_command
@@ -56,11 +58,13 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -171,13 +175,14 @@ def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: Flask
     assert chat["active_agent"]["state"] == "RUNNING"
 
 
-def test_subagent_route_refuses_an_agent_that_is_not_the_chats(client: FlaskClient, tmp_path: Path) -> None:
+def test_subagent_route_refuses_an_agent_that_is_not_the_chats(
+    client: FlaskClient, app: Flask, tmp_path: Path
+) -> None:
     """The three-part subagent route names the chat's agent whose session the subagent ran
-    under: an agent id that is not the chat's active agent is 404, the active agent's reads."""
-    agent_info = _model_agent_info("agent-123", tmp_path)
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        mismatched = client.get("/api/chats/agent-123/agents/agent-456/subagents/s1/events")
-        matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
+    under: an agent id that is not one of the chat's is 404, a member's reads."""
+    _track_claude_agent(app, "agent-123", "test-agent", tmp_path / "claude_config")
+    mismatched = client.get("/api/chats/agent-123/agents/agent-456/subagents/s1/events")
+    matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
     assert mismatched.status_code == 404
     assert mismatched.get_json()["detail"] == "Chat 'agent-123' has no agent 'agent-456'"
     assert matched.status_code == 200
@@ -278,14 +283,12 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     assert response.status_code == 200
 
 
-def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> None:
-    """Getting events for an agent with session files returns parsed events."""
-    # Set up agent state dir with session history
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
+def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
+    """Getting events for an agent with session files returns parsed events, each naming its agent."""
+    claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
 
     # Create a session file
-    claude_config_dir = tmp_path / "claude_config"
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
 
@@ -321,16 +324,8 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     # Write session history
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get("/api/agents/agent-123/events")
-        by_chat_route = client.get("/api/chats/agent-123/events")
+    response = client.get("/api/agents/agent-123/events")
+    by_chat_route = client.get("/api/chats/agent-123/events")
 
     assert response.status_code == 200
     data = response.get_json()
@@ -340,14 +335,14 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     assert data["events"][0]["content"] == "Hello"
     assert data["events"][1]["type"] == "assistant_message"
     assert data["events"][1]["text"] == "Hi!"
+    assert [event["agent_id"] for event in data["events"]] == ["agent-123", "agent-123"]
 
 
-def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -> None:
+def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
     """The detail endpoint reconstructs one event's full payloads from disk, and answers a
     clean 404 (the frontend's quiet placeholder) for an unknown event."""
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
     claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
     session_id = "detail-session"
@@ -368,26 +363,18 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -
     )
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        events = client.get("/api/agents/agent-123/events").get_json()["events"]
-        result_event = next(e for e in events if e["type"] == "tool_result")
-        # Payload-free wire: the output is not on the event.
-        assert "output" not in result_event
-        assert result_event["output_chars"] == 9000
+    events = client.get("/api/agents/agent-123/events").get_json()["events"]
+    result_event = next(e for e in events if e["type"] == "tool_result")
+    # Payload-free wire: the output is not on the event.
+    assert "output" not in result_event
+    assert result_event["output_chars"] == 9000
 
-        detail = client.get(f"/api/agents/agent-123/events/{result_event['event_id']}/detail")
-        assert detail.status_code == 200
-        assert detail.get_json()["output"] == "z" * 9000
+    detail = client.get(f"/api/agents/agent-123/events/{result_event['event_id']}/detail")
+    assert detail.status_code == 200
+    assert detail.get_json()["output"] == "z" * 9000
 
-        missing = client.get("/api/agents/agent-123/events/not-a-real-event/detail")
-        assert missing.status_code == 404
+    missing = client.get("/api/agents/agent-123/events/not-a-real-event/detail")
+    assert missing.status_code == 404
 
 
 def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
@@ -433,12 +420,11 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     state.shutdown()
 
 
-def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Path) -> None:
+def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
     """The no-`before` events response is capped to the most recent N events,
     and older events remain reachable via the `before` backfill branch."""
-    agent_state_dir = tmp_path / "agent_state"
-    agent_state_dir.mkdir(parents=True)
     claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "test-agent", claude_config_dir)
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
 
@@ -461,64 +447,55 @@ def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Pat
     )
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
-    agent_info = AgentInfo(
-        id="agent-123",
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
+    response = client.get("/api/agents/agent-123/events")
+    assert response.status_code == 200
+    body = response.get_json()
+    events = body["events"]
+    # Only the most recent _DEFAULT_TAIL_COUNT events are returned.
+    assert len(events) == _DEFAULT_TAIL_COUNT
+    assert events[0]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT}"
+    assert events[-1]["content"] == f"Message {total_events - 1}"
+    # offset + total place the tail window in the full conversation: the first
+    # tail event sits at index (total - tail), so offset > 0 tells the client
+    # there is older history above to page in.
+    assert body["total"] == total_events
+    assert body["offset"] == total_events - _DEFAULT_TAIL_COUNT
 
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.get("/api/agents/agent-123/events")
-        assert response.status_code == 200
-        body = response.get_json()
-        events = body["events"]
-        # Only the most recent _DEFAULT_TAIL_COUNT events are returned.
-        assert len(events) == _DEFAULT_TAIL_COUNT
-        assert events[0]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT}"
-        assert events[-1]["content"] == f"Message {total_events - 1}"
-        # offset + total place the tail window in the full conversation: the first
-        # tail event sits at index (total - tail), so offset > 0 tells the client
-        # there is older history above to page in.
-        assert body["total"] == total_events
-        assert body["offset"] == total_events - _DEFAULT_TAIL_COUNT
+    # Older events are still reachable by paging backwards from the oldest
+    # event in the initial tail.
+    oldest_in_tail = events[0]["event_id"]
+    backfill = client.get(f"/api/agents/agent-123/events?before={oldest_in_tail}")
+    assert backfill.status_code == 200
+    backfill_body = backfill.get_json()
+    backfill_events = backfill_body["events"]
+    assert len(backfill_events) == total_events - _DEFAULT_TAIL_COUNT
+    assert backfill_events[0]["content"] == "Message 0"
+    assert backfill_events[-1]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT - 1}"
+    # The page reached the very first event (offset 0 => no more history above).
+    assert backfill_body["offset"] == 0
+    assert backfill_body["total"] == total_events
 
-        # Older events are still reachable by paging backwards from the oldest
-        # event in the initial tail.
-        oldest_in_tail = events[0]["event_id"]
-        backfill = client.get(f"/api/agents/agent-123/events?before={oldest_in_tail}")
-        assert backfill.status_code == 200
-        backfill_body = backfill.get_json()
-        backfill_events = backfill_body["events"]
-        assert len(backfill_events) == total_events - _DEFAULT_TAIL_COUNT
-        assert backfill_events[0]["content"] == "Message 0"
-        assert backfill_events[-1]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT - 1}"
-        # The page reached the very first event (offset 0 => no more history above).
-        assert backfill_body["offset"] == 0
-        assert backfill_body["total"] == total_events
+    # A jump lands a window at an arbitrary global offset in one request,
+    # rather than paging through everything before it.
+    jump = client.get("/api/agents/agent-123/events?offset=5&limit=4")
+    assert jump.status_code == 200
+    jump_body = jump.get_json()
+    assert [e["content"] for e in jump_body["events"]] == [f"Message {i}" for i in range(5, 9)]
+    assert jump_body["offset"] == 5
 
-        # A jump lands a window at an arbitrary global offset in one request,
-        # rather than paging through everything before it.
-        jump = client.get("/api/agents/agent-123/events?offset=5&limit=4")
-        assert jump.status_code == 200
-        jump_body = jump.get_json()
-        assert [e["content"] for e in jump_body["events"]] == [f"Message {i}" for i in range(5, 9)]
-        assert jump_body["offset"] == 5
+    # From that jumped window the client can page *newer* (toward the tail).
+    after_id = jump_body["events"][-1]["event_id"]
+    forward = client.get(f"/api/agents/agent-123/events?after={after_id}&limit=3")
+    assert forward.status_code == 200
+    forward_body = forward.get_json()
+    assert [e["content"] for e in forward_body["events"]] == [f"Message {i}" for i in range(9, 12)]
+    assert forward_body["offset"] == 9
 
-        # From that jumped window the client can page *newer* (toward the tail).
-        after_id = jump_body["events"][-1]["event_id"]
-        forward = client.get(f"/api/agents/agent-123/events?after={after_id}&limit=3")
-        assert forward.status_code == 200
-        forward_body = forward.get_json()
-        assert [e["content"] for e in forward_body["events"]] == [f"Message {i}" for i in range(9, 12)]
-        assert forward_body["offset"] == 9
-
-        # A non-positive limit must not defeat the cap (``[-0:]`` would return
-        # the whole list); it falls back to the default tail count.
-        zero_limit = client.get("/api/agents/agent-123/events?limit=0")
-        assert zero_limit.status_code == 200
-        assert len(zero_limit.get_json()["events"]) == _DEFAULT_TAIL_COUNT
+    # A non-positive limit must not defeat the cap (``[-0:]`` would return
+    # the whole list); it falls back to the default tail count.
+    zero_limit = client.get("/api/agents/agent-123/events?limit=0")
+    assert zero_limit.status_code == 200
+    assert len(zero_limit.get_json()["events"]) == _DEFAULT_TAIL_COUNT
 
 
 def test_send_message_success() -> None:
@@ -2279,6 +2256,7 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
     state_dir.mkdir(parents=True)
 
     claude_config_dir = tmp_path / "claude_config"
+    (state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True)
     session_id = "test-session-id"
@@ -2319,18 +2297,10 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
     manager._ensure_activity_tracking(agent_id)
 
     app = create_application(build_test_state(agent_manager=manager))
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="seed-agent",
-        state="RUNNING",
-        agent_state_dir=state_dir,
-        claude_config_dir=claude_config_dir,
-    )
 
     try:
         test_client = app.test_client()
-        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-            response = test_client.get(f"/api/agents/{agent_id}/events")
+        response = test_client.get(f"/api/agents/{agent_id}/events")
         assert response.status_code == 200
 
         # The watcher creation path seeds transcript-derived state
@@ -2412,6 +2382,20 @@ def _register_agent(app: Flask, agent_id: str, name: str, state: str) -> None:
     )
 
 
+def _track_claude_agent(app: Flask, agent_id: str, name: str, claude_config_dir: Path) -> Path:
+    """Register a claude agent whose state dir (under the test's isolated host dir) names ``claude_config_dir``.
+
+    The read routes resolve an agent through the manager, which derives the state dir from
+    the host dir and the config dir from the state dir's env file, so a test that wants the
+    routes to read its fixture transcript registers the agent this way. Returns the state dir.
+    """
+    state_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / agent_id
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
+    _register_agent(app, agent_id, name, "RUNNING")
+    return state_dir
+
+
 def test_start_unknown_agent_returns_404(client: FlaskClient) -> None:
     """POST /api/agents/<id>/start returns 404 for an unknown agent."""
     response = client.post("/api/agents/nonexistent/start")
@@ -2453,7 +2437,7 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     """Confront the ``mngr destroy`` argv with the live ``imbue.mngr.main.cli``
     tree, so a system/vendor/mngr rename of that subcommand/flag fails here at merge
     time rather than only surfacing at runtime."""
-    assert_mngr_argv_valid(_build_chat_destroy_command("mngr", "demo"))
+    assert_mngr_argv_valid(_build_chat_destroy_command("mngr", ("agent-demo1", "agent-demo2")))
 
 
 def test_stop_argv_accepted_by_live_cli() -> None:
@@ -2771,3 +2755,112 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert first["chat_id"] == reserved.chat_id
     assert first["phase"] == ProvisionalChatPhase.AWAITING_ACCOUNT.value
     assert second["type"] == "chats_updated"
+
+
+# --- A chat that has run on two agents: one transcript, read across both segments ---
+
+
+def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    (projects_dir / f"{session_id}.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+
+
+def _user_event(uuid: str, timestamp: str, content: str) -> dict[str, Any]:
+    return {"type": "user", "uuid": uuid, "timestamp": timestamp, "message": {"role": "user", "content": content}}
+
+
+def _two_member_chat(app: Flask, tmp_path: Path) -> tuple[str, str]:
+    """A chat that moved from a stopped, archived claude agent (two events, one a tool result with a
+    payload) to a running one (two user turns); returns the two agent ids."""
+    first, second = "agent-first-member", "agent-second-member"
+    first_state_dir = _track_claude_agent(app, first, f"archived-1-Chat-1-{first}", tmp_path / "first_config")
+    _write_claude_session(
+        tmp_path / "first_config",
+        "first-session",
+        [
+            _user_event("f-1", "2026-01-01T00:00:00Z", "Hello from the first agent"),
+            {
+                "type": "user",
+                "uuid": "f-2",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_f", "content": "z" * 900}],
+                },
+            },
+        ],
+    )
+    (first_state_dir / "claude_session_id_history").write_text("first-session\n")
+    second_state_dir = _track_claude_agent(app, second, "Chat-1", tmp_path / "second_config")
+    _write_claude_session(
+        tmp_path / "second_config",
+        "second-session",
+        [
+            _user_event("s-1", "2026-01-02T00:00:00Z", "Hello from the second agent"),
+            _user_event("s-2", "2026-01-02T00:00:01Z", "And again"),
+        ],
+    )
+    (second_state_dir / "claude_session_id_history").write_text("second-session\n")
+    manager: AgentManager = state_of(app).agent_manager
+    with manager._lock:
+        manager._agents[first] = manager._agents[first].model_copy_update(
+            to_update(manager._agents[first].field_ref().state, "STOPPED")
+        )
+    manager._chat_record_store.write(make_two_member_chat_record(first, second, first_event_count=2))
+    manager.refresh_chat_records()
+    return first, second
+
+
+def test_a_two_member_chat_reads_as_one_transcript_with_the_switch_between(
+    client: FlaskClient, app: Flask, tmp_path: Path
+) -> None:
+    first, second = _two_member_chat(app, tmp_path)
+    switch_id = agent_switch_event_id(ChatId(first), 1)
+
+    whole = client.get(f"/api/chats/{first}/events").get_json()
+    assert (whole["offset"], whole["total"]) == (0, 5)
+    assert [event["type"] for event in whole["events"]] == [
+        "user_message",
+        "tool_result",
+        "agent_switch",
+        "user_message",
+        "user_message",
+    ]
+    assert [event["agent_id"] for event in whole["events"]] == [first, first, second, second, second]
+    switch = whole["events"][2]
+    assert switch["event_id"] == switch_id
+    assert (switch["from_agent_id"], switch["to_agent_id"], switch["seq"]) == (first, second, 1)
+    first_ids = [event["event_id"] for event in whole["events"][:2]]
+    second_ids = [event["event_id"] for event in whole["events"][3:]]
+
+    # Paging older from the live segment's first event crosses the chip into the archived one.
+    before = client.get(f"/api/chats/{first}/events?before={second_ids[0]}&limit=2").get_json()
+    assert ([event["event_id"] for event in before["events"]], before["offset"]) == ([first_ids[1], switch_id], 1)
+    # A jump lands inside the live segment by chat-global offset; paging newer from the chip too.
+    jump = client.get(f"/api/chats/{first}/events?offset=3&limit=1").get_json()
+    assert ([event["event_id"] for event in jump["events"]], jump["offset"]) == ([second_ids[0]], 3)
+    after = client.get(f"/api/chats/{first}/events?after={switch_id}&limit=5").get_json()
+    assert [event["event_id"] for event in after["events"]] == second_ids
+
+    # A detail fetch resolves the segment by event id; the chip has no payload.
+    detail = client.get(f"/api/chats/{first}/events/{first_ids[1]}/detail")
+    assert detail.status_code == 200 and detail.get_json()["output"] == "z" * 900
+    assert client.get(f"/api/chats/{first}/events/{switch_id}/detail").status_code == 404
+
+    # The archived segment was loaded (and cached) rather than watched; the live one is watched.
+    state = state_of(app)
+    assert set(state.loaders) == {first} and set(state.watchers) == {second}
+    # An archived member's id names no chat of its own.
+    assert client.get(f"/api/chats/{second}/events").status_code == 404
+
+
+def test_a_two_member_chats_subagent_reads_resolve_by_member(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
+    first, second = _two_member_chat(app, tmp_path)
+    archived = client.get(f"/api/chats/{first}/agents/{first}/subagents/s1/events")
+    live = client.get(f"/api/chats/{first}/agents/{second}/subagents/s1/events")
+    stranger = client.get(f"/api/chats/{first}/agents/agent-stranger/subagents/s1/events")
+    assert (archived.status_code, live.status_code) == (200, 200)
+    assert archived.get_json() == {"events": [], "metadata": None}
+    assert stranger.status_code == 404
+    assert stranger.get_json()["detail"] == f"Chat '{first}' has no agent 'agent-stranger'"

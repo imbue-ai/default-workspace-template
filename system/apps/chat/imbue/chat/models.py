@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import auto
 
 from app_instances.data_types import InstanceStatus
@@ -5,6 +6,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
@@ -316,6 +318,18 @@ class ChatSnapshot(FrozenModel):
         description="The in-progress handoff, or None while the chat is not converging"
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
+
+
+class ChatSegmentInfo(FrozenModel):
+    """One agent of a chat as the transcript reads it: which agent, its place, and whether it is the live one."""
+
+    agent: AgentInfo = Field(description="The agent, with its resolved state and config dirs")
+    seq: int = Field(ge=1, description="The agent's 1-based position in the chat")
+    is_active: bool = Field(description="Whether this is the agent the chat runs on (its segment is the live one)")
+    recorded_event_count: int | None = Field(
+        description="The segment's main-transcript event count recorded when the agent was archived; None for the live one"
+    )
+    ended_at: datetime | None = Field(description="When the agent was archived; None for the live one")
 
 
 class ChatListResponse(FrozenModel):
