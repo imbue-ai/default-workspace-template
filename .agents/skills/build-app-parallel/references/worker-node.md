@@ -34,9 +34,10 @@ you when two of you touch the same file.
 `.agents/skills/build-app/SKILL.md` is the reference for how apps are built here:
 the scaffolder, file-path conventions, the `frontend-design` skill before any
 markup, raw-data affordances, verification. Follow its mechanics for the part of
-the build your subtask covers. The steps it assigns to the main agent -- asking
-the user questions, showing the mock, surfacing the tab, and handing off to
-`crystallize-creation` -- belong to the orchestrator, not to you.
+the build your subtask covers. The steps it assigns to the main agent -- running
+the plan recorder, asking the user questions, showing the mock, surfacing the
+tab, and handing off to `crystallize-creation` -- belong to the orchestrator or
+do not apply, so skip them.
 
 Where you meet something you would rather ask about (a name, a default, an
 ambiguity), decide, and say what you decided in your report. You never talk to

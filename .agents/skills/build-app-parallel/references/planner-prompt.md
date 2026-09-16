@@ -79,6 +79,8 @@ everything downstream of it, so spend where the risk is.
 
 ### How the workers run
 
+The brief names the app. Every node uses that name; no node picks another.
+
 Every worker runs in the same folder: one git checkout the orchestrator created
 for this build. Whatever an earlier node wrote to disk is there for a later node
 to find the moment it is written. Up to 5 workers run at once. Workers do not
