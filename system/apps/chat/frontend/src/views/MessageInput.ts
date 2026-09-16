@@ -97,14 +97,64 @@ export function raiseFailureNotice(chatId: string, notice: PendingFailureNotice)
 // new chat" moves it to the new chat); the mounted composer clears its own text on its next pass.
 const pendingComposerClears = new Set<string>();
 
-/** Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
- *  switch dialog begins with. The persisted copy goes too, so a reload does not bring it back. */
-export function takeComposerDraft(chatId: string): string {
-  const draft = localStorage.getItem(messageTextKey(chatId)) ?? "";
+/** What a sibling view took out of ``chatId``'s composer to send somewhere else. */
+export interface TakenComposerDraft {
+  /** What the user typed, for putting back if it could not be sent. */
+  text: string;
+  /** What goes on the wire: the text with the attachment references appended. */
+  finalText: string;
+  attachments: readonly ComposerAttachment[];
+}
+
+/**
+ * Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
+ * switch dialog begins with. The attachments travel with the text, so a file dropped in this
+ * composer is not left behind by the move, and in-flight uploads are awaited first so a file
+ * dropped a moment ago still makes it. The persisted copy goes too, so a reload does not bring it
+ * back. Null when an upload failed: the file would leave the message silently and its chip would be
+ * cleared along with the rest, so this refuses and names it instead, as an ordinary send does.
+ */
+export async function takeComposerDraft(chatId: string): Promise<TakenComposerDraft | null> {
+  await waitForComposerUploads(chatId);
+  const failed = getComposerAttachments(chatId).filter((attachment) => attachment.status === "error");
+  if (failed.length > 0) {
+    const names = failed.map((attachment) => attachment.fileName).join(", ");
+    raiseFailureNotice(chatId, {
+      title: failed.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload",
+      detail: `${names} could not be uploaded, so the new chat was not started. Remove the attachment, or try again.`,
+    });
+    return null;
+  }
+  const text = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  const attachments = getComposerAttachments(chatId);
+  const finalText = buildMessageWithAttachments(text, getReadyAttachmentPaths(chatId));
   localStorage.removeItem(messageTextKey(chatId));
+  clearComposerAttachments(chatId);
   pendingComposerClears.add(chatId);
   m.redraw();
-  return draft;
+  return { text, finalText, attachments };
+}
+
+/** Hand a taken draft back to ``chatId``'s composer when what it was taken for did not happen. */
+export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft): void {
+  restoreToComposer(chatId, taken.text, taken.attachments);
+}
+
+/**
+ * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
+ *
+ * Prepending is what lets it run unconditionally: the returned message first and any draft typed
+ * since after it, and neither is lost. The attachments merge rather than overwrite, since anything
+ * attached in the meantime would otherwise go with them.
+ */
+function restoreToComposer(chatId: string, text: string, attachments: readonly ComposerAttachment[]): void {
+  prependToComposer(chatId, text);
+  const existingAttachments = getComposerAttachments(chatId);
+  const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
+  restoreComposerAttachments(chatId, [
+    ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
+    ...existingAttachments,
+  ]);
 }
 
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view. */
@@ -649,21 +699,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         text: string,
         attachments: readonly ComposerAttachment[],
       ): void {
-        // Reuses the module-level prepend that Stop's drain and QueuedMessageView already hand
-        // blocks back through: it persists to localStorage (so the message survives a reload or
-        // an unmounted composer) and merges the same way, rather than this path inventing a
-        // second set of rules for the same job. Prepending is what lets it run unconditionally:
-        // put the failed message first and any draft typed during the send after it, and neither
-        // is lost.
-        prependToComposer(forChatId, text);
-        // Merge rather than replace: restoreComposerAttachments overwrites, and anything attached
-        // while the send was in flight would go with it.
-        const existingAttachments = getComposerAttachments(forChatId);
-        const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
-        restoreComposerAttachments(forChatId, [
-          ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
-          ...existingAttachments,
-        ]);
+        // Reuses the module-level hand-back that Stop's drain, QueuedMessageView and the switch
+        // dialog already go through, rather than inventing a second set of rules for the same job.
+        restoreToComposer(forChatId, text, attachments);
         if (currentChatId === forChatId) {
           messageText = localStorage.getItem(messageTextKey(forChatId)) ?? text;
         }

@@ -26,7 +26,7 @@ import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./harness-labels";
-import { prependToComposer, raiseFailureNotice, takeComposerDraft } from "./MessageInput";
+import { raiseFailureNotice, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
 
 /** The value of the model select's first row: the target harness's own default. */
@@ -206,15 +206,22 @@ function renderPicker(dialog: OpenDialog): m.Children {
   ]);
 }
 
-/** Leave this chat as it is and open a new one on the target, on the picked model, with the draft moved over. */
+/** Leave this chat as it is and open a new one on the target, on the picked model, with the draft --
+ *  its attachments included -- moved over. A draft the composer refuses to give up leaves the dialog
+ *  where it is, with the composer's own notice saying why. */
 async function startNewChat(dialog: OpenDialog): Promise<void> {
   const pick = pickOf(dialog);
   dialog.isBusy = true;
   m.redraw();
-  const draft = takeComposerDraft(dialog.chatId);
+  const draft = await takeComposerDraft(dialog.chatId);
+  if (draft === null) {
+    dialog.isBusy = false;
+    m.redraw();
+    return;
+  }
   setPendingAccount(dialog.chatId, null);
-  const isStarted = await startChatOnAccount(dialog.target.id, draft, pick?.identity ?? null);
-  if (!isStarted) prependToComposer(dialog.chatId, draft);
+  const isStarted = await startChatOnAccount(dialog.target.id, draft.finalText, pick?.identity ?? null);
+  if (!isStarted) restoreComposerDraft(dialog.chatId, draft);
   if (open === dialog) open = null;
   m.redraw();
 }

@@ -16,8 +16,10 @@ const state = vi.hoisted(() => {
     started: [] as unknown[][],
     notices: [] as unknown[],
     draft: "",
+    draftAttachments: [] as unknown[],
+    isStartAccepted: true,
     isTranscriptLoaded: true,
-    prepended: [] as string[],
+    restored: [] as unknown[],
   };
 });
 vi.mock("../models/Chats", () => ({
@@ -42,16 +44,23 @@ vi.mock("../models/Handoffs", () => ({
 vi.mock("../shell", () => ({
   startChatOnAccount: (...args: unknown[]) => {
     state.started.push(args);
-    return Promise.resolve(true);
+    return Promise.resolve(state.isStartAccepted);
   },
 }));
 vi.mock("./MessageInput", () => ({
+  // The real one expands the text with the composer's attachment references and hands them back
+  // together; the dialog must move both, not just the text.
   takeComposerDraft: () => {
-    const draft = state.draft;
+    const taken = {
+      text: state.draft,
+      finalText: state.draftAttachments.length === 0 ? state.draft : `${state.draft} + attachments`,
+      attachments: state.draftAttachments,
+    };
     state.draft = "";
-    return draft;
+    state.draftAttachments = [];
+    return Promise.resolve(taken);
   },
-  prependToComposer: (_chatId: string, block: string) => state.prepended.push(block),
+  restoreComposerDraft: (_chatId: string, taken: unknown) => state.restored.push(taken),
   raiseFailureNotice: (_chatId: string, notice: unknown) => state.notices.push(notice),
 }));
 vi.mock("../models/AccountModelOptions", () => ({
@@ -112,8 +121,10 @@ describe("the switch dialog", () => {
     state.switches.length = 0;
     state.started.length = 0;
     state.notices.length = 0;
-    state.prepended.length = 0;
+    state.restored.length = 0;
     state.draft = "";
+    state.draftAttachments = [];
+    state.isStartAccepted = true;
     state.isTranscriptLoaded = true;
     setPendingAccount("agent-1", null);
   });
@@ -187,6 +198,9 @@ describe("the switch dialog", () => {
 
   it("starts a new chat on the target with the draft and the pick, leaving this chat alone", async () => {
     state.draft = "moving house";
+    // Attached in the old composer: what the new chat starts with is the expanded text, not the
+    // bare draft, so the file is not left behind by the move.
+    state.draftAttachments = [{ localId: "a1", fileName: "plan.pdf" }];
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     render();
     await flush();
@@ -203,12 +217,31 @@ describe("the switch dialog", () => {
     pressButton("Start a new chat");
     await flush();
     expect(state.started).toEqual([
-      ["acct-openai", "moving house", { model_id: "gpt-6-astra", effort: "low", fast: false }],
+      ["acct-openai", "moving house + attachments", { model_id: "gpt-6-astra", effort: "low", fast: false }],
     ]);
     expect(getPendingAccountId("agent-1")).toBeNull();
     expect(state.switches).toEqual([]);
     render();
     expect(ROOT().textContent).toBe("");
+  });
+
+  it("hands the draft back, attachments and all, when the new chat could not be started", async () => {
+    state.draft = "moving house";
+    state.draftAttachments = [{ localId: "a1", fileName: "plan.pdf" }];
+    state.isStartAccepted = false;
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    await flush();
+    render();
+    pressButton("Start a new chat");
+    await flush();
+    expect(state.restored).toEqual([
+      {
+        text: "moving house",
+        finalText: "moving house + attachments",
+        attachments: [{ localId: "a1", fileName: "plan.pdf" }],
+      },
+    ]);
   });
 
   it("arms a rebind at once, with no dialog and no pick, for an account on the chat's own harness and lane", () => {

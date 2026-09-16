@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => {
     switching,
     drainToComposer: vi.fn(async () => ({ block: "" })),
     getComposerAttachments: vi.fn(() => [] as unknown[]),
+    clearComposerAttachments: vi.fn(),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
@@ -86,9 +87,12 @@ vi.mock("../models/PendingLane", () => ({
 }));
 vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
 vi.mock("../models/ComposerAttachments", () => ({
-  clearComposerAttachments: vi.fn(),
+  clearComposerAttachments: mocks.clearComposerAttachments,
   getComposerAttachments: mocks.getComposerAttachments,
-  getReadyAttachmentPaths: () => [],
+  getReadyAttachmentPaths: () =>
+    (mocks.getComposerAttachments() as { status: string; uploaded?: { path: string } }[]).flatMap((attachment) =>
+      attachment.status === "ready" && attachment.uploaded ? [attachment.uploaded.path] : [],
+    ),
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
   restoreComposerAttachments: vi.fn(),
@@ -96,7 +100,8 @@ vi.mock("../models/ComposerAttachments", () => ({
   waitForComposerUploads: vi.fn(async () => {}),
 }));
 vi.mock("../models/attachments", () => ({
-  buildMessageWithAttachments: (text: string) => text,
+  buildMessageWithAttachments: (text: string, paths: readonly string[]) =>
+    paths.length === 0 ? text : `${text} + ${paths.join(" ")}`,
   formatFileSize: () => "0 B",
 }));
 vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
@@ -151,7 +156,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
-import { MessageInput, prependToComposer, takeComposerDraft } from "./MessageInput";
+import { MessageInput, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -677,6 +682,7 @@ describe("MessageInput switching harness", () => {
 
   beforeEach(() => {
     mocks.sendMessage.mockClear();
+    mocks.clearComposerAttachments.mockClear();
     mocks.switchChat.mockClear();
     mocks.switchChat.mockResolvedValue({ kind: "handoff", phase: "summarizing", returned_block: "" });
     mocks.setPendingAccount.mockClear();
@@ -825,21 +831,49 @@ describe("MessageInput switching harness", () => {
     expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
   });
 
-  it("gives its draft up to a sibling that takes it, and comes back empty", () => {
+  it("gives its draft up to a sibling that takes it, attachments and all, and comes back empty", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "plan.pdf", status: "ready", uploaded: { path: "/uploads/plan.pdf" } },
+    ]);
     const component = MessageInput();
     typeDraft(component, "agent-1", "moving house");
-    expect(takeComposerDraft("agent-1")).toBe("moving house");
+    const taken = await takeComposerDraft("agent-1");
+    mocks.getComposerAttachments.mockReturnValue([]);
+    expect(taken).toEqual({
+      text: "moving house",
+      // The mocked builder appends the ready paths it was given.
+      finalText: "moving house + /uploads/plan.pdf",
+      attachments: [{ localId: "a1", fileName: "plan.pdf", status: "ready", uploaded: { path: "/uploads/plan.pdf" } }],
+    });
+    // The chips go with the text, rather than being left behind in a composer it emptied.
+    expect(mocks.clearComposerAttachments).toHaveBeenCalledWith("agent-1");
     expect(localStorage.getItem("message-text:agent-1")).toBeNull();
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
   });
 
-  it("keeps a draft handed straight back after a sibling took it", () => {
+  it("refuses to give its draft up while an attachment has failed to upload", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.pdf", status: "error", error: "boom" },
+    ]);
     const component = MessageInput();
     typeDraft(component, "agent-1", "moving house");
-    takeComposerDraft("agent-1");
+    expect(await takeComposerDraft("agent-1")).toBeNull();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    // Nothing was taken: the file would have left the message silently and its chip with it.
+    expect(localStorage.getItem("message-text:agent-1")).toBe("moving house");
+    expect(mocks.clearComposerAttachments).not.toHaveBeenCalled();
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("didn't upload");
+    expect(text).toContain("notes.pdf");
+  });
+
+  it("keeps a draft handed straight back after a sibling took it", async () => {
+    const component = MessageInput();
+    typeDraft(component, "agent-1", "moving house");
+    const taken = await takeComposerDraft("agent-1");
     // No view pass in between: the take and the hand-back are both pending on the next one.
-    prependToComposer("agent-1", "moving house");
+    restoreComposerDraft("agent-1", taken!);
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("moving house");
   });
