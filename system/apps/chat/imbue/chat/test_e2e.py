@@ -29,6 +29,7 @@ from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_CHAT_ADDRESS
 from imbue.chat.testing import FIXTURE_SESSION_ID
@@ -766,6 +767,26 @@ def _switch_and_send(chat: FrameLocator, message: str) -> None:
     switch_button.click()
 
 
+def _settled_chat_snapshot(server: RunningWorkspace) -> ChatSnapshot:
+    """The chat's snapshot once its switch has left the record.
+
+    The node turns "done" on the ``agent_switch`` marker, which the backend emits when it adopts
+    the successor -- before it delivers the prompt and the held sends and clears the record -- so
+    the page runs ahead of the record by those deliveries. Reading the snapshot the instant the
+    page says done races them.
+    """
+    manager = server.chat_state.agent_manager
+
+    def _settled() -> bool:
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        return snapshot is not None and snapshot.handoff is None
+
+    wait_for(_settled, timeout=30.0, poll_interval=0.1, error_message="the switch never left the chat's record")
+    snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+    assert snapshot is not None
+    return snapshot
+
+
 def _switched_workspace(
     tmp_path: Path,
     messenger: MngrMessenger | None = None,
@@ -879,8 +900,7 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
             "Handed off from Claude to Codex", timeout=30000
         )
-        snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert snapshot is not None and snapshot.handoff is None
+        snapshot = _settled_chat_snapshot(server)
         # The typed message rode inside the successor's prompt, so the switch marker shows it as the
         # successor's opening bubble, and the held bubble that stood in for it is gone.
         opening = chat.locator('.message-list .message-user[id$=":message"]')
@@ -1025,8 +1045,7 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
             "Handed off from Claude to Antigravity", timeout=30000
         )
         expect(chat.locator(".handoff-failed-notice")).to_have_count(0)
-        settled = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert settled is not None and settled.handoff is None
+        settled = _settled_chat_snapshot(server)
         assert settled.active_agent.harness.value == "antigravity"
         assert settled.active_agent.account_id == server.account_ids[2]
         # The lane picked before the failure is spent too: the next send is an ordinary one.
