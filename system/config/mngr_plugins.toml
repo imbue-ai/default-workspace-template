@@ -31,3 +31,8 @@ tools = ["mngr", "chat"]
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_wait"
 tools = ["mngr"]
+
+[[plugins]]
+path = "system/vendor/mngr/libs/mngr_autocompact"
+tools = ["mngr"]
+
