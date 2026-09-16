@@ -17,9 +17,10 @@
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
  * focus too, no fade, centered under the trigger with a 6px gap, flipped above
  * on bottom overflow, clamped to the viewport, dropped when its own trigger is
- * left or blurred and on any click / scroll / resize. The centered-below placement is the default
- * everywhere and callers should not opt out of it lightly -- one placement is
- * what keeps every tooltip in the workspace reading as the same tooltip.
+ * left or blurred and on any click / scroll / resize. The centered-below
+ * placement is the default everywhere and callers should not opt out of it
+ * lightly -- one placement is what keeps every tooltip in the workspace
+ * reading as the same tooltip.
  *
  * **A trigger's whole state is its ``data-hover-tooltip`` attribute**, read at
  * the moment the bubble goes up, with one set of listeners on the document
