@@ -10,7 +10,7 @@
  * dockview's clipping overlay otherwise -- and mithril validates keyed fragments during the
  * DOM diff, not while building vnodes, so a vnode walk cannot see either.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
@@ -71,6 +71,8 @@ vi.mock("./SwitchDialog", () => ({
 
 import m from "mithril";
 
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
+
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
@@ -123,6 +125,10 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
@@ -186,6 +192,22 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
+  });
+
+  it("stops explaining a read-only harness once its catalog says the model can be switched", () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
+    render();
+    click(".model-selector-trigger");
+    const modelRow = document.querySelector<HTMLElement>('[data-card-row="model"]')!;
+    expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
+
+    catalogState.catalog = catalogOf();
+    render();
+    // The card stays open and mithril patches the row rather than replacing it, so the row
+    // keeps whatever its first render attached.
+    expect(document.querySelector('[data-card-row="model"]')).toBe(modelRow);
+    expect(hoverTooltipText(modelRow)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
