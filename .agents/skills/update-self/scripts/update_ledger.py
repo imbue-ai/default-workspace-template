@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 from pathlib import Path
 
 from update_runtime import ApplyError, Runner, git_out
+
+# The marker rule is shared with publish-template, update-published-template and
+# migrate-workspace, so it lives in one stdlib-only script; this module applies
+# it to the workspace's own log.
+_RESOLVE_TEMPLATE_BASE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "shared"
+    / "scripts"
+    / "resolve_template_base.py"
+)
+_resolve_template_base_spec = importlib.util.spec_from_file_location(
+    "resolve_template_base", _RESOLVE_TEMPLATE_BASE_PATH
+)
+assert _resolve_template_base_spec is not None
+assert _resolve_template_base_spec.loader is not None
+_resolve_template_base = importlib.util.module_from_spec(_resolve_template_base_spec)
+_resolve_template_base_spec.loader.exec_module(_resolve_template_base)
 
 _VERSION_HISTORY_REL = "docs/VERSION_HISTORY.md"
 
@@ -79,21 +97,20 @@ def _insert_under_workspace(lines: list[str], new_line: str, *, first: bool) -> 
 def _origin_line(repo_root: Path, runner: Runner) -> str:
     """The one-time ``created from`` seed for ``## Workspace``.
 
-    The template base is the OLDEST first-parent template-state marker (an
-    ``update-self:`` merge or the ``Initial workspace commit``), falling back to
-    the first-parent root; its date, version and sha come from that commit
-    itself, so seeding late still records when the workspace was created. The
-    version uses ``git describe`` (reachability), never ``--points-at``: no tag
-    is ever *on* a template base, only on an ancestor of it.
+    Where the workspace started is its own ``Initial workspace commit``, falling
+    back to the first-parent root; its date, version and sha come from that
+    commit itself, so seeding late still records when the workspace was created.
+    A full-history clone reaches older markers -- the template repo's own, and a
+    source mind's when this one was created from a published template -- and any
+    of those would date this workspace to a stranger's creation, so the walk
+    takes the NEWEST. (``publish-template`` resolves the base the workspace is on
+    *now* from the same log, which is the newest marker of either kind and
+    resolves a merge to its upstream parent; this wants where the mind started.)
+    The version uses ``git describe`` (reachability), never ``--points-at``: no
+    tag is ever *on* a template base, only on an ancestor of it.
     """
-    log = git_out(
-        runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"]
-    )
-    creation = ""
-    for line in log.splitlines():
-        sha, _, subject = line.partition(" ")
-        if subject.startswith("update-self:") or subject == "Initial workspace commit":
-            creation = sha  # keep walking: the log is newest-first, we want the oldest
+    log = git_out(runner, repo_root, list(_resolve_template_base.FIRST_PARENT_LOG_ARGS))
+    creation = _resolve_template_base.find_workspace_origin(log.splitlines())
     if not creation:
         revs = git_out(runner, repo_root, ["rev-list", "--first-parent", "HEAD"])
         creation = revs.splitlines()[-1] if revs else "HEAD"

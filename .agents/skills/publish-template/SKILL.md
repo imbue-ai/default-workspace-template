@@ -313,13 +313,11 @@ pre-check. It also exits 5 for a base that descends from this workspace's
 `Initial workspace commit` -- the merge commit itself, `HEAD`, or any other
 commit carrying the mind's own work.
 
-(The same markers seed the version ledger's `## Workspace` origin line in
+(The same script seeds the version ledger's `## Workspace` origin line in
 §8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
-`scripts/update_ledger.py`) -- with two deliberate differences: the
-origin-line walk takes the OLDEST marker (where the mind started) where this
-section takes the NEWEST (the base the mind is on now), and it reads the marker
-commit itself rather than resolving a merge to its upstream parent. Keep them
-in step if the marker convention ever changes.)
+`scripts/update_ledger.py`), under `--origin`: that asks where the mind
+*started* -- its own `Initial workspace commit` -- where this section asks what
+template state it is on *now*. Two questions, one marker convention.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is
@@ -1231,21 +1229,22 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   `update-self`'s `scripts/update_self.py`) -- then append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
-  workspace, as the FIRST line under `## Workspace`. Resolve the template base
-  as the **OLDEST** first-parent template-state marker (`^update-self:` or
-  `Initial workspace commit`; fall back to the first-parent root), and resolve its
+  workspace, as the FIRST line under `## Workspace`. Resolve where the mind
+  started with `uv run .agents/shared/scripts/resolve_template_base.py --origin`
+  (its own `Initial workspace commit`; fall back to the first-parent root when
+  that exits 1), and resolve its
   date/version/sha from that commit itself. **Use `git describe --tags
   --abbrev=0 --match 'minds-v*' "$CREATION"` (reachability), NEVER `git tag
   --points-at`** -- no tag is ever *on* a template base (an `Initial workspace
-  commit` sits on top of the cloned template; an `update-self:` marker is a merge
-  commit; the `minds-v*` tag is always on an ancestor), so a pointing-at lookup
+  commit` sits on top of the cloned template; the `minds-v*` tag is always on an
+  ancestor), so a pointing-at lookup
   comes up empty and the line would silently degrade to the unnamed `created from
   the workspace template` fallback. Insert `- <date>  created from <version or
   "the workspace template">  <7-char sha>`, note padded to width 26 but never
   fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
   26 chars, so a bare pad-to-26 would land the sha flush). (This is the
-  OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick, and
-  the marker commit itself rather than a merge's upstream parent.)
+  `--origin` end of §2's script -- where the mind started, not the base it is on
+  now.)
 
 - **Append the template entry.** Create the heading `### <slug>  --  <repo-url>`
   under `## Templates` if this slug has none yet. Then append one line under

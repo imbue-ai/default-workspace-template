@@ -45,9 +45,9 @@ def _new_workspace(root: Path) -> tuple[Path, str, str]:
     return repo, template, _git(repo, "rev-parse", "HEAD")
 
 
-def _resolve(repo: Path) -> subprocess.CompletedProcess[str]:
+def _resolve(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(_SCRIPT), "--repo", str(repo)],
+        [sys.executable, str(_SCRIPT), "--repo", str(repo), *args],
         capture_output=True,
         text=True,
     )
@@ -114,6 +114,50 @@ def test_a_history_without_markers_exits_nonzero_for_the_callers_fallback(
 
     assert completed.returncode == 1
     assert completed.stdout == ""
+    # Both questions fall back the same way, so the caller handles one case.
+    assert _resolve(repo, "--origin").returncode == 1
+
+
+def test_the_origin_is_this_workspaces_own_marker_not_an_ancestors(
+    tmp_path: Path,
+) -> None:
+    """The template repo is itself developed from workspaces.
+
+    A full-history clone therefore reaches bootstrap markers that belong to
+    somebody else's workspace, and dating this one by those reports a stranger's
+    creation.
+    """
+    repo, _, ancestor_marker = _new_workspace(tmp_path)
+    _commit(repo, "system/release_two.py", "Template release two")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "Initial workspace commit")
+    own_marker = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "system/apps/demo/main.py", "Build the app")
+
+    completed = _resolve(repo, "--origin")
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == own_marker
+    assert own_marker != ancestor_marker
+
+
+def test_an_update_self_merge_does_not_move_the_origin(tmp_path: Path) -> None:
+    """Where the mind started never changes; only the base it is on does."""
+    repo, template, initial = _new_workspace(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "upstream", template)
+    upstream = _commit(repo, "system/release_two.py", "Template release two")
+    _git(repo, "checkout", "-q", "main")
+    _git(
+        repo,
+        "merge",
+        "-q",
+        "--no-ff",
+        "upstream",
+        "-m",
+        "update-self: merge upstream template (minds-v0.0.2)",
+    )
+
+    assert _resolve(repo, "--origin").stdout.strip() == initial
+    assert _resolve(repo).stdout.strip() == upstream
 
 
 def test_find_template_base_takes_the_newest_marker() -> None:

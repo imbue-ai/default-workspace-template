@@ -1581,8 +1581,10 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(("git", "rev-parse", "HEAD"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "rev-parse", _MERGE_REF), _Result(stdout="fedcba9876543"))
     runner.respond(("git", "diff"), _Result(stdout=name_status))
+    # The ledger's origin walk reads the shared `FIRST_PARENT_LOG_ARGS` format:
+    # <sha>\t<parents>\t<subject>, here a root commit with no parents.
     runner.respond(
-        ("git", "log"), _Result(stdout=f"{_ROLLBACK} Initial workspace commit")
+        ("git", "log"), _Result(stdout=f"{_ROLLBACK}\t\tInitial workspace commit")
     )
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))
@@ -5652,6 +5654,42 @@ def test_ledger_origin_names_the_release_when_one_is_reachable(tmp_path: Path) -
 
     text = (repo / "docs/VERSION_HISTORY.md").read_text()
     assert "created from minds-v0.1.0" in text
+
+
+def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
+    tmp_path: Path,
+) -> None:
+    """The template repo is itself developed from workspaces.
+
+    A full-history clone therefore carries bootstrap markers older than this
+    workspace's own, and seeding from one of those dates the mind to a
+    stranger's creation and names the release that stranger started from.
+    """
+    repo = _make_real_repo(tmp_path)
+    subprocess.run(["git", "tag", "minds-v0.1.0"], cwd=repo, check=True)
+    ancestor_marker = _head_sha(repo)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "Template release five"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "tag", "minds-v0.5.0"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "Initial workspace commit"],
+        cwd=repo,
+        check=True,
+    )
+    own_marker = _head_sha(repo)
+
+    update_ledger.write_version_history_entry(
+        repo, update_runtime.Runner(), "minds-v0.6.0", own_marker, _TODAY
+    )
+
+    text = (repo / "docs/VERSION_HISTORY.md").read_text()
+    origin = next(line for line in text.splitlines() if "created from" in line)
+    assert "minds-v0.5.0" in origin and own_marker[:7] in origin
+    assert "minds-v0.1.0" not in text
+    assert ancestor_marker[:7] not in text
 
 
 def test_apply_writes_the_ledger_and_runs_env_converge_post_success(

@@ -168,23 +168,23 @@ template published on the wrong base -- an `update-self:` merge commit instead o
 its upstream parent -- shipped everything the mind had built before that update,
 in its tree and in its history. The published base is the newest commit under
 the `template:` snapshots, and it must not descend from this workspace's own
-`Initial workspace commit` (being that commit is fine). Only the NEWEST marker is
-the workspace's own: a mind created from a published template also carries the
-source mind's marker further down, and a correct base descends from that one:
+`Initial workspace commit` (being that commit is fine). `--origin` resolves that
+marker, and takes the NEWEST for the reason the script documents: a mind created
+from a published template also carries the source mind's marker further down,
+and a correct base descends from that one:
 
 ```bash
 PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
     | awk '$2 != "template:" {print $1; exit}')"
-git log --first-parent --format='%H %s' HEAD \
-    | awk '$0 ~ /^[^ ]+ Initial workspace commit$/ {print $1; exit}' \
-    | while read -r initial; do
-        [ "$initial" != "$PUBLISHED_BASE" ] \
-            && git merge-base --is-ancestor "$initial" "$PUBLISHED_BASE" \
-            && echo "CONTAINS $initial"
-    done
+INITIAL="$(uv run .agents/shared/scripts/resolve_template_base.py --origin)"
+if [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \
+    && git merge-base --is-ancestor "$INITIAL" "$PUBLISHED_BASE"; then
+    echo "CONTAINS $INITIAL"
+fi
 ```
 
-If it prints anything, **STOP and tell the user plainly**: the published repo
+A clean published repo prints nothing and exits 0; read the output, not the exit
+code. If it prints anything, **STOP and tell the user plainly**: the published repo
 contains this workspace's own commits (other apps and anything else committed
 before its base), and an update cannot remove them -- a new commit on top leaves
 the history in place. The remedy is theirs to choose: make the repo private or

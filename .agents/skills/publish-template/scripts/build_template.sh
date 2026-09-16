@@ -149,11 +149,16 @@ cd "$REPO"
 # The skill's CWD invariant says assembly runs with cwd = $WT. That is an
 # instruction, and an instruction cannot stop the delete on the run where it is
 # not followed. This can, so the check lives here rather than only in prose.
+#
+# The worktree starts at the workspace's HEAD, never at the base: step 1 stages
+# the --include paths out of this checkout (a base checkout does not have them
+# yet), and the base guard below reads this checkout's first-parent history for
+# the workspace's own marker. The base is an argument, not the checkout.
 LIVE_WORKSPACE="$(cd "${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}" 2>/dev/null && pwd -P || true)"
 if [ -n "$LIVE_WORKSPACE" ] && [ "$REPO" = "$LIVE_WORKSPACE" ]; then
     echo "build_template.sh: refusing to run in $REPO -- that is the live workspace." >&2
     echo "  Assembly resets the tree and deletes gitignored files (data/, .mngr/, secrets)." >&2
-    echo "  Run it in a throwaway worktree instead: git worktree add \"\$WT\" <base-ref>" >&2
+    echo "  Run it in a throwaway worktree instead: git worktree add \"\$WT\" HEAD" >&2
     exit 2
 fi
 # A linked worktree keeps its git dir at <common>/worktrees/<name>; in a main
@@ -164,7 +169,7 @@ if [ "$GIT_DIR_PATH" = "$GIT_COMMON_DIR_PATH" ]; then
     echo "build_template.sh: refusing to run in $REPO -- this is a repo's MAIN worktree." >&2
     echo "  Assembly resets the tree to the base and deletes untracked and gitignored files," >&2
     echo "  so it must run somewhere disposable." >&2
-    echo "  Create one and run there: git worktree add \"\$WT\" <base-ref>" >&2
+    echo "  Create one and run there: git worktree add \"\$WT\" HEAD" >&2
     exit 2
 fi
 
@@ -360,11 +365,25 @@ fi
 
 # --- no-diff guard: nothing to publish beyond the base -----------------------
 
+stage_snapshot() {
+    # Everything on disk, plus each opted-in data path by force. `git add -A`
+    # honours .gitignore and the template ignores all of data/, so without the
+    # -f a --data-include path would be overlaid, named in the manifest as
+    # shipping, and then silently left out of the commit. The scan in step 5
+    # already covered these paths -- it scans the whole stage.
+    git add -A
+    for rel in "${DATA_INCLUDE_PATHS[@]}"; do
+        if [ -e "$rel" ]; then
+            git add -f -- "$rel"
+        fi
+    done
+}
+
 # If the assembled tree is identical to BASE_REF's tree, there is nothing to
 # publish. Compare via git: stage everything, then diff the index tree against
 # BASE_REF's tree. (This runs before manifest/thumbnail/welcome writes, which
 # would themselves create a diff.)
-git add -A
+stage_snapshot
 ASSEMBLED_TREE="$(git write-tree)"
 BASE_TREE="$(git rev-parse "${BASE_REF}^{tree}")"
 if [ "$ASSEMBLED_TREE" = "$BASE_TREE" ]; then
@@ -872,7 +891,7 @@ fi
 # ("publish a secret-cleaned copy of this file") entirely. commit-tree writes
 # the already-validated assembled tree with the base as parent; reset --soft
 # moves the branch there without touching the worktree or index.
-git add -A
+stage_snapshot
 SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "$BASE_REF" -m "template: ${SLUG}
 
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base ${BASE_REF} (provenance link only; no upstream fetch).")"

@@ -139,7 +139,9 @@ def _linked_worktree(source: Path, root: Path) -> Path:
     return worktree
 
 
-def _assemble(cwd: Path, base_ref: str) -> subprocess.CompletedProcess[str]:
+def _assemble(
+    cwd: Path, base_ref: str, *extra: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
@@ -154,6 +156,7 @@ def _assemble(cwd: Path, base_ref: str) -> subprocess.CompletedProcess[str]:
             "A demo.",
             "--include",
             "system/apps/demo",
+            *extra,
         ],
         cwd=cwd,
         capture_output=True,
@@ -305,3 +308,22 @@ def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) ->
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert (worktree / "system/apps/demo/main.py").read_text() == "x = 30\n"
+
+
+@_needs_scanners
+def test_an_opted_in_data_path_ships_in_the_snapshot(tmp_path: Path) -> None:
+    """The template gitignores all of data/, so `git add -A` alone drops it.
+
+    A recipe that names a data path and a snapshot that does not carry it is a
+    manifest lying about what an adopter gets.
+    """
+    source, base_ref = _make_source_repo(tmp_path)
+    worktree = _linked_worktree(source, tmp_path)
+    (worktree / "data/demo").mkdir(parents=True)
+    (worktree / "data/demo/seed.json").write_text('{"rows": 1}\n')
+
+    completed = _assemble(worktree, base_ref, "--data-include", "data/demo")
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    shipped = _git("ls-tree", "-r", "--name-only", "HEAD", cwd=worktree).splitlines()
+    assert "data/demo/seed.json" in shipped

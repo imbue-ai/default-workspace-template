@@ -17,16 +17,19 @@ history:
 A commit whose subject starts ``update-self:`` but is not a two-parent merge
 merged nothing from upstream, so it is not a marker.
 
+``--origin`` prints the workspace's own creation commit instead -- see
+:func:`find_workspace_origin`.
+
 Usage (cwd = the repo, or pass ``--repo``):
 
-    uv run .agents/shared/scripts/resolve_template_base.py [--repo DIR]
+    uv run .agents/shared/scripts/resolve_template_base.py [--repo DIR] [--origin]
 
-Prints the base's full sha on stdout and exits 0; exits 1 with a message on
+Prints the resolved sha on stdout and exits 0; exits 1 with a message on
 stderr when HEAD's first-parent history has no marker.
 
-To apply the rule to a log read some other way (such as over SSH), run ``git``
-with :data:`FIRST_PARENT_LOG_ARGS` and pass its lines to
-:func:`find_template_base`.
+To apply either rule to a log read some other way (such as over SSH), run
+``git`` with :data:`FIRST_PARENT_LOG_ARGS` and pass its lines to
+:func:`find_template_base` or :func:`find_workspace_origin`.
 """
 
 from __future__ import annotations
@@ -62,9 +65,37 @@ def find_template_base(first_parent_log: Sequence[str]) -> str | None:
     return None
 
 
+def find_workspace_origin(first_parent_log: Sequence[str]) -> str | None:
+    """Return the workspace's own creation commit, or None without one.
+
+    Bootstrap writes exactly one ``Initial workspace commit`` per workspace, so
+    the NEWEST one on the first-parent chain is this workspace's and everything
+    the workspace ever committed descends from it. Older ones belong to someone
+    else: the template repo is itself developed from workspaces, and a mind
+    created from a published template carries the source mind's marker too.
+    Dating a workspace by one of those reports a stranger's creation, and
+    treating one as the boundary of the workspace's own work rejects every
+    legitimate template base.
+
+    ``first_parent_log`` is as for :func:`find_template_base`.
+    """
+    for line in first_parent_log:
+        if not line.strip():
+            continue
+        sha, _parents, subject = line.split("\t", 2)
+        if subject == _INITIAL_WORKSPACE_COMMIT_SUBJECT:
+            return sha
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", type=Path, default=Path("."))
+    parser.add_argument(
+        "--origin",
+        action="store_true",
+        help="print the workspace's own creation commit instead of its template base",
+    )
     args = parser.parse_args(argv)
     log = subprocess.run(
         ["git", "-C", str(args.repo), *FIRST_PARENT_LOG_ARGS],
@@ -72,15 +103,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         capture_output=True,
         text=True,
     ).stdout
-    base = find_template_base(log.splitlines())
-    if base is None:
-        print(
-            "resolve_template_base.py: no 'Initial workspace commit' or 'update-self:' "
-            "merge on HEAD's first-parent history",
-            file=sys.stderr,
+    lines = log.splitlines()
+    if args.origin:
+        resolved = find_workspace_origin(lines)
+        missing = "no 'Initial workspace commit' on HEAD's first-parent history"
+    else:
+        resolved = find_template_base(lines)
+        missing = (
+            "no 'Initial workspace commit' or 'update-self:' merge on HEAD's "
+            "first-parent history"
         )
+    if resolved is None:
+        print(f"resolve_template_base.py: {missing}", file=sys.stderr)
         return 1
-    print(base)
+    print(resolved)
     return 0
 
 
