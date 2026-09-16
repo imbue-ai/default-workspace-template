@@ -4,7 +4,8 @@
  *
  * The check runs per render, where the loaded transcript and the idle flag meet, on a chat
  * whose harness declared the ``fast_mode_limit`` turn check (claude, codex). A chat is switched
- * at most once: a user who turns fast mode back on afterwards keeps it. The first switch in a
+ * at most once per browser (remembered in localStorage): a user who turns fast mode back on
+ * afterwards keeps it, across reloads too. The first switch in a
  * workspace also raises a short notice explaining what happened and where the limit lives,
  * recorded on the settings so it shows once.
  *
@@ -24,8 +25,31 @@ import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
 import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
 
-// The chats this page has already switched to standard speed; never switched twice.
+// The chats this browser has already switched to standard speed; never switched twice. Kept
+// in localStorage, keyed by chat, so a reload does not switch a chat the user turned fast
+// mode back on afterwards.
 const switchedChatIds = new Set<string>();
+
+function switchedStorageKey(chatId: string): string {
+  return `chat.fastModeLimitApplied.${chatId}`;
+}
+
+function wasSwitchedInStorage(chatId: string): boolean {
+  try {
+    return localStorage.getItem(switchedStorageKey(chatId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberSwitched(chatId: string): void {
+  switchedChatIds.add(chatId);
+  try {
+    localStorage.setItem(switchedStorageKey(chatId), "1");
+  } catch {
+    // Storage unavailable: the in-memory set still holds for this page.
+  }
+}
 // The chat whose switch raised the notice, or null while none is showing.
 let noticeChatId: string | null = null;
 
@@ -72,9 +96,9 @@ export function isFastModeLimitReached(
   return countUserTurns(events) >= fastModeTurnLimit;
 }
 
-/** Whether this page already switched the chat off fast mode. */
+/** Whether this browser already switched the chat off fast mode. */
 export function wasFastModeLimitApplied(chatId: string): boolean {
-  return switchedChatIds.has(chatId);
+  return switchedChatIds.has(chatId) || wasSwitchedInStorage(chatId);
 }
 
 /** The chat whose switch raised the one-time notice, or null. */
@@ -96,7 +120,7 @@ export function maybeApplyFastModeLimit(
   events: readonly TranscriptEvent[],
   isAgentIdle: boolean,
 ): void {
-  if (chat === undefined || switchedChatIds.has(chat.chat_id) || !hasFastModeLimit(chat.active_agent.harness)) {
+  if (chat === undefined || wasFastModeLimitApplied(chat.chat_id) || !hasFastModeLimit(chat.active_agent.harness)) {
     return;
   }
   const settings = getChatSettings();
@@ -107,7 +131,7 @@ export function maybeApplyFastModeLimit(
   if (!isFastModeLimitReached(chat, events, isAgentIdle, settings.fast_mode_turn_limit)) {
     return;
   }
-  switchedChatIds.add(chat.chat_id);
+  rememberSwitched(chat.chat_id);
   setFastMode(chat.chat_id, false);
   if (!settings.is_fast_mode_notice_shown) {
     noticeChatId = chat.chat_id;
@@ -117,6 +141,13 @@ export function maybeApplyFastModeLimit(
 
 /** Forget every switch and the notice, so a test starts clean. */
 export function resetFastModeLimitForTests(): void {
+  for (const chatId of switchedChatIds) {
+    try {
+      localStorage.removeItem(switchedStorageKey(chatId));
+    } catch {
+      // Nothing stored to forget.
+    }
+  }
   switchedChatIds.clear();
   noticeChatId = null;
 }

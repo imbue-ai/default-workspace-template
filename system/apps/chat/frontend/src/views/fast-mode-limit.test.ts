@@ -13,6 +13,19 @@ import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { ensureChatSettings, getChatSettings, updateChatSettings } from "../models/ChatSettings";
 
+// The switch memory is kept in localStorage, which the node test env lacks.
+vi.hoisted(() => {
+  const store = new Map<string, string>();
+  globalThis.localStorage ??= {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+    clear: () => store.clear(),
+    key: () => null,
+    length: 0,
+  } as Storage;
+});
+
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../models/ModelSettings", () => ({ getChatFastMode: vi.fn(), setFastMode: vi.fn() }));
 vi.mock("../models/HarnessCatalog", () => ({ hasFastModeLimit: vi.fn() }));
@@ -139,6 +152,21 @@ describe("maybeApplyFastModeLimit", () => {
     // A later render, the user having turned fast mode back on, leaves it alone.
     maybeApplyFastModeLimit(chat, conversation(9), true);
     expect(setFastModeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers the switch across a reload, so a chat turned back on stays fast", () => {
+    getChatSettingsMock.mockReturnValue({ fast_mode_turn_limit: 3, is_fast_mode_notice_shown: true });
+    const chat = chatSnapshotFixture("agent-3");
+    maybeApplyFastModeLimit(chat, conversation(3), true);
+    expect(setFastModeMock).toHaveBeenCalledTimes(1);
+    // A reload forgets the page's memory but not the browser's.
+    expect(localStorage.getItem("chat.fastModeLimitApplied.agent-3")).toBe("1");
+    resetFastModeLimitForTests();
+    localStorage.setItem("chat.fastModeLimitApplied.agent-3", "1");
+    expect(wasFastModeLimitApplied("agent-3")).toBe(true);
+    maybeApplyFastModeLimit(chat, conversation(9), true);
+    expect(setFastModeMock).toHaveBeenCalledTimes(1);
+    localStorage.removeItem("chat.fastModeLimitApplied.agent-3");
   });
 
   it("raises no notice once the workspace has seen it", () => {
