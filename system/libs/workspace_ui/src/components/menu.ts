@@ -71,7 +71,7 @@ export interface MenuRowOptions {
 
 /** The keyboard-focus treatment for a focusable row (a real <button>). Inset so the ring stays
  *  inside the card instead of the OS default halo overhanging it. Inert on a non-focusable row,
- *  so it rides the base. Exported for the dropdown, whose options share the row's shape. */
+ *  so it rides the base. Exported so other list surfaces can borrow the row's shape. */
 export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /** The row's highlight: a slab inset 4px from the card's edges, with the 12px radius the
@@ -79,7 +79,7 @@ export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-of
  *  The width is explicit rather than `w-full` (which adds the 8px of margin and overflows the
  *  card) or `auto` (a <button> shrink-to-fits even at `display: flex`, and the highlight
  *  stops short of a trailing tick). `px-2` completes the 12px the text gets from the card's
- *  edge. Exported for the dropdown, whose options share the row's shape. */
+ *  edge. Exported so other list surfaces can borrow the row's shape. */
 export const MENU_ROW_SLAB = "mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2";
 
 function rowGapClass(tightGap: boolean | undefined): string {
@@ -300,9 +300,8 @@ const TONE_CLASS: Record<MenuRowTone, string> = {
 };
 const DISABLED_CLASS = "text-faint cursor-default hover:bg-transparent";
 
-/** The button inside a row that carries `trailing`. The slab, the hover and the tone live on
- *  the row's wrapper -- buttons cannot nest, and a trailing control may be a button of its
- *  own (the switcher's pencil) -- so this is only the label's own line and its focus ring. */
+/** The button inside a row that carries `trailing`: the slab, the hover and the tone live on
+ *  the row's wrapper, so this is only the label's own line and its focus ring. */
 const ROW_INNER_BUTTON_CLASS = `flex h-full min-w-0 flex-1 items-center text-left ${MENU_ROW_FOCUS}`;
 
 export interface MenuOptions {
@@ -593,8 +592,7 @@ export function createMenu(options: MenuOptions): Menu {
         if (focused === null || !focused.matches(":focus-visible")) return;
         cancelHoverIntent();
         openSubmenuFromRow(submenu, event.currentTarget as HTMLElement);
-        // `focusin` is not one of the events a portal host redraws for, so without this the
-        // submenu opens in state and paints nothing.
+        // `focusin` is not one of the events a portal host redraws for.
         redraw();
       },
     };
@@ -646,9 +644,8 @@ export function createMenu(options: MenuOptions): Menu {
       );
     }
     // Trailing content rides BESIDE the button rather than inside it: buttons cannot nest,
-    // and a trailing control may be a button of its own (the switcher's pencil). The wrapper
-    // takes the slab, the hover and the tone, so the row still lights as one piece under
-    // either.
+    // and a trailing control may be a button of its own. The wrapper takes the slab, the
+    // hover and the tone, so the row still lights as one piece under either.
     return m("div", { class: rowClass, ...rowKeyAttr(row.key), ...tooltipAttrs(row.tooltip), ...hover }, [
       m(
         "button",
