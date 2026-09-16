@@ -2675,11 +2675,14 @@ class AgentManager:
     ) -> None:
         """Run mngr create in the background and always settle the provisional chat.
 
-        This thread is started with ``is_checked=False``, so any exception that escaped here
-        would be silently swallowed -- and the chat's page would wait forever, because the
-        ``provisional_chat_completed`` broadcast never fired. The whole body runs inside a single
-        catch-all so that no matter what the subprocess, its callbacks, or the calls below
-        throw, the provisional chat ends up either an agent or failed with a reason.
+        This thread is started with ``is_checked=False``, so an exception that escaped here would
+        cost the chat's page its answer: it waits for the ``provisional_chat_completed`` broadcast.
+        The create itself runs inside a single catch-all so that no matter what the subprocess or
+        its callbacks throw, the provisional chat ends up either an agent or failed with a reason;
+        the broadcast that says so is made in a ``finally``, so the settling that follows a created
+        agent cannot cost the page its answer either. Once the agent exists the create HAS
+        succeeded, so a settling step that fails is not reported as a failed create -- it is logged,
+        with its traceback, by the thread that runs this.
 
         ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
         pick so the first turn runs on it, then the message the create was told to leave out.
@@ -2745,20 +2748,22 @@ class AgentManager:
             except (OSError, RuntimeError) as cleanup_exc:
                 _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
 
-        if success:
-            self._ensure_activity_tracking(agent_id)
-            self._ensure_model_tracking(agent_id)
-            self._broadcast_chats_updated()
-            self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
-        else:
-            # The provisional record changed phase with no agent-list broadcast to carry the
-            # change (a success nudges through the broadcast above).
-            self._nudger.nudge()
-            # The pages show what the record holds: the reason and the output behind it.
-            failed = self.get_provisional_chat(chat_id)
-            if failed is not None and failed.error is not None:
-                error = failed.error
-        self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+        try:
+            if success:
+                self._ensure_activity_tracking(agent_id)
+                self._ensure_model_tracking(agent_id)
+                self._broadcast_chats_updated()
+                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
+            else:
+                # The provisional record changed phase with no agent-list broadcast to carry the
+                # change (a success nudges through the broadcast above).
+                self._nudger.nudge()
+                # The pages show what the record holds: the reason and the output behind it.
+                failed = self.get_provisional_chat(chat_id)
+                if failed is not None and failed.error is not None:
+                    error = failed.error
+        finally:
+            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
     def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
         """Put a just-created chat on its pick and hand it the message its create left out.

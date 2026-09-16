@@ -745,6 +745,47 @@ def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
 
 
+def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agent is up, so the create succeeded; a first message that could not be handed over is the
+    settling step's problem and must not cost the waiting page its answer."""
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        raise OSError("the pane went away")
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    q = broadcaster.register()
+
+    with pytest.raises(OSError):
+        agent_manager._run_creation(
+            ChatId("test-id"),
+            "test-id",
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {},
+            HarnessType.CLAUDE,
+            deferred_message="hello",
+        )
+
+    assert agent_manager.get_agent_by_id("test-id") is not None
+    messages = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        messages.append(json.loads(raw))
+    completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
+    assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
+
+
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
