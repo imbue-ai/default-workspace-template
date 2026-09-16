@@ -1352,6 +1352,8 @@ class AgentManager:
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
+        # Resolved twice on purpose: the freshness read walks the retiring agent's transcript,
+        # which must not happen under the lock, so the chat is re-resolved for the write.
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         is_fresh_start = self._is_fresh_start(agent_state)
@@ -2568,7 +2570,7 @@ class AgentManager:
             extra_role_templates,
             project_id,
             account_args,
-            initial_message="" if model_pick is not None else message,
+            initial_message="" if deferred_message else message,
         )
 
         self._broadcaster.broadcast_provisional_chat_created(provisional)
