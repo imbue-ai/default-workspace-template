@@ -217,7 +217,6 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
-    message_file: Path | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -278,12 +277,10 @@ def _build_chat_create_command(
         cmd.extend(["--label", label])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness, exactly as the ``first`` template's ``/welcome``
-    # does (a CLI ``--message`` takes precedence over a template's). A handoff prompt is long
-    # enough to travel as a file.
+    # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
+    # to apply first withholds its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
-    if message_file is not None:
-        cmd.extend(["--message-file", str(message_file)])
     return cmd
 
 
