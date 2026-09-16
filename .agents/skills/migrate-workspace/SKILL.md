@@ -20,8 +20,9 @@ always has a first-parent template-state marker (`bootstrap` writes `Initial
 workspace commit`; `update-self` writes `update-self:` merges, whose upstream
 parent is the base), so diffing the source's working tree against *its own*
 template base yields an exact list of what the user authored there -- and
-excludes template-version drift by construction. That is what makes auto-porting settings and template-file edits
-safe. **No resolvable base means no automation** (Step 4).
+excludes template-version drift by construction. That is what makes
+auto-porting settings and template-file edits safe. **No resolvable base means
+no automation** (Step 4).
 
 You are the **lead**: get access, take backups, check this workspace is fresh,
 produce the whole inventory and audit, and surface every question you can *up

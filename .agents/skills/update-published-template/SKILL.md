@@ -226,9 +226,10 @@ diff would try to re-add exactly the things the recipe deliberately removed. Als
 note the **base delta**: compare the published base (`PUBLISHED_BASE` from 2b)
 against the current resolved base (`uv run
 .agents/shared/scripts/resolve_template_base.py`, as in `publish-template` §2).
-If `BASE_REF` moved, the template substrate advanced too -- report it, but an app-delta update re-publishes
-on the existing published base; re-cutting on a newer base is a separate, larger
-operation (surface it as an option, default to not doing it).
+If `BASE_REF` moved, the template substrate advanced too -- report it, but an
+app-delta update re-publishes on the existing published base; re-cutting on a
+newer base is a separate, larger operation (surface it as an option, default to
+not doing it).
 
 **If the delta is empty and the base is unchanged**, the published version is
 already current -- tell the user so and STOP. There is nothing to update.
