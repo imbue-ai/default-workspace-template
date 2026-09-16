@@ -5,9 +5,9 @@
 """Deterministic helpers for the safe, background-worker-driven update-self flow.
 
 The update-self orchestration is mostly agent judgement (triage conflicts,
-decide validation depth, work the report's impact analysis). This script owns
-the parts that are *deterministic* and therefore belong in tested code rather
-than agent prose:
+judge whether the user's creations survived, work the report's impact
+analysis). This script owns the parts that are *deterministic* and therefore
+belong in tested code rather than agent prose:
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
