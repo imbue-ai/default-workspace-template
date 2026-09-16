@@ -578,17 +578,14 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           ...hoverTooltipAttrs("Change model or provider", "above"),
         },
         [
-          // Joined by dots between EVERY part, including before the bolt: the three axes are
-          // one reading, and a bolt tacked on without a separator read as a button.
+          // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
+          // is already read apart from the words and a dot beside it doubles the punctuation.
           m("span", matched?.label ?? account?.provider ?? "Model"),
           shownEfforts.length > 1 && currentEffort !== null
             ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
             : null,
           currentFast
-            ? [
-                m("span", { class: css.TRIGGER_DOT }, "·"),
-                m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
-              ]
+            ? m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true })))
             : null,
         ],
       );

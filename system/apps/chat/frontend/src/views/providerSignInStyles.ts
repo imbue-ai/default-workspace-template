@@ -37,7 +37,7 @@ export const PANEL = "flex w-[460px] max-w-[90vw] flex-col";
 
 /** The body's shared part. Its ceiling comes from `panelBody`, because how much room a screen
  *  deserves is a fact about that screen. */
-const BODY = "overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
+const BODY = "overflow-y-auto overscroll-contain px-4 pb-3 pt-1";
 
 /** Each screen's body ceiling. Height is the axis that still varies: a confirmation is a
  *  sentence, a method list is a column of rows, and the lane list is the tallest thing the
@@ -57,7 +57,7 @@ export function panelBody(screen: "status" | "menu" | "form" | "chooser"): strin
   }[screen];
 }
 
-export const HEADER = "flex items-center gap-1.5 px-6 pb-4 pt-5";
+export const HEADER = "flex items-center gap-1.5 px-4 pb-3 pt-3";
 export const TITLE = "m-0 type-heading text-primary";
 
 export const ROW_STACK = "flex flex-col gap-2";
@@ -122,7 +122,7 @@ export const STEP_NUM =
 export const FIELD_ROW = "flex items-center gap-2";
 
 /** One right-aligned action under the body. */
-export const FOOTER = "px-6 pb-5 pt-4";
+export const FOOTER = "px-4 pb-3 pt-3";
 export const FOOTER_ROW = "flex justify-end";
 
 /** Secondary prose under a field or step. */
@@ -134,21 +134,22 @@ export const RAW_VALUE =
   "mt-2 select-all break-all rounded-md border border-default bg-sidebar p-2 font-mono " +
   "type-helper leading-snug text-primary";
 
-/** The device flow's one-time code: the one place a value is meant to be read aloud off the
- *  screen and typed somewhere else, so it is set far above any type role. */
+/** The device flow's one-time code. Label weight in mono with a little tracking: legible
+ *  enough to read aloud and retype, while the box stays level with the copy button beside
+ *  it instead of towering over it. */
 export const CODE =
-  "flex-1 rounded-md bg-sidebar p-3 text-center font-mono text-[22px] tracking-[0.12em] " + "text-primary select-all";
+  "flex-1 rounded-md bg-sidebar p-2 text-center font-mono type-label tracking-[0.12em] text-primary select-all";
 
 /** verifying / success / error, one shape for all three.
  *
- *  The verdict is the whole screen, so it is sized like one: a bigger disc, a heading at full
- *  strength rather than a step back, and a detail line in the body colour. */
+ *  The verdict reads as a label over its detail line rather than as a second title: the modal
+ *  header already names the screen, so the verdict only has to state the outcome. */
 export const STATUS = "flex flex-col items-center px-2 py-8 text-center";
-const STATUS_DISC = "mb-4 flex h-16 w-16 items-center justify-center rounded-full";
+const STATUS_DISC = "mb-3 flex h-12 w-12 items-center justify-center rounded-full";
 export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent`;
 export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-light text-accent`;
 export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-danger-surface text-danger`;
-export const STATUS_TITLE = "type-heading-lg text-primary";
+export const STATUS_TITLE = "type-label text-primary";
 export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-secondary";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-faint";

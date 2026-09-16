@@ -119,6 +119,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       await navigator.clipboard.writeText(value);
       copied = kind;
       copyFailed = false;
+      // Copying the link is taking step 1: the user has the page in hand, so the highlight
+      // moves on to the code, just as clicking the link itself moves it.
+      if (kind === "link") activeStep = 2;
     } catch {
       // Insecure context or a denied permission -- reveal the raw value instead, so the
       // user is never left without a way to reach the page by hand.
@@ -226,10 +229,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   ): m.Vnode {
     const glyph =
       kind === "pending"
-        ? loginSpinnerIcon()
+        ? loginSpinnerIcon(24)
         : kind === "success"
-          ? icon("check", { size: 26, strokeWidth: 2.5 })
-          : warningIcon();
+          ? icon("check", { size: 20, strokeWidth: 2.5 })
+          : warningIcon(20);
     const disc =
       kind === "pending"
         ? css.STATUS_DISC_PENDING
