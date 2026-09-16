@@ -761,7 +761,7 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   assembled commit rather than from the include set you intended:
 
   ```bash
-  git -C "$WT" diff --name-only <BASE_REF> HEAD | cut -d/ -f1-3 | sort -u
+  git -C "$WT" diff --name-only "<BASE_REF>" HEAD | cut -d/ -f1-3 | sort -u
   ```
 
   Check EVERY entry before writing the message. Each must be covered by an
