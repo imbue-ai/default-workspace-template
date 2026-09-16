@@ -702,7 +702,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
-    { name = "resource-guards" },
     { name = "ruff" },
     { name = "system-interface" },
     { name = "ty" },
@@ -744,7 +743,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
-    { name = "resource-guards", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=2ffdce11c3f54ac995873b4fcc6f4f722fc21c61" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "system-interface", editable = "system/apps/system_interface" },
     { name = "ty", specifier = "==0.0.24" },
@@ -3319,7 +3317,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
-    { name = "resource-guards" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -3351,7 +3348,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
-    { name = "resource-guards", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=2ffdce11c3f54ac995873b4fcc6f4f722fc21c61" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "ty", specifier = "==0.0.24" },
 ]
