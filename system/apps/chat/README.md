@@ -153,13 +153,13 @@ A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
 goes to it through the send path, then the held messages. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
-while since `mngr start` does not wait for the harness to come up. A new chat created
-with a pick (`POST /api/chats/create` takes `model` too) is set up the same
-way. `GET /api/accounts/<account-id>/model-options` is where the dialog gets the
-target account's models, for a handoff's successor and a rebound agent alike:
-the catalog for a static harness, for codex the options an agent of the account
-was last offered, and nothing for antigravity, whose model is changed from the
-agent's terminal.
+while since `mngr start` does not wait for the harness to come up. A new chat
+created with a pick (`POST /api/chats/create` takes `model` too) is set up the
+same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
+gets the target account's models, for a handoff's successor and a rebound agent
+alike: the catalog for a static harness, for codex the options an agent of the
+account was last offered, and nothing for antigravity, whose model is changed
+from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
