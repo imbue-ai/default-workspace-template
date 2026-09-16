@@ -760,7 +760,7 @@ def _put_settings_endpoint() -> Response:
     """``PUT /api/settings``: replace the workspace-wide chat settings whole.
 
     The body is the settings object; a field left out takes its default, and an out-of-range
-    value (a negative turn limit) answers 400.
+    value (a turn limit below one, an unknown fast mode) answers 400.
     """
     body = parse_json_object_body()
     if isinstance(body, Response):
