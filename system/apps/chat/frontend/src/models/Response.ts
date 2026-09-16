@@ -519,6 +519,10 @@ class TranscriptStore {
 
 const storeByChat: Record<string, TranscriptStore> = {};
 const notFoundChatIds = new Set<string>();
+// Chats whose transcript snapshot has landed at least once. An empty window means two different
+// things -- an empty transcript, or one that has not loaded (or whose load failed) -- and a caller
+// that acts on "this chat has no user turn" must be able to tell them apart.
+const loadedChatIds = new Set<string>();
 
 /** Where a chat's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
@@ -587,6 +591,12 @@ export function hasMoreAfter(chatId: string): boolean {
 
 export function isConversationNotFound(chatId: string): boolean {
   return notFoundChatIds.has(chatId);
+}
+
+/** Whether a transcript snapshot for this chat has landed, so an empty window means an empty
+ *  transcript rather than one that has not loaded. */
+export function isTranscriptLoaded(chatId: string): boolean {
+  return loadedChatIds.has(chatId);
 }
 
 /** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */
@@ -736,6 +746,7 @@ export async function fetchEvents(chatId: string): Promise<TranscriptEvent[]> {
     }
     placeWindow(chatId, result);
     loadStateByChat.set(chatId, IDLE_LOAD_STATE);
+    loadedChatIds.add(chatId);
     return result.events;
   } catch (error) {
     // The not-found latch is fenced alongside the state because the panel acts on

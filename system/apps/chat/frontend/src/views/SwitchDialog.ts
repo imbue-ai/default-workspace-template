@@ -23,7 +23,7 @@ import type { ModelIdentity } from "../models/ModelSettings";
 import { setPendingAccount, setPendingSwitch, switchKind } from "../models/PendingLane";
 import type { PendingPick } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { getEventsForChat, mintMessageId } from "../models/Response";
+import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./harness-labels";
 import { prependToComposer, raiseFailureNotice, takeComposerDraft } from "./MessageInput";
@@ -53,7 +53,9 @@ let open: OpenDialog | null = null;
  * short by the press. A handoff with context gets the dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
-  if (!hasUserTurn(getEventsForChat(chatId))) {
+  // Only a loaded transcript can say there is no user turn: an unloaded (or failed) one reads as
+  // empty, and switching a chat of hundreds of turns without asking is the worse mistake of the two.
+  if (isTranscriptLoaded(chatId) && !hasUserTurn(getEventsForChat(chatId))) {
     void switchFreshChat(chatId, target);
     return;
   }

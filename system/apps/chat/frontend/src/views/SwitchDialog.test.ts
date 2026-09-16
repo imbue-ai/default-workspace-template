@@ -16,6 +16,7 @@ const state = vi.hoisted(() => {
     started: [] as unknown[][],
     notices: [] as unknown[],
     draft: "",
+    isTranscriptLoaded: true,
     prepended: [] as string[],
   };
 });
@@ -29,6 +30,7 @@ vi.mock("../models/Providers", () => ({
 }));
 vi.mock("../models/Response", () => ({
   getEventsForChat: () => state.events,
+  isTranscriptLoaded: () => state.isTranscriptLoaded,
   mintMessageId: () => "m-1",
 }));
 vi.mock("../models/Handoffs", () => ({
@@ -112,6 +114,7 @@ describe("the switch dialog", () => {
     state.notices.length = 0;
     state.prepended.length = 0;
     state.draft = "";
+    state.isTranscriptLoaded = true;
     setPendingAccount("agent-1", null);
   });
 
@@ -123,6 +126,18 @@ describe("the switch dialog", () => {
     render();
     expect(ROOT().textContent).toBe("");
     expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("asks rather than switching at once when the transcript has not loaded", async () => {
+    // The window is empty because nothing landed, not because the chat is new: acting on it would
+    // switch a chat of any length with no dialog, no summary and no message.
+    state.isTranscriptLoaded = false;
+    state.events = [];
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    expect(state.switches).toEqual([]);
+    render();
+    expect(ROOT().textContent).toContain("Switch to Codex?");
   });
 
   it("reports a refused immediate switch through the composer's notice", async () => {
