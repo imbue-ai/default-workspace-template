@@ -687,7 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     classify_parser = sub.add_parser(
         "classify-merge",
-        help="Split upstream-changed files into merged vs pulled-in and classify each.",
+        help="Split the changed files into merged, pulled-in and local-only, and classify each.",
         parents=[common],
     )
     classify_parser.add_argument(
