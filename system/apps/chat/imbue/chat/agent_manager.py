@@ -687,6 +687,9 @@ class AgentManager:
     # before/after key diff starts and stops the per-agent tracking.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
+    # Agents this server created that the observe stream has not reported yet. A rebuild keeps
+    # them: observe reports a new agent seconds after its create returns.
+    _created_unobserved_by_id: dict[str, AgentStateItem]
     # The session sweep's lifecycle: ``_session_sweep_stop`` ends the loop.
     _session_sweep_stop: threading.Event
     _session_sweep_thread: threading.Thread | None
@@ -827,6 +830,7 @@ class AgentManager:
         manager._session_sweep_thread = None
         manager._agent_details_by_id = {}
         manager._agents = {}
+        manager._created_unobserved_by_id = {}
         manager._match_by_agent_id = {}
         manager._provisional_chats = {}
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
@@ -1951,10 +1955,15 @@ class AgentManager:
     def _note_agent_created(self, agent_state: AgentStateItem) -> None:
         """Track a successor the moment its create returns, as a chat create does, and start its trackers."""
         with self._lock:
-            self._agents[agent_state.id] = agent_state
+            self._track_created_agent_locked(agent_state)
         self._ensure_activity_tracking(agent_state.id)
         self._ensure_model_tracking(agent_state.id)
         self._broadcast_chats_updated()
+
+    def _track_created_agent_locked(self, agent_state: AgentStateItem) -> None:
+        self._agents[agent_state.id] = agent_state
+        if agent_state.id not in self._agent_details_by_id:
+            self._created_unobserved_by_id[agent_state.id] = agent_state
 
     def _build_successor_create_command(self, spec: SuccessorCreateSpec) -> list[str]:
         """The successor's ``mngr create``: the same builder every chat create uses, plus its membership labels."""
@@ -2174,6 +2183,7 @@ class AgentManager:
         """
         with self._lock:
             self._agents.pop(agent_id, None)
+            self._created_unobserved_by_id.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
             self._pending_permission_ids_by_agent.pop(agent_id, None)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
@@ -2710,13 +2720,15 @@ class AgentManager:
             with self._lock:
                 if success:
                     self._provisional_chats.pop(chat_id, None)
-                    self._agents[agent_id] = AgentStateItem(
-                        id=agent_id,
-                        name=agent_name,
-                        state="RUNNING",
-                        labels=labels,
-                        work_dir=str(work_dir),
-                        harness=harness,
+                    self._track_created_agent_locked(
+                        AgentStateItem(
+                            id=agent_id,
+                            name=agent_name,
+                            state="RUNNING",
+                            labels=labels,
+                            work_dir=str(work_dir),
+                            harness=harness,
+                        )
                     )
                 else:
                     self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
@@ -3062,6 +3074,10 @@ class AgentManager:
                     updates.append(to_update(agent_state.field_ref().queued_messages, cached_queued))
                 if updates:
                     new_agents[agent_id] = agent_state.model_copy_update(*updates)
+            for agent_id in [agent_id for agent_id in self._created_unobserved_by_id if agent_id in details_by_id]:
+                del self._created_unobserved_by_id[agent_id]
+            for agent_id, created in self._created_unobserved_by_id.items():
+                new_agents[agent_id] = self._agents.get(agent_id, created)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
 
