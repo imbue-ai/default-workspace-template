@@ -101,7 +101,7 @@ export function maybeApplyFastModeLimit(
   }
   const settings = getChatSettings();
   if (settings === null) {
-    void ensureChatSettings().then(() => m.redraw());
+    void ensureChatSettings();
     return;
   }
   if (!isFastModeLimitReached(chat, events, isAgentIdle, settings.fast_mode_turn_limit)) {

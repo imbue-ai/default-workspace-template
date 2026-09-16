@@ -20,6 +20,10 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = { fast_mode_turn_limit: 5, is
 
 let settings: ChatSettings | null = null;
 let loading: Promise<ChatSettings> | null = null;
+// After a failed load, when the backend may be asked again. The callers ask on every render,
+// so a failure has to hold them off rather than be retried by the next redraw.
+let retryNotBefore = 0;
+export const RETRY_DELAY_MS = 30_000;
 
 /** The settings as this page last saw them, or null before the first load answered. */
 export function getChatSettings(): ChatSettings | null {
@@ -27,26 +31,30 @@ export function getChatSettings(): ChatSettings | null {
 }
 
 /**
- * Load the settings once; later calls share the first load. A load that fails is warned about
- * and resolves with the defaults, leaving nothing loaded so a later call asks again.
+ * Load the settings once and redraw when they land; later calls share the first load. A load
+ * that fails is warned about and resolves with the defaults, leaving nothing loaded: a call
+ * after ``RETRY_DELAY_MS`` asks again, and one before it gets the defaults without a request,
+ * so callers that ask on every render cannot turn a backend outage into a request per frame.
  */
 export function ensureChatSettings(): Promise<ChatSettings> {
   if (settings !== null) return Promise.resolve(settings);
-  if (loading === null) {
-    loading = m
-      .request<{ settings: ChatSettings }>({ method: "GET", url: apiUrl("/api/settings") })
-      .then((response) => {
-        settings = response.settings;
-        return settings;
-      })
-      .catch((error: unknown) => {
-        console.warn("Failed to load the chat settings", error);
-        return DEFAULT_CHAT_SETTINGS;
-      })
-      .finally(() => {
-        loading = null;
-      });
-  }
+  if (loading !== null) return loading;
+  if (Date.now() < retryNotBefore) return Promise.resolve(DEFAULT_CHAT_SETTINGS);
+  loading = m
+    .request<{ settings: ChatSettings }>({ method: "GET", url: apiUrl("/api/settings") })
+    .then((response) => {
+      settings = response.settings;
+      m.redraw();
+      return settings;
+    })
+    .catch((error: unknown) => {
+      console.warn("Failed to load the chat settings", error);
+      retryNotBefore = Date.now() + RETRY_DELAY_MS;
+      return DEFAULT_CHAT_SETTINGS;
+    })
+    .finally(() => {
+      loading = null;
+    });
   return loading;
 }
 
@@ -78,4 +86,5 @@ export async function updateChatSettings(next: ChatSettings): Promise<ChatSettin
 export function resetChatSettingsForTests(): void {
   settings = null;
   loading = null;
+  retryNotBefore = 0;
 }

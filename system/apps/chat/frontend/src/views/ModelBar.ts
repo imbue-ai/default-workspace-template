@@ -331,7 +331,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
    *  negative field goes back to what the settings hold. */
   function fastLimitRow(opts: { interactive: boolean; tooltip: string | null }): m.Vnode {
     const settings = getChatSettings();
-    if (settings === null) void ensureChatSettings().then(() => m.redraw());
+    if (settings === null) void ensureChatSettings();
     const limit = settings?.fast_mode_turn_limit ?? DEFAULT_CHAT_SETTINGS.fast_mode_turn_limit;
     const apply = (raw: string): void => {
       const current = getChatSettings() ?? DEFAULT_CHAT_SETTINGS;

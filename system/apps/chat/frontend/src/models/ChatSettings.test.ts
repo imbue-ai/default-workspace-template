@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Capture mithril's request so the test drives the backend's answers without a network call;
-// redraw is a no-op and apiUrl is identity so URLs are predictable.
-const { mockRequest } = vi.hoisted(() => ({ mockRequest: vi.fn() }));
-vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }));
+// redraw is recorded and apiUrl is identity so URLs are predictable.
+const { mockRequest, mockRedraw } = vi.hoisted(() => ({ mockRequest: vi.fn(), mockRedraw: vi.fn() }));
+vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: mockRedraw } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
 const STORED = { fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
@@ -19,9 +19,34 @@ async function loadWithSettings(): Promise<typeof import("./ChatSettings")> {
 }
 
 describe("ensureChatSettings", () => {
-  it("warns about a failed load, answers the defaults, and asks again on the next call", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("loads once, shares the load, and redraws when it lands", async () => {
     vi.resetModules();
     mockRequest.mockReset();
+    mockRedraw.mockClear();
+    const chatSettings = await import("./ChatSettings");
+    mockRequest.mockResolvedValueOnce({ settings: STORED });
+
+    const [first, second] = await Promise.all([chatSettings.ensureChatSettings(), chatSettings.ensureChatSettings()]);
+
+    expect(first).toEqual(STORED);
+    expect(second).toEqual(STORED);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockRedraw).toHaveBeenCalledTimes(1);
+    expect(await chatSettings.ensureChatSettings()).toEqual(STORED);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns about a failed load, answers the defaults, and asks again only after the retry delay", async () => {
+    // The callers ask on every render, so a failure that was retried by the next call would
+    // loop a request per frame for as long as the backend is down.
+    vi.useFakeTimers();
+    vi.resetModules();
+    mockRequest.mockReset();
+    mockRedraw.mockClear();
     const chatSettings = await import("./ChatSettings");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     mockRequest.mockRejectedValueOnce(new Error("503"));
@@ -29,7 +54,14 @@ describe("ensureChatSettings", () => {
     expect(await chatSettings.ensureChatSettings()).toEqual(chatSettings.DEFAULT_CHAT_SETTINGS);
 
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(mockRedraw).not.toHaveBeenCalled();
     expect(chatSettings.getChatSettings()).toBeNull();
+    // Inside the delay: the defaults again, with no request behind them.
+    vi.advanceTimersByTime(chatSettings.RETRY_DELAY_MS - 1);
+    expect(await chatSettings.ensureChatSettings()).toEqual(chatSettings.DEFAULT_CHAT_SETTINGS);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    // Past it: asked again, and this time it lands.
+    vi.advanceTimersByTime(1);
     mockRequest.mockResolvedValueOnce({ settings: STORED });
     expect(await chatSettings.ensureChatSettings()).toEqual(STORED);
     expect(mockRequest).toHaveBeenCalledTimes(2);
