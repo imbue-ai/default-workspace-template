@@ -3269,6 +3269,71 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         manager.stop()
 
 
+def test_a_switch_that_failed_after_its_successor_was_adopted_retries_only_where_the_chat_moved(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A delivery refused past the adoption leaves the successor as the chat's own agent, with only the
+    deliveries left to do. A retry naming another account is refused: destroying that agent to create
+    another under the same id would take the chat's agent away and leave the create step skipped (its
+    guard reads the record's last entry), so the chat would list nothing at all."""
+    sent: list[tuple[str, str, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        # The prompt goes out after the successor is on the record; failing it is how a real
+        # refusal past the point of no return lands (a record write, ensure_watcher, a held send).
+        if message_id.startswith("handoff-prompt-"):
+            raise OSError("the successor's pane went away")
+        sent.append((agent_info.id, text, message_id))
+        write_summary_for_request(text)
+        return SendOutcome.OK
+
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+    )
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: _TranscriptWithUserTurn(["e-1", "e-2", "e-3"]),
+            drain_to_composer=lambda agent_info: "queued text",
+            deliver=deliver,
+        )
+    )
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    chat_id = ChatId(first)
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        def is_failed() -> bool:
+            record = store.read(chat_id)
+            return record is not None and record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        successor = record.handoff.next_agent_id
+        assert record.agents[-1].agent_id == successor
+
+        with pytest.raises(HandoffError):
+            manager.retry_handoff(chat_id, _openai_account())
+
+        # Refused before anything was written or destroyed: the chat still runs on its successor.
+        assert "destroy" not in argv_log.read_text()
+        refused = store.read(chat_id)
+        assert refused is not None and refused.handoff is not None
+        assert refused.handoff.phase is HandoffPhase.FAILED
+        assert refused.handoff.next_agent_id == successor
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.active_agent.agent_id == successor
+    finally:
+        manager.stop()
+
+
 def test_a_pick_is_refused_for_a_switch_that_keeps_the_agent(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1595,8 +1595,11 @@ class AgentManager:
 
         A failed handoff reruns its successor's create on any signed-in account, the stored
         prompt resent verbatim; a failed rebind reruns its restart on an account of the same
-        harness and lane (its agent stays the chat's). Raises ``HandoffError`` when the chat is
-        not in the failed phase, the account is unknown, or it is not one a rebind can move to.
+        harness and lane (its agent stays the chat's). A handoff that failed after its successor
+        was already adopted has only its deliveries left, and reruns them on the account it
+        moved to. Raises ``HandoffError`` when the chat is not in the failed phase, the account
+        is unknown, it is not one a rebind can move to, or it names another account for a
+        handoff whose successor the chat already runs on.
         """
         # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
         self._require_switch_capabilities()
@@ -1624,6 +1627,22 @@ class AgentManager:
                 )
                 self._write_record_locked(record.with_converging(retried_rebind))
             else:
+                # Once the successor is on the record it IS the chat's agent, and only the
+                # deliveries are left: destroying it to create another under the same id would
+                # take the chat's agent away and leave the create step skipped (its guard reads
+                # the record's last entry), so the chat would list nothing at all. Such a retry
+                # can only finish where the conversation already is.
+                # Once the successor is on the record it IS the chat's agent, and only the
+                # deliveries are left: destroying it to create another under the same id would
+                # take the chat's agent away and leave the create step skipped (its guard reads
+                # the record's last entry), so the chat would list nothing at all. Such a retry
+                # can only finish where the conversation already is.
+                is_successor_adopted = record.agents[-1].agent_id == transition.next_agent_id
+                if is_successor_adopted and transition.target_account_id != target.account.id:
+                    raise HandoffError(
+                        f"Chat '{chat_id}' has already moved to its new agent; its switch can only be "
+                        "retried on the account it moved to"
+                    )
                 # A successor an earlier attempt created (a pick that failed leaves one running)
                 # is adopted by a retry on the same account, since the create step finds it
                 # under the pre-minted id; a retry on another account destroys it first and
