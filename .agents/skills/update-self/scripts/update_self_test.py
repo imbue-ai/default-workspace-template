@@ -729,10 +729,10 @@ def test_classify_merge_reports_the_local_footprint_beyond_docs() -> None:
 def test_classify_merge_cli_reads_the_local_footprint_from_git(
     tmp_path, capsys
 ) -> None:
-    # The footprint comes from the local side of the diff, which the command
-    # already computed but used only to split the upstream set. A workspace
-    # whose only commits since the base add an app and rewrite the version
-    # history must report that app as its footprint.
+    # The footprint is read off the local side of the diff -- the same set the
+    # command splits the upstream set against. A workspace whose only commits
+    # since the base add an app and rewrite the version history must report
+    # that app as its footprint.
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
