@@ -28,8 +28,9 @@ Three subcommands:
 ``ready``
     Given which nodes are done and which are running, print the nodes that can
     start now: every node in their access list is done, and starting them keeps
-    the number running at or under the parallelism cap. Interactive nodes are
-    included; the orchestrator runs those itself rather than launching a worker.
+    the number of running workers at or under the parallelism cap. Interactive
+    nodes are included and take no worker slot; the orchestrator runs those
+    itself rather than launching a worker.
 
 ``write-task``
     Write one node's worker task file: frontmatter naming where its report must
@@ -199,7 +200,12 @@ def find_ready_nodes(
     done_node_indices: Sequence[int],
     running_node_indices: Sequence[int],
 ) -> list[int]:
-    """Nodes that can start now, lowest index first, within the parallelism cap."""
+    """Nodes that can start now, lowest index first.
+
+    Only worker nodes count toward the parallelism cap: an interactive node is a
+    conversation the orchestrator holds, so it starts whenever its dependencies
+    are done and takes no worker slot.
+    """
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
     done = set(done_node_indices)
@@ -211,20 +217,29 @@ def find_ready_nodes(
     if unknown:
         raise PlanError(f"no such nodes in the plan: {sorted(unknown)}")
 
-    waiting_ready = [
+    def is_interactive(node_idx: int) -> bool:
+        return nodes[node_idx]["capability"] == INTERACTIVE_CAPABILITY
+
+    unblocked = [
         node["index"]
         for node in nodes
         if node["index"] not in done
         and node["index"] not in running
         and set(node["access"]) <= done
     ]
-    free_slot_count = max(MAX_RUNNING_NODE_COUNT - len(running), 0)
-    return waiting_ready[:free_slot_count]
+    running_worker_count = sum(1 for idx in running if not is_interactive(idx))
+    free_worker_slot_count = max(MAX_RUNNING_NODE_COUNT - running_worker_count, 0)
+    ready_workers = [idx for idx in unblocked if not is_interactive(idx)][
+        :free_worker_slot_count
+    ]
+    ready_interactive = [idx for idx in unblocked if is_interactive(idx)]
+    return sorted(ready_workers + ready_interactive)
 
 
 def render_node_task(
     plan: dict[str, object],
     node_idx: int,
+    task_path: Path,
     finish_report_path: Path,
     report_by_node_idx: dict[int, str],
 ) -> str:
@@ -257,6 +272,7 @@ def render_node_task(
     return (
         f"---\nfinish_report_path: {finish_report_path}\n---\n\n"
         f"# Task: node {node_idx} of an app build\n\n"
+        f"This task file: `{task_path}`\n\n"
         f"Follow `{WORKER_RULES_REFERENCE}` for how to work in the shared build "
         "folder and how to report back. It is part of this task.\n\n"
         f"## Your subtask\n\n{node['subtask']}\n\n"
@@ -310,13 +326,14 @@ def _run_write_task(run_dir: Path, node_idx: int) -> int:
         for idx in nodes[node_idx]["access"]
         if node_report_path(run_dir, idx).is_file()
     }
+    task_path = node_task_path(run_dir, node_idx)
     task_text = render_node_task(
         plan=plan,
         node_idx=node_idx,
+        task_path=task_path,
         finish_report_path=node_report_path(run_dir, node_idx),
         report_by_node_idx=report_by_node_idx,
     )
-    task_path = node_task_path(run_dir, node_idx)
     task_path.parent.mkdir(parents=True, exist_ok=True)
     task_path.write_text(task_text, encoding="utf-8")
     print(f"plan_orchestration: wrote the task for node {node_idx} to {task_path}")
