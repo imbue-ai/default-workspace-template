@@ -214,7 +214,9 @@ in your report.
   test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
   `uv run pytest`.
 - **Isolated-service boots** for each service with a file in the merged set,
-  and for each user-created service 4a found impacted, against a scratch
+  and for each service 4a found impacted that carries local content of its
+  own -- one the workspace created, or a built-in one it has modified (a file
+  of it in `local_only`) -- against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
   `update-app`), never the live store. A built-in service that arrived clean
   is not booted here: the apply pre-flights the merged shell and chat app
