@@ -10,7 +10,39 @@ import {
   isTitleTruncated,
   mostRecentAddressOfApp,
   stoppedPlaceholderForApp,
+  viewIdForChatFocus,
 } from "./DockviewWorkspace";
+import { EVERYTHING_VIEW_ID } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
+
+const CHAT = "app:chat?instance=agent-0a1b";
+
+function project(id: string, tabs: string[]): ProjectInfo {
+  return { id, name: id, color: "#123456", glyph: 0, tabs, shortcuts: [] };
+}
+
+describe("viewIdForChatFocus", () => {
+  const projects = [project("alpha", ["app:terminal?instance=t"]), project("beta", [CHAT]), project("gamma", [CHAT])];
+
+  it("stays in the mounted view when it already holds the chat, Everything included", () => {
+    expect(viewIdForChatFocus("beta", projects, CHAT)).toBe("beta");
+    expect(viewIdForChatFocus("gamma", projects, CHAT)).toBe("gamma");
+    expect(viewIdForChatFocus(EVERYTHING_VIEW_ID, projects, CHAT)).toBe(EVERYTHING_VIEW_ID);
+  });
+
+  it("switches to the first project whose tab set holds the chat", () => {
+    expect(viewIdForChatFocus("alpha", projects, CHAT)).toBe("beta");
+  });
+
+  it("opens the chat in the mounted project when no project holds it", () => {
+    expect(viewIdForChatFocus("alpha", projects, "app:chat?instance=agent-ffff")).toBe("alpha");
+    expect(viewIdForChatFocus("alpha", [], CHAT)).toBe("alpha");
+  });
+
+  it("does nothing before a view is mounted", () => {
+    expect(viewIdForChatFocus(null, projects, CHAT)).toBeNull();
+  });
+});
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
