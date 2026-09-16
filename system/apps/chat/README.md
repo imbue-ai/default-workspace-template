@@ -63,7 +63,7 @@ instance list shows one chat per record, from its active agent, and never an
 archived member; stop, start, rename, and status act on the active agent, and
 destroy names every member. The read routes go through `chat_transcript.py`,
 the chat's transcript as its agents' segments in order with an `agent_switch`
-chip between them: an archived segment is read through its harness's
+marker between them: an archived segment is read through its harness's
 `TranscriptLoader` (the watcher without the watching), loaded on the first read
 that reaches into it and dropped with the chat, and every event on the wire
 carries its `agent_id`.
@@ -75,20 +75,24 @@ queue back (draining), asks the agent for a summary through the
 `handoff-summary` skill unless a fresh one exists (summarizing), then stops and
 archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
 its segment's length, and creates the successor under a pre-minted id with the
-chat's name, the account's binding, `chat_id`/`chat_seq` labels, and a first
-message filled in from `.agents/shared/references/continue-chat.md`
-(switching). Every step is recorded on the chat record's `handoff` entry and
+chat's name, the account's binding and `chat_id`/`chat_seq` labels, carrying no
+message of its own (switching); the prompt filled in from
+`.agents/shared/references/continue-chat.md` follows through the send path. Every step is recorded on the chat record's `handoff` entry and
 re-checked against mngr's state, so a restart of the app resumes an unfinished
 handoff where it stopped. While a chat converges its instance stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
 proceeds. `POST .../handoff/cancel` calls it off before switching begins and
-returns the confirming message for the composer; a failed create leaves the
-chat in the `failed` phase with the reason, and `POST .../handoff/retry` with
-an `account_id` runs the create again with the same prompt. The event fan-out
-and the SSE streams are keyed by chat id, so an open page follows the chat
-through the switch and sees the chip live. The summaries and prompts live
+returns the confirming message for the composer; a step that fails past the
+point of no return -- the create, the model pick, a delivery, or one mngr
+refuses -- leaves the chat in the `failed` phase with the reason and the step
+(`failed_step`), and `POST .../handoff/retry` with an `account_id` runs that
+step again, keeping the pre-minted id so a successor an earlier attempt made is
+adopted rather than made twice. A retry may name another account until the
+successor is the chat's own agent; after that only the account it moved to. The
+event fan-out and the SSE streams are keyed by chat id, so an open page follows
+the chat through the switch and sees the node live. The summaries and prompts live
 beside the record under `data/.apps/chat/chats/<chat-id>/`.
 
 A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
@@ -103,8 +107,9 @@ and delivers the held messages once it is up. The agent, its transcript, its tk
 steps, and its model settings stay; the record's `rebind` entry carries the
 state through a restart of the app, and a rebind on a one-agent chat drops the
 record again when it completes. There is no cancel (the agent restarts as soon
-as the switch is confirmed); a failed start leaves the chat in the `failed`
-phase, and the retry offers the accounts of the same harness and lane.
+as the armed switch's next message carries it out); a failed start leaves the
+chat in the `failed` phase, and the retry offers the accounts of the same
+harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
 may be rebound on; a same-lane target on any other harness is a handoff.
 
@@ -164,7 +169,9 @@ binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the New
 Tab tile, a rail shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
-one; pressing another account in that menu makes it the chat's pending lane. `system/scripts/migrate_claude_auth.py` imports this package from
+one; pressing another account in that menu switches the chat to it (through
+the dialog, or at once for a chat with nothing to hand over -- see the switch
+above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
