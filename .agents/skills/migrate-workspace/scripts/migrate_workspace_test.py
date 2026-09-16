@@ -2,8 +2,8 @@
 
 Covers the pieces the flow rests on being exactly right: source-layout
 detection, the legacy path map (including the prefixes that are genuinely
-ambiguous and must NOT be silently resolved), reference rewriting, template-base
-resolution, branch merged/unmerged classification, agent-to-session resolution,
+ambiguous and must NOT be silently resolved), reference rewriting, branch
+merged/unmerged classification, agent-to-session resolution,
 the recreate argv and its labels, port reconciliation, and the audit patterns.
 """
 
@@ -236,43 +236,6 @@ def test_rewrite_legacy_references_leaves_ambiguous_prefixes_for_the_agent() -> 
     text = "from libs.email_triage import run\nopen('runtime/email_triage/x.json')\n"
     rewritten, _ = migrate_workspace.rewrite_legacy_references(text)
     assert "runtime/email_triage" in rewritten
-
-
-# --- find_template_base ----------------------------------------------------
-
-
-def test_find_template_base_takes_the_newest_marker() -> None:
-    log = [
-        "aaa1111 Add the email triage app",
-        "bbb2222 update-self: merge minds-v0.3.9",
-        "ccc3333 Tweak the welcome skill",
-        "ddd4444 update-self: merge minds-v0.3.6",
-        "eee5555 Initial workspace commit",
-    ]
-    # The NEWEST marker is the template state the source last updated to, so the
-    # diff against it is exactly the user's own work since then. (update-self's
-    # origin-line walk takes the OLDEST from the same markers.)
-    assert migrate_workspace.find_template_base(log) == "bbb2222"
-
-
-def test_find_template_base_accepts_a_bootstrap_only_history() -> None:
-    log = ["aaa1111 Build a dashboard", "bbb2222 Initial workspace commit"]
-    assert migrate_workspace.find_template_base(log) == "bbb2222"
-
-
-def test_find_template_base_returns_none_without_a_marker() -> None:
-    assert migrate_workspace.find_template_base([]) is None
-    assert (
-        migrate_workspace.find_template_base(["aaa1111 Initial commit", "", "  "])
-        is None
-    )
-
-
-def test_find_template_base_ignores_a_marker_that_is_not_the_subject_prefix() -> None:
-    # A commit merely *mentioning* update-self is not a template-state marker;
-    # only the `update-self:` subject prefix is.
-    log = ["aaa1111 Fix the update-self skill's conflict triage"]
-    assert migrate_workspace.find_template_base(log) is None
 
 
 # --- parse_baseline_diff ---------------------------------------------------
