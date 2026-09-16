@@ -157,8 +157,8 @@ while since `mngr start` does not wait for the harness to come up. A new chat cr
 with a pick (`POST /api/chats/create` takes `model` too) is set up the same
 way. `GET /api/accounts/<account-id>/model-options` is where the dialog gets the
 target account's models, for a handoff's successor and a rebound agent alike:
-the catalog for a static harness, the options the account's last agent was
-offered for codex, and nothing for antigravity, whose model is changed from the
+the catalog for a static harness, for codex the options an agent of the account
+was last offered, and nothing for antigravity, whose model is changed from the
 agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
