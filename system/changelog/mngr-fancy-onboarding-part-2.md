@@ -5,3 +5,5 @@
 - `.mngr/settings.toml`: the `first` create template, stacked once per workspace, is replaced by `welcome` (sends `/welcome` to every chat that starts with no message) and `fast` (the fast-mode settings, stacked on every chat while the workspace's fast-mode turn limit is above zero).
 
 - Carries the phase 7 and 8 changes of the chat-agent split (`mngr/chat-agent-refactor-8`) into this branch.
+
+- `.mngr/settings.toml`: the codex and pi system prompts no longer inline a fixed `/welcome` reply; they point at the welcome skill, so those harnesses run the same count-varied greeting claude does.
