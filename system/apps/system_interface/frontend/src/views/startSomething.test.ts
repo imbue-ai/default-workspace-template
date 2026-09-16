@@ -24,7 +24,7 @@ describe("the Start something table", () => {
     }
   });
 
-  it("keeps the learn-about-Minds and edit-Minds tiles behind the first page", () => {
+  it("keeps the learn-about-Mind and edit-Mind tiles behind the first page", () => {
     expect(START_OPTIONS.length).toBe(START_PAGE_SIZE + 2);
     expect(START_OPTIONS.slice(START_PAGE_SIZE).map((option) => option.key)).toEqual(["learn", "edit-minds"]);
   });

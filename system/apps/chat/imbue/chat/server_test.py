@@ -39,6 +39,7 @@ from imbue.chat.harnesses.codex.model import get_codex_model_options_path
 from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -853,6 +854,10 @@ def test_get_harnesses_includes_every_harness(client: FlaskClient) -> None:
     catalog = client.get("/api/harnesses").get_json()
     assert "claude" in catalog
     assert "codex" in catalog
+    # Each carries the name the page shows for it, the same one the account labels use.
+    assert {HarnessType(name): entry["label"] for name, entry in catalog.items()} == {
+        harness: HARNESS_LABEL[harness] for harness in HarnessType if harness.value in catalog
+    }
 
 
 def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:
@@ -2168,14 +2173,14 @@ def test_create_chat_refuses_a_message_beside_a_reserved_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat(message="Teach me about Minds")
+    reserved = agent_manager.reserve_chat(message="Teach me about Mind")
 
     response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
     reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None and reserved_proto.message == "Teach me about Minds"
+    assert reserved_proto is not None and reserved_proto.message == "Teach me about Mind"
 
 
 def test_create_chat_relaunches_a_failed_chat_under_its_id(
@@ -3025,6 +3030,15 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
+    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    with_pick = client.post(
+        f"/api/chats/{first}/handoff",
+        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
+    )
+    assert with_pick.status_code == 400
+    assert "keeps its model settings" in with_pick.get_json()["detail"]
 
 
 def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:

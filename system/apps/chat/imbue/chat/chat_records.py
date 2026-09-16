@@ -26,8 +26,10 @@ from pydantic import ValidationError
 from pydantic import model_validator
 
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
+from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -69,6 +71,27 @@ class ChatAgentEntry(FrozenModel):
     final_event_count: int | None = Field(
         default=None, ge=0, description="The agent's main-transcript event count, recorded when it was archived"
     )
+    opening_message_id: str | None = Field(
+        default=None,
+        description=(
+            "The send-time id of the message the user switched with, when a handoff folded it into this agent's "
+            "first prompt; None for a chat's first agent and for a fresh start, whose message is a turn of its own"
+        ),
+    )
+    opening_message: str | None = Field(
+        default=None,
+        description=(
+            "That message's text, carried on the switch marker before this agent's segment: folded into the prompt, "
+            "it never appears in the transcript as a turn of its own"
+        ),
+    )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the handoff that started this agent was a fresh start (the retiring agent had no user turn, so "
+            "no summary was asked for and no prompt delivered); False for a chat's first agent and for a rebind"
+        ),
+    )
 
 
 class ChatTransitionRecord(FrozenModel):
@@ -99,7 +122,10 @@ class ChatTransitionRecord(FrozenModel):
     returned_block: str = Field(
         default="", description="The queued text draining took off the agent, for the composer"
     )
-    error: str | None = Field(default=None, description="Why the agent could not be started, in the failed phase")
+    error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
+    failed_step: HandoffFailedStep | None = Field(
+        default=None, description="Which step failed, in the failed phase; a retry reruns from that step"
+    )
 
     @property
     def transition_id(self) -> str:
@@ -136,7 +162,25 @@ class ChatHandoffRecord(ChatTransitionRecord):
         default=None, description="How summarizing ended; None before it has"
     )
     prompt: str | None = Field(
-        default=None, description="The successor's first message, built once and resent verbatim"
+        default=None,
+        description=(
+            "The successor's first message, built once and delivered verbatim by whichever attempt lands the "
+            "successor; None before summarizing ends, and for good on a fresh start"
+        ),
+    )
+    is_prompt_delivered: bool = Field(
+        default=False, description="Whether the prompt has reached the successor, so a resume does not send it twice"
+    )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the retiring agent never received a user turn: nothing to summarize, no prompt, and the "
+            "successor starts as a new chat would"
+        ),
+    )
+    model_pick: ModelPick | None = Field(
+        default=None,
+        description="The model the successor runs on, applied after its create; None for the harness's default",
     )
 
     @property

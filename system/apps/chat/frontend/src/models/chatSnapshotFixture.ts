@@ -38,12 +38,14 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
   return {
     kind: "handoff",
     phase: "summarizing",
+    started_at: "2026-09-14T12:00:00Z",
     target_lane: "openai",
     target_account_id: "acct-openai",
     target_harness: "codex",
     target_label: "Codex",
     held_sends: [{ message_id: "trigger-1", text: "Carry on in Codex" }],
     error: null,
+    failed_step: null,
     ...overrides,
   };
 }
@@ -54,12 +56,14 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
   return {
     kind: "rebind",
     phase: "restarting",
+    started_at: "2026-09-14T12:00:00Z",
     target_lane: "anthropic",
     target_account_id: "acct-anthropic-2",
     target_harness: "claude",
     target_label: "Anthropic 2 (Claude Code)",
     held_sends: [{ message_id: "trigger-1", text: "Carry on on the other account" }],
     error: null,
+    failed_step: null,
     ...overrides,
   };
 }

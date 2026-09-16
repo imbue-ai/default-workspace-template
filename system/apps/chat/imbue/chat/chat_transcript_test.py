@@ -25,7 +25,14 @@ def _ids(events: list[dict[str, Any]]) -> list[str]:
     return [event["event_id"] for event in events]
 
 
-def _segment(agent_id: str, seq: int, recorded_event_count: int | None, harness: HarnessType) -> TranscriptSegment:
+def _segment(
+    agent_id: str,
+    seq: int,
+    recorded_event_count: int | None,
+    harness: HarnessType,
+    opening_message: tuple[str, str] | None = None,
+    is_fresh_start: bool = False,
+) -> TranscriptSegment:
     is_archived = recorded_event_count is not None
     return TranscriptSegment(
         agent_id=agent_id,
@@ -33,6 +40,9 @@ def _segment(agent_id: str, seq: int, recorded_event_count: int | None, harness:
         seq=seq,
         recorded_event_count=recorded_event_count,
         ended_at=datetime(2026, 9, 1, 12, seq, tzinfo=timezone.utc) if is_archived else None,
+        opening_message_id=None if opening_message is None else opening_message[0],
+        opening_message=None if opening_message is None else opening_message[1],
+        is_fresh_start=is_fresh_start,
     )
 
 
@@ -49,7 +59,7 @@ class _LoadRecorder:
 
 
 def _three_segment_transcript() -> tuple[ChatTranscript, _LoadRecorder]:
-    """first: a1 a2 a3 (archived, 3 recorded) | switch:1 | second: b1 b2 (archived, 2 recorded) | switch:2 | third: c1 c2 c3 c4 (live)."""
+    """first: a1 a2 a3 (archived, 3 recorded) | switch:1 (a fresh start) | second: b1 b2 (archived, 2 recorded) | switch:2 | third: c1 c2 c3 c4 (live)."""
     readers: dict[str, TranscriptReader] = {
         "agent-first": ListTranscriptReader(["a1", "a2", "a3"]),
         "agent-second": ListTranscriptReader(["b1", "b2"]),
@@ -59,8 +69,8 @@ def _three_segment_transcript() -> tuple[ChatTranscript, _LoadRecorder]:
         _CHAT_ID,
         (
             _segment("agent-first", 1, 3, HarnessType.CLAUDE),
-            _segment("agent-second", 2, 2, HarnessType.CODEX),
-            _segment("agent-third", 3, None, HarnessType.CLAUDE),
+            _segment("agent-second", 2, 2, HarnessType.CODEX, is_fresh_start=True),
+            _segment("agent-third", 3, None, HarnessType.CLAUDE, opening_message=("m-3", "Carry on here")),
         ),
         {"agent-third": ListTranscriptReader(["c1", "c2", "c3", "c4"])},
         loader,
@@ -128,6 +138,11 @@ def test_the_tail_crosses_into_earlier_segments_with_the_switch_chips_between() 
     assert switch["agent_id"] == "agent-third"
     assert switch["seq"] == 2
     assert switch["timestamp"] == "2026-09-01T12:02:00+00:00"
+    # The chip before a segment carries the message the user switched to it with; the earlier
+    # switch delivered its message as a turn, so its chip has none.
+    assert (switch["message_id"], switch["message"], switch["is_fresh_start"]) == ("m-3", "Carry on here", False)
+    first_switch = next(event for event in tail if event["event_id"] == _SWITCH_1)
+    assert (first_switch["message_id"], first_switch["message"], first_switch["is_fresh_start"]) == (None, None, True)
 
 
 def test_a_backfill_pages_across_segments_and_from_a_switch_chip() -> None:

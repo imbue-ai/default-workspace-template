@@ -11,6 +11,7 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addressFor } from "@imbue/workspace-ui/src/addresses";
 import { createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
+import type { ModelIdentity } from "./models/ModelSettings";
 import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -107,16 +108,21 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
 
 /**
  * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
- * given. The switch confirm's "Start a new chat instead" calls this with the typed message,
- * and the failed-switch notice with none. A chat started inside a project carries that
- * project's id in its label; the shell files its tab when it docks the page.
+ * given and ``pick`` as the model it runs on (null for the harness's default). The switch
+ * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
+ * notice with neither. A chat started inside a project carries that project's id in its label;
+ * the shell files its tab when it docks the page.
  */
-export async function startChatOnAccount(accountId: string, message: string = ""): Promise<boolean> {
+export async function startChatOnAccount(
+  accountId: string,
+  message: string = "",
+  pick: ModelIdentity | null = null,
+): Promise<boolean> {
   const viewId = shellViewId();
   const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChat;
   try {
-    created = await createChat(projectId, accountId, message);
+    created = await createChat(projectId, accountId, message, pick);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return false;

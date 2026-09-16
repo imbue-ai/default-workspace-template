@@ -45,6 +45,8 @@ export interface HarnessPopup {
 }
 
 export interface HarnessCatalog {
+  // The harness's user-facing name ("Claude Code"), from the backend's one table of them.
+  label: string;
   // The static catalog options. EMPTY for a "dynamic" picker (codex): its options are per-agent,
   // fetched from /model-options on open, not carried here.
   options: CatalogModelOption[];

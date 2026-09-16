@@ -1084,7 +1084,7 @@ def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -
     """The bug this flag exists to prevent: blaming the app for the user's choice.
 
     `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
-    `latest_available`, so an eyeball comparison would tell the user their Minds
+    `latest_available`, so an eyeball comparison would tell the user their Mind
     app held the update back when they picked the older tag themselves.
     """
     assert (
@@ -1202,6 +1202,50 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     frontmatter_template = skill_md[start:end]
     assert "lead_agent: $MNGR_AGENT_ID" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
+
+
+def test_the_staged_skill_copy_can_actually_run_on_its_own(tmp_path: Path) -> None:
+    """From Step 3 the apply runs out of a `git archive` of this skill directory.
+
+    Nothing outside `.agents/skills/update-self/` is in that archive, so a
+    module here that reaches out of the skill dir at import time -- for a shared
+    helper under `.agents/shared/`, say -- leaves every staged subcommand dying
+    before it parses argv. That breaks the apply for exactly the workspaces
+    updating INTO the release that introduces it, and the rest of this file
+    cannot see it: these tests import the in-tree copy, where the neighbour
+    exists. So stage it for real and run it.
+
+    Laid down from `git ls-files` rather than `git archive HEAD`, so this reads
+    the tree you are editing: the archive would only ever show the last commit,
+    and an import that reaches outside the skill dir is worth catching before
+    it is committed. Restricting to tracked files keeps the archive's other
+    property -- an untracked neighbour is not there to be imported either.
+    """
+    skill_dir_rel = Path(update_self.SKILL_DIR_REL)
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", str(skill_dir_rel)],
+        cwd=_WORKSPACE_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split("\0")
+
+    staged = tmp_path / "skill-at-target"
+    for relative in filter(None, tracked):
+        destination = staged / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(_WORKSPACE_ROOT / relative, destination)
+    entry = staged / skill_dir_rel / "scripts/update_self.py"
+    assert entry.is_file(), "the staged copy has no entry point"
+
+    completed = subprocess.run(
+        [sys.executable, str(entry), "--help"],
+        cwd=staged,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
@@ -1739,6 +1783,13 @@ _PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_R
 # The real tree's Python apps, so the plan tests see the apps the template ships.
 _APP_TOOLS = update_classification.read_app_tools(_WORKSPACE_ROOT)
 
+# What a change to a *shared* manifest has to fan out to. Read off the tree
+# rather than spelled out, because a workspace accumulates apps the user built:
+# spelling the template's apps out here would make every app the user adds fail
+# these four cases. The sibling cases below still name single apps literally, so
+# an _APP_TOOLS that silently lost an entry still fails the file.
+_EVERY_APP_TOOL = {app.tool_name for app in _APP_TOOLS}
+
 
 def _plan(paths: list[str]) -> update_classification.ApplyPlan:
     return update_classification.plan_apply(paths, _PROVISIONER_INPUTS, _APP_TOOLS)
@@ -1845,22 +1896,10 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         # A shared backend manifest is part of every app tool's closure: the
         # vendored packages an app depends on editable, and the plugin table
         # that assigns plugins to its tool.
-        (
-            "system/apps/system_interface/pyproject.toml",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            "system/vendor/mngr/libs/mngr/pyproject.toml",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            update_layout.PLUGIN_MANIFEST_PATH,
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            "uv.lock",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
+        ("system/apps/system_interface/pyproject.toml", _EVERY_APP_TOOL),
+        ("system/vendor/mngr/libs/mngr/pyproject.toml", _EVERY_APP_TOOL),
+        (update_layout.PLUGIN_MANIFEST_PATH, _EVERY_APP_TOOL),
+        ("uv.lock", _EVERY_APP_TOOL),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(
@@ -5659,6 +5698,42 @@ def test_ledger_origin_names_the_release_when_one_is_reachable(tmp_path: Path) -
     assert "created from minds-v0.1.0" in text
 
 
+def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
+    tmp_path: Path,
+) -> None:
+    """The template repo is itself developed from workspaces.
+
+    A full-history clone therefore carries bootstrap markers older than this
+    workspace's own, and seeding from one of those dates the mind to a
+    stranger's creation and names the release that stranger started from.
+    """
+    repo = _make_real_repo(tmp_path)
+    subprocess.run(["git", "tag", "minds-v0.1.0"], cwd=repo, check=True)
+    ancestor_marker = _head_sha(repo)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "Template release five"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "tag", "minds-v0.5.0"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "Initial workspace commit"],
+        cwd=repo,
+        check=True,
+    )
+    own_marker = _head_sha(repo)
+
+    update_ledger.write_version_history_entry(
+        repo, update_runtime.Runner(), "minds-v0.6.0", own_marker, _TODAY
+    )
+
+    text = (repo / "docs/VERSION_HISTORY.md").read_text()
+    origin = next(line for line in text.splitlines() if "created from" in line)
+    assert "minds-v0.5.0" in origin and own_marker[:7] in origin
+    assert "minds-v0.1.0" not in text
+    assert ancestor_marker[:7] not in text
+
+
 def test_apply_writes_the_ledger_and_runs_env_converge_post_success(
     apply_repo: Path,
 ) -> None:
@@ -6355,7 +6430,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# --- run-status (the Minds app's status contract) --------------------------
+# --- run-status (the Mind app's status contract) --------------------------
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
