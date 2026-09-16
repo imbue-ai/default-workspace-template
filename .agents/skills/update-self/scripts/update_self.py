@@ -48,7 +48,12 @@ than agent prose:
     necessary but not sufficient to skip the gates -- the worker's impact
     analysis must also find no user-created code affected, and the worker must
     have authored no in-branch edits of its own (which this diff cannot see at
-    all); the worker reference owns that half.
+    all); the worker reference owns that half. ``local_only`` lists the files
+    only the workspace changed, and ``has_local_footprint`` says whether any
+    local content (merged or local-only) is outside the docs class -- the
+    mechanical answer to "does this workspace have code of its own that the
+    update could break", which scopes the worker's impact analysis and its
+    validation.
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -296,6 +301,8 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
                 "reveal_classes_pulled_in": result.reveal_classes_pulled_in,
                 "projects_to_validate": result.projects_to_validate,
                 "has_merge_work": result.has_merge_work,
+                "local_only": result.local_only,
+                "has_local_footprint": result.has_local_footprint,
             },
             indent=2,
         )

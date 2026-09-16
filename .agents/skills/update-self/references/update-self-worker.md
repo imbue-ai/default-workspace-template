@@ -126,9 +126,26 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 to the merged set** (the reconciled files); a clean pull-in is trusted as
 upstream-tested. The impact analysis below covers *every* upstream-changed
 file, pulled-in ones included: upstream's testing never answers the local
-question of who depends on the file.
+question of who depends on the file -- but only a workspace that has files of
+its own can have a dependent. The output's `local_only` list is the
+workspace's own content beside the merged set, and `has_local_footprint` says
+whether any of it is outside the docs class; both 4a and 4b read it.
 
 ### 4a. Identify impacted services, skills, and creations
+
+**Whether this analysis runs is decided by rule.** It exists to find a
+*user-created* consumer of what the update changed. When `has_local_footprint`
+is false -- the workspace's only divergence from the base is prose (the
+version history every apply rewrites, a `PURPOSE.md`) -- there is no code of
+the user's for anything to depend on: skip the whole of 4a except the
+provisioning paragraph at its end, record the footprint evidence
+(`has_local_footprint: false` plus the `local_only` paths) in your report, and
+go to 4b. Every impacted consumer is then built-in, restarted by the apply and
+tested upstream. Enumerating consumers, grepping for retired names, and
+reasoning about coupling all exist to find user code, and with none to find
+they only spend the user's time. If you believe the analysis should run anyway in a
+situation this rule does not cover, that is a `question` gate (Step 6), never
+a silent widening. When `has_local_footprint` is true, run all of it.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
@@ -172,19 +189,36 @@ live-applicable, rebuild-only, or `stuck`.
 
 ### 4b. Validate
 
+**Validation depth is decided by rule, not by judgment**, the same way the
+review gates are (4c): each item below names the condition that runs it, and
+an item whose condition does not hold is skipped, not run "as extra coverage".
+On a clean pull with no local footprint every condition is false and nothing
+here runs. The suites would test upstream's own code, which upstream already
+tested; the boots would repeat the pre-flight the apply itself performs on the
+merged backend before it restarts anything; and on a two-core workspace the
+full set costs over half an hour, which is what the user waits through.
+Widening the scope is the one deviation this rule never licenses; if you
+believe something should run in a situation the rule does not cover, that is
+a `question` gate (Step 6). Record which branch applied, with its evidence,
+in your report.
+
 - **Environment gate first**, whenever a manifest or lockfile is in the
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate`: root
+- **Suites, lint, ratchets** for each project in `projects_to_validate`, and
+  for no other (an empty list runs no suite at all): root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
   and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
   or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
   test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
   `uv run pytest`.
-- **Isolated-service boots** for each impacted service, against a scratch
+- **Isolated-service boots** for each service with a file in the merged set,
+  and for each user-created service 4a found impacted, against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
-  `update-app`), never the live store. This runs on the host's global
+  `update-app`), never the live store. A built-in service that arrived clean
+  is not booted here: the apply pre-flights the merged shell and chat app
+  itself before anything live restarts. This runs on the host's global
   toolchain, so it does not exercise a global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
@@ -281,21 +315,26 @@ Valid `name:` values:
     and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
     not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
-    or skill depending on a changed file.
+    or skill depending on a changed file; or, when the 4a rule skipped it,
+    the footprint evidence (`has_local_footprint: false` and the `local_only`
+    paths).
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
     image-level. Version pins live in `setup_system.sh`, so a pin bump is a
     provisioner change, not a Dockerfile hunk.
   - **Provisioning changes** and **global-dependency bumps** (if any) -- per
     `references/worker-provisioning-changes.md`: each classified
     live-applicable (naming the in-branch mirror edits you made) or
-    rebuild-only, with the version delta and what your research turned up; a
-    genuinely breaking, unapplyable change is a `stuck` report, not a `done`.
-  - **Validation** -- suites, boots and Playwright run, all passing; **which
-    branch of the 4c rule applied, with its evidence** (the clean-pull skip's
-    three conditions, or the gate run's kept/reverted fix commits -- or "gate
-    ran clean" -- and the architecture-gate verdicts); any validation gap
-    called out honestly. A report with neither record is incomplete and the
-    lead sends it back.
+    rebuild-only, with the version delta (and, for a user-created dependent,
+    what your research turned up); a genuinely breaking, unapplyable change
+    is a `stuck` report, not a `done`.
+  - **Validation** -- **which branch of the 4b scope rule applied, with its
+    evidence** (each item's condition and whether it held; on a clean pull
+    with no footprint, that nothing ran and why), then the suites, boots and
+    Playwright that did run, all passing; **which branch of the 4c rule
+    applied, with its evidence** (the clean-pull skip's three conditions, or
+    the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
+    architecture-gate verdicts); any validation gap called out honestly. A
+    report missing either record is incomplete and the lead sends it back.
 - `stuck` (`type: status`) -- you could not reach a clean, validated merge, or
   you hit the provisioning escape hatch; one sentence on what blocked you and
   where the work stands. Never report `done` on a merge whose suites or boots

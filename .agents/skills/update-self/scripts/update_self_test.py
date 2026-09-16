@@ -694,6 +694,86 @@ def test_classify_merge_empty() -> None:
     assert result.has_merge_work is False
 
 
+def test_classify_merge_reports_the_local_footprint_beyond_docs() -> None:
+    # The impact analysis exists to find user-created consumers of what the
+    # update changed. The footprint is every local change outside the docs
+    # class, whether upstream also touched the file (merged) or not (local
+    # only); docs/VERSION_HISTORY.md, which every apply rewrites, and other
+    # prose never make one.
+    result = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"],
+        ["docs/VERSION_HISTORY.md", "PURPOSE.md", "system/apps/my_app/server.py"],
+    )
+    assert [entry["path"] for entry in result.local_only] == [
+        "PURPOSE.md",
+        "docs/VERSION_HISTORY.md",
+        "system/apps/my_app/server.py",
+    ]
+    assert [entry["disposition"] for entry in result.local_only] == ["local_only"] * 3
+    assert result.has_local_footprint is True
+
+    docs_only = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"], ["docs/VERSION_HISTORY.md", "PURPOSE.md"]
+    )
+    assert docs_only.has_local_footprint is False
+
+    # A file that diverged on both sides is local content too, even though it
+    # is not in the local-only list.
+    merged_code = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"], ["system/scripts/forward_port.py"]
+    )
+    assert merged_code.local_only == []
+    assert merged_code.has_local_footprint is True
+
+
+def test_classify_merge_cli_reads_the_local_footprint_from_git(
+    tmp_path, capsys
+) -> None:
+    # The footprint comes from the local side of the diff, which the command
+    # already computed but used only to split the upstream set. A workspace
+    # whose only commits since the base add an app and rewrite the version
+    # history must report that app as its footprint.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write("docs/VERSION_HISTORY.md", "base\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("checkout", "-q", "-b", "upstream-line")
+    _write("system/scripts/forward_port.py", "upstream change\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "upstream")
+    _git("tag", "target")
+    _git("checkout", "-q", "-")
+    _write("docs/VERSION_HISTORY.md", "base\nupdated to a release\n")
+    _write("system/apps/my_app/server.py", "print('mine')\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "local work")
+
+    code = update_self.main(
+        ["classify-merge", "--target", "target", "--repo-root", str(tmp_path)]
+    )
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [entry["path"] for entry in result["pulled_in"]] == [
+        "system/scripts/forward_port.py"
+    ]
+    assert [entry["path"] for entry in result["local_only"]] == [
+        "docs/VERSION_HISTORY.md",
+        "system/apps/my_app/server.py",
+    ]
+    assert result["has_merge_work"] is False
+    assert result["has_local_footprint"] is True
+
+
 # --- CLI wiring --------------------------------------------------------------
 
 

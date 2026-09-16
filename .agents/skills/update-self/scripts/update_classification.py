@@ -222,6 +222,15 @@ class MergeClassification(NamedTuple):
     added no commits of its own on top of the merge. That last condition is
     invisible here by construction -- the caller passes the *pre-merge* local
     ref, so nothing the worker committed afterwards is in either diff.
+
+    ``local_only`` are the files only the local side changed, which are not
+    upstream updates at all but are the workspace's own content; together with
+    the merged set they are where a user-created consumer of the update can
+    live. ``has_local_footprint`` is true when any of that local content is
+    outside the docs class: a workspace whose only divergence is prose (the
+    version history every apply rewrites, a ``PURPOSE.md``) has no code of its
+    own for the update to break, so the impact analysis and the validation
+    that exist to protect it have nothing to look at.
     """
 
     merged: list[dict[str, object]]
@@ -230,6 +239,8 @@ class MergeClassification(NamedTuple):
     reveal_classes_pulled_in: list[str]
     projects_to_validate: list[str]
     has_merge_work: bool
+    local_only: list[dict[str, object]]
+    has_local_footprint: bool
 
 
 def _entry(path: str, disposition: str) -> dict[str, object]:
@@ -252,16 +263,20 @@ def classify_merge(
     merge base; ``local_changed`` the set the local branch changed relative to
     the same base. A file in both diverged on both sides -> **merged** (validate);
     a file only upstream changed is a clean **pulled-in** arrival (trust). Files
-    only *local* changed are not upstream updates at all and are ignored here.
+    only *local* changed are not upstream updates at all: they are reported as
+    **local_only**, the workspace's own content, which is where a consumer of
+    the update can live.
     """
+    upstream = set(upstream_changed)
     local = set(local_changed)
     merged: list[dict[str, object]] = []
     pulled_in: list[dict[str, object]] = []
-    for path in sorted(set(upstream_changed)):
+    for path in sorted(upstream):
         if path in local:
             merged.append(_entry(path, "merged"))
         else:
             pulled_in.append(_entry(path, "pulled_in"))
+    local_only = [_entry(path, "local_only") for path in sorted(local - upstream)]
 
     def _distinct_classes(entries: list[dict[str, object]]) -> list[str]:
         return sorted({str(entry["reveal_class"]) for entry in entries})
@@ -274,6 +289,10 @@ def classify_merge(
         reveal_classes_pulled_in=_distinct_classes(pulled_in),
         projects_to_validate=projects,
         has_merge_work=bool(merged),
+        local_only=local_only,
+        has_local_footprint=any(
+            entry["reveal_class"] != CLASS_DOCS for entry in merged + local_only
+        ),
     )
 
 
