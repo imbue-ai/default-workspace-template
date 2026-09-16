@@ -452,9 +452,7 @@ def _mngr_create_argv(
         "--label",
         "agent_created=true",
     ]
-    folder_args = (
-        [] if work_folder is None else ["--from", f":{work_folder.resolve()}"]
-    )
+    folder_args = [] if work_folder is None else ["--from", f":{work_folder.resolve()}"]
     model_args = (
         []
         if model is None
