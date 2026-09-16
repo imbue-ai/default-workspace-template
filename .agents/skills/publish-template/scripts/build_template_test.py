@@ -7,6 +7,7 @@ not the publisher: the adopter's agent boots the generated `/welcome`, and a
 human browsing GitHub reads the generated README.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -149,8 +150,12 @@ def _linked_worktree(source: Path, root: Path) -> Path:
 
 
 def _assemble(
-    cwd: Path, base_ref: str, *extra: str
+    cwd: Path, base_ref: str, *extra: str, live_workspace: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
+    """Run the real script. `live_workspace` is where it reads data paths from."""
+    env = dict(os.environ)
+    if live_workspace is not None:
+        env["ENV_CONVERGE_WORKSPACE_DIR"] = str(live_workspace)
     return subprocess.run(
         [
             "bash",
@@ -168,6 +173,7 @@ def _assemble(
             *extra,
         ],
         cwd=cwd,
+        env=env,
         capture_output=True,
         text=True,
     )
@@ -323,18 +329,25 @@ def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) ->
 
 @_needs_scanners
 @pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
-def test_an_opted_in_data_path_ships_in_the_snapshot(tmp_path: Path) -> None:
-    """The template gitignores all of data/, so `git add -A` alone drops it.
+def test_an_opted_in_data_path_ships_from_the_live_workspace(tmp_path: Path) -> None:
+    """The worker's worktree never has the data; only the live workspace does.
 
-    A recipe that names a data path and a snapshot that does not carry it is a
-    manifest lying about what an adopter gets.
+    That worktree is a `transfer = "git-worktree"` checkout, which carries no
+    gitignored file, and all of `data/` is gitignored -- so the path has to be
+    read from the live workspace, and then force-added past the same gitignore
+    to reach the commit. Writing the data into the worktree instead would
+    manufacture the one precondition production does not supply, and the test
+    would pass over a snapshot that ships nothing.
     """
     source, base_ref = _make_source_repo(tmp_path)
+    (source / "data/demo").mkdir(parents=True)
+    (source / "data/demo/seed.json").write_text('{"rows": 1}\n')
     worktree = _linked_worktree(source, tmp_path)
-    (worktree / "data/demo").mkdir(parents=True)
-    (worktree / "data/demo/seed.json").write_text('{"rows": 1}\n')
+    assert not (worktree / "data/demo").exists(), "the checkout must not carry data/"
 
-    completed = _assemble(worktree, base_ref, "--data-include", "data/demo")
+    completed = _assemble(
+        worktree, base_ref, "--data-include", "data/demo", live_workspace=source
+    )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     shipped = _git("ls-tree", "-r", "--name-only", "HEAD", cwd=worktree).splitlines()

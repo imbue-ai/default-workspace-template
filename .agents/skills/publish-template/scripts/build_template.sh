@@ -292,10 +292,13 @@ if [ -f "$MANIFEST_TOML" ]; then
 fi
 
 stage_one() {
-    # Stage a single repo-root-relative path if it exists in the live worktree.
+    # Stage a single repo-root-relative path, read out of "$2" (default: this
+    # worktree). rsync -R preserves the relative path, so it lands at the same
+    # location under $STAGE whichever root it came from.
     local rel="$1"
-    if [ -e "$rel" ]; then
-        rsync -aR "$rel" "$STAGE/"
+    local from="${2:-$REPO}"
+    if [ -e "$from/$rel" ]; then
+        (cd "$from" && rsync -aR "$rel" "$STAGE/")
     else
         echo "build_template.sh: warning: include path not found, skipping: $rel" >&2
     fi
@@ -304,8 +307,18 @@ stage_one() {
 for rel in "${INCLUDE_PATHS[@]}"; do
     stage_one "$rel"
 done
+# Data paths come from the LIVE workspace, not from here. They are gitignored
+# runtime state, and the worker's worktree is a `transfer = "git-worktree"`
+# checkout (see .mngr/settings.toml), which by definition carries no gitignored
+# file -- so reading them from $REPO found nothing, warned, and published a
+# manifest that named data the snapshot did not contain. The live workspace
+# holds the only copy, and there is no pinned version to prefer: nothing under
+# data/ is committed. This is a READ; the destructive steps below all run
+# against $REPO, and the guard above has already refused to run if the two are
+# the same directory.
+data_source="${LIVE_WORKSPACE:-$REPO}"
 for rel in "${DATA_INCLUDE_PATHS[@]}"; do
-    stage_one "$rel"
+    stage_one "$rel" "$data_source"
 done
 
 # Nothing to carry forward: a publish OVERRIDES the previous manifest rather
