@@ -262,7 +262,7 @@ function railAction(options: {
       xs: true,
       extra: `${reveal} ${options.extra ?? ""}`,
       "aria-label": options.label,
-      ...(options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip, options.tooltipPlacement)),
+      ...hoverTooltipAttrs(options.tooltip ?? null, options.tooltipPlacement),
       onclick: (event: MouseEvent) => {
         event.stopPropagation();
         options.onclick(event);
@@ -776,6 +776,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   function renameRow(row: SidebarTabRow, attrs: SidebarAttrs): m.Vnode {
+    // Same tag and key as the row it stands in for, so mithril patches that element rather than
+    // replacing it. The attrs the row carries and this one does not -- its tooltip, its address --
+    // go with the patch.
     return m("div", { key: row.address, class: `${ROW_CLASS} pr-1` }, [
       m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(getApp(row.appName), ROW_ICON_SIZE))),
       m("input", {
@@ -820,7 +823,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             : row.isOpen
               ? "text-primary"
               : "text-faint"),
-        ...(row.stoppedDetail === undefined ? {} : hoverTooltipAttrs(`${row.label} — ${row.stoppedDetail}`, "right")),
+        ...hoverTooltipAttrs(row.stoppedDetail === undefined ? null : `${row.label} — ${row.stoppedDetail}`, "right"),
         onclick: () => reveal(() => attrs.onOpenRow(row)),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -941,7 +944,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         class: `${options.rowClass ?? MENU_ROW_CLASS} ${tone}`,
         role: "menuitem",
         "aria-disabled": options.isDisabled === true ? "true" : undefined,
-        ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
+        ...hoverTooltipAttrs(options.tooltip ?? null),
         onclick: options.isDisabled === true ? undefined : options.onclick,
       },
       [
