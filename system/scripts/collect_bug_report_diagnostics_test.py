@@ -186,8 +186,9 @@ def _chat_events(
         json.dumps(
             {
                 "timestamp": _stamp_seconds_ago(age_seconds),
-                "type": "user_message",
-                "source": f"{source}/common_transcript",
+                "type": "step",
+                "emitter": f"{source}/common_transcript",
+                "source": "user",
                 "seq": marker,
             }
         )
@@ -205,12 +206,18 @@ def _agent_id_for(name: str) -> str:
     return f"agent-{name}"
 
 
+def _target_for(name: str) -> str:
+    """The pinned ``id@host-id.provider`` target the stub's listing reports for an agent."""
+    return f"{_agent_id_for(name)}@stub-host-id.local"
+
+
 def _write_mngr_stub(
     tmp_path: Path,
     *,
     agents: Sequence[str] = (),
     events_by_agent: Mapping[str, str] | None = None,
     panes_by_agent: Mapping[str, str] | None = None,
+    chat_of_agent: Mapping[str, tuple[str, int]] | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
@@ -218,23 +225,34 @@ def _write_mngr_stub(
     The collector asks mngr three things -- which agents exist, what was said in
     one, and what is on one's pane -- so the stub answers exactly those three
     shapes: the pipe template
-    ``{name}|{name}@{host.name}.{host.provider_name}|{id}`` for ``list``, raw
-    JSONL for ``event``, and pane text for ``capture``. Both per-agent targets
-    arrive as the pinned ``name@host.provider`` address the listing handed out,
-    so the stub keys its canned answers by the name in front of the ``@``. An
-    agent with no canned pane exits nonzero, as the real ``mngr capture`` does
-    for an agent that is not running.
+    ``{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}``
+    for ``list``, raw JSONL for ``transcript``, and pane text for ``capture``. Both
+    per-agent targets arrive as the pinned ``id@host-id.provider`` form the
+    listing handed out, so the stub keys its canned answers by the id in front
+    of the ``@``. An agent with no canned pane exits nonzero, as the real
+    ``mngr capture`` does for an agent that is not running.
+
+    ``chat_of_agent`` maps an agent name to the ``(chat id, sequence)`` it is a
+    segment of; an agent absent from it lists with both label columns empty,
+    which is what mngr prints for an agent carrying neither.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
-        (events_dir / agent_name).write_text(events, encoding="utf-8")
+        (events_dir / _agent_id_for(agent_name)).write_text(events, encoding="utf-8")
     panes_dir = tmp_path / "stub-panes"
     panes_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, pane in (panes_by_agent or {}).items():
-        (panes_dir / agent_name).write_text(pane, encoding="utf-8")
+        (panes_dir / _agent_id_for(agent_name)).write_text(pane, encoding="utf-8")
+    chat_labels = chat_of_agent or {}
     listing = "".join(
-        f"{name}|{name}@stub-host.local|{_agent_id_for(name)}\n" for name in agents
+        "{}|{}|{}|{}|{}\n".format(
+            name,
+            _agent_id_for(name),
+            _target_for(name),
+            *(chat_labels.get(name) or ("", "")),
+        )
+        for name in agents
     )
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
@@ -248,15 +266,15 @@ def _write_mngr_stub(
         f'  cat "{listing_path}"\n'
         "  exit 0\n"
         "fi\n"
-        'if [ "$1" = "event" ]; then\n'
-        '  agent_name="${2%%@*}"\n'
-        f'  f="{events_dir}/$agent_name"\n'
+        'if [ "$1" = "transcript" ]; then\n'
+        '  agent_id="${2%%@*}"\n'
+        f'  f="{events_dir}/$agent_id"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = "capture" ]; then\n'
-        '  agent_name="${2%%@*}"\n'
-        f'  f="{panes_dir}/$agent_name"\n'
+        '  agent_id="${2%%@*}"\n'
+        f'  f="{panes_dir}/$agent_id"\n'
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi\n'
         "  exit 1\n"
         "fi\n"
@@ -270,26 +288,19 @@ def _write_mngr_stub(
 def _transcript_events(
     *messages: str, source: str = "claude", timestamp: str = "2026-08-17T12:00:00Z"
 ) -> str:
-    """JSONL in the shape ``mngr event`` returns, one event per message."""
+    """JSONL in the shape ``mngr transcript`` returns, one ATIF step per message."""
     return "".join(
         json.dumps(
             {
                 "timestamp": timestamp,
-                "type": "user_message",
-                "source": f"{source}/common_transcript",
+                "type": "step",
+                "emitter": f"{source}/common_transcript",
+                "source": "user",
                 "message": message,
             }
         )
         + "\n"
         for message in messages
-    )
-
-
-def _user_message_line(timestamp: str) -> str:
-    """One common-transcript user message, as the fallback ranking reads it."""
-    return (
-        json.dumps({"type": "user_message", "timestamp": timestamp, "message": "hi"})
-        + "\n"
     )
 
 
@@ -480,9 +491,15 @@ def test_every_agent_is_a_transcript_candidate(
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
-        ("chatty", "chatty@stub-host.local", "agent-chatty"),
-        ("system-services", "system-services@stub-host.local", "agent-system-services"),
-        ("worker", "worker@stub-host.local", "agent-worker"),
+        ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local", "", 1),
+        (
+            "system-services",
+            "agent-system-services",
+            "agent-system-services@stub-host-id.local",
+            "",
+            1,
+        ),
+        ("worker", "agent-worker", "agent-worker@stub-host-id.local", "", 1),
     ]
 
 
@@ -507,18 +524,17 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     assert [name for name, _, _ in members] == ["chats/chatty-claude.jsonl"]
 
 
-def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_log(
+def test_the_collector_reads_conversations_with_the_transcript_command(
     tmp_path: Path,
 ) -> None:
     """What the collector ASKS mngr for is the contract, and it is easy to get wrong.
 
-    The harness cannot be derived from the agent type (a ``chat`` agent writes
-    under ``claude/``), so the query filters on the source each event carries.
-    Everything under ``logs/`` is the converter's own stdout -- it records *that*
-    it converted, not what was said -- so including it would attach a log of
-    conversions in place of the conversation. Asserting the arguments is what
-    catches a wrong filter: a stub that answered regardless of them let a
-    deliberately broken source stay green.
+    ``transcript`` is what preserves the records as the harness wrote them,
+    speaker included; the event reader overwrites each record's ``source`` with
+    the path it read the stream from. It also picks the stream itself, so the
+    collector names neither the harness nor the converter's own stdout under
+    ``logs/``. Asserting the arguments is what catches a wrong query: a stub that
+    answered regardless of them let a deliberately broken one stay green.
     """
     chats = {"chatty": _chat_events("hello")}
     stub = _mngr_stub_for_chats(tmp_path, chats)
@@ -527,13 +543,106 @@ def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_
     module.collect_transcript_members(5.0)
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
-    event_calls = [
-        line for line in invocations.splitlines() if line.startswith("event ")
+    transcript_calls = [
+        line for line in invocations.splitlines() if line.startswith("transcript ")
     ]
-    assert len(event_calls) == 1, invocations
-    assert 'source.endsWith("common_transcript")' in event_calls[0]
-    assert 'source.startsWith("logs/")' in event_calls[0]
-    assert "--format jsonl" in event_calls[0]
+    assert len(transcript_calls) == 1, invocations
+    assert transcript_calls[0].endswith(" --format jsonl"), transcript_calls[0]
+    assert not [line for line in invocations.splitlines() if line.startswith("event ")]
+
+
+def test_a_chat_handed_to_another_harness_attaches_as_one_conversation(
+    tmp_path: Path,
+) -> None:
+    """A chat outlives the agent running it, and the report is about the chat.
+
+    Handing one to another harness archives the agent and starts a successor,
+    so the conversation the user held in one place is spread over two agents'
+    streams. Attached separately, a reader has to stitch them back together --
+    and the selection below would rank the halves against each other.
+    """
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("archived-1-Chat-1-agent-x", "Chat-1"),
+        events_by_agent={
+            "archived-1-Chat-1-agent-x": _chat_events(
+                "first-half", age_seconds=600, source="claude"
+            ),
+            "Chat-1": _chat_events("second-half", age_seconds=60, source="codex"),
+        },
+        chat_of_agent={
+            "archived-1-Chat-1-agent-x": ("agent-chat-1", 1),
+            "Chat-1": ("agent-chat-1", 2),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    # Named for the segment the chat is live on, and for the harness it is on now.
+    assert [name for name, _, _ in members] == ["chats/Chat-1-codex.jsonl"]
+    conversation = members[0][1]
+    assert conversation.index("first-half") < conversation.index("second-half")
+
+
+def test_an_unlabelled_agent_is_a_chat_of_its_own(tmp_path: Path) -> None:
+    """Every agent in a workspace whose chat app predates handoffs carries no chat labels."""
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("chatty", "worker"),
+        events_by_agent={
+            "chatty": _chat_events("chatty-said"),
+            "worker": _chat_events("worker-said"),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert sorted(name for name, _, _ in members) == [
+        "chats/chatty-claude.jsonl",
+        "chats/worker-claude.jsonl",
+    ]
+
+
+def test_an_older_segment_rides_along_with_the_chat_it_belongs_to(
+    tmp_path: Path,
+) -> None:
+    """The floor counts conversations, so a chat's own beginning never competes with other chats.
+
+    Ranked as its own agent, a segment last written to before the window would
+    fall below the newest MIN_TRANSCRIPT_COUNT and take the start of a live
+    conversation with it.
+    """
+    chats = {
+        f"other-{index}": _chat_events(f"other-{index}", age_seconds=60 * (index + 1))
+        for index in range(5)
+    }
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("archived-1-Chat-1-agent-x", "Chat-1", *chats),
+        events_by_agent={
+            "archived-1-Chat-1-agent-x": _chat_events(
+                "the-beginning", age_seconds=60 * 60 * 24
+            ),
+            "Chat-1": _chat_events("the-end", age_seconds=30),
+            **chats,
+        },
+        chat_of_agent={
+            "archived-1-Chat-1-agent-x": ("agent-chat-1", 1),
+            "Chat-1": ("agent-chat-1", 2),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    handed_off = [
+        content for name, content, _ in members if name.startswith("chats/Chat-1-")
+    ]
+    assert len(handed_off) == 1, [name for name, _, _ in members]
+    assert "the-beginning" in handed_off[0]
+    assert "the-end" in handed_off[0]
 
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
@@ -1584,13 +1693,15 @@ def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
     )
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("chatty@stub-host.local", 5.0) == "on screen"
+    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) == "on screen"
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     capture_calls = [
         line for line in invocations.splitlines() if line.startswith("capture ")
     ]
-    assert capture_calls == ["capture chatty@stub-host.local --full --no-start"]
+    assert capture_calls == [
+        "capture agent-chatty@stub-host-id.local --full --no-start"
+    ]
 
 
 def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> None:
@@ -1599,7 +1710,7 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("chatty@stub-host.local", 5.0) is None
+    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) is None
 
 
 def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
@@ -1995,6 +2106,6 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     list_calls = [line for line in invocations.splitlines() if line.startswith("list ")]
     assert list_calls == [
-        "list --provider local"
-        " --format {name}|{name}@{host.name}.{host.provider_name}|{id}"
+        "list --provider local --format "
+        "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}"
     ], invocations

@@ -176,12 +176,6 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     m.redraw();
   }
 
-  /** A row's tooltip attrs, or nothing when it has none to give. Spread, not wrapped: the
-   *  bubble lives on <body>, so the row needs no container of its own. */
-  function tooltipAttrs(text: string | null): m.Attributes {
-    return text === null ? {} : hoverTooltipAttrs(text);
-  }
-
   /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
    *  its value and explains, on hover, where it can be changed instead. */
   function menuRow(opts: {
@@ -200,7 +194,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
         class: opts.openable ? css.ROW : css.ROW_INERT,
         // A stable hook so a test can address a row by what it is rather than by its classes.
         "data-card-row": opts.which,
-        ...tooltipAttrs(opts.tooltip),
+        ...hoverTooltipAttrs(opts.tooltip),
         // CLICK, not hover. Opening the model flyout fetches this agent's offerable models,
         // which for pi shells out to `pi --list-models` (up to 15s) and for codex connects to
         // its daemon -- on hover that would fire on every pointer sweep across the card.
@@ -269,7 +263,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...hoverTooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
@@ -322,7 +316,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     tooltip: string | null;
     onToggle: () => void;
   }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Fast Mode"),
       m(
         "span",
