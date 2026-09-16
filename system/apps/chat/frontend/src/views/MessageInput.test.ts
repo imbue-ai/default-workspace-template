@@ -118,20 +118,21 @@ vi.mock("../models/ModelSettings", () => ({
 // so the mock ships a per-harness fixture mirroring the real declarations (the
 // matcher itself is reimplemented here minimally; the real one is covered by
 // HarnessCatalog.test.ts).
-vi.mock("../models/HarnessCatalog", () => {
+vi.mock("../models/HarnessCatalog", async () => {
+  const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
     { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
   > = {
     claude: {
-      label: "Claude Code",
+      label: harnessCatalogFixture("claude")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
       ],
     },
     codex: {
-      label: "Codex",
+      label: harnessCatalogFixture("codex")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
