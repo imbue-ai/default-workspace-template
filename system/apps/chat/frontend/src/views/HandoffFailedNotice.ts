@@ -1,8 +1,9 @@
 /**
- * The page of a chat whose switch failed (spec 5.10): the reason the new agent could not be
- * started, over the composer, with a retry on any signed-in account. The chat has no running
- * agent meanwhile; the composer keeps working, since the chat app holds what is typed for the
- * retry.
+ * The page of a chat whose switch failed (spec 5.10, 6): the reason the agent could not be
+ * started, over the composer, with a retry and a way to start a new chat instead. A failed
+ * handoff retries on any signed-in account; a failed rebind retries on an account of the same
+ * harness and lane, since its agent stays the chat's. The chat has no running agent
+ * meanwhile; the composer keeps working, since the chat app holds what is typed for the retry.
  */
 
 import m from "mithril";
@@ -10,9 +11,21 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
+import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import { retryHandoff } from "../models/Handoffs";
 import { getAccounts } from "../models/Providers";
+import type { ProviderAccount } from "../models/Providers";
+import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./agent-switch-chip";
+
+/** The accounts a failed switch may be retried on: any for a handoff, the agent's own harness and lane for a rebind. */
+export function retryableAccounts(chat: ChatSnapshot, handoff: HandoffState): ProviderAccount[] {
+  const accounts = getAccounts();
+  if (handoff.kind !== "rebind") return accounts;
+  return accounts.filter(
+    (account) => account.harness === chat.active_agent.harness && account.lane === handoff.target_lane,
+  );
+}
 
 export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
   // The account the retry runs on, once the user picks one; the failed target until then.
@@ -23,15 +36,20 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
   return {
     view(vnode) {
       const { chatId } = vnode.attrs;
-      const handoff = getChatById(chatId)?.handoff ?? null;
-      if (handoff === null || handoff.phase !== "failed") {
+      const chat = getChatById(chatId);
+      const handoff = chat?.handoff ?? null;
+      if (chat === undefined || handoff === null || handoff.phase !== "failed") {
         chosenAccountId = null;
         retryError = null;
         return null;
       }
-      const accounts = getAccounts();
+      const accounts = retryableAccounts(chat, handoff);
       const failedTargetId = handoff.target_account_id;
       const selectedId = chosenAccountId ?? failedTargetId;
+      const title =
+        handoff.kind === "rebind"
+          ? `Could not restart ${harnessLabel(chat.active_agent.harness)}`
+          : `Could not start ${harnessLabel(handoff.target_harness)}`;
 
       async function retry(): Promise<void> {
         if (isRetrying) return;
@@ -58,11 +76,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
           role: "alert",
         },
         [
-          m(
-            "p",
-            { class: "handoff-failed-title type-label text-danger" },
-            `Could not start ${harnessLabel(handoff.target_harness)}`,
-          ),
+          m("p", { class: "handoff-failed-title type-label text-danger" }, title),
           m(
             "pre",
             {
@@ -70,7 +84,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
                 "handoff-failed-reason max-h-40 overflow-auto font-mono text-(length:--font-size-helper) " +
                 "whitespace-pre-wrap text-primary",
             },
-            handoff.error ?? "The new agent could not be started.",
+            handoff.error ?? "The agent could not be started.",
           ),
           m("div", { class: "flex flex-wrap items-center gap-2" }, [
             m(
@@ -101,6 +115,16 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
                 onclick: () => void retry(),
               },
               isRetrying ? "Starting…" : "Try again",
+            ),
+            m(
+              Button,
+              {
+                sm: true,
+                extra: "handoff-new-chat-button",
+                readonly: isRetrying,
+                onclick: () => void startChatOnAccount(chosenAccountId ?? failedTargetId),
+              },
+              "Start a new chat instead",
             ),
           ]),
           retryError !== null ? m("p", { class: "handoff-retry-error text-sm text-danger" }, retryError) : null,

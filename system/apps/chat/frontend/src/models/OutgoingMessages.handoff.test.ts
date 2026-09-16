@@ -9,7 +9,7 @@ vi.mock("./Chats", async (importOriginal) => ({
   addChatsUpdatedListener: (listener: (chats: unknown[]) => void) => listeners.push(listener),
 }));
 
-import { chatSnapshotFixture, handoffStateFixture } from "./chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "./chatSnapshotFixture";
 import {
   addOutgoing,
   dropOutgoingByMessageId,
@@ -158,6 +158,29 @@ describe("the bubbles of a chat switching harness", () => {
     });
     push([converging]);
     push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-old" } })]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
+  });
+
+  it("counts the same agent's arrivals during a rebind, since its held sends land in its own transcript", () => {
+    // A rebind keeps the agent, so nothing names a successor; the held sends still reach the
+    // transcript before the switch clears, and those turns must consume the returning bubbles.
+    const chat = `a-${Math.random()}`;
+    addOutgoing(chat, "Carry on on the other account", "trigger-1");
+    const converging = chatSnapshotFixture(chat, {
+      active_agent: { agent_id: "agent-same" },
+      handoff: rebindStateFixture({
+        held_sends: [
+          { message_id: "trigger-1", text: "Carry on on the other account" },
+          { message_id: "m-2", text: "and this" },
+        ],
+      }),
+    });
+    push([converging]);
+    expect(getOutgoingMessages(chat)).toEqual([]);
+    noteBackendArrivals(chat, ["u-trigger"]);
+    // The rebind cleared on the same agent: the confirming message's turn already arrived, so
+    // only the other held send comes back as a bubble.
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-same" } })]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
   });
 

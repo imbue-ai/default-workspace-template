@@ -91,16 +91,36 @@ and the SSE streams are keyed by chat id, so an open page follows the chat
 through the switch and sees the chip live. The summaries and prompts live
 beside the record under `data/.apps/chat/chats/<chat-id>/`.
 
-The page drives it from the composer's provider menu: pressing an account on
-another harness makes it the chat's pending lane ("next"), the send button then
-reads "Switch and send" and asks a two-line confirm, and the typed message
-becomes the new agent's first. While the chat converges the held messages
+A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
+and lane: the same route, dispatched on the target account's harness and lane
+(the answer's `kind` says which it was). The chat app drains the agent's queue
+as a handoff does, then stops the agent, repoints its binding in its own state
+dir (the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the
+chat's session files into the new account's folder so `claude --resume` and the
+watcher still find them; the credential symlink for codex, pi, and antigravity),
+rewrites its `account` label, starts it again with `mngr start --no-resume`,
+and delivers the held messages once it is up. The agent, its transcript, its tk
+steps, and its model settings stay; the record's `rebind` entry carries the
+state through a restart of the app, and a rebind on a one-agent chat drops the
+record again when it completes. There is no cancel (the agent restarts as soon
+as the switch is confirmed); a failed start leaves the chat in the `failed`
+phase, and the retry offers the accounts of the same harness and lane.
+`harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
+may be rebound on; a same-lane target on any other harness is a handoff.
+
+The page drives both from the composer's provider menu: pressing any account
+but the chat's own makes it the chat's pending lane ("next"), the send button
+then reads "Switch and send" and asks a confirm (two lines for a handoff, one
+for a rebind, with "Start a new chat instead" as the other way out), and the
+typed message becomes the first the chat sends after the switch. While the chat converges the held messages
 render from the snapshot's `handoff.held_sends` with the phase as their
-caption, the activity strip and the placeholder say what is happening, and the
-Stop button is "Cancel switch" until the old agent is stopped; a failed create
-shows its reason over the composer with a retry on any signed-in account. The
-verbs the app refuses meanwhile answer 409 with a detail written for the user,
-which the page and the shell's tab menu show as is.
+caption, the activity strip and the placeholder say what is happening, and for
+a handoff the Stop button is "Cancel switch" until the old agent is stopped; a
+failed start shows its reason over the composer with a retry (on any signed-in
+account after a handoff, on the same harness and lane after a rebind) and
+"Start a new chat instead". The verbs the app refuses meanwhile answer 409 with
+a detail written for the user, which the page and the shell's tab menu show as
+is.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -117,11 +137,11 @@ chat. See `docs/system/blueprint/chat-agent-split/`.
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
 signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
-binds to an account when it is created and never changes it. A launch that names
-no account (the New Tab tile, a rail shortcut, `layout.py open chat`) goes to the
-account the user pinned as the default in a chat's provider menu, else to the
-most recently used one; pressing another account in that menu offers to launch a
-new chat on it. `system/scripts/migrate_claude_auth.py` imports this package from
+binds to an account when it is created and moves to another only through a
+switch (a handoff or a rebind, above). A launch that names no account (the New
+Tab tile, a rail shortcut, `layout.py open chat`) goes to the account the user
+pinned as the default in a chat's provider menu, else to the most recently used
+one; pressing another account in that menu makes it the chat's pending lane. `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no

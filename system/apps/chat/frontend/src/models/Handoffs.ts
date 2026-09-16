@@ -7,10 +7,12 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import type { HandoffPhase } from "./Chats";
+import type { HandoffPhase, TransitionKind } from "./Chats";
 import { announceMessageSent } from "./Response";
 
 export interface SwitchChatResult {
+  /** Whether the target made the switch a handoff (a new agent) or a rebind (the same agent, another account). */
+  kind: TransitionKind;
   phase: HandoffPhase;
   /** The queued text taken off the agent the chat is leaving, for the composer ("" for none). */
   returned_block: string;

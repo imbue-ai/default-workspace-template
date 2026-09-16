@@ -7,7 +7,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 
 import type { ChatSnapshot } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
-import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
 import { renderHeldSends } from "./HeldSendView";
 
@@ -40,6 +40,27 @@ describe("the words for a chat switching harness", () => {
   });
 });
 
+describe("the words for a chat changing account in place", () => {
+  it("keeps the harness and names the account the agent restarts on", () => {
+    expect(handoffPhaseText(rebindStateFixture({ phase: "draining" }), "claude")).toBe("Wrapping up with Claude…");
+    expect(handoffPhaseText(rebindStateFixture({ phase: "restarting" }), "claude")).toBe(
+      "Restarting Claude on Anthropic 2 (Claude Code)…",
+    );
+    expect(handoffPhaseText(rebindStateFixture({ phase: "failed" }), "claude")).toBe(
+      "Could not restart Claude on Anthropic 2 (Claude Code)",
+    );
+    expect(handoffComposerPlaceholder(rebindStateFixture())).toBe(
+      "Type a message; it is delivered once Anthropic 2 (Claude Code) is ready…",
+    );
+  });
+
+  it("can never be called off: the agent restarts as soon as the switch is confirmed", () => {
+    expect(isHandoffCancellable(rebindStateFixture({ phase: "draining" }))).toBe(false);
+    expect(isHandoffCancellable(rebindStateFixture({ phase: "restarting" }))).toBe(false);
+    expect(isHandoffCancellable(rebindStateFixture({ phase: "failed" }))).toBe(false);
+  });
+});
+
 describe("the held-send bubbles", () => {
   it("renders every held message from the snapshot, captioned with the phase", () => {
     chats.set(
@@ -61,6 +82,13 @@ describe("the held-send bubbles", () => {
     expect(text).toContain("and this");
     expect(text).toContain("Claude is writing a summary…");
     expect(text).not.toContain("Sending…");
+  });
+
+  it("captions a rebind's held messages with the restart", () => {
+    chats.set("agent-3", chatSnapshotFixture("agent-3", { handoff: rebindStateFixture() }));
+    const text = JSON.stringify(renderHeldSends("agent-3"));
+    expect(text).toContain("Carry on on the other account");
+    expect(text).toContain("Restarting Claude on Anthropic 2 (Claude Code)…");
   });
 
   it("renders nothing for a chat that is not switching", () => {

@@ -100,18 +100,21 @@ class HandoffStepError(RuntimeError):
 
 
 @pure
-def converging_detail(phase: HandoffPhase, target_harness: HarnessType) -> str:
+def converging_detail(phase: HandoffPhase, target_label: str) -> str:
     """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
 
-    Names the harness and the phase in plain words rather than the chat's id: the shell's tab
-    menu and the chat page both put this text in front of the user.
+    Names the destination and the phase in plain words rather than the chat's id: the shell's
+    tab menu and the chat page both put this text in front of the user. The destination is the
+    harness for a handoff and the account for a rebind (``HandoffState.target_label``).
     """
-    label = HARNESS_LABEL[target_harness]
     match phase:
-        case HandoffPhase.DRAINING | HandoffPhase.SUMMARIZING | HandoffPhase.SWITCHING:
-            return f"This chat is switching to {label} and is {phase.value}; wait for the switch to finish, then try again."
+        case HandoffPhase.DRAINING | HandoffPhase.SUMMARIZING | HandoffPhase.SWITCHING | HandoffPhase.RESTARTING:
+            return (
+                f"This chat is switching to {target_label} and is {phase.value}; "
+                "wait for the switch to finish, then try again."
+            )
         case HandoffPhase.FAILED:
-            return f"This chat's switch to {label} failed; retry the switch from the chat before anything else."
+            return f"This chat's switch to {target_label} failed; retry the switch from the chat before anything else."
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -203,20 +206,29 @@ def failure_notice(error: str | None, output_tail: str) -> str:
 
 
 @pure
-def _rename_failure_reason(result: FinishedProcess) -> str:
-    """Why the archival rename failed: the timeout, mngr's own words, or the signal or exit code that ended it.
+def mngr_exit_summary(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
+    """How an mngr verb ended, in one line: the timeout, or the signal or exit code that ended it.
 
-    A rename that ran out of time or was killed prints nothing, so its stderr alone would
-    leave the step error (the one trace of why the switch stalled) without a reason.
+    Never mngr's own output: a failed page shows that as the tail under this line, and a log
+    line adds it where it has it.
     """
     if result.is_timed_out:
-        return f"mngr rename did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped"
-    stderr = result.stderr.strip()
-    if stderr:
-        return stderr
+        return f"mngr {verb} did not finish within {timeout_seconds:.0f}s and was stopped"
     if result.returncode is not None and result.returncode < 0:
-        return f"mngr rename was stopped by signal {-result.returncode}"
-    return f"mngr rename exited with code {result.returncode}"
+        return f"mngr {verb} was stopped by signal {-result.returncode}"
+    return f"mngr {verb} exited with code {result.returncode}"
+
+
+@pure
+def mngr_failure_reason(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
+    """Why an mngr verb failed, for a step error: the timeout, mngr's own words, or the signal or exit code that ended it.
+
+    A verb that ran out of time or was killed prints nothing, so its stderr alone would leave
+    the step error (the one trace of why the switch stalled) without a reason.
+    """
+    if result.is_timed_out:
+        return mngr_exit_summary(verb, result, timeout_seconds)
+    return result.stderr.strip() or mngr_exit_summary(verb, result, timeout_seconds)
 
 
 @pure
@@ -352,6 +364,8 @@ class HandoffRunner:
                     is_done = True
                 case HandoffPhase.FAILED:
                     is_done = True
+                case HandoffPhase.RESTARTING:
+                    raise HandoffStepError(f"the handoff of chat {chat_id} is in the rebind-only phase restarting")
                 case _ as unreachable:
                     assert_never(unreachable)
 
@@ -388,7 +402,7 @@ class HandoffRunner:
                 handoff_id,
                 lambda current: current.model_copy_update(
                     to_update(current.field_ref().phase, HandoffPhase.SUMMARIZING),
-                    to_update(current.field_ref().returned_block, _joined_blocks(current.returned_block, block)),
+                    to_update(current.field_ref().returned_block, joined_blocks(current.returned_block, block)),
                 ),
             )
         except HandoffCancelledError as e:
@@ -397,7 +411,7 @@ class HandoffRunner:
                 chat_id,
                 e,
             )
-        return _joined_blocks(handoff.returned_block, block)
+        return joined_blocks(handoff.returned_block, block)
 
     # -- summarizing ---------------------------------------------------------------------------
 
@@ -568,7 +582,8 @@ class HandoffRunner:
         )
         if result.returncode != 0:
             raise HandoffStepError(
-                f"could not archive agent {retiring.agent_id} of chat {chat_id}: {_rename_failure_reason(result)}"
+                f"could not archive agent {retiring.agent_id} of chat {chat_id}: "
+                f"{mngr_failure_reason('rename', result, _RENAME_TIMEOUT_SECONDS)}"
             )
         self._deps.note_agent_renamed(retiring.agent_id, archival_name, labels)
 
@@ -816,7 +831,7 @@ def _retiring_entry(record: ChatRecord, handoff: ChatHandoffRecord) -> ChatAgent
 
 
 @pure
-def _joined_blocks(first: str, second: str) -> str:
+def joined_blocks(first: str, second: str) -> str:
     return "\n".join(block for block in (first, second) if block)
 
 

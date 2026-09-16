@@ -166,7 +166,7 @@ def _agent_list_not_known_response() -> Response:
 
 def _converging_response(handoff: HandoffState) -> Response:
     return json_response(
-        {"detail": converging_detail(handoff.phase, handoff.target_harness), "phase": handoff.phase.value},
+        {"detail": converging_detail(handoff.phase, handoff.target_label), "phase": handoff.phase.value},
         status_code=409,
     )
 
@@ -1044,13 +1044,12 @@ def _drain_to_composer_endpoint(chat_id: str) -> Response:
 
 
 def _switch_chat_endpoint(chat_id: str) -> Response:
-    """Continue the chat on another account: the handoff (spec 5.2).
+    """Continue the chat on another account: a handoff to a new agent, or a rebind of the same one (spec 5.2, 6).
 
     The route runs draining synchronously, so its answer carries the queued text taken off
-    the retiring agent for the composer, and the remaining phases run in the background.
-    Answers 409 while the chat is already converging, 404 when it has no active agent, and 400
-    when the account is unknown or the chat's own, or the target runs the same harness (a
-    rebind, which a later phase adds).
+    the agent for the composer, and the remaining phases run in the background. Answers 409
+    while the chat is already converging, 404 when it has no active agent, and 400 when the
+    account is unknown or the chat's own.
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
@@ -1067,7 +1066,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     try:
-        phase, returned_block = agent_manager.begin_handoff(
+        kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
             switch_request.account_id,
             switch_request.message,
@@ -1080,14 +1079,15 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     _record_client_message_activity(ChatId(chat_id), switch_request)
     agent_manager.record_message_sent(ChatId(chat_id))
-    response = SwitchChatResponse(status="converging", phase=phase, returned_block=returned_block)
+    response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
     return json_response(response.model_dump(mode="json"), status_code=202)
 
 
 def _cancel_handoff_endpoint(chat_id: str) -> Response:
     """Call the chat's handoff off (spec 5.6); the confirming message comes back for the composer.
 
-    Answers 400 for a chat that is not converging and 409 once switching has begun.
+    Answers 400 for a chat that is not converging and 409 once switching has begun, or when
+    the switch is a rebind, which has no window to call it off in (spec 6).
     """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
@@ -1103,7 +1103,11 @@ def _cancel_handoff_endpoint(chat_id: str) -> Response:
 
 
 def _retry_handoff_endpoint(chat_id: str) -> Response:
-    """Run a failed handoff's create again on an account (spec 5.10). 400 unless the chat is in the failed phase."""
+    """Run a failed switch's last step again on an account: a handoff's create (spec 5.10) or a rebind's restart (spec 6).
+
+    400 unless the chat is in the failed phase, and for a rebind when the account is not on the
+    agent's own harness and lane.
+    """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
         return _chat_not_found_response(chat_id)

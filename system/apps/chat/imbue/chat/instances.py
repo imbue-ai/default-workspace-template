@@ -120,13 +120,13 @@ def instance_record_for_chat(snapshot: ChatSnapshot) -> InstanceRecord:
 
 
 def _refuse_while_moving(snapshot: ChatSnapshot) -> None:
-    """Stop, start, and rename answer 409 while the chat moves to another agent (contracts.md 4.3).
+    """Stop, start, and rename answer 409 while the chat moves to another agent or account (contracts.md 4.3).
 
-    The snapshot's active agent is then the retiring stand-in, which a start would revive
-    and a stop or rename would act on behind the handoff's back.
+    The snapshot's active agent is then the retiring stand-in (or the one being restarted),
+    which a start would revive and a stop or rename would act on behind the switch's back.
     """
     if snapshot.handoff is not None:
-        raise ChatMovingError(converging_detail(snapshot.handoff.phase, snapshot.handoff.target_harness))
+        raise ChatMovingError(converging_detail(snapshot.handoff.phase, snapshot.handoff.target_label))
 
 
 _STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] = {

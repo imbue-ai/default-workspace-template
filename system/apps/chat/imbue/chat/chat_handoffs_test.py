@@ -22,13 +22,13 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
-from imbue.chat.chat_handoffs import _rename_failure_reason
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
 from imbue.chat.chat_handoffs import is_summary_written
 from imbue.chat.chat_handoffs import last_user_turn_epoch
+from imbue.chat.chat_handoffs import mngr_failure_reason
 from imbue.chat.chat_handoffs import prompt_path
 from imbue.chat.chat_handoffs import summary_path
 from imbue.chat.chat_handoffs import summary_request_message
@@ -366,15 +366,15 @@ def _finished_rename(returncode: int, stderr: str = "", is_timed_out: bool = Fal
     )
 
 
-def test_a_failed_archival_rename_names_its_reason_even_when_mngr_printed_nothing() -> None:
+def test_a_failed_mngr_verb_names_its_reason_even_when_mngr_printed_nothing() -> None:
     """The step error is the one trace of why a switch stalled, so a timeout or a signal is named
     rather than reported as an empty stderr."""
-    assert _rename_failure_reason(_finished_rename(1, stderr="No agent named x\n")) == "No agent named x"
-    assert _rename_failure_reason(_finished_rename(-15, is_timed_out=True)).startswith(
-        "mngr rename did not finish within"
+    assert mngr_failure_reason("rename", _finished_rename(1, stderr="No agent named x\n"), 30.0) == "No agent named x"
+    assert mngr_failure_reason("rename", _finished_rename(-15, is_timed_out=True, stderr="killed\n"), 30.0) == (
+        "mngr rename did not finish within 30s and was stopped"
     )
-    assert _rename_failure_reason(_finished_rename(-9)) == "mngr rename was stopped by signal 9"
-    assert _rename_failure_reason(_finished_rename(2)) == "mngr rename exited with code 2"
+    assert mngr_failure_reason("rename", _finished_rename(-9), 30.0) == "mngr rename was stopped by signal 9"
+    assert mngr_failure_reason("label", _finished_rename(2), 30.0) == "mngr label exited with code 2"
 
 
 def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path) -> None:

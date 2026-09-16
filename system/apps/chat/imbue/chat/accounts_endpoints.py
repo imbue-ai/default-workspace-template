@@ -25,8 +25,6 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
-from imbue.chat.harnesses.lanes import account_label
-from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.models import ErrorResponse
 from imbue.chat.request_helpers import parse_json_object_body
@@ -99,49 +97,26 @@ def list_accounts() -> Response:
     to turn a harness into "(Claude Code)"; the client would otherwise need a second copy.
     """
     index = accounts.read_index()
-    rows = []
-    # The stored `seq` counts per LANE, but the label names a provider and a harness -- and
-    # those do not line up. Two lanes run on pi and can both mint an OpenRouter account, so
-    # lane numbering gives two rows reading "OpenRouter (Pi)" with nothing between them;
-    # meanwhile a lane that offers many providers numbers its only Groq account "Groq (Pi) 2"
-    # because an OpenRouter one came first. Numbering here, over what the label actually
-    # says, makes the number mean what the user reads it as.
-    shown: dict[tuple[str, str], int] = {}
-    for account in index.accounts:
-        try:
-            lane = get_lane(account.lane)
-        except LaneNotFoundError:
-            # A row naming a lane this build no longer has. Skip rather than 500 -- the user
-            # can still see and delete their other accounts.
-            logger.warning("Account {} names unknown lane {}; skipping", account.id, account.lane)
-            continue
-        # A renamed account is numbered under the name the user gave it, not the provider's.
-        # Numbering the hidden name would put a "2" on a row with nothing beside it, and drop
-        # the one that two rows reading "work" actually need.
-        display = account.name if account.name != "" else account.display
-        key = (display, lane.harness.value)
-        shown[key] = shown.get(key, 0) + 1
-        # The number rides `provider` rather than `label` alone. Every surface that shows an
-        # account renders the provider and the harness as two spans at different sizes, so a
-        # number that lives only in the composed string is a number nothing displays -- which
-        # is exactly how two "Anthropic (Claude Code)" rows ended up indistinguishable.
-        numbered = numbered_provider(display, shown[key])
-        rows.append(
-            {
-                "id": account.id,
-                "lane": account.lane,
-                "harness": lane.harness.value,
-                # The composed label ("Groq 2 (Pi)") for anything showing one string, and its
-                # parts for the combo card, which renders the provider and the harness at
-                # different sizes on one row. Composed here either way, so the numbering rule
-                # lives in one place.
-                "provider": numbered,
-                "harness_label": HARNESS_LABEL[lane.harness],
-                "seq": shown[key],
-                "name": account.name,
-                "label": account_label(display, lane.harness, shown[key]),
-            }
-        )
+    # An account on a lane this build no longer has is left out rather than a 500, so the user
+    # can still see and delete their other accounts (``harness_for`` logs it).
+    rows = [
+        {
+            "id": numbered.account.id,
+            "lane": numbered.account.lane,
+            "harness": numbered.harness.value,
+            # The number rides `provider` rather than `label` alone. Every surface that shows an
+            # account renders the provider and the harness as two spans at different sizes, so a
+            # number that lives only in the composed string is a number nothing displays -- which
+            # is exactly how two "Anthropic (Claude Code)" rows ended up indistinguishable. The
+            # composed label serves anything showing one string.
+            "provider": numbered_provider(numbered.display, numbered.number),
+            "harness_label": HARNESS_LABEL[numbered.harness],
+            "seq": numbered.number,
+            "name": numbered.account.name,
+            "label": numbered.label,
+        }
+        for numbered in accounts.number_accounts(index.accounts)
+    ]
     return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
 
 
