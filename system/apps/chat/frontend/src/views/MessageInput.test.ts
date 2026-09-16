@@ -151,7 +151,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
-import { MessageInput, takeComposerDraft } from "./MessageInput";
+import { MessageInput, prependToComposer, takeComposerDraft } from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -832,6 +832,16 @@ describe("MessageInput switching harness", () => {
     expect(localStorage.getItem("message-text:agent-1")).toBeNull();
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("keeps a draft handed straight back after a sibling took it", () => {
+    const component = MessageInput();
+    typeDraft(component, "agent-1", "moving house");
+    takeComposerDraft("agent-1");
+    // No view pass in between: the take and the hand-back are both pending on the next one.
+    prependToComposer("agent-1", "moving house");
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("moving house");
   });
 
   it("sends ordinarily, with the send-time id, when no lane is pending", async () => {

@@ -317,12 +317,14 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       const pendingPrepend = pendingComposerPrepends.get(chatId);
+      // The clear before the prepend: a take-then-hand-straight-back (a new chat the shell could
+      // not start) leaves both pending on the same pass, and the restored draft must win.
+      if (pendingComposerClears.delete(chatId)) {
+        messageText = "";
+      }
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
-      }
-      if (pendingComposerClears.delete(chatId)) {
-        messageText = "";
       }
 
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
