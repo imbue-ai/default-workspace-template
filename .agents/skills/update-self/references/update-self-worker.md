@@ -298,8 +298,9 @@ Valid `name:` values:
 
 - `question` (`type: gate`) -- three cases; say which in the first line.
   (a) A genuine, unresolvable merge conflict: the file, what each side did,
-  the options. (b) The 4c review-gate escape hatch: the rule's conditions as
-  you read them, your situation, what you would do instead. (c) A
+  the options. (b) The scope escape hatch of 4a (the impact analysis), 4b (a
+  validation item) or 4c (the review gates): which rule, its conditions as you
+  read them, your situation, what you would do instead. (c) A
   **customization the update cannot keep** (the 4b verdict): what the user
   built, what the update does to it, the adaptation you attempted and why it
   failed, the before/after evidence (paths in your worktree), and the options.
