@@ -46,7 +46,7 @@ interface OpenDialog {
   target: ProviderAccount;
   /** What the switch does, read when the dialog opens: it decides the words and what no pick means. */
   kind: TransitionKind;
-  /** The successor's pickable models, once fetched; null while loading. */
+  /** The target account's pickable models, once fetched; null while loading. */
   options: CatalogModelOption[] | null;
   /** Why the models could not be fetched, when they could not be; null otherwise. */
   optionsError: string | null;

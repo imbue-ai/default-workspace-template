@@ -1,6 +1,7 @@
 /**
- * The models an account can run a NEW agent on: what the switch dialog's picker offers for the
- * successor a handoff creates, or for a new chat, before either agent exists.
+ * The models an account can run an agent on: what the switch dialog's picker offers for the agent a
+ * switch leaves the chat on (a handoff's successor, or a rebind's agent restarted on the account), or
+ * for a new chat.
  *
  * Read from ``GET /api/accounts/:id/model-options``, the account-level twin of the per-chat
  * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the options the
