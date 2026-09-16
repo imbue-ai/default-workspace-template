@@ -60,8 +60,7 @@ export interface HarnessCatalog {
   // to the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;
   // The harness's declared popups plus its agent-auth surface, merged into the
-  // payload from the backend HarnessSpec. Always present, like `label`: the page is
-  // served by the same process as the route, so there is no older backend to omit it.
+  // payload from the backend HarnessSpec.
   popups: HarnessPopup[];
 }
 

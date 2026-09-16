@@ -256,8 +256,8 @@ function renderPicker(dialog: OpenDialog): m.Children {
 
 /** Leave this chat as it is and open a new one on the target, on the picked model, with the draft --
  *  its attachments included -- moved over. With nothing picked, a rebind's new chat takes the model this
- *  chat runs on, which is what "Keep the current model" said. A draft the composer refuses to give up
- *  leaves the dialog where it is, with the composer's own notice saying why. */
+ *  chat runs on. A draft the composer refuses to give up leaves the dialog where it is, with the
+ *  composer's own notice saying why. */
 async function startNewChat(dialog: OpenDialog): Promise<void> {
   const pick =
     pickOf(dialog)?.identity ?? (dialog.kind === "rebind" ? currentModelIdentity(getChatById(dialog.chatId)) : null);

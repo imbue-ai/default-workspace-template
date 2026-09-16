@@ -945,8 +945,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       /**
        * What the armed switch will do, above the composer (spec 5.1): the account the next message
        * moves the chat to and the model picked for it, with a way back into the dialog to change the
-       * pick (a rebind was armed without one, so this is where its model is picked) and a way to
-       * call the choice off.
+       * pick and a way to call the choice off.
        */
       function renderSwitchStrip(target: ProviderAccount): m.Children {
         const pick = chatId ? getPendingPick(chatId) : null;
