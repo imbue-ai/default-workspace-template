@@ -364,6 +364,7 @@ let chooserAccountId: string | null = null;
 // were adding a provider for later and should not be moved. The caller knows which it is;
 // nothing here can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
+let chooserBrokenAccountId: string | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -372,8 +373,11 @@ export function isProviderChooserOpen(): boolean {
 export interface ProviderChooserIntent {
   /** Re-authenticate THIS account rather than add a provider. */
   accountId?: string;
-  /** Run once a sign-in succeeds, with the account it produced. */
+  /** Run once a sign-in succeeds, with the account it produced. Also run when a signed-in
+   *  account is picked instead, which is why its presence makes those rows pickable. */
   onSignedIn?: (accountId: string) => void;
+  /** The account the caller is moving away from because it failed. Listed, but not pickable. */
+  brokenAccountId?: string;
 }
 
 /** Open the chooser, optionally saying why it was opened. */
@@ -382,7 +386,24 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOpen = true;
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
+  chooserBrokenAccountId = intent.brokenAccountId ?? null;
   m.redraw();
+}
+
+/** Whether the chooser was opened to pick an account, so a signed-in one can be used as is. */
+export function isPickingAccount(): boolean {
+  return chooserOnSignedIn !== null;
+}
+
+export function getBrokenAccountId(): string | null {
+  return chooserBrokenAccountId;
+}
+
+/** Use an account that is already signed in: what a finished sign-in does, minus the sign-in. */
+export function pickAccount(accountId: string): void {
+  const run = chooserOnSignedIn;
+  closeProviderChooser();
+  run?.(accountId);
 }
 
 /** The account the chooser was opened on, or null when it was opened to add a provider.
@@ -399,5 +420,6 @@ export function closeProviderChooser(): void {
   // Cleared on close as well as on open: a chooser dismissed without signing in must not
   // leave a callback armed for whoever opens it next.
   chooserOnSignedIn = null;
+  chooserBrokenAccountId = null;
   m.redraw();
 }
