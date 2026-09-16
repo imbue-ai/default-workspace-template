@@ -3218,6 +3218,8 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
     second create, and a retry on another account destroys the successor and creates afresh."""
     sent: list[tuple[str, str, str]] = []
     manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
     first = f"agent-{uuid4().hex}"
     seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
     chat_id = ChatId(first)
@@ -3260,6 +3262,9 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
         assert retried is not None and retried.handoff is not None and retried.handoff.model_pick == pick
+        # Discarding it forgot it the way a destroy does, trackers and resident transcript included,
+        # rather than only dropping it from the tracked list.
+        assert evicted == [successor]
     finally:
         manager.stop()
 

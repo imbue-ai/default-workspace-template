@@ -1629,7 +1629,6 @@ class AgentManager:
                 # for, so a retry on another harness drops it.
                 if transition.target_account_id != target.account.id and transition.next_agent_id in self._agents:
                     discarded_successor_id = transition.next_agent_id
-                    del self._agents[transition.next_agent_id]
                 retried_handoff = transition.model_copy_update(
                     to_update(transition.field_ref().phase, HandoffPhase.SWITCHING),
                     to_update(transition.field_ref().error, None),
@@ -1657,12 +1656,18 @@ class AgentManager:
         """Destroy the successor a failed attempt made, once a retry moves the chat to another account.
 
         Logged rather than raised when mngr refuses: the retry's create then meets the id in
-        use and runs the half-made path, which destroys and creates again.
+        use and runs the half-made path, which destroys and creates again. Forgotten either
+        way, and through ``remove_agent``, which also stops the trackers the successor was
+        given when it was noted -- and which the retry's create must not find still tracking
+        the id it is about to mint again.
         """
         try:
             self.destroy_agent_process(successor_id)
         except AgentDestroyError as e:
-            _loguru_logger.warning("Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e)
+            _loguru_logger.warning(
+                "Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e
+            )
+        self.remove_agent(successor_id)
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
         """Put a running agent on ``pick``: the model bar's own path, for an agent that was just created.
