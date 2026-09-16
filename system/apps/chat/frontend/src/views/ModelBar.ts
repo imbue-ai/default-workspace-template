@@ -112,6 +112,9 @@ export function ModelBar(): m.Component<{ chatId: string }> {
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
+  // What the fast-limit field shows while it is being typed into, or null when it shows the
+  // settings' limit; see fastLimitRow.
+  let fastLimitDraft: string | null = null;
 
   // Recompute the offerable models for `chatId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
@@ -155,6 +158,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     // A drag that never released (the card can be torn down mid-gesture) would otherwise
     // still be driving the label and the thumb the next time the card opens.
     draggingEffortIndex = null;
+    fastLimitDraft = null;
     setFlyout(null);
   }
 
@@ -351,9 +355,23 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           class: `${inputClass({ extra: "fast-limit-input w-16 py-1 text-right" })}`,
           "aria-label": "Fast mode turn limit",
           "data-card-row": "fast-limit",
-          value: String(limit),
+          // Mithril re-asserts `value` on every redraw, and every keystroke here triggers one
+          // (the onkeydown handler), so the field holds what is typed locally until it commits;
+          // otherwise each character would be wiped by the redraw that follows the key press.
+          value: fastLimitDraft ?? String(limit),
           disabled: !opts.interactive || settings === null,
-          onchange: (event: Event) => apply((event.target as HTMLInputElement).value),
+          oninput: (event: Event) => {
+            fastLimitDraft = (event.target as HTMLInputElement).value;
+          },
+          onchange: (event: Event) => {
+            fastLimitDraft = null;
+            apply((event.target as HTMLInputElement).value);
+          },
+          // A field blurred with its text unchanged fires no `change`; a draft kept past that
+          // would mask a limit written elsewhere.
+          onblur: () => {
+            fastLimitDraft = null;
+          },
           onkeydown: (event: KeyboardEvent) => {
             if (event.key === "Enter") (event.target as HTMLInputElement).blur();
           },

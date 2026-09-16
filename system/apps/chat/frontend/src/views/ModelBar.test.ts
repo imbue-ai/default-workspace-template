@@ -538,7 +538,12 @@ describe("the combo card", () => {
     // The unit beside the field agrees with the number in it.
     expect(input.nextElementSibling?.textContent).toBe("turn");
 
+    // Typing redraws (every keystroke runs a handler), and a redraw re-asserts `value`: the
+    // typed text has to survive it, or the field can only be changed with the spinner.
     input.value = "3";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    expect(input.value).toBe("3");
     input.dispatchEvent(new Event("change", { bubbles: true }));
     expect(settingsWrites).toEqual([{ fast_mode_turn_limit: 3, is_fast_mode_notice_shown: true }]);
 
