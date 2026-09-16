@@ -334,6 +334,18 @@ def send_through_chat_app(
     return SendResult(Outcome.REFUSED, answer.detail)
 
 
+def create_request_body(request: CreateRequest) -> dict[str, object]:
+    """The JSON the create route is posted: the chat app's ``CreateChatRequest``, which forbids
+    unknown fields, so a test there pins these keys against it."""
+    return {
+        "name": request.name,
+        "message": request.message,
+        "labels": dict(request.labels),
+        "is_installation_check_skipped": request.is_installation_check_skipped,
+        WAIT_FIELD: True,
+    }
+
+
 def create_through_chat_app(
     base_url: str,
     request: CreateRequest,
@@ -346,14 +358,9 @@ def create_through_chat_app(
     as long as ``mngr create`` takes (the connect timeout alone bounds an unreachable app),
     and a 2xx means the chat runs.
     """
-    body: dict[str, object] = {
-        "name": request.name,
-        "message": request.message,
-        "labels": dict(request.labels),
-        "is_installation_check_skipped": request.is_installation_check_skipped,
-        WAIT_FIELD: True,
-    }
-    answer = _post_until_answered(base_url, CREATE_CHAT_PATH, body, clock, sleep)
+    answer = _post_until_answered(
+        base_url, CREATE_CHAT_PATH, create_request_body(request), clock, sleep
+    )
     if isinstance(answer, SendResult):
         return answer
     if answer.status == 400 and WAIT_FIELD in answer.detail:
