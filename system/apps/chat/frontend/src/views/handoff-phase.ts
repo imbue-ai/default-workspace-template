@@ -4,7 +4,7 @@
  */
 
 import type { HandoffState } from "../models/Chats";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 
 /** The phase, as the page tells it. ``retiringHarness`` is the active agent's: the one the chat
  *  is leaving in a handoff, the one being restarted in a rebind. */

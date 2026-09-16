@@ -25,7 +25,7 @@ import type { PendingPick } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 import { prependToComposer, raiseFailureNotice, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
 

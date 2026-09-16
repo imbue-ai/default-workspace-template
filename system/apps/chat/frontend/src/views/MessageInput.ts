@@ -24,7 +24,7 @@ import { openProviderChooser } from "../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getChatById, isHandoffCancellable, whenChatRegistered } from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";

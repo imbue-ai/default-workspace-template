@@ -16,7 +16,7 @@ import { retryHandoff } from "../models/Handoffs";
 import { getAccounts } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 
 /** The accounts a failed switch may be retried on: any for a handoff, the agent's own harness and lane for a rebind. */
 export function retryableAccounts(chat: ChatSnapshot, handoff: HandoffState): ProviderAccount[] {

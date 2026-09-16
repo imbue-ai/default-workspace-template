@@ -14,7 +14,7 @@ import { statusDoneIcon, statusPendingIcon } from "@imbue/workspace-ui/src/compo
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import type { ToolResultEvent } from "../models/Response";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantMessageChildren } from "./message-renderers";
 import { isLiveHandoffRequest } from "./turn-grouping";
