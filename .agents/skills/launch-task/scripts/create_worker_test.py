@@ -389,6 +389,119 @@ def test_launch_proceeds_when_not_a_git_repo(tmp_path: Path) -> None:
     assert any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
 
 
+def test_work_folder_and_model_reach_create_and_skip_clean_check(
+    tmp_path: Path,
+) -> None:
+    """A work folder runs the worker in place (``--from :<absolute folder>``) and a
+    model becomes a per-agent settings override. The lead's dirty tree does not
+    block the launch, because the worker never starts from the lead's HEAD."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+    runner.respond(("git", "status"), _StubResult(stdout=" M some_file.py\n"))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="shared_folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+        model="sonnet",
+    )
+
+    assert rc == 0
+    argvs = [c.argv for c in runner.calls]
+    assert ["git", "status", "--porcelain"] not in argvs
+    create_calls = [argv for argv in argvs if argv[:2] == ["mngr", "create"]]
+    assert create_calls == [
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "shared_folder_worker",
+            "--label",
+            "agent_created=true",
+            "--from",
+            f":{work_folder.resolve()}",
+            "-S",
+            "agent_types.claude.settings_overrides.model=sonnet",
+        ]
+    ]
+
+
+def test_work_folder_and_model_argv_accepted_by_live_cli(tmp_path: Path) -> None:
+    """The in-place ``mngr create`` argv (with ``--from`` and ``-S``) is accepted
+    by the live mngr CLI surface."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="shared_folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+        model="sonnet",
+    )
+
+    assert rc == 0
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    assert len(create_calls) == 1
+    assert_mngr_argv_valid(create_calls[0])
+
+
+def test_work_folder_missing_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A work folder that does not exist aborts before any command runs."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="shared_folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=tmp_path / "no-such-folder",
+        model=None,
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert "--work-folder" in capsys.readouterr().err
+
+
+def test_main_launch_threads_work_folder_and_model(tmp_path: Path) -> None:
+    """The ``launch`` CLI passes ``--work-folder`` and ``--model`` through to create."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(
+        _launch_argv(runtime, task)
+        + ["--work-folder", str(work_folder), "--model", "opus"],
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    assert len(create_calls) == 1
+    assert create_calls[0][-4:] == [
+        "--from",
+        f":{work_folder.resolve()}",
+        "-S",
+        "agent_types.claude.settings_overrides.model=opus",
+    ]
+
+
 def test_invalid_frontmatter_yaml_raises(tmp_path: Path) -> None:
     """A present frontmatter block with invalid YAML raises rather than being
     silently treated as 'no frontmatter' -- it would otherwise mask an
