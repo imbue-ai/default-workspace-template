@@ -1,6 +1,6 @@
 ---
 name: find-transcripts
-description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Minds agents -- not other services (ChatGPT, claude.ai, etc.)."
+description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Mind agents -- not other services (ChatGPT, claude.ai, etc.)."
 compatibility: Covers agents that ran on this host (active, stopped, or destroyed). Uses find/cat/jq/mngr.
 metadata:
   author: imbue
@@ -38,9 +38,9 @@ help you identify which is which.
   stored on this host. To access them you'd need to pull in that data separately
   via their own export features.
 
-- **Other Minds workspaces**: each workspace is a separate host with its own
+- **Other Mind workspaces**: each workspace is a separate host with its own
   `/home/user/.mngr/`. Transcripts from agents in another workspace live there, not here.
-  To read them, SSH into that workspace via the Minds API: use the `minds-api`
+  To read them, SSH into that workspace via the Mind API: use the `minds-api`
   skill to request the `minds-workspaces-ssh` latchkey permission, then run this
   skill's read commands over SSH on that host.
 

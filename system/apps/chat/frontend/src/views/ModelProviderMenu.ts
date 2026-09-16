@@ -189,10 +189,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     void fetchOfferedModels(chatId);
   }
 
-  function tooltipAttrs(text: string | null): m.Attributes {
-    return text === null ? {} : hoverTooltipAttrs(text, "above");
-  }
-
   /** The effort slider, or null when there is nothing to slide.
    *
    * Two deliberate choices, both decided rather than discovered:
@@ -232,7 +228,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
@@ -300,7 +296,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     tooltip: string | null;
     onToggle: () => void;
   }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
       m("span", { class: css.ROW_LABEL }, "Fast Mode"),
       m(
         "span",

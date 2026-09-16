@@ -1388,7 +1388,7 @@ def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Pa
         page.locator('.new-tab-start-tile[data-start="learn"]').click()
         is_seeded = poll_until(
             lambda: any(
-                call.startswith("create:new:{'message': 'Teach me about Minds") for call in server.stub_source.calls
+                call.startswith("create:new:{'message': 'Teach me about Mind") for call in server.stub_source.calls
             ),
             timeout=15.0,
             poll_interval=0.1,
