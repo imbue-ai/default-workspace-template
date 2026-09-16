@@ -13,6 +13,7 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import RECORD_VERSION
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -56,6 +57,38 @@ def test_a_record_refuses_agents_that_contradict_what_it_says_about_them() -> No
     # A converging chat (every agent archived, none active yet) and a single agent are both fine.
     ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(2, second, is_archived=True)))
     ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=False),))
+
+
+def test_a_seed_segment_is_the_chats_first_ended_member_and_no_agent_mngr_knows() -> None:
+    """A seeded chat's record exists before any agent does: the seed is its first member under
+    the chat's own id, already ended, and is left out of the agents a destroy or a listing names."""
+    chat_id, agent = _agent_id(), _agent_id()
+    seed = make_chat_agent_entry(1, chat_id, is_archived=True, harness=HarnessType.SEED)
+
+    seed_only = ChatRecord(chat_id=ChatId(chat_id), agents=(seed,), seed_title="Getting started")
+    assert seed_only.is_seeded and seed_only.is_seed_only
+    assert seed_only.mngr_agent_ids == () and seed_only.active_entry is None
+
+    launched = ChatRecord(chat_id=ChatId(chat_id), agents=(seed, make_chat_agent_entry(2, agent, is_archived=False)))
+    assert launched.is_seeded and not launched.is_seed_only
+    assert launched.member_agent_ids == (chat_id, agent) and launched.mngr_agent_ids == (agent,)
+
+    plain = ChatRecord(chat_id=ChatId(chat_id), agents=(make_chat_agent_entry(1, chat_id, is_archived=False),))
+    assert not plain.is_seeded and not plain.is_seed_only and plain.mngr_agent_ids == (chat_id,)
+
+    with pytest.raises(ValidationError, match="seed segment can only be the chat's first"):
+        ChatRecord(
+            chat_id=ChatId(chat_id),
+            agents=(
+                make_chat_agent_entry(1, chat_id, is_archived=True),
+                make_chat_agent_entry(2, agent, is_archived=True, harness=HarnessType.SEED),
+            ),
+        )
+    with pytest.raises(ValidationError, match="seed segment can only be the chat's first"):
+        ChatRecord(
+            chat_id=ChatId(chat_id),
+            agents=(make_chat_agent_entry(1, chat_id, is_archived=False, harness=HarnessType.SEED),),
+        )
 
 
 def test_a_records_handoff_must_retire_its_last_agent_and_name_a_new_successor() -> None:
