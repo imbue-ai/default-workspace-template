@@ -1714,7 +1714,10 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 #
 # Differences from `worker`, each following from that shared folder:
 # - No provision commands. The orchestrator runs `uv sync --all-packages` in the
-#   folder once; a per-worker sync would race the other workers on one .venv.
+#   folder once, and again after any worker that changes dependencies; a per-worker
+#   sync would only queue behind the other workers on one .venv. For the same reason
+#   the SessionStart `uv sync --all-packages` hook in .claude/settings.json skips
+#   agents whose MNGR_AGENT_ROLE is shared_folder_worker.
 #   No harden-worker install either -- hardening is the orchestrator's final
 #   crystallize-creation handoff, not a shared-folder worker.
 # - The stop hook is fully off (REVIEWER_STOP_HOOK_ENABLE=0). Its uncommitted-changes
