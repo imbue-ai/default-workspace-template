@@ -3603,19 +3603,18 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         broadcaster, tmp_path, monkeypatch, sent
     )
     chat_id = ChatId(agent_id)
+    rebind = make_chat_rebind_record(
+        agent_id=agent_id,
+        phase=HandoffPhase.FAILED,
+        target_account_id=second_account,
+        error="mngr start exited with code 1",
+    )
     try:
         store.write(
             ChatRecord(
                 chat_id=chat_id,
                 agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
-                rebind=(
-                    rebind := make_chat_rebind_record(
-                        agent_id=agent_id,
-                        phase=HandoffPhase.FAILED,
-                        target_account_id=second_account,
-                        error="mngr start exited with code 1",
-                    )
-                ),
+                rebind=rebind,
             )
         )
         manager.refresh_chat_records()
