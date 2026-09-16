@@ -108,7 +108,7 @@ Each decision below was settled during design, with the rationale given at the t
     A future mngr plugin may produce it per harness; for now the request is a slash command backed by a skill in this template.
     The chat app must be robust to the agent failing to write it, including failing immediately.
 11. **The lane change applies on the next send**, never while a turn is in flight on its own.
-    The user can change the pending lane freely; the next send asks for confirmation.
+    The user can change the pending lane freely. The next send asked for confirmation until phase 8, which moved the asking to the dialog that arms the switch, so the send carries it out with no second confirmation (5.1).
 12. **tk step records follow the chat, not the agent.**
     tk scopes step records by creator, and the creator is the chat's id (`MINDS_CHAT_ID`, falling back to the agent's name outside the chat app), so a successor sees its predecessor's open steps as its own and decides which still apply; the handoff closes nothing.
     Keying on the chat id also fixes the rename bug the name-based scoping had: `mngr rename` changes `MNGR_AGENT_NAME` under a running process, which stranded the steps created after a rename.
@@ -505,7 +505,7 @@ Cancel is refused with 409 in `switching` and later.
 - A repeated `message_id` while held answers 202 like the first time and holds nothing twice: the delivered-id ledger phase 1 deferred, scoped to held sends.
 - Sends keep being held in the `failed` phase too; they deliver on the retry.
 - The trigger message is the first of the held sends.
-  It rides the new agent's `mngr create --message-file` together with the handoff prompt (5.8); the others follow through the normal send path once the agent is ready.
+  It rode the new agent's `mngr create --message-file` together with the handoff prompt until phase 8, which made the create silent: the prompt now carries the message at its end and goes through the send path (5.8), and the others follow it once the agent is ready.
 - Delivery pops one held send at a time under the same lock the message route appends under, and the `handoff` entry is cleared only once the list is empty, so a send that arrives during delivery is delivered by the same loop rather than overtaking one still held.
 - A cancel returns the trigger message to the composer and delivers the other held sends to the old agent (5.6).
 - Held sends survive a chat-app restart because they are persisted on the record's `handoff` entry.
@@ -540,6 +540,8 @@ Cancel is refused with 409 in `switching` and later.
 The chat then has no running agent and one archived agent more.
 The record's `handoff` entry moves to `failed` with the reason (mngr's exit status and the last lines it printed, as today's failed provisional create records, which is also how the create gate's "No provider account is signed in on this machine" reaches the page), the pre-minted id, and the stored prompt.
 The instance status is `error`, the page shows the reason over the composer with a retry that offers every signed-in account, and a retry on any lane runs step 3's create again with the same prompt.
+Since phase 8 the same phase is reached from any later step of the switch too -- the model pick, a delivery, or a step mngr refuses (5.4) -- and `failed_step` says which (4.6).
+The retry then reruns that step rather than the create: it keeps the pre-minted id, so a successor an earlier attempt made is adopted rather than made twice, and it may name another account only until that successor is the chat's own agent; after that the chat has already moved, and the retry finishes where it is.
 The archived transcript stays readable underneath.
 Destroy remains available.
 
@@ -559,7 +561,8 @@ Reconciliation is chosen over replay because every step is idempotent when check
 
 ### 5.12 What the model bar shows
 
-A harness handoff resets model, effort, and fast mode to the new harness's defaults, since those live in the agent's own settings; no translation between harness catalogs is attempted.
+A harness handoff reset model, effort, and fast mode to the new harness's defaults, since those live in the agent's own settings; no translation between harness catalogs is attempted.
+Since phase 8 the switch dialog takes a model for the successor, so it is the user's pick that lands before the first turn, and the harness's default only when they picked none (5.8, principle 24).
 
 ## 6. Rebind
 
