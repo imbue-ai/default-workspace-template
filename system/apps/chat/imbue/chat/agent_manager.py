@@ -77,7 +77,6 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
-from imbue.chat.harnesses.lanes import AUTO_NAME_WORD_BY_LANE
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
@@ -116,7 +115,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import TransitionKind
-from imbue.chat.naming import AUTO_NAME_WORD_BY_HARNESS
+from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_name_conflict
@@ -2237,9 +2236,7 @@ class AgentManager:
         """
         chat_id = ChatId(str(AgentId()))
         with self._lock:
-            display_name = first_free_numbered_name(
-                AUTO_NAME_WORD_BY_HARNESS[DEFAULT_HARNESS], self._taken_names_locked()
-            )
+            display_name = first_free_numbered_name(AUTO_NAME_WORD, self._taken_names_locked())
             provisional = ProvisionalChat(
                 chat_id=chat_id,
                 name=display_name,
@@ -2281,10 +2278,10 @@ class AgentManager:
 
         Returns the chat's id (its first agent's, minted before the create) together with the
         chat's name pair: the human-readable display name and its canonical true name (see
-        ``imbue.chat.naming``). An empty ``requested_name`` mints the
-        first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
-        server-side, under the same lock that registers the in-flight create --
-        so two simultaneous creates cannot both mint "Chat 1".
+        ``imbue.chat.naming``). An empty ``requested_name`` mints the first free "Chat N"
+        here, whatever harness the account runs on, server-side, under the same lock that
+        registers the in-flight create -- so two simultaneous creates cannot both mint
+        "Chat 1".
 
         ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
         failed): it is launched under that id and keeps the name and project it was minted
@@ -2356,12 +2353,7 @@ class AgentManager:
                         )
                     display_name = explicit_name
                 else:
-                    # The lane's word where it has one, else the harness's. Two lanes can share a
-                    # harness -- Opencode Go and OpenRouter both run on pi -- and naming those tabs
-                    # after the harness made both fleets count as "Pi N", so the strip could not
-                    # say which provider a chat was spending.
-                    word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
-                    display_name = first_free_numbered_name(word, taken_names)
+                    display_name = first_free_numbered_name(AUTO_NAME_WORD, taken_names)
 
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,

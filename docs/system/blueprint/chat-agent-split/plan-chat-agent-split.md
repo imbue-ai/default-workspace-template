@@ -138,6 +138,12 @@ Each decision below was settled during design, with the rationale given at the t
 27. **No mngr code change is required.**
     The chat app edits an agent's env file directly for a rebind, which is what the file exists for.
     The one mngr change the arc depends on landed separately before it started: mngr PR 908 made a local `[commands.create]` add to the project's defaults instead of replacing them, which is what lets `.mngr/settings.local.toml` carry the default account (section 4.5).
+28. **Phase 7 dropped every `/api/agents/...` alias at once**, with no release of overlap.
+    No shipped template ever had them (phases 1 through 7 ship together), and the one caller that could run a stale copy of the messenger, a worker's worktree cut before an update, only ever messages another worker, which is its own chat, so its 404 fallback to `mngr message` lands on the right agent anyway.
+29. **`GET /api/agents` stays.** It is the plain listing of every mngr agent, not an alias: it is how loopback callers (the evals bridge, the deployment tests) see background agents beside the chats, and `/api/chats` lists chats only.
+30. **One auto-name word, "Chat"**, for every harness and lane (4.3); chats named before phase 7 keep the names on their agents.
+31. **A browser is owned by a chat**, not by the agent that claimed it: the fleet CLI sends `MINDS_CHAT_ID`, with `MNGR_AGENT_ID` as the fallback for a background agent, so the daemon's wake-ups reach the chat through the chat app whichever agent runs it.
+32. **The paired minds branch merges after the template is tagged**, as the app-model arc's did: the evals bridge clones the template's `main`, which has no `/api/chats` until the whole arc lands there.
 
 ## 4. The model
 
@@ -254,7 +260,7 @@ The rename happens after `mngr stop`, so no tmux session carries the archival na
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
 
-The auto-name word stays per lane or harness until phase 7, when it becomes a lane-neutral "Chat N", since a chat that has switched harness would otherwise be called after a harness it no longer runs.
+Since phase 7 every auto-minted name is a lane-neutral "Chat N" (`naming.py`'s one `AUTO_NAME_WORD`), whatever harness or lane the chat starts on, since a chat that has switched harness would otherwise be called after a harness it no longer runs; the names chats were given before that ("Codex 1", "Pi 2") stay on their agents, and new numbers skip every taken name.
 
 ### 4.4 Status, stop, start, destroy, rename
 
@@ -349,8 +355,8 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
   While set it carries `kind` (`handoff` or `rebind`), the phase (`restarting` is the rebind's), the target lane, account, and harness, `target_label` (what the phase text and the 409s name the destination by: the harness for a handoff, the account for a rebind), the messages held for after the switch (the confirming message first, so a reloaded page keeps showing them until they land in the transcript; the record keeps the confirming text as `trigger_text` once it leaves the held list), and the failed phase's `error`.
 - The Flask state holder currently named `ChatState` is renamed (to `ChatAppState`) so the name is free for chat-level state.
 
-Routes move to `/api/chats/<chat_id>/...` and `/api/chats/create`, with every `/api/agents/...` route kept as an alias that resolves the path parameter as a chat id, until phase 7 drops the aliases.
-The `agent_id` field of the create request keeps its name in the alias and is `chat_id` in the new route.
+Routes are `/api/chats/<chat_id>/...` and `/api/chats/create`; every `/api/agents/...` route was kept as an alias that resolved the path parameter as a chat id until phase 7 dropped the aliases (`GET /api/agents`, the plain listing of every mngr agent, is not one and stays).
+The create request's minted-id field is `chat_id`.
 The subagent routes take the three-part key.
 
 ### 4.7 The transcript
@@ -657,22 +663,27 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 7: cleanup
 
-- Drop the `/api/agents/*` aliases; retarget the in-workspace messaging script (`system/scripts/message_chat.py`, which posts to the aliased send route so that it still reaches a chat app from before the rename during an update), and, in the paired minds branch, the minds_evals bridge, the minds deployment tests, and the e2e runner, which merges after this template is tagged, as the app-model arc did.
-- The lane-neutral auto-name word.
-- Remove the phase 2 `CLEANUP` bridges, update the minds docs and glossary, and record the settled decisions.
+- The `/api/agents/...` aliases are gone: the per-chat routes, `/api/chats/create`, and the subagent reads answer under `/api/chats` alone, `CreateAgentResponse` went with the create alias, and `GET /api/agents` stays as the plain listing (principle 29).
+  `system/scripts/message_chat.py` posts to `/api/chats/<chat_id>/message`; its 404 backoff to `mngr message` is unchanged, and still right for a chat app from before the rename, which has no `/api/chats` routes and no handoffs either.
+- One auto-name word, "Chat" (4.3): `naming.py`'s `AUTO_NAME_WORD` replaces the per-harness table and `lanes.py`'s per-lane overrides.
+- The browser fleet addresses the chat that holds a browser (principle 31): the fleet CLI's owner id is `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`, and the daemon's wake-ups and nudges reach that chat through the messenger.
+- The paired minds branch retargets the minds_evals bridge (`/api/chats/create` answering `chat_id`, `/api/chats/<chat_id>/message`, `/events`, and `/model`) and the deployment test that creates a chat; the e2e runner keys on the URL shape and is unchanged. It merges after this template is tagged (principle 32).
+- Docs: the chat README, the workspace app model's section 7.4, its mngr-side note, the oom_priority README's presence route, the minds glossary and the minds_evals README; the per-phase specs and older plans keep their historical route names.
+- Not removed, on purpose: the `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}` fallbacks across the skills and `layout.py` (they serve agents created outside the chat app, which never get the variable), and the `CLEANUP` marks of other arcs.
 
 ## 9. External callers and compatibility
 
 | Caller | Today | After phase 2 | After phase 7 |
 |---|---|---|---|
 | minds e2e runner (`e2e_workspace_runner.py`) | finds the chat frame by `/agent-<hex>/` | unchanged (chat ids keep the prefix) | unchanged |
-| minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events` | served by the aliases | retargeted to `/api/chats/...` |
-| minds deployment tests | `/api/agents/...` | aliases | retargeted |
+| minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events`, `/model` | served by the aliases | `/api/chats/create` (answering `chat_id`), `/api/chats/<chat_id>/...`; the `/api/agents` listing as before |
+| minds deployment tests (`test_litellm_via_workspace.py`) | `/api/agents/create-chat` | the alias | `/api/chats/create` |
 | minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID` | unchanged |
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |
 | the minds latchkey handlers' resolution nudge (`mngr message <agent_id>`) | the request's `agent_id` | unchanged (the chat id is the live agent's id until phase 3); phase 4's paired minds branch routes the nudge through the chat app by chat id (4.5) | unchanged |
+| the browser fleet's owner id and wake-ups (`fleet.py`, `session.py`) | `MNGR_AGENT_ID`, messaged with `mngr message` | the messenger, still keyed by the claiming agent's id | `MINDS_CHAT_ID`, else `MNGR_AGENT_ID` (principle 31) |
 
 ## 10. Open questions and things to verify
 

@@ -1273,20 +1273,19 @@ def test_create_chat_counts_in_flight_creates_as_taken(
     assert created.display_name == "Chat 2"
 
 
-def test_create_chat_numbers_each_harness_under_its_own_word(
+def test_create_chat_numbers_every_harness_under_the_one_chat_word(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+    """A codex chat is "Chat 2", not "Codex 1": one word for every harness and lane.
 
-    The harness comes from the bound account, so the codex one is named by signing in
-    rather than by asking for it -- which is the point: a caller cannot name a harness
-    that disagrees with the credential the chat will actually run on.
+    A chat can move to another harness after it is named, so a name that said which
+    harness it started on would be wrong the moment it moved; the provider row of the
+    model bar is where the harness shows.
     """
     # The plain chat is created first, while there is nothing signed in, so it lands on
     # the workspace login as claude. Signing in afterwards is what makes the second one
-    # codex -- and note it would also make an unbound THIRD chat codex, since the most
-    # recently used account is the default.
+    # codex -- the harness comes from the bound account, never from the name.
     chat = agent_manager.create_chat("")
     codex_account_id, _ = mint_account_dir()
     commit_account(codex_account_id, "openai", "OpenAI")
@@ -1294,7 +1293,7 @@ def test_create_chat_numbers_each_harness_under_its_own_word(
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"
-    assert codex.display_name == "Codex 1"
+    assert codex.display_name == "Chat 2"
 
 
 def test_create_chat_rejects_an_explicit_name_that_collides(
