@@ -7,6 +7,11 @@ collector marked ``error`` (the harness could not find out) are excluded from th
 a declared class has no determinable entry at all, this scores 0.0 and finalize.py turns that into a
 grading-infrastructure failure, so the agent is never charged for a broken instrument.
 
+Most classes are a fraction of pass/fail checks. ``timing`` is not: it scores one continuous
+measurement the collector recorded on a curve, and its unmeasurable state -- a client that never
+said its goal was met -- is a legitimate 0.0 rather than a grading failure, so finalize.py does not
+carry it.
+
 Runs in the verifier container: stdlib + rewardkit only. The absolute paths are harbor's verifier
 contract rather than this harness's choice: ``/tests`` is where the task's tests directory lands in
 the container, and ``/logs/agent/...`` is where the task's declared artifacts are re-materialized at
@@ -15,6 +20,7 @@ their original absolute paths.
 
 import fnmatch
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +35,8 @@ FILES_CLASS = "files"
 APP_CLASS = "app"
 HTTP_CLASS = "http"
 UI_FLOWS_CLASS = "ui_flows"
+PROCESS_CLASS = "process"
+TIMING_CLASS = "timing"
 
 # Which expanded check list makes a class scored, and what its criterion is called. A class the case
 # does not declare registers no criterion at all, so it contributes nothing in either direction.
@@ -37,6 +45,8 @@ CRITERION_BY_CLASS = (
     (APP_CLASS, "app_checks", "app_registered"),
     (HTTP_CLASS, "http_checks", "http_expectations_met"),
     (UI_FLOWS_CLASS, "ui_flow_checks", "ui_flows_completed"),
+    (PROCESS_CLASS, "process_checks", "process_expectations_met"),
+    (TIMING_CLASS, "timing_checks", "time_to_goal_within_expectations"),
 )
 
 
@@ -59,11 +69,15 @@ def _expectations() -> dict[str, Any]:
     return expectations if isinstance(expectations, dict) else {}
 
 
-def _manifest_entries(check_class: str) -> list[dict[str, Any]]:
+def _all_manifest_entries() -> list[dict[str, Any]]:
     entries = _load_json(MANIFEST_PATH).get("entries")
     if not isinstance(entries, list):
         return []
-    return [entry for entry in entries if isinstance(entry, dict) and entry.get("check_class") == check_class]
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _manifest_entries(check_class: str) -> list[dict[str, Any]]:
+    return [entry for entry in _all_manifest_entries() if entry.get("check_class") == check_class]
 
 
 def _inventory_paths() -> list[str]:
@@ -122,12 +136,82 @@ def _files_score() -> float:
     return met / len(checks)
 
 
+def _failed_check_classes(entries: list[dict[str, Any]]) -> set[str]:
+    """Which classes recorded a check the workspace fell short on, for a timing prerequisite to read.
+
+    Only ``failed`` counts: an ``error`` is the harness not finding out, and holding an unmeasured
+    class against the clock would charge the agent for a broken instrument.
+    """
+    return {str(entry.get("check_class")) for entry in entries if entry.get("status") == "failed"}
+
+
+def timing_score(seconds: float | None, fast_seconds: float, slow_seconds: float) -> float:
+    """The timing curve: clamped, and linear in the logarithm of the measured time.
+
+    1.0 at or under the fast anchor, 0.0 at or over the slow one, and a log-linear ramp between, so
+    the curve is scale-free -- halving a slow trial's time is worth as much as halving a fast one's,
+    which is what makes the per-case anchors comparable across cases.
+
+    ``seconds`` is None when nothing measured the time, which for this class means the client was
+    never satisfied: unboundedly slow, and so 0.0 rather than an error. Anchors that cannot define a
+    curve score 0.0 too, because a criterion here must never raise.
+    """
+    if seconds is None or fast_seconds <= 0.0 or slow_seconds <= fast_seconds:
+        return 0.0
+    if seconds <= fast_seconds:
+        return 1.0
+    if seconds >= slow_seconds:
+        return 0.0
+    return (math.log(slow_seconds) - math.log(seconds)) / (math.log(slow_seconds) - math.log(fast_seconds))
+
+
+def _measured_seconds(raw_value: Any) -> float | None:
+    """The measurement an entry carries, or None when it carries none. A bool is excluded because
+    isinstance(True, int) holds, and a manifest that somehow held one is not a measured time."""
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+        return None
+    return float(raw_value)
+
+
+def timing_class_score(checks: list[dict[str, Any]], entries: list[dict[str, Any]]) -> float:
+    """How fast the agent got the goal-holding client to say its goal was met.
+
+    The seconds are the collector's measurement, read out of the entry's ``value`` rather than
+    recomputed here, so collection and grading cannot disagree about the number. This applies the
+    curve, and the prerequisite: a class the case named in ``requires_no_failures`` that recorded a
+    failed check zeroes the time outright, since being fast at something other than what the case
+    commissioned is not what the class is for.
+    """
+    if not checks:
+        return 0.0
+    value_by_entry_id = {
+        str(entry.get("entry_id")): entry.get("value") for entry in entries if entry.get("check_class") == TIMING_CLASS
+    }
+    failed_classes = _failed_check_classes(entries)
+    scores: list[float] = []
+    for check in checks:
+        prerequisites = check.get("requires_no_failures") or []
+        if any(str(name) in failed_classes for name in prerequisites):
+            scores.append(0.0)
+            continue
+        scores.append(
+            timing_score(
+                _measured_seconds(value_by_entry_id.get(str(check.get("check_id")))),
+                float(check.get("fast_seconds") or 0.0),
+                float(check.get("slow_seconds") or 0.0),
+            )
+        )
+    return sum(scores) / len(scores)
+
+
 @criterion(description="Recorded outcome checks of one expectation class that the delivered workspace met")
 def expectation_class_met(workspace: Path, check_class: str) -> float:
     """Score one expectation class from the recorded evidence, never from live state."""
     try:
         if check_class == FILES_CLASS:
             return _files_score()
+        if check_class == TIMING_CLASS:
+            return timing_class_score(_expectations().get("timing_checks") or [], _all_manifest_entries())
         return _recorded_class_score(check_class)
     # rewardkit aborts the whole grade (every dimension, no reward file) when a criterion raises, so
     # a malformed check must degrade to a zero here and be diagnosed by finalize.py instead.
@@ -147,8 +231,10 @@ def _is_class_scorable(check_class: str, expectation_key: str) -> bool:
     nothing leaves the flows out of the score in either direction, which is what an unmeasurable
     check should cost. The manifest still records which part broke, and the judge still sees it.
 
-    The cheap classes keep the stricter rule: an inventory or registry that could not be read at
-    all means the collection phase itself failed, which is worth erroring the trial over.
+    The cheap classes keep the stricter rule: an inventory, a registry or a transcript that could
+    not be read at all means the collection phase itself failed, which is worth erroring the trial
+    over. ``timing`` needs no second condition at all: its entry is never an error, and a time that
+    could not be measured is a client that was never satisfied, which scores zero on its own terms.
     """
     if not _expectations().get(expectation_key):
         return False

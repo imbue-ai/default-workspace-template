@@ -291,6 +291,9 @@ flowchart TB
 - **turn**: loosely, an exchange.
   In `state.json`, the legacy `num_turns` counts configured entries and `waits_done` counts messages actually sent; the two differ once a goal entry is involved.
 
+- **turn record** (`TurnRecord`, `turns` in `state.json`, `per_turn` in `agent/usage.json`): one answered client message's wall-clock (`sent_at`, `replied_at`, `reply_seconds`) and the tokens and cost the workspace agent spent answering it; `conversation_seconds` spans the first message to the last answered reply.
+  Observability only, and cumulative across a stepped case's steps, like `entries`. The per-turn spend is a floor on the trial's: the welcome turn, a worker's spend and anything spent past the poll that closed a turn are in no record.
+
 - **turn source** (`TurnSource`, `LiteralTurnSource`, `PersonaLLMTurnSource`, `GoalTurnSource`): the driver's seam between the conversation loop and the model calls.
   A source only ever answers `Say` or `Done` (`TurnAction`) and never touches the workspace.
 
@@ -318,14 +321,17 @@ flowchart TB
 
 ## Expectations and evidence
 
-- **expectations** (`Expectations`, `expectations.py`): the optional block on a case or step that says what was commissioned: `outcome` prose for the judge, a `deliverable`, `ui_flows` and `test_commands`.
+- **expectations** (`Expectations`, `expectations.py`): the optional block on a case or step that says what was commissioned: `outcome` prose for the judge, a `deliverable`, `ui_flows`, `test_commands` and a `process` block.
   The authored form is expanded once, at generation, into an explicit check list (`ExpandedExpectations`) written identically into the case config for the driver and the verifier; see [Outcome verification](../README.md#outcome-verification).
 
 - **deliverable** (`DeliverableExpectation`): what the case commissions; the only kind is `minds-app`, which implies app, HTTP and bundle checks.
   Also names `deliverable.bundle`, the git bundle of the agent's commits.
 
-- **check** (expectation check, `AppCheck`, `HttpCheck`, `FilesCheck`, `UiFlowCheck`): one expanded, probeable expectation, of class `app`, `http`, `files`, `bundle`, `test_command` or `ui_flows` (`CheckClass`).
+- **check** (expectation check, `AppCheck`, `HttpCheck`, `FilesCheck`, `UiFlowCheck`, `ProcessCheck`): one expanded, probeable expectation, of class `app`, `http`, `files`, `bundle`, `test_command`, `ui_flows` or `process` (`CheckClass`).
   Each becomes manifest entries at trial time and feeds a criterion at grade time.
+
+- **process expectations** (`ProcessExpectation` authored, `ProcessCheck` expanded): what a case demands of HOW the agent worked, declared under `expectations.process` as `required_skills`, `forbidden_skills` and `max_worker_launches`.
+  Read off the chat agent's own captured transcript -- a `Skill` tool call on claude, a `skills/<name>/SKILL.md` path in what a call runs or opens elsewhere (`scan_skill_invocations`), and in neither case a call whose result came back an error -- and scored as `process_expectations_met`. A transcript that never came out of the workspace, or came out holding no record of the agent, makes every entry an `error`, which errors the trial.
 
 - **evidence phase** (evidence collection, `EvidenceCollector.collect`): the driver phase after the last turn, while the workspace is still alive, that records what was delivered into `agent/verification/`.
   Its budget is `verification_timeout_seconds`, which bounds this phase and not the verifier container.
@@ -406,7 +412,7 @@ flowchart LR
         qg["guard: message lengths"]:::crit
     end
     subgraph outcome["outcome: expectations cases only"]
-        oc["checks: app_registered, http, files,<br/>ui_flows_completed"]:::crit
+        oc["checks: app_registered, http, files,<br/>ui_flows_completed, process_expectations_met"]:::crit
         oj["judge: works_as_expected"]:::crit
     end
     subgraph hq["harness_quality: claude only"]
@@ -471,20 +477,25 @@ flowchart LR
 
 ## Scheduled CI
 
-- **matrix** (`CiMatrix`, `ci_matrix.decide_matrix`): the nightly workflow's grid of arms: each evaluated pair times each selected harness config.
+- **matrix** (`CiMatrix`, `ci_matrix.decide_matrix`): the nightly workflow's grid of arms: each evaluated pair times each suite's eval config times each of that suite's harness configs.
   See [Scheduled CI](../README.md#scheduled-ci).
 
-- **cell** (`MatrixCell`): one arm of a scheduled run, one pair and one harness config, with its own job, concurrency group, artifacts and green marker.
+- **suite** (`NightlySuite`, `configs/nightly_suites.json`): one eval config and the harness configs worth running it on, each optionally asking for more than one attempt.
+  The checked-in list of suites is what a scheduled run evaluates, and the single place that names what a night costs.
+
+- **config slug** (`ci_matrix.config_slug`): an eval config's file name, lowercased and without its extension (`eval-config-time-to-mock`), which every job, concurrency group, artifact and summary name of its cells carries.
+
+- **cell** (`MatrixCell`): one arm of a scheduled run, one pair and one suite's harness config, with its own job, concurrency group, artifacts and green marker.
 
 - **main / released pair** (`FrozenPair`, `PairDecision`): mngr-internal and default-workspace-template both at `main`, or both at the `minds-v<version>` tag the stable channel names.
   A dispatch can name a `custom` pair instead.
 
 - **pass** (`PassReport`, `ci_report.py`): one oracle run or one cell's live run, each with its own summary artifact and a column of the Slack grid.
 
-- **green marker** (`ci_matrix.cache_key_for`): the `actions/cache` entry recording that an exact arm passed end to end, keyed on the pair's SHAs and the harness config.
+- **green marker** (`ci_matrix.cache_key_for`): the `actions/cache` entry recording that an exact arm passed end to end, keyed on the pair's SHAs, the eval config and the harness config.
   A green cell is skipped the next night.
 
-- **nightly** (`HarnessConfigEntry.is_nightly`): a harness config whose flag is set, so a schedule runs it; the others run only when a dispatch names them.
+- **nightly** (`HarnessConfigEntry.is_nightly`): a harness config whose flag is set, so a suite that names no arm of its own runs it; the others run only where a suite names them or a dispatch asks for them.
 
 - **check-run** (`check_run.py`, `RunCheck`, `TrialCheck`): `minds-evals check-run`, which decides whether a finished job passed: every trial completed, its gates held, nothing went unmeasured, and it ran on the model it asked for.
   Judge scores are reported, never gated; see [Checking a finished run](../README.md#checking-a-finished-run).

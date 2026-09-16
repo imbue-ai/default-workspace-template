@@ -97,7 +97,7 @@ export function adoptTemplateMessage(template: CatalogTemplate): string {
 /** Have a new machine made from a template: the first message of the chat that action starts. */
 export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
   return (
-    `Please create a new Minds machine for me from the template at ${template.repository_url} ` +
+    `Please create a new Mind machine for me from the template at ${template.repository_url} ` +
     "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
     "or accounts, and tell me when it is ready."
   );
@@ -525,7 +525,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               "text-(length:--font-size-row) font-medium " +
               (isDisabled ? "cursor-not-allowed" : "hover:bg-fill-hover cursor-pointer"),
             onclick: isDisabled ? undefined : run,
-            ...(isDisabled ? {} : hoverTooltipAttrs(tile.action.label)),
+            ...hoverTooltipAttrs(isDisabled ? null : tile.action.label),
           },
           [
             m("span", { class: "text-faint flex shrink-0 items-center" }, m.trust(appGlyph(tile.app.name))),
@@ -586,7 +586,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
           (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
         onclick: isDisabled ? undefined : pick,
-        ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
+        ...hoverTooltipAttrs(isDisabled ? disabledReason : null),
       },
       [
         // The wrapper colours only the standing-down glyph; a tinted one carries its own tones. It

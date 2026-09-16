@@ -113,7 +113,7 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Minds app, bootstrap and the system interface read),
+verdict and record the Mind app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``, and
 ``update_apply`` (the apply and recover orchestration). All of it is covered
@@ -814,7 +814,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Minds app (data/.state/update-apply/run.json).",
+        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -849,7 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Minds app's modal.",
+        help="One plain-language line for the Mind app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",

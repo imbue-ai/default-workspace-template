@@ -61,6 +61,9 @@ dev = [
     "moto[s3]>=5.0",
     # Validates the generated /api/schema OpenAPI document in minds tests.
     "openapi-spec-validator>=0.7",
+    # psycopg2's SQLSTATE exception classes are injected into psycopg2.errors by
+    # its C extension, so only the stubs declare them to a type checker.
+    "types-psycopg2>=2.9.21",
 ]
 
 # Shared pytest settings (markers, filterwarnings, coverage report config)

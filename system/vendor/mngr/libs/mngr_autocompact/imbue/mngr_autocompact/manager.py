@@ -33,13 +33,14 @@ def _is_concurrency_group_active(agent: AgentInterface) -> bool:
 def is_agent_stale_for_compaction(
     agent: AgentInterface,
     config: AutoCompactPluginConfig,
+    expected_mode: ContextCompactionMode,
     now: datetime | None = None,
 ) -> bool:
     """Check whether an agent is idle long enough to warrant context compaction before cache expiry.
 
     Returns True only if:
     1. The agent implements HasCompactionMixin.
-    2. Compaction is enabled (not DISABLED).
+    2. The agent's compaction mode matches expected_mode.
     3. The agent is running and has an active idle epoch (agent.get_idle_since() is not None).
     4. The agent's context size meets min_context_tokens (or min_context_tokens is 0).
        If get_context_tokens() is None and min_context_tokens > 0, returns False and logs a warning.
@@ -49,7 +50,7 @@ def is_agent_stale_for_compaction(
     if not isinstance(agent, HasCompactionMixin):
         return False
 
-    if config.mode == ContextCompactionMode.DISABLED:
+    if config.mode != expected_mode:
         return False
 
     try:
@@ -119,9 +120,10 @@ def trigger_compaction(agent: AgentInterface, instructions: str | None = None) -
         return False
 
 
-def compact_agent(
+def compact_agent_if_stale(
     agent: AgentInterface,
     config: AutoCompactPluginConfig,
+    expected_mode: ContextCompactionMode,
     now: datetime | None = None,
     instructions: str | None = None,
 ) -> bool:
@@ -129,7 +131,7 @@ def compact_agent(
 
     Returns True if compaction was triggered, False otherwise.
     """
-    if not is_agent_stale_for_compaction(agent, config, now=now):
+    if not is_agent_stale_for_compaction(agent, config, expected_mode=expected_mode, now=now):
         return False
 
     return trigger_compaction(agent, instructions=instructions)
@@ -163,7 +165,12 @@ def get_stale_agents(
                     continue
 
                 config = live_agent.mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
-                if is_agent_stale_for_compaction(live_agent, config, now=now):
+                if is_agent_stale_for_compaction(
+                    live_agent,
+                    config,
+                    expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+                    now=now,
+                ):
                     stale.append(live_agent.name)
         except (MngrError, OSError) as e:
             logger.debug("Error checking agents on host {}: {}", host_ref.host_name, e)
@@ -176,10 +183,7 @@ def compact_all_agents(
     now: datetime | None = None,
     instructions: str | None = None,
 ) -> list[AgentName]:
-    """Discover running agents across all online hosts and trigger compaction for stale ones.
-
-    Returns a list of AgentNames that were compacted.
-    """
+    """Discover and compact all stale agents across all online hosts."""
     outcome = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=None,
@@ -203,7 +207,13 @@ def compact_all_agents(
                     continue
 
                 config = live_agent.mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
-                if compact_agent(live_agent, config, now=now, instructions=instructions):
+                if compact_agent_if_stale(
+                    live_agent,
+                    config,
+                    expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+                    now=now,
+                    instructions=instructions,
+                ):
                     compacted.append(live_agent.name)
         except (MngrError, OSError) as e:
             logger.debug("Error checking agents on host {}: {}", host_ref.host_name, e)

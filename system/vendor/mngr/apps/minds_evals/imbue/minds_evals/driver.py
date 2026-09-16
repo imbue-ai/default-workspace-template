@@ -70,6 +70,7 @@ from imbue.minds_evals.data_types import Transcript
 from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import UsageSource
 from imbue.minds_evals.data_types import WORKSPACE_UPLOADS_DIR
 from imbue.minds_evals.data_types import WorkerCapture
@@ -987,6 +988,55 @@ def _new_agent_reply_texts(events: list[dict[str, Any]], baseline_event_count: i
 
 
 @pure
+def build_turn_record(
+    *,
+    message_index: int,
+    entry_index: int,
+    exchange_index: int,
+    sent_at: datetime,
+    replied_at: datetime,
+    agent_message_count: int,
+    events: Sequence[Mapping[str, Any]],
+    # The event count captured just before the turn was sent, so the usage below is this turn's and
+    # not the conversation's.
+    baseline_event_count: int,
+) -> TurnRecord:
+    """One answered client message as a record, priced over its own slice of the event stream."""
+    turn_usage = usage_accounting.summarize_turn_usage(events, baseline_event_count)
+    return TurnRecord(
+        index=message_index,
+        entry_index=entry_index,
+        exchange=exchange_index,
+        sent_at=sent_at.isoformat(),
+        replied_at=replied_at.isoformat(),
+        reply_seconds=round((replied_at - sent_at).total_seconds(), 1),
+        agent_message_count=agent_message_count,
+        message_count=turn_usage.message_count,
+        tokens=usage_accounting.token_buckets(turn_usage.tokens),
+        cost_usd=turn_usage.cost_usd,
+    )
+
+
+@pure
+def conversation_seconds(turn_records: Sequence[TurnRecord]) -> float:
+    """Wall-clock from the first client message to the last reply the trial actually got.
+
+    Narrower than the trial's ``elapsed_seconds``, which also holds workspace creation, sign-in and
+    the welcome turn -- none of which the agent under test is being measured on. Zero while no turn
+    has been answered.
+
+    The records accumulate across a stepped case's steps, the way the entry records do, so on a
+    later step this spans from the case's first message and holds the verifier runs between the
+    steps: it is the case's figure, not the step's, and it can exceed ``step_elapsed_seconds``.
+    """
+    if not turn_records:
+        return 0.0
+    start = datetime.fromisoformat(turn_records[0].sent_at)
+    end = datetime.fromisoformat(turn_records[-1].replied_at)
+    return round((end - start).total_seconds(), 1)
+
+
+@pure
 def _words_per_agent_turn(conversation: list[dict[str, str]]) -> list[int]:
     """Word count of each agent turn -- one entry per client turn, over the turn's merged reply
     (several agent messages joined). Contrast ``average_words_per_message``, which counts each agent
@@ -1381,6 +1431,9 @@ class MindsPersonaDriver(BaseAgent):
         # How each prompts entry played out: its kind, the exchanges it actually sent, and why it
         # stopped. The structural gates are founded on these.
         self._entry_records: list[EntryRecord] = []
+        # How long each answered client message took and what it spent. Observability only; a send or
+        # a reply that ran out adds nothing here.
+        self._turn_records: list[TurnRecord] = []
         self._transcript_capture: TranscriptCapture = evidence_collection.not_attempted_transcript_capture()
         # The background workers the evidence phase captured, their streams read back for the usage
         # account, and the launches the capture's caps left out.
@@ -1629,6 +1682,9 @@ class MindsPersonaDriver(BaseAgent):
             workspace_agent_id=self._workspace_agent_id,
             chat_agent_id=self._chat_agent_id,
             case=self._case,
+            # The conversation as it played out, which is what the timing class measures.
+            entry_records=tuple(self._entry_records),
+            turn_records=tuple(self._turn_records),
             clone_base_sha=self._clone_base_sha,
             dwt_tip_sha=self._dwt_tip_sha,
             preexisting_registrations=self._preexisting_registrations,
@@ -1970,6 +2026,13 @@ class MindsPersonaDriver(BaseAgent):
         # Reason and detail come from the one `Done` either way, so they cannot disagree.
         if end is None:
             end = source.exhaustion_end
+        # The client rules on the conversation as it stands, so the reply it was satisfied by is the
+        # last one answered when the entry ended. That is frequently NOT one of this entry's own
+        # exchanges: a goal the previous entry's reply already met sends nothing and ends with
+        # exchange_count 0.
+        satisfying_turn = (
+            self._turn_records[-1] if end.reason is TurnOutcome.SATISFIED and self._turn_records else None
+        )
         self._entry_records.append(
             EntryRecord(
                 index=entry_index,
@@ -1977,6 +2040,8 @@ class MindsPersonaDriver(BaseAgent):
                 exchange_count=exchange_count,
                 outcome=end.reason,
                 detail=end.detail,
+                satisfied_at="" if satisfying_turn is None else satisfying_turn.replied_at,
+                satisfied_at_turn=None if satisfying_turn is None else satisfying_turn.index,
             )
         )
         await self._sync_trial_files(environment)
@@ -2096,6 +2161,7 @@ class MindsPersonaDriver(BaseAgent):
         )
         if not is_sent:
             return "could not send message {}".format(message_index)
+        sent_at = datetime.now(timezone.utc)
         self._conversation.append({"role": "user", "text": text})
         self._waits_done = message_index
         await self._sync_trial_files(environment)
@@ -2105,6 +2171,7 @@ class MindsPersonaDriver(BaseAgent):
         )
         if not is_replied:
             return "no reply to message {}".format(message_index)
+        replied_at = datetime.now(timezone.utc)
         reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
         # Record each message's length before merging, so the per-message
         # metric sees the agent's real (short) messages, not the merged wall.
@@ -2112,6 +2179,20 @@ class MindsPersonaDriver(BaseAgent):
         self._conversation.append({"role": "agent", "text": "\n\n".join(reply_texts)})
         # The turn is in the conversation now, so the in-flight copy of it would be a duplicate.
         self._partial_reply_texts = ()
+        # Recorded before the sync below, so the turn the trial just finished is in the state file
+        # this write produces rather than the next one.
+        self._turn_records.append(
+            build_turn_record(
+                message_index=message_index,
+                entry_index=entry_index,
+                exchange_index=exchange_index,
+                sent_at=sent_at,
+                replied_at=replied_at,
+                agent_message_count=len(reply_texts),
+                events=self._latest_events,
+                baseline_event_count=baseline_event_count,
+            )
+        )
         await self._sync_trial_files(environment)
 
         if is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_EXCHANGE):
@@ -2861,6 +2942,9 @@ class MindsPersonaDriver(BaseAgent):
             # stepped case the count accumulates, so the final step's file describes the whole case.
             "num_turns": self._configured_entry_count,
             "entries": [record.model_dump(mode="json") for record in self._entry_records],
+            # One record per answered client message. A turn that was never answered leaves none, so
+            # these end at the message a timed-out trial died on.
+            "turns": [record.model_dump(mode="json") for record in self._turn_records],
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
             # Which wait ran out, in prose. Empty while the trial has not given up: "timed_out" on
@@ -2874,6 +2958,9 @@ class MindsPersonaDriver(BaseAgent):
             # case that key is only this step's share of the conversation budget, so the trial-wide
             # figure above would read as an overrun on a perfectly healthy later step.
             "step_elapsed_seconds": round(time.time() - self._step_started_at, 1),
+            # The conversation's own span: first message out to last reply in. Both figures above
+            # additionally hold workspace creation, sign-in and the welcome turn.
+            "conversation_seconds": conversation_seconds(self._turn_records),
             "timeout_seconds": self._case.timeout_seconds if self._case is not None else 0.0,
             # The whole treatment the trial ran under -- pinned pair plus harness config -- and what
             # it was observed running on. Written on every state, so a trial that gave up during
@@ -3001,6 +3088,12 @@ class MindsPersonaDriver(BaseAgent):
             "turn_count": self._configured_entry_count,
             "step_name": self._case.step.name if self._case is not None and self._case.step is not None else "",
             "entries": [record.model_dump(mode="json") for record in self._entry_records],
+            # Per answered client message: its wall-clock and its spend, and the span they sit in.
+            # Observability only, like the word counts below -- no grade-time reader touches them.
+            # Here as well as in state.json so a run summary can read a trial's conversation off the
+            # trial listing without opening its log bundle.
+            "turns": [record.model_dump(mode="json") for record in self._turn_records],
+            "conversation_seconds": conversation_seconds(self._turn_records),
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
             # Which wait ran out, in prose; empty while the trial has not given up.
@@ -3062,6 +3155,11 @@ class MindsPersonaDriver(BaseAgent):
         payload = {
             "workspace_agent": usage_accounting.workspace_usage_metadata(workspace_usage),
             "decider": usage_accounting.decider_usage_metadata(decider_usage),
+            # What each answered client message cost. Always the transcript's account, whatever
+            # sourced the totals above, and a floor rather than a partition of them: the welcome
+            # turn, a worker's spend, and whatever the agent spends past the poll that closed a
+            # turn all belong to no record.
+            "per_turn": [record.model_dump(mode="json") for record in self._turn_records],
         }
         (self.logs_dir / USAGE_FILENAME).write_text(json.dumps(payload, indent=2))
 

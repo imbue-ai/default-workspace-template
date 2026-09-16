@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.data_types import SKILL_NAME_EXPRESSION
+from imbue.minds_evals.data_types import SkillInvocation
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
@@ -86,6 +88,18 @@ _SHELL_ASSIGNMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|[\s;&|])(?:export\s+)?(?P<variable>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s;&|]+)"
 )
 _SHELL_QUOTES: Final[str] = "'\""
+
+# claude's own skill tool, which names the skill in its arguments. Every other harness reads the
+# skill file itself, so the invocation shows up as a path to the skill's body in what the call runs
+# or opens: a shell command, the path a read tool is pointed at, or a codex code-mode program.
+_SKILL_TOOL_NAME: Final[str] = "Skill"
+_SKILL_FILE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"skills/(?P<name>{})/SKILL\.md".format(SKILL_NAME_EXPRESSION)
+)
+# Only these arguments are searched for that path, so a skill a call merely mentions -- in the
+# content it writes, in a note it records -- is not read as a reach for it. `prompt` is left out on
+# purpose too: a skill named in a delegation prompt is the worker's invocation, not the lead's.
+_SKILL_PATH_ARGUMENT_KEYS: Final[tuple[str, ...]] = ("command", "cmd", "_raw", "file_path", "path")
 
 
 # The `extra` tag every harness-written step carries, so a reader can tell the eval's own annotations
@@ -496,6 +510,87 @@ def scan_worker_launches(steps: Sequence[Mapping[str, Any]], depth: int, lead_na
                     )
                 )
     return launches
+
+
+@pure
+def _skills_invoked_by_call(tool_call: Mapping[str, Any]) -> list[str]:
+    """The skills one tool call invokes, in the order the call names them, each once.
+
+    claude invokes a skill through its `Skill` tool, which names it outright. The other harnesses
+    have no such tool: the agent reads the skill's own file, so the invocation is a path to that
+    file in what the call runs or opens (`_SKILL_PATH_ARGUMENT_KEYS`).
+    """
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return []
+    if str(tool_call.get("function_name") or "") == _SKILL_TOOL_NAME:
+        named = str(arguments.get("skill") or "").strip()
+        if named:
+            return [named]
+    found = (
+        match.group("name")
+        for key in _SKILL_PATH_ARGUMENT_KEYS
+        if isinstance(value := arguments.get(key), str)
+        for match in _SKILL_FILE_PATTERN.finditer(value)
+    )
+    return list(dict.fromkeys(found))
+
+
+@pure
+def _errored_call_ids(records: Sequence[Mapping[str, Any]]) -> frozenset[str]:
+    """The tool calls whose result came back an error, in whichever shape the record carries it: a
+    captured stream writes observations as records of their own, a built document nests them under
+    the step that made the call. A result with no call id names no call, so it is left out."""
+    errored: set[str] = set()
+    for record in records:
+        observation = record.get("observation")
+        nested = observation.get("results") if isinstance(observation, Mapping) else None
+        for result in record.get("results") or nested or []:
+            if not isinstance(result, Mapping):
+                continue
+            extra = result.get("extra")
+            call_id = str(result.get("source_call_id") or "")
+            if call_id and isinstance(extra, Mapping) and extra.get("is_error"):
+                errored.add(call_id)
+    return frozenset(errored)
+
+
+@pure
+def scan_skill_invocations(steps: Sequence[Mapping[str, Any]]) -> tuple[SkillInvocation, ...]:
+    """Every skill an agent's steps invoked, in invocation order.
+
+    Reads either a captured stream's ``step`` records or a document's ``steps``, the way
+    ``scan_worker_launches`` does. Repeats are kept: a case that asks what the agent reached for
+    wants each reach, and a reader of the manifest entry sees where each one happened.
+
+    A call whose result came back an error invoked nothing, and is left out: a `Skill` call answered
+    `Unknown skill` never ran the skill (an unresolved plugin, which `harness_quality` counts as a
+    broken workspace), and a command that failed never opened the file. Counting those would score a
+    broken workspace as an agent that worked as asked, and charge an agent for a forbidden skill it
+    never got. The veto is per call, not per command, because a result names the call alone -- so a
+    call that ran several commands (a compound shell line, a codex program) loses every skill it
+    named as soon as any part of it fails, and a required skill really invoked there reads as never
+    invoked. Erring the other way is worse: it is the broken-workspace reading above.
+    """
+    errored_call_ids = _errored_call_ids(steps)
+    invocations: list[SkillInvocation] = []
+    for step in steps:
+        if step.get("source") != "agent":
+            continue
+        for tool_call in step.get("tool_calls") or []:
+            if not isinstance(tool_call, Mapping):
+                continue
+            if str(tool_call.get("tool_call_id") or "") in errored_call_ids:
+                continue
+            invocations.extend(
+                SkillInvocation(
+                    name=name,
+                    tool_call_id=str(tool_call.get("tool_call_id") or ""),
+                    step_id=str(step.get("step_id") or ""),
+                )
+                for name in _skills_invoked_by_call(tool_call)
+            )
+    return tuple(invocations)
 
 
 @pure

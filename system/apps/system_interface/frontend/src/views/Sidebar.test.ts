@@ -12,6 +12,7 @@ import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, shortcutL
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 import { appRecord, instanceRecord, projectRecord } from "../testing/records";
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
   return appRecord(name, {
@@ -85,6 +86,7 @@ describe("Sidebar", () => {
     m.mount(root, null);
     root.remove();
     resetInventoryForTesting();
+    vi.useRealTimers();
   });
 
   const rows: SidebarTabRow[] = [
@@ -201,6 +203,25 @@ describe("Sidebar", () => {
     ]);
     document.querySelector<HTMLElement>('[role="menuitem"]:last-child')!.click();
     expect(attrs.onDeleteRow).toHaveBeenCalledWith(expect.objectContaining({ address: "app:terminal?instance=one" }));
+  });
+
+  it("stops explaining a stopped row while its name is being edited", () => {
+    vi.useFakeTimers();
+    mount({ rows: [{ ...rows[1], stoppedDetail: "not running" }] });
+    expand();
+    const row = root.querySelector<HTMLElement>('[data-address="app:chat?instance=one"]')!;
+    expect(hoverTooltipText(row)).toBe("chat one — not running");
+
+    root.querySelector<HTMLElement>('[aria-label="Actions for chat one"]')!.click();
+    m.redraw.sync();
+    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find((el) => el.textContent?.trim() === "Rename")!
+      .click();
+    m.redraw.sync();
+
+    // The editor takes over the row's own element, so the bubble is gone only if it followed.
+    expect(row.querySelector("input")).not.toBeNull();
+    expect(hoverTooltipText(row)).toBeNull();
   });
 
   it("stops and starts one instance from its row, reading the verb off its status", () => {

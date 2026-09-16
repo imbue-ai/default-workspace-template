@@ -26,3 +26,9 @@ Resolve by updating the issue: the chat app runs as its own program (default-wor
 The framework only calls `render_report` (`orchestration.py`, around lines 49-54); the upload lives in the TMR recipe (`libs/mngr_tmr/imbue/mngr_tmr/report_upload.py`).
 Noticed while writing `specs/behaviors-mapreduce/spec.md`; it assumes the code is correct and treats upload as recipe-side.
 
+
+## specs/minds-onboarding/concise.md describes a retired first-start flow
+
+`specs/minds-onboarding/concise.md` specifies the welcome splash (`/welcome`, Sign Up / Log In / "Continue without an account"), a simplified server-rendered create form with a LEASED mode, and Vultr-pool version resolution.
+None of that matches the code: the pages are a Mithril SPA, the launch modes are DOCKER / LIMA / IMBUE_CLOUD / cloud BYOK accounts, and sign-in runs through the system browser.
+`specs/minds-first-run-onboarding/spec.md` supersedes it for the first-run flow and assumes the code is correct; the old spec should be deleted or marked historical once the new flow lands.

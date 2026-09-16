@@ -112,21 +112,32 @@ _INSTALL_OBSERVER_JS = """
 """
 # Resolves to a StepReaction value. Polled rather than driven by the observer itself, because the
 # verdict depends on time passing with NO callbacks: the observer cannot announce its own silence.
+#
+# A verdict that rests on silence ("none", "settled") is only returned when the NEXT tick still sees
+# no new mutation. Silence is read off the clock, and the clock keeps running while the renderer is
+# not: a renderer the OS deschedules, or a main thread a long task holds, runs nothing for that
+# long, so the page's own timers fall overdue beside the tick and the first tick to run afterwards
+# sees a gap the page never had. Overdue timers were due before the tick this one schedules, so
+# they run -- and their mutations reach the observer -- before that second look.
 _WAIT_FOR_REACTION_JS = """
 new Promise((resolve) => {
   const watch = globalThis.__mindsEvalsReactionWatch;
   const startedAt = performance.now();
+  let silentAtCount = -1;
   const settleWith = (verdict) => { watch.observer.disconnect(); resolve(verdict); };
   const tick = () => {
     const now = performance.now();
     const state = watch.state;
+    let silentVerdict = "";
     if (state.mutationCount === 0) {
-      if (now - startedAt >= %(first_cap_ms)d) return settleWith("none");
+      if (now - startedAt >= %(first_cap_ms)d) silentVerdict = "none";
     } else if (now - state.lastMutationAt >= %(quiet_ms)d) {
-      return settleWith("settled");
+      silentVerdict = "settled";
     } else if (now - Math.max(state.firstMutationAt, startedAt) >= %(settle_cap_ms)d) {
       return settleWith("still_changing");
     }
+    if (silentVerdict && silentAtCount === state.mutationCount) return settleWith(silentVerdict);
+    silentAtCount = silentVerdict ? state.mutationCount : -1;
     setTimeout(tick, %(poll_ms)d);
   };
   tick();

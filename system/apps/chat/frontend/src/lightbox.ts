@@ -10,8 +10,7 @@
  * applies to are not part of mithril's vnode tree.
  */
 
-import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import type { HoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 
@@ -26,16 +25,6 @@ function filenameFromUrl(imageUrl: string): string {
 }
 
 let activeOverlay: HTMLElement | null = null;
-// The header buttons' tooltips, disposed with the overlay so a bubble that is
-// up when the lightbox closes (via Escape, say) goes with it.
-let activeTooltips: HoverTooltip[] = [];
-
-// Native `title` is not used anywhere in the workspace -- see views/hoverTooltip.ts.
-function addTooltip(element: HTMLElement, label: string): void {
-  const tooltip = attachHoverTooltip(element, "above");
-  tooltip.setText(label);
-  activeTooltips.push(tooltip);
-}
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
@@ -55,10 +44,10 @@ export function closeImageLightbox(): void {
   if (activeOverlay === null) {
     return;
   }
+  // Removing the overlay takes its buttons' tooltips with it -- a bubble that is
+  // up when the lightbox closes (via Escape, say) goes down with its trigger.
   activeOverlay.remove();
   activeOverlay = null;
-  activeTooltips.forEach((tooltip) => tooltip.dispose());
-  activeTooltips = [];
   document.removeEventListener("keydown", onKeydown);
 }
 
@@ -104,8 +93,9 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   closeButton.innerHTML = icon("close", { size: 20 });
   closeButton.addEventListener("click", closeImageLightbox);
 
-  addTooltip(downloadLink, "Download");
-  addTooltip(closeButton, "Close");
+  // Native `title` is not used anywhere in the workspace -- see workspace_ui's hoverTooltip.ts.
+  setHoverTooltip(downloadLink, "Download", "above");
+  setHoverTooltip(closeButton, "Close", "above");
 
   actions.appendChild(downloadLink);
   actions.appendChild(closeButton);

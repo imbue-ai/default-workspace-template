@@ -15,6 +15,18 @@ from imbue.minds_evals import flow_browser
 from imbue.minds_evals.template_loading import load_template_module
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every test that reaches the `chromium_path` fixture as `chromium`.
+
+    Keyed on the fixture rather than on a file, so a browser test in any file lands in the browser
+    session `just test-minds-evals` runs apart from the rest of the suite. An unmarked one would
+    still run, but in the rest-of-suite session, spending that session's time budget.
+    """
+    for item in items:
+        if isinstance(item, pytest.Function) and "chromium_path" in item.fixturenames:
+            item.add_marker(pytest.mark.chromium)
+
+
 @pytest.fixture(scope="session")
 def chromium_path() -> Path:
     """The Chromium the flow lab launches: playwright's, resolved the way the box resolves its own.
@@ -77,6 +89,23 @@ def harness_report_renderer() -> ModuleType:
 def harness_checks() -> ModuleType:
     """The harness_quality programmatic criteria that ship into every generated dataset."""
     return load_template_module("tests/verifier/harness_quality/checks.py", "minds_evals_harness_checks")
+
+
+@pytest.fixture(scope="session")
+def outcome_checks() -> ModuleType:
+    """The outcome dimension's programmatic criteria that ship into every generated dataset.
+
+    Importing it registers criteria for whatever `/tests/case.json` declares, which in a test run is
+    nothing at all -- so the module comes up with an empty registration and its scoring functions,
+    which take their inputs as arguments, can be exercised directly.
+    """
+    return load_template_module("outcome/checks.py", "minds_evals_outcome_checks")
+
+
+@pytest.fixture(scope="session")
+def expectations_renderer() -> ModuleType:
+    """The grade-time pre-step that renders the case's expectations for the outcome judge."""
+    return load_template_module("tests/verifier/render_expectations.py", "minds_evals_render_expectations")
 
 
 @pytest.fixture(scope="session")

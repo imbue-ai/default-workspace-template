@@ -20,6 +20,7 @@ from imbue.minds_evals.testing import atif_document
 from imbue.minds_evals.testing import atif_document_json
 from imbue.minds_evals.testing import atif_document_with_worker_launch
 from imbue.minds_evals.testing import codex_code_mode_trajectory_document
+from imbue.minds_evals.testing import codex_skill_reading_program
 from imbue.minds_evals.testing import worker_document
 from imbue.minds_evals.testing import worker_launch
 from imbue.minds_evals.testing import worker_stream_jsonl
@@ -31,6 +32,7 @@ from imbue.minds_evals.trajectory import build_worker_trajectory_from_stream
 from imbue.minds_evals.trajectory import build_workspace_trajectory
 from imbue.minds_evals.trajectory import graft_worker_trajectories
 from imbue.minds_evals.trajectory import parse_worker_document
+from imbue.minds_evals.trajectory import scan_skill_invocations
 from imbue.minds_evals.trajectory import scan_worker_launches
 from imbue.minds_evals.usage import TrialUsage
 from imbue.mngr_usage.data_types import TokenSnapshot
@@ -628,3 +630,190 @@ def test_scan_worker_launches_finds_the_worker_a_live_codex_trial_launched() -> 
     assert [(launch.name, launch.tool_call_id, launch.task_file) for launch in launches] == [
         ("crystallize-todo-list", launching_call_id, "data/.tasks/harden/crystallize-todo-list/task.md")
     ]
+
+
+def _skill_tool_step(step_id: int, skill: str, call_id: str) -> dict:
+    """A claude step invoking a skill: the harness has a `Skill` tool that names it outright."""
+    return {
+        "step_id": step_id,
+        "source": "agent",
+        "message": "",
+        "tool_calls": [{"tool_call_id": call_id, "function_name": "Skill", "arguments": {"skill": skill}}],
+    }
+
+
+def test_scan_skill_invocations_reads_a_claude_skill_tool_call() -> None:
+    steps = [
+        {"step_id": 1, "source": "user", "message": "use the build-app skill"},
+        _skill_tool_step(2, "build-app", "c1"),
+        _skill_tool_step(3, "imbue-code-guardian:autofix", "c2"),
+        _bash_step(4, "ls .agents/skills", "c3"),
+        _skill_tool_step(5, "build-app", "c4"),
+    ]
+
+    invocations = scan_skill_invocations(steps)
+
+    # The client's own message is not an invocation, and a second reach for the same skill is its
+    # own invocation rather than a repeat to be folded away.
+    assert [(invocation.name, invocation.tool_call_id, invocation.step_id) for invocation in invocations] == [
+        ("build-app", "c1", "2"),
+        ("imbue-code-guardian:autofix", "c2", "3"),
+        ("build-app", "c4", "5"),
+    ]
+
+
+def test_scan_skill_invocations_reads_a_harness_that_opens_the_skill_file_itself() -> None:
+    # pi-coding has no Skill tool: the harness reads the skill's body, so the invocation is the path
+    # to it, in a shell command or in a read tool's own argument.
+    steps = [
+        _bash_step(1, "cat /home/user/workspace/.agents/skills/frontend-design/SKILL.md", "c1"),
+        {
+            "step_id": 2,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {
+                    "tool_call_id": "c2",
+                    "function_name": "read",
+                    "arguments": {"file_path": "/home/user/workspace/.agents/skills/build-app/SKILL.md"},
+                }
+            ],
+        },
+        _bash_step(3, "cat .agents/skills/build-app/reference.md", "c3"),
+    ]
+
+    invocations = scan_skill_invocations(steps)
+
+    # Only the skill's own body counts: reading another file from the skill's directory is not a
+    # reach for the skill.
+    assert [(invocation.name, invocation.tool_call_id) for invocation in invocations] == [
+        ("frontend-design", "c1"),
+        ("build-app", "c2"),
+    ]
+
+
+def test_scan_skill_invocations_reads_past_a_skill_a_call_only_mentions() -> None:
+    # Only what a call runs or opens counts. A skill path inside the content a call writes is the
+    # agent talking about the skill, not reaching for it, and a forbidden-skill check reading that as
+    # an invocation would charge the agent for a skill it stayed away from.
+    steps = [
+        {
+            "step_id": 1,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {
+                    "tool_call_id": "c1",
+                    "function_name": "Write",
+                    "arguments": {
+                        "file_path": "/home/user/workspace/notes/plan.md",
+                        "content": "Do not hand this to .agents/skills/crystallize-creation/SKILL.md yet.",
+                    },
+                }
+            ],
+        },
+        _bash_step(2, "ls .agents/skills/heal-creation/SKILL.md >/dev/null", "c2"),
+    ]
+
+    invocations = scan_skill_invocations(steps)
+
+    # The shell command still counts: what the agent then did with the file it opened is not
+    # something the command's text can settle.
+    assert [(invocation.name, invocation.tool_call_id) for invocation in invocations] == [("heal-creation", "c2")]
+
+
+def test_scan_skill_invocations_reads_a_codex_code_mode_program() -> None:
+    # codex runs its shell from inside a JavaScript program carried whole under `_raw`, so the skill
+    # path is a string literal in that program rather than an argument of the call. Both skills the
+    # program reads take the program's own call id, and each is counted once however often the
+    # program names it.
+    program = codex_skill_reading_program()
+    steps = [
+        {
+            "step_id": 7,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "call_codex", "function_name": "exec", "arguments": {"_raw": program}}],
+        }
+    ]
+
+    invocations = scan_skill_invocations(steps)
+
+    assert [(invocation.name, invocation.tool_call_id, invocation.step_id) for invocation in invocations] == [
+        ("build-app", "call_codex", "7"),
+        ("frontend-design", "call_codex", "7"),
+    ]
+
+
+def test_scan_skill_invocations_reads_a_stream_as_well_as_a_document() -> None:
+    records = [
+        {"type": "header"},
+        {
+            "type": "step",
+            "source": "agent",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "Skill", "arguments": {"skill": "build-app"}}],
+        },
+        {"type": "observation", "results": []},
+    ]
+
+    invocations = scan_skill_invocations(records)
+
+    # A stream record carries no step id of its own, which must not keep the invocation out.
+    assert [(invocation.name, invocation.step_id) for invocation in invocations] == [("build-app", "")]
+
+
+def test_scan_skill_invocations_finds_nothing_in_a_trial_that_invoked_none() -> None:
+    assert scan_skill_invocations(codex_code_mode_trajectory_document()["steps"]) == ()
+
+
+def test_scan_skill_invocations_reads_past_a_skill_call_the_harness_rejected() -> None:
+    # An unresolved plugin answers `Skill` with `Unknown skill`, which harness_quality counts as a
+    # broken workspace. The skill never ran, so counting it would report an agent that worked as
+    # asked off a workspace that gave it nothing.
+    steps = [
+        {
+            **_skill_tool_step(1, "frontend-design:frontend-design", "c1"),
+            "observation": {
+                "results": [
+                    {
+                        "source_call_id": "c1",
+                        "content": "<tool_use_error>Unknown skill: frontend-design:frontend-design</tool_use_error>",
+                        "extra": {"is_error": True},
+                    }
+                ]
+            },
+        },
+        {
+            **_skill_tool_step(2, "build-app", "c2"),
+            "observation": {"results": [{"source_call_id": "c2", "content": "Launching skill: build-app"}]},
+        },
+    ]
+
+    invocations = scan_skill_invocations(steps)
+
+    assert [(invocation.name, invocation.tool_call_id) for invocation in invocations] == [("build-app", "c2")]
+
+
+def test_scan_skill_invocations_reads_past_a_failed_read_of_a_skill_file_in_a_stream() -> None:
+    # A stream carries its observations as records of their own rather than nested under the step,
+    # and a command that could not open the skill's body did not reach for the skill either.
+    records = [
+        {"type": "header"},
+        {"type": "step", **_bash_step(1, "cat .agents/skills/frontend-design/SKILL.md", "c1")},
+        {
+            "type": "observation",
+            "results": [
+                {
+                    "source_call_id": "c1",
+                    "content": "cat: .agents/skills/frontend-design/SKILL.md: No such file or directory",
+                    "extra": {"is_error": True},
+                }
+            ],
+        },
+        {"type": "step", **_bash_step(2, "cat .agents/skills/build-app/SKILL.md", "c2")},
+        {"type": "observation", "results": [{"source_call_id": "c2", "content": "# build-app"}]},
+    ]
+
+    invocations = scan_skill_invocations(records)
+
+    assert [(invocation.name, invocation.tool_call_id) for invocation in invocations] == [("build-app", "c2")]

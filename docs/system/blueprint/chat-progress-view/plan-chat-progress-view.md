@@ -21,7 +21,7 @@
 
 ## Overview
 
-- **What the feature is.** For each user turn, the Minds chat renders a clean
+- **What the feature is.** For each user turn, the Mind chat renders a clean
   **progress timeline** instead of a raw tool-call stream: a vertical list of
   plain-English step nodes (pending / active / done), each expandable to reveal
   the underlying work, with the agent's wrap-up reply rendered below the

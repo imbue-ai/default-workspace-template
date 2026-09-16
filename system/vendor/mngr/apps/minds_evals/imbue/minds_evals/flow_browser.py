@@ -31,6 +31,9 @@ from imbue.mngr.utils.polling import wait_for
 # Both are flags playwright itself passes on every platform, and no-ops where they do not
 # apply. The flow lab launches with the same flags, so the page it captures is rendered the way the
 # box renders it.
+# --window-size is the window the product's own browser service opens a page in, so a flow renders
+# the app at the size a user's pane renders it at. A step captures the viewport rather than the full
+# page, which makes this the flag that decides how much of the app reaches the judge.
 CHROMIUM_LAUNCH_FLAGS: Final[tuple[str, ...]] = (
     "--headless=new",
     "--no-sandbox",
@@ -40,6 +43,7 @@ CHROMIUM_LAUNCH_FLAGS: Final[tuple[str, ...]] = (
     "--ignore-certificate-errors",
     "--use-mock-keychain",
     "--disable-field-trial-config",
+    "--window-size=1280,800",
 )
 
 # What Chromium prints on stderr once its debug server is up, naming the port it bound. Asking for

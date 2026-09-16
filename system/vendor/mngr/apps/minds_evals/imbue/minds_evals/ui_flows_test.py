@@ -1,9 +1,11 @@
 import json
 import re
+import shlex
 from importlib import resources
 
 import pytest
 
+from imbue.minds_evals import flow_browser
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
@@ -217,11 +219,32 @@ def test_browser_launch_command_asks_playwright_where_its_chromium_is() -> None:
 def test_browser_launch_command_keeps_the_flags_the_box_needs() -> None:
     command = ui_flows.browser_launch_command(0)
 
-    assert "--remote-debugging-port={}".format(ui_flows.flow_browser_port(0)) in command
     # The box runs as root, where Chromium refuses to start its sandbox, and a container's default
     # /dev/shm is too small for its renderer.
-    assert "--no-sandbox" in command and "--disable-dev-shm-usage" in command
-    assert "setsid nohup" in command
+    assert "--no-sandbox" in flow_browser.CHROMIUM_LAUNCH_FLAGS
+    assert "--disable-dev-shm-usage" in flow_browser.CHROMIUM_LAUNCH_FLAGS
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.commenters = ""
+    lexer.whitespace_split = True
+    shell_words = tuple(lexer)
+    launch_start = next(
+        index
+        for index in range(len(shell_words) - 2)
+        if (index == 0 or shell_words[index - 1] == ";")
+        and shell_words[index : index + 3] == ("setsid", "nohup", "$chrome")
+    )
+    port_argument = "--remote-debugging-port={}".format(ui_flows.flow_browser_port(0))
+    port_index = shell_words.index(port_argument, launch_start + 3)
+    # Every flag the module declares has to reach the box's own launch line: the flow lab renders a
+    # page the way a trial renders it only while the two launch with the same set.
+    assert shell_words[launch_start + 3 : port_index] == flow_browser.CHROMIUM_LAUNCH_FLAGS
+
+
+def test_browser_launch_command_opens_the_page_at_the_products_window_size() -> None:
+    # A step screenshots the viewport rather than the full page, so the launched window is what
+    # decides how much of the app reaches the judge. It is the window the product's own browser
+    # service opens a page in, so a flow sees what a user's pane sees.
+    assert "--window-size=1280,800" in flow_browser.CHROMIUM_LAUNCH_FLAGS
 
 
 def test_browser_launch_command_refuses_a_headless_shell_binary() -> None:

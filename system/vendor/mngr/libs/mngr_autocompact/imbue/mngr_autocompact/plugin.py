@@ -10,7 +10,7 @@ from imbue.mngr.interfaces.host import HostInterface
 from imbue.mngr_autocompact.cli import autocompact_group
 from imbue.mngr_autocompact.config import AutoCompactPluginConfig
 from imbue.mngr_autocompact.config import ContextCompactionMode
-from imbue.mngr_autocompact.manager import compact_agent
+from imbue.mngr_autocompact.manager import compact_agent_if_stale
 
 register_plugin_config("autocompact", AutoCompactPluginConfig)
 
@@ -28,5 +28,4 @@ def on_before_send_message(agent: AgentInterface, host: HostInterface, message: 
         return
 
     config = agent.mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
-    if config.mode == ContextCompactionMode.ON_NEXT_PROMPT:
-        compact_agent(agent, config)
+    compact_agent_if_stale(agent, config, expected_mode=ContextCompactionMode.ON_NEXT_PROMPT)

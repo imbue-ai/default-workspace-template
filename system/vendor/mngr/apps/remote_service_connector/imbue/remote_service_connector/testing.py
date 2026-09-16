@@ -16,9 +16,6 @@ from typing import Final
 from urllib.parse import quote
 from uuid import UUID
 
-# Note: psycopg2.errors is reachable through the base import, matching app.py;
-# an explicit ``import psycopg2.errors`` makes ty resolve the module and then
-# reject its dynamically-generated members (UniqueViolation) as unknown.
 import paramiko
 import psycopg2
 import pytest

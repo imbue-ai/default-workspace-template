@@ -23,6 +23,7 @@ import tomllib
 from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -44,27 +45,37 @@ from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import EvidenceEnv
 from imbue.minds_evals.data_types import EvidenceManifest
 from imbue.minds_evals.data_types import ExpandedExpectations
+from imbue.minds_evals.data_types import GoalEntry
+from imbue.minds_evals.data_types import GoalSatisfactionTiming
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import PhaseTiming
+from imbue.minds_evals.data_types import ProcessCheck
+from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RegisteredApp
+from imbue.minds_evals.data_types import SkillInvocation
+from imbue.minds_evals.data_types import TimingCheck
 from imbue.minds_evals.data_types import TraceRecord
 from imbue.minds_evals.data_types import TranscriptCapture
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerListing
 from imbue.minds_evals.data_types import WorkerListingEntry
 from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.data_types import is_same_skill
 from imbue.minds_evals.errors import TrajectoryDocumentError
 from imbue.minds_evals.expectations import slugify
 from imbue.minds_evals.resources.flow_step_protocol import StepReaction
 from imbue.minds_evals.trajectory import parse_transcript_jsonl
 from imbue.minds_evals.trajectory import parse_worker_document
+from imbue.minds_evals.trajectory import scan_skill_invocations
 from imbue.minds_evals.trajectory import scan_worker_launches
 from imbue.mngr.primitives import AgentLifecycleState
 
@@ -177,6 +188,19 @@ REASON_SERVICE_NOT_RUNNING: Final[str] = "service_not_running"
 REASON_NO_SUPERVISED_PROGRAM: Final[str] = "no_supervised_program"
 REASON_TOO_FEW_APPS: Final[str] = "too_few_apps"
 REASON_NONZERO_EXIT: Final[str] = "nonzero_exit"
+# Why a process check did not pass. The last two are the instrument failing rather than the agent:
+# with no transcript, or one holding no record of the agent, there is nothing to read its own work
+# off.
+REASON_SKILL_NOT_INVOKED: Final[str] = "skill_not_invoked"
+REASON_FORBIDDEN_SKILL_INVOKED: Final[str] = "forbidden_skill_invoked"
+REASON_WORKER_LAUNCHES_EXCEEDED: Final[str] = "worker_launches_exceeded"
+REASON_TRANSCRIPT_UNCAPTURED: Final[str] = "transcript_uncaptured"
+REASON_TRANSCRIPT_EMPTY: Final[str] = "transcript_empty"
+# Why a measured time does not stand. Neither is the instrument failing: a client who was never
+# satisfied took infinitely long, and a prerequisite class that fell short means the trial was fast
+# at something other than what the case commissioned. Both are the agent's, and score zero.
+REASON_GOAL_NEVER_SATISFIED: Final[str] = "goal_never_satisfied"
+REASON_TIMING_PREREQUISITE_FAILED: Final[str] = "timing_prerequisite_failed"
 # Why a transcript file did not make it out of the workspace. These are recorded on the driver's
 # trial metadata, not in the manifest: the transcript is the trial's record, not outcome evidence.
 REASON_NOT_ATTEMPTED: Final[str] = "not_attempted"
@@ -192,6 +216,8 @@ _ORACLE_PREEXISTING_APPS: Final[tuple[tuple[str, str], ...]] = (
     ("system_interface", "http://localhost:8000"),
     ("terminal", "http://localhost:7681"),
 )
+# The call the oracle's fabricated evidence says each required skill was invoked from.
+_ORACLE_SKILL_CALL_ID: Final[str] = "call-oracle-skill"
 _ORACLE_APP_NAME: Final[str] = "delivered-app"
 _ORACLE_APP_URL: Final[str] = "http://localhost:8080"
 _ORACLE_APP_LABEL: Final[str] = "delivered-app-o1r2a3c4"
@@ -614,6 +640,171 @@ def _flow_entry(check: UiFlowCheck, status: CheckStatus, reason: str, detail: st
         reason=reason,
         detail=detail,
         evidence_path="{}/{}/{}".format(VERIFICATION_DIRNAME, FLOWS_DIRNAME, slugify(check.name)),
+    )
+
+
+@pure
+def _invocation_sites(invocations: Sequence[SkillInvocation]) -> str:
+    """Where a skill was invoked, as the manifest names it: each call, with the step it sat in when
+    the record carries one (a stream record names no step)."""
+    return ", ".join(
+        "{}{}".format(
+            invocation.tool_call_id or "?", " (step {})".format(invocation.step_id) if invocation.step_id else ""
+        )
+        for invocation in invocations
+    )
+
+
+@pure
+def _invoked_skill_names(invocations: Sequence[SkillInvocation]) -> str:
+    """Every skill the transcript shows, each once, so a check that found nothing still says what the
+    agent did reach for -- which is how a renamed skill is told from one the agent never used."""
+    names = list(dict.fromkeys(invocation.name for invocation in invocations))
+    return ", ".join(names) if names else "none"
+
+
+@pure
+def _process_entry(
+    check: ProcessCheck, invocations: Sequence[SkillInvocation], launches: Sequence[WorkerLaunch]
+) -> ManifestEntry:
+    """One process check's verdict, read off the agent's own transcript.
+
+    Every outcome here is the agent's: the transcript is the record of what it did, so a check that
+    can be evaluated at all is FAILED rather than ERROR when it does not hold.
+    """
+    match check.kind:
+        case ProcessCheckKind.REQUIRED_SKILL:
+            matching = [invocation for invocation in invocations if is_same_skill(check.skill, invocation.name)]
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.PASSED if matching else CheckStatus.FAILED,
+                "" if matching else REASON_SKILL_NOT_INVOKED,
+                "{} invoked at {}".format(check.skill, _invocation_sites(matching))
+                if matching
+                else "{} was never invoked; the transcript shows: {}".format(
+                    check.skill, _invoked_skill_names(invocations)
+                ),
+                "",
+            )
+        case ProcessCheckKind.FORBIDDEN_SKILL:
+            matching = [invocation for invocation in invocations if is_same_skill(check.skill, invocation.name)]
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.FAILED if matching else CheckStatus.PASSED,
+                REASON_FORBIDDEN_SKILL_INVOKED if matching else "",
+                "{} invoked at {}".format(check.skill, _invocation_sites(matching))
+                if matching
+                else "{} was never invoked".format(check.skill),
+                "",
+            )
+        case ProcessCheckKind.MAX_WORKER_LAUNCHES:
+            is_within_cap = len(launches) <= check.max_worker_launches
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.PASSED if is_within_cap else CheckStatus.FAILED,
+                "" if is_within_cap else REASON_WORKER_LAUNCHES_EXCEEDED,
+                "{} worker(s) launched against a cap of {}{}".format(
+                    len(launches),
+                    check.max_worker_launches,
+                    ": {}".format(", ".join(launch.name for launch in launches)) if launches else "",
+                ),
+                "",
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def measure_goal_satisfaction_timing(
+    entry_records: Sequence[EntryRecord], turn_records: Sequence[TurnRecord]
+) -> GoalSatisfactionTiming | None:
+    """How long the trial took to get its goal-holding client to say the goal was met, or None when
+    no entry ever did.
+
+    Anchored on the case's FIRST client message, not on the satisfying entry's own: what the timing
+    class measures is how long the client waited between asking and being shown, and the earlier
+    entries are part of that wait. The records accumulate across a stepped case's steps, the way
+    ``conversation_seconds`` does, so a later step's figure spans from the case's first message.
+
+    Closed by the LAST satisfaction rather than the first, so a case that holds out for several
+    goals in turn is measured to the one it finished on -- and, on a stepped case, to this step's.
+    """
+    if not turn_records:
+        return None
+    satisfaction = next(
+        (
+            (record.satisfied_at, record.satisfied_at_turn)
+            for record in reversed(tuple(entry_records))
+            if record.satisfied_at and record.satisfied_at_turn is not None
+        ),
+        None,
+    )
+    if satisfaction is None:
+        return None
+    satisfied_at, satisfied_at_turn = satisfaction
+    started_at = datetime.fromisoformat(turn_records[0].sent_at)
+    return GoalSatisfactionTiming(
+        seconds=round((datetime.fromisoformat(satisfied_at) - started_at).total_seconds(), 1),
+        turn_index=satisfied_at_turn,
+    )
+
+
+@pure
+def _timing_entry(
+    check: TimingCheck,
+    timing: GoalSatisfactionTiming | None,
+    failed_prerequisite_classes: Sequence[CheckClass],
+) -> ManifestEntry:
+    """The timing class's one entry: the measurement the grade-time criterion scores on its curve,
+    plus the prose a reader needs to see why it scored what it did.
+
+    PASSED means there is a time to score, not that the time was good -- the class is continuous and
+    the curve is applied at grade time, so a trial slower than the slow anchor passes here and
+    scores 0.0 there. FAILED means there is nothing to score on the curve: a client that never said
+    the goal was met, or a prerequisite class that fell short. Neither is an ERROR: a client who was
+    never satisfied took unboundedly long, which is a measurement of the agent.
+
+    A time that a prerequisite zeroed is still recorded in ``value``, so the entry says both how
+    fast the trial was and why being fast earned it nothing.
+    """
+    anchors = "fast {:.0f}s, slow {:.0f}s".format(check.fast_seconds, check.slow_seconds)
+    if timing is None:
+        return ManifestEntry(
+            entry_id=check.check_id,
+            check_class=CheckClass.TIMING,
+            status=CheckStatus.FAILED,
+            env=EvidenceEnv.LIVE,
+            reason=REASON_GOAL_NEVER_SATISFIED,
+            detail="no entry's client ever said its goal was met, so the time to it is unbounded ({})".format(anchors),
+            evidence_path="",
+            value=None,
+        )
+    measured = "{:.1f}s to the reply to client message {} ({})".format(timing.seconds, timing.turn_index, anchors)
+    if failed_prerequisite_classes:
+        return ManifestEntry(
+            entry_id=check.check_id,
+            check_class=CheckClass.TIMING,
+            status=CheckStatus.FAILED,
+            env=EvidenceEnv.LIVE,
+            reason=REASON_TIMING_PREREQUISITE_FAILED,
+            detail="{}, but the time does not count: a required check failed in the {} class(es)".format(
+                measured, ", ".join(check_class.value for check_class in failed_prerequisite_classes)
+            ),
+            evidence_path="",
+            value=timing.seconds,
+        )
+    return ManifestEntry(
+        entry_id=check.check_id,
+        check_class=CheckClass.TIMING,
+        status=CheckStatus.PASSED,
+        env=EvidenceEnv.LIVE,
+        reason="",
+        detail=measured,
+        evidence_path="",
+        value=timing.seconds,
     )
 
 
@@ -1259,6 +1450,16 @@ class EvidenceCollector(MutableModel):
         "the driver never resolved one, in which case the capture is not attempted",
     )
     case: CaseConfig = Field(frozen=True, description="The case whose expanded expectations drive the probes")
+    # The conversation the driver just held, as the records state.json publishes. Only the timing
+    # class reads them, and only to turn "the client said it was satisfied" into a span; they are
+    # passed in rather than re-read from the state file so the collector never has to parse what
+    # the driver is still writing.
+    entry_records: tuple[EntryRecord, ...] = Field(
+        frozen=True, default=(), description="How each prompts entry played out, in order"
+    )
+    turn_records: tuple[TurnRecord, ...] = Field(
+        frozen=True, default=(), description="Every answered client message, in order"
+    )
     clone_base_sha: str = Field(frozen=True, description="HEAD of the prepared dwt clone; the git bundle's base")
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
     # Required rather than defaulted to None: an unmeasured trial must be a deliberate claim, never
@@ -1489,6 +1690,9 @@ class EvidenceCollector(MutableModel):
         await self._capture_file_inventory()
         expectations = self.case.expectations
         if is_expectations_collection_wanted and expectations is not None:
+            # Reads what the always-on capture already brought out, so it costs no round trip and is
+            # recorded even when the probes below run the budget down.
+            self._evaluate_process_checks(expectations)
             if expectations.is_deliverable_bundle_required:
                 await self._capture_repo_state()
             await self._run_test_commands(expectations)
@@ -1497,6 +1701,9 @@ class EvidenceCollector(MutableModel):
             # Last, and after the HTTP probes: driving the UI is the most expensive step and the
             # one most likely to exhaust the budget, and everything above is worth having anyway.
             await self._run_ui_flows(expectations)
+            # After every other class, because a timing prerequisite is answered from the failures
+            # this bundle already records.
+            self._evaluate_timing_checks(expectations)
         await self._flush_record()
         return self.manifest()
 
@@ -2243,6 +2450,77 @@ class EvidenceCollector(MutableModel):
         )
         await self._flush_record()
 
+    def _evaluate_process_checks(self, expectations: ExpandedExpectations) -> None:
+        """How the agent worked, rather than what it delivered: which skills it invoked and how many
+        background workers it launched, read off the captured transcript stream.
+
+        The stream is the same input the worker capture scans, and it is already host-side, so this
+        costs no round trip. Without it nothing about the agent's own work can be read, and every
+        check is an ERROR -- the instrument failed, and an agent must not be charged for that.
+
+        A stream that came out but holds no agent record at all is the same failure wearing the
+        shape of a success. These checks run only on a finished conversation, where every configured
+        entry was answered, so the chat agent's own stream cannot honestly be free of its steps --
+        and reading an empty one as evidence would charge the agent for every required skill while
+        waving off however many workers it launched.
+        """
+        if not expectations.process_checks:
+            return
+        started_at = time.monotonic()
+        stream = self.transcript_capture.stream
+        records = parse_transcript_jsonl(stream.host_path.read_text()) if stream.host_path is not None else []
+        if any(record.get("source") == "agent" for record in records):
+            invocations = scan_skill_invocations(records)
+            launches = scan_worker_launches(records, depth=0, lead_name="")
+            self.entries.extend(_process_entry(check, invocations, launches) for check in expectations.process_checks)
+        else:
+            is_uncaptured = stream.host_path is None
+            detail = (
+                "the transcript stream was not captured: {} {}".format(
+                    stream.failure_reason, stream.failure_detail
+                ).strip()
+                if is_uncaptured
+                else "the captured transcript stream holds no record of the agent"
+            )
+            self.entries.extend(
+                _entry(
+                    check.check_id,
+                    CheckClass.PROCESS,
+                    CheckStatus.ERROR,
+                    REASON_TRANSCRIPT_UNCAPTURED if is_uncaptured else REASON_TRANSCRIPT_EMPTY,
+                    detail,
+                    "",
+                )
+                for check in expectations.process_checks
+            )
+        self._record_phase("process_checks", started_at)
+
+    def _evaluate_timing_checks(self, expectations: ExpandedExpectations) -> None:
+        """How long the agent took to satisfy the goal-holding client, read off the conversation
+        records the driver holds. Costs no round trip: nothing about it is in the workspace.
+
+        Runs after every other class, so the prerequisite is answered from the failures this bundle
+        actually recorded rather than from a second pass over the workspace.
+        """
+        if not expectations.timing_checks:
+            return
+        started_at = time.monotonic()
+        timing = measure_goal_satisfaction_timing(self.entry_records, self.turn_records)
+        failed_classes = frozenset(entry.check_class for entry in self.entries if entry.status == CheckStatus.FAILED)
+        for check in expectations.timing_checks:
+            self.entries.append(
+                _timing_entry(
+                    check,
+                    timing,
+                    tuple(
+                        check_class
+                        for check_class in sorted(set(check.requires_no_failures))
+                        if check_class in failed_classes
+                    ),
+                )
+            )
+        self._record_phase("timing_checks", started_at)
+
     def _evaluate_app_checks(self, expectations: ExpandedExpectations) -> None:
         """The registry/service half of the deliverable: enough delivered apps registered, and each
         one's supervisord program actually running. Derived from the always-on capture, so it costs
@@ -2332,7 +2610,7 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
         is_evidence_complete=True,
         started_at="1970-01-01T00:00:00+00:00",
         phases=(PhaseTiming(name="oracle", seconds=0.0),),
-        entries=_oracle_entries(expectations),
+        entries=_oracle_entries(expectations, _oracle_satisfied_turn_index(case)),
     )
     trace = TraceRecord(
         timestamp="1970-01-01T00:00:00+00:00",
@@ -2447,7 +2725,22 @@ def _oracle_inventory_paths(expectations: ExpandedExpectations) -> tuple[str, ..
 
 
 @pure
-def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, ...]:
+def _oracle_satisfied_turn_index(case: CaseConfig) -> int:
+    """Which client message the oracle's goal-holding client was satisfied by.
+
+    The oracle's canned conversation is one message per prompts entry, and its state.json records a
+    goal entry as satisfied by its own message, so that is the entry's 1-based position. A case with
+    no goal entry has no such message; the last one stands in, which keeps the fabricated timing
+    entry self-consistent with the fabricated conversation.
+    """
+    return max(
+        (index + 1 for index, entry in enumerate(case.prompts) if isinstance(entry, GoalEntry)),
+        default=len(case.prompts),
+    )
+
+
+@pure
+def _oracle_entries(expectations: ExpandedExpectations, satisfied_turn_index: int) -> tuple[ManifestEntry, ...]:
     entries: list[ManifestEntry] = [
         _entry(
             "file_inventory",
@@ -2538,4 +2831,24 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                 "expected: {}\nagent's reading of the final state: as described".format(check.expect),
             )
         )
+    # Graded by the same function a live trial uses, against a transcript in which every required
+    # skill was invoked and no worker was ever launched, so the fabricated entries keep the shape a
+    # real run records.
+    oracle_invocations = tuple(
+        SkillInvocation(name=check.skill, tool_call_id=_ORACLE_SKILL_CALL_ID, step_id="2")
+        for check in expectations.process_checks
+        if check.kind is ProcessCheckKind.REQUIRED_SKILL
+    )
+    entries.extend(_process_entry(check, oracle_invocations, ()) for check in expectations.process_checks)
+    # Built by the same function a live trial uses, against a conversation that reached the client's
+    # goal exactly at the case's fast anchor and left no prerequisite class failing -- so an oracle
+    # run scores the class's full mark instead of erroring for want of a measurement.
+    entries.extend(
+        _timing_entry(
+            check,
+            GoalSatisfactionTiming(seconds=check.fast_seconds, turn_index=satisfied_turn_index),
+            (),
+        )
+        for check in expectations.timing_checks
+    )
     return tuple(entries)

@@ -279,16 +279,30 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
     help="The named harness configs file",
 )
 @click.option(
+    "--nightly-suites",
+    "nightly_suites_path",
+    default=ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH,
+    show_default=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The checked-in suite list: which eval configs a run evaluates, and the arms of each",
+)
+@click.option(
     "--select",
     "selection",
     default="",
-    help="Comma-separated harness config names to run; empty runs every config marked nightly",
+    help=(
+        "Comma-separated harness config names to run every selected config on, overriding the suites' own "
+        "arms; empty runs each suite's arms, and the nightly set for a suite that names none"
+    ),
 )
 @click.option(
     "--config",
     "config_path",
-    required=True,
-    help="The repo-relative eval config every cell generates its dataset from; part of each green marker key",
+    default="",
+    help=(
+        "One ad-hoc suite to evaluate instead of the suite list: the repo-relative eval config its cells "
+        "generate their dataset from, and part of each of their green marker keys"
+    ),
 )
 @click.option(
     "--green-markers",
@@ -331,6 +345,7 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
 def ci_matrix_command(
     pairs_path: Path,
     harness_configs_path: Path,
+    nightly_suites_path: Path,
     selection: str,
     config_path: str,
     green_markers_path: Path | None,
@@ -340,15 +355,25 @@ def ci_matrix_command(
     summary_md_path: Path | None,
     repository: str,
 ) -> None:
-    """Decide which arms a scheduled run evaluates: every frozen pair times every selected harness
-    config, minus the cells whose green marker says that exact arm was already verified.
+    """Decide which arms a scheduled run evaluates: every frozen pair times every suite's eval
+    config times that suite's harness configs, minus the cells whose green marker says that exact
+    arm was already verified.
 
-    The harness configs file is validated whole, selected or not, through the driver's own kwarg
-    parsing, so a config the driver would refuse at construction is refused here on the free job.
+    Both checked-in files are validated whole, selected or not: the harness configs through the
+    driver's own kwarg parsing, so a config the driver would refuse at construction is refused here
+    on the free job, and the suite list against the configs actually in the checkout.
     """
     try:
         entries = ci_matrix.load_harness_configs(harness_configs_path)
-        selected = ci_matrix.select_harness_configs(entries, selection)
+        suites = ci_matrix.resolve_suites(
+            ci_matrix.suites_for_run(
+                suites=ci_matrix.load_nightly_suites(nightly_suites_path, ci_matrix.REPO_ROOT),
+                entries=entries,
+                config_path=config_path,
+                selection=selection,
+            ),
+            entries,
+        )
         pairs = ci_matrix.read_frozen_pairs(pairs_path)
         green_keys = (
             frozenset()
@@ -357,12 +382,10 @@ def ci_matrix_command(
         )
     except CiMatrixError as exc:
         raise click.UsageError(str(exc)) from exc
-    matrix = ci_matrix.decide_matrix(
-        pairs=pairs, entries=selected, config_path=config_path, green_keys=green_keys, is_forced=is_forced
-    )
+    matrix = ci_matrix.decide_matrix(pairs=pairs, suites=suites, green_keys=green_keys, is_forced=is_forced)
     ci_matrix.write_matrix_reports(matrix, output_path, summary_md_path, repository)
     for cell in matrix.cells:
-        logger.info("{} x {}: {}", cell.pair, cell.harness_config, cell.decision.value)
+        logger.info("{} x {} x {}: {}", cell.pair, cell.config_slug, cell.harness_config, cell.decision.value)
     for pair in matrix.pairs:
         if pair.decision is not PairDecision.RUN:
             logger.info("pair {}: {}", pair.pair, pair.decision.value)
@@ -381,7 +404,7 @@ def ci_matrix_command(
     "summaries_dir",
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Where the per-pair and per-cell summary artifacts were downloaded to; may not exist",
+    help="Where the per-oracle-pass and per-cell summary artifacts were downloaded to; may not exist",
 )
 @click.option("--run-url", required=True, help="The workflow run's URL")
 @click.option("--trigger", required=True, help="The event that started the run (schedule, workflow_dispatch, push)")
@@ -406,7 +429,7 @@ def ci_matrix_command(
     "output_path",
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair",
+    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair and eval config",
 )
 def ci_report_command(
     matrix_path: Path | None,
@@ -420,8 +443,8 @@ def ci_report_command(
     evaluate_result: str,
     output_path: Path,
 ) -> None:
-    """Write the Slack report of a scheduled run: one webhook payload per pair, each a grid of the
-    pair's cases by harness config.
+    """Write the Slack report of a scheduled run: one webhook payload per pair and eval config, each
+    a grid of that config's cases by harness config.
 
     This command is the whole notification of a run, so it never fails: a matrix that cannot be read
     or a summary that is missing is reported as such, and the exit code is zero either way.

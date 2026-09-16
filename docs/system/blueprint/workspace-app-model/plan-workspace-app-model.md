@@ -107,7 +107,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 | Add to project, Remove from project | Shell, shared |
 | Arrangement, docked set, last-focused per tab, active view | Shell, per client |
 | Close (undock) a tab | Shell, per client |
-| Workspace-level facts minds needs (service discovery events, owner-exec, share materials) | Minds, through its own contract with the workspace, which this model does not touch |
+| Workspace-level facts minds needs (service discovery events, owner-exec, share materials) | Mind, through its own contract with the workspace, which this model does not touch |
 
 ### 3.5 Invariants
 

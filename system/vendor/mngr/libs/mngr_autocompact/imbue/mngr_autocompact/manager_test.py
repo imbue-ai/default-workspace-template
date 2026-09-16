@@ -36,7 +36,7 @@ from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr_autocompact import manager as manager_module
 from imbue.mngr_autocompact.config import AutoCompactPluginConfig
 from imbue.mngr_autocompact.config import ContextCompactionMode
-from imbue.mngr_autocompact.manager import compact_agent
+from imbue.mngr_autocompact.manager import compact_agent_if_stale
 from imbue.mngr_autocompact.manager import compact_all_agents
 from imbue.mngr_autocompact.manager import get_stale_agents
 from imbue.mngr_autocompact.manager import is_agent_stale_for_compaction
@@ -115,7 +115,12 @@ def test_is_agent_stale_non_compaction_agent() -> None:
         running=True,
     )
     config = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.ON_NEXT_PROMPT
+    )
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER
+    )
 
 
 def test_is_agent_stale_disabled_mode() -> None:
@@ -128,7 +133,12 @@ def test_is_agent_stale_disabled_mode() -> None:
     )
     config = AutoCompactPluginConfig(mode=ContextCompactionMode.DISABLED)
     now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.ON_NEXT_PROMPT, now=now
+    )
 
 
 def test_is_agent_stale_not_running_or_not_idle() -> None:
@@ -139,13 +149,17 @@ def test_is_agent_stale_not_running_or_not_idle() -> None:
         running=False,
         idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
     )
-    config = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT)
+    config = AutoCompactPluginConfig(mode=ContextCompactionMode.PROACTIVE_TIMER)
     now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
     agent.running = True
     agent.idle_since_dt = None
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
 
 def test_is_agent_stale_unknown_ttl() -> None:
@@ -158,13 +172,17 @@ def test_is_agent_stale_unknown_ttl() -> None:
         idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
     )
     # No override, no agent ttl -> False
-    config = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT, cache_ttl_minutes=None)
+    config = AutoCompactPluginConfig(mode=ContextCompactionMode.PROACTIVE_TIMER, cache_ttl_minutes=None)
     now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
     # Config override -> True
-    config_with_ttl = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT, cache_ttl_minutes=60)
-    assert is_agent_stale_for_compaction(cast(Any, agent), config_with_ttl, now=now)
+    config_with_ttl = AutoCompactPluginConfig(mode=ContextCompactionMode.PROACTIVE_TIMER, cache_ttl_minutes=60)
+    assert is_agent_stale_for_compaction(
+        cast(Any, agent), config_with_ttl, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
 
 def test_is_agent_stale_context_tokens_gating() -> None:
@@ -180,18 +198,26 @@ def test_is_agent_stale_context_tokens_gating() -> None:
     now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
 
     # Gated at 100k, agent has 50k -> not stale
-    config_100k = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT, min_context_tokens=100_000)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config_100k, now=now)
+    config_100k = AutoCompactPluginConfig(mode=ContextCompactionMode.PROACTIVE_TIMER, min_context_tokens=100_000)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config_100k, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
     # Gating disabled (0) -> stale
-    config_0 = AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT, min_context_tokens=0)
-    assert is_agent_stale_for_compaction(cast(Any, agent), config_0, now=now)
+    config_0 = AutoCompactPluginConfig(mode=ContextCompactionMode.PROACTIVE_TIMER, min_context_tokens=0)
+    assert is_agent_stale_for_compaction(
+        cast(Any, agent), config_0, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
     # Agent reports None for context tokens -> not stale
     agent.context_tokens = None
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config_100k, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config_100k, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
     # Gating disabled with None tokens -> still stale
-    assert is_agent_stale_for_compaction(cast(Any, agent), config_0, now=now)
+    assert is_agent_stale_for_compaction(
+        cast(Any, agent), config_0, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
 
 
 def test_is_agent_stale_timing_logic() -> None:
@@ -205,7 +231,7 @@ def test_is_agent_stale_timing_logic() -> None:
         idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
     )
     config = AutoCompactPluginConfig(
-        mode=ContextCompactionMode.ON_NEXT_PROMPT,
+        mode=ContextCompactionMode.PROACTIVE_TIMER,
         min_context_tokens=100_000,
     )
     # Default epsilon is 3 minutes -> delay is 57 minutes
@@ -214,6 +240,7 @@ def test_is_agent_stale_timing_logic() -> None:
     assert not is_agent_stale_for_compaction(
         cast(Any, agent),
         config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
         now=datetime(2026, 8, 27, 12, 30, 0, tzinfo=timezone.utc),
     )
 
@@ -221,6 +248,7 @@ def test_is_agent_stale_timing_logic() -> None:
     assert not is_agent_stale_for_compaction(
         cast(Any, agent),
         config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
         now=datetime(2026, 8, 27, 12, 56, 59, tzinfo=timezone.utc),
     )
 
@@ -228,8 +256,77 @@ def test_is_agent_stale_timing_logic() -> None:
     assert is_agent_stale_for_compaction(
         cast(Any, agent),
         config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
         now=datetime(2026, 8, 27, 12, 57, 0, tzinfo=timezone.utc),
     )
+
+
+def test_is_agent_stale_on_next_prompt_mode() -> None:
+    agent = _DummyCompactionAgent(
+        id=AgentId.generate(),
+        name=AgentName("test-agent"),
+        agent_type=AgentTypeName("claude"),
+        running=True,
+        cache_ttl=60,
+        context_tokens=150_000,
+        idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    config = AutoCompactPluginConfig(
+        mode=ContextCompactionMode.ON_NEXT_PROMPT,
+        min_context_tokens=100_000,
+    )
+    now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
+
+    # When expected_mode is PROACTIVE_TIMER -> not stale for compaction
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+    )
+
+    # When expected_mode matches ON_NEXT_PROMPT -> stale
+    assert is_agent_stale_for_compaction(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.ON_NEXT_PROMPT,
+        now=now,
+    )
+
+
+def test_compact_agent_if_stale_on_next_prompt_mode() -> None:
+    agent = _DummyCompactionAgent(
+        id=AgentId.generate(),
+        name=AgentName("test-agent"),
+        agent_type=AgentTypeName("claude"),
+        running=True,
+        cache_ttl=60,
+        context_tokens=150_000,
+        idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    config = AutoCompactPluginConfig(
+        mode=ContextCompactionMode.ON_NEXT_PROMPT,
+        min_context_tokens=100_000,
+    )
+    now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
+
+    # When expected_mode is PROACTIVE_TIMER -> compaction not triggered
+    assert not compact_agent_if_stale(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+    )
+    assert agent.compaction_count == 0
+
+    # With expected_mode=ON_NEXT_PROMPT -> compaction triggered
+    assert compact_agent_if_stale(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.ON_NEXT_PROMPT,
+        now=now,
+    )
+    assert agent.compaction_count == 1
 
 
 def test_trigger_compaction_non_compaction_agent() -> None:
@@ -269,7 +366,12 @@ def test_check_and_compact_agent_not_stale() -> None:
     )
     # Only 10m idle -> not stale
     now = datetime(2026, 8, 27, 12, 10, 0, tzinfo=timezone.utc)
-    assert not compact_agent(cast(Any, agent), config, now=now)
+    assert not compact_agent_if_stale(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+    )
     assert agent.compaction_count == 0
 
 
@@ -289,11 +391,16 @@ def test_is_agent_stale_for_compaction_stale() -> None:
     )
     now = datetime(2026, 8, 27, 13, 0, 0, tzinfo=timezone.utc)
     # Staleness check should return True without calling request_compaction
-    assert is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert is_agent_stale_for_compaction(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+    )
     assert agent.compaction_count == 0
 
 
-def test_compact_agent_stale_triggers() -> None:
+def test_compact_agent_if_stale_triggers() -> None:
     agent = _DummyCompactionAgent(
         id=AgentId.generate(),
         name=AgentName("test-agent"),
@@ -308,12 +415,17 @@ def test_compact_agent_stale_triggers() -> None:
         epsilon_offset_minutes=2,
     )
     now = datetime(2026, 8, 27, 13, 0, 0, tzinfo=timezone.utc)
-    assert compact_agent(cast(Any, agent), config, now=now)
+    assert compact_agent_if_stale(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+    )
     assert agent.compaction_count == 1
     assert agent.last_instructions is None
 
 
-def test_compact_agent_with_instructions() -> None:
+def test_compact_agent_if_stale_with_instructions() -> None:
     agent = _DummyCompactionAgent(
         id=AgentId.generate(),
         name=AgentName("test-agent"),
@@ -328,7 +440,13 @@ def test_compact_agent_with_instructions() -> None:
         epsilon_offset_minutes=2,
     )
     now = datetime(2026, 8, 27, 13, 0, 0, tzinfo=timezone.utc)
-    assert compact_agent(cast(Any, agent), config, now=now, instructions="preserve errors")
+    assert compact_agent_if_stale(
+        cast(Any, agent),
+        config,
+        expected_mode=ContextCompactionMode.PROACTIVE_TIMER,
+        now=now,
+        instructions="preserve errors",
+    )
     assert agent.compaction_count == 1
     assert agent.last_instructions == "preserve errors"
 
@@ -430,7 +548,9 @@ def test_concurrency_group_inactive_skips_staleness_and_compaction(temp_mngr_ctx
         epsilon_offset_minutes=2,
     )
     now = datetime(2026, 8, 27, 14, 0, 0, tzinfo=timezone.utc)
-    assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+    assert not is_agent_stale_for_compaction(
+        cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+    )
     assert not trigger_compaction(cast(Any, agent))
     assert agent.compaction_count == 0
 
@@ -456,7 +576,9 @@ def test_is_agent_stale_exceptions() -> None:
             context_tokens=150_000,
             idle_since_dt=datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc),
         )
-        assert not is_agent_stale_for_compaction(cast(Any, agent), config, now=now)
+        assert not is_agent_stale_for_compaction(
+            cast(Any, agent), config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER, now=now
+        )
 
 
 def test_trigger_compaction_exceptions() -> None:
@@ -585,13 +707,43 @@ def test_get_stale_agents_and_compact_all_agents(temp_mngr_ctx: MngrContext) -> 
         provider_name=provider.name,
     )
 
+    # Agent with ON_NEXT_PROMPT mode is idle long enough, but should NOT be considered stale for proactive compaction
+    on_prompt_aid = AgentId.generate()
+    on_prompt_config = MngrConfig(
+        providers={
+            ProviderInstanceName("local"): ProviderInstanceConfig(backend=ProviderBackendName("local")),
+        },
+        plugins={
+            PluginName("autocompact"): AutoCompactPluginConfig(mode=ContextCompactionMode.ON_NEXT_PROMPT),
+        },
+    )
+    on_prompt_ctx = MngrContext(
+        config=on_prompt_config,
+        pm=temp_mngr_ctx.pm,
+        profile_dir=temp_mngr_ctx.profile_dir,
+        concurrency_group=temp_mngr_ctx.concurrency_group,
+    )
+    on_prompt_agent = _DummyCompactionAgent(
+        id=on_prompt_aid,
+        name=AgentName("on-prompt-agent"),
+        agent_type=AgentTypeName("claude"),
+        mngr_ctx=on_prompt_ctx,
+        idle_since_dt=now - timedelta(minutes=100),
+    )
+    on_prompt_aref = DiscoveredAgent(
+        agent_id=on_prompt_aid,
+        agent_name=AgentName("on-prompt-agent"),
+        host_id=on_hid,
+        provider_name=provider.name,
+    )
+
     on_host = _FakeOnlineHost(
         id=on_hid,
         host_name=HostName("on-host"),
         connector=PyinfraConnector(provider._create_local_pyinfra_host()),
         provider_instance=provider,
         mngr_ctx=mngr_ctx,
-        test_agents=[noncompact_agent, fresh_agent, stale_agent],
+        test_agents=[noncompact_agent, fresh_agent, stale_agent, on_prompt_agent],
     )
     provider.mock_hosts[on_hid] = on_host
     on_ref = DiscoveredHost(
@@ -600,7 +752,13 @@ def test_get_stale_agents_and_compact_all_agents(temp_mngr_ctx: MngrContext) -> 
         provider_name=provider.name,
         host_state=HostState.RUNNING,
     )
-    provider.mock_agents_by_host[on_ref] = [missing_aref, noncompact_aref, fresh_aref, stale_aref]
+    provider.mock_agents_by_host[on_ref] = [
+        missing_aref,
+        noncompact_aref,
+        fresh_aref,
+        stale_aref,
+        on_prompt_aref,
+    ]
 
     providers_module._instance_cache[(provider.name, id(mngr_ctx))] = provider
     try:
@@ -610,5 +768,6 @@ def test_get_stale_agents_and_compact_all_agents(temp_mngr_ctx: MngrContext) -> 
         compacted_names = compact_all_agents(mngr_ctx, now=now)
         assert compacted_names == [AgentName("stale-agent")]
         assert stale_agent.compaction_count == 1
+        assert on_prompt_agent.compaction_count == 0
     finally:
         reset_provider_instances()
