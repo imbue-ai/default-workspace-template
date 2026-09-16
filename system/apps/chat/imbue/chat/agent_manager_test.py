@@ -475,9 +475,13 @@ def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seede
         assert [event["type"] for event in events] == ["user_message", "assistant_message", "assistant_message"]
         assert events[0]["event_id"] == seed_event_id(chat_id, 0)
         # The seed reads back as the chat's one (ended) segment.
-        (segment,) = manager.get_chat_segments(chat_id)
+        segments = manager.get_chat_segments(chat_id)
+        assert segments is not None
+        (segment,) = segments
         assert segment.agent.harness is HarnessType.SEED and segment.is_active is False
-        broadcast = json.loads(q.get_nowait())
+        raw = q.get_nowait()
+        assert raw is not None
+        broadcast = json.loads(raw)
         assert broadcast["type"] == "provisional_chat_created"
         assert broadcast["chat_id"] == created.chat_id
     finally:
@@ -603,7 +607,9 @@ def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_
         assert manager.chat_id_of_agent(agent.agent_id) == chat_id
         assert manager.get_provisional_chat(seeded.chat_id) is not None
         assert manager.get_chat_snapshots() == []
-        (seed_segment,) = manager.get_chat_segments(chat_id)
+        seed_segments = manager.get_chat_segments(chat_id)
+        assert seed_segments is not None
+        (seed_segment,) = seed_segments
         assert seed_segment.agent.harness is HarnessType.SEED
 
         # mngr lists the agent mid-create: one chat, under the seed's id, reading both segments.
@@ -727,7 +733,12 @@ def test_seed_chat_checks_its_title_like_a_launch_checks_a_requested_name(
         manager.stop()
 
 
-def test_a_seeded_chat_must_be_launched_with_a_message(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+def test_a_seeded_chat_must_be_launched_with_a_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The launch resolves its work dir before it reads the message, so name one (CI sets none).
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     manager, _store = _seed_manager(broadcaster, tmp_path)
     try:
         seeded = manager.seed_chat("", _seed_turns())
