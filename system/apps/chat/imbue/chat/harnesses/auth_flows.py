@@ -246,7 +246,7 @@ class AuthFlowService:
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         return service
 
-    # -- lifecycle ------------------------------------------------------------------------
+    # lifecycle
 
     def start(self, lane_id: str, method_id: str, account_id: str | None = None) -> FlowStart:
         """Begin a sign-in. Any flow already running is abandoned.
@@ -424,7 +424,7 @@ class AuthFlowService:
             raise FlowError(session.detail or "extraction failed")
         return (None, value) if method.static_url else (value, None)
 
-    # -- advancing ------------------------------------------------------------------------
+    # advancing
 
     def submit_code(self, flow_id: str, code: str) -> FlowStatus:
         with self._lock:
@@ -530,7 +530,7 @@ class AuthFlowService:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
 
-    # -- internals ------------------------------------------------------------------------
+    # internals
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""

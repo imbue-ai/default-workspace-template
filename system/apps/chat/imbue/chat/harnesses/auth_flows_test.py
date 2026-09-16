@@ -381,7 +381,7 @@ def test_an_account_id_that_is_a_path_is_refused(service: AuthFlowService) -> No
             service.start("opencode-go", "api_key", account_id=hostile)
 
 
-# ----- a method whose credential is printed, not persisted by the CLI ---------------------
+# a method whose credential is printed, not persisted by the CLI
 
 _OAT = "sk-ant-oat01-" + "A" * 80
 

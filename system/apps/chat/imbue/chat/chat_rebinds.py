@@ -66,8 +66,8 @@ _START_TIMEOUT_SECONDS: Final[float] = 120.0
 # How much of a failed start's output the failed phase carries.
 _START_OUTPUT_TAIL_LINES: Final[int] = 20
 # How long a model pick keeps being retried after the restart. ``mngr start`` returns without awaiting
-# the harness (a create awaits it; a start does not), so the first tries can meet an agent still coming
-# up: codex's daemon takes a few seconds to answer the switch.
+# the harness, so the first tries can meet an agent still coming up: codex's daemon takes a few seconds
+# to answer the switch.
 _MODEL_PICK_BUDGET_SECONDS: Final[float] = 30.0
 _MODEL_PICK_RETRY_INTERVAL_SECONDS: Final[float] = 1.0
 
@@ -217,7 +217,7 @@ class RebindRunner:
                 case _ as unreachable:
                     assert_never(unreachable)
 
-    # -- draining ------------------------------------------------------------------------------
+    # draining
 
     def drain(self, chat_id: ChatId, rebind_id: str) -> str:
         """Return the agent's queue to the composer and move on to restarting.
@@ -250,7 +250,7 @@ class RebindRunner:
         )
         return joined_blocks(rebind.returned_block, block)
 
-    # -- restarting ----------------------------------------------------------------------------
+    # restarting
 
     def _restart(self, chat_id: ChatId, rebind_id: str, rebind: ChatRebindRecord) -> None:
         """Stop the agent, repoint its binding, relabel it, start it, set its model, and hand it the held sends.

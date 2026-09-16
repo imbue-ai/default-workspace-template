@@ -927,7 +927,7 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
         manager.stop()
 
 
-# --- mngr CLI argv contract ---
+# mngr CLI argv contract
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
 # so a system/vendor/mngr subcommand/flag rename fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
@@ -1040,7 +1040,7 @@ def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     assert templates == ["chat", "first"]
 
 
-# --- the chat's originating project (the mngr ``project`` label) ---
+# the chat's originating project (the mngr ``project`` label)
 # A chat is an agent, so the project it was created inside rides the label mngr
 # already propagates to the agent's children rather than a parallel list. The
 # label is where a chat starts out filed, not an owner: membership is
@@ -1673,9 +1673,7 @@ def test_handle_observe_output_line_logs_stderr_as_warning(
     assert "something bad happened" in warnings[0]
 
 
-# ---------------------------------------------------------------------------
 # Activity-state integration
-# ---------------------------------------------------------------------------
 
 
 def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
@@ -2503,9 +2501,7 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
-# =============================================================================
 # Offline codex model-chip resolution from the persisted raw model-list sidecar
-# =============================================================================
 
 
 def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
@@ -2713,7 +2709,7 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     assert session.in_flight_block() == "caught mid-send"
 
 
-# --- Watcher eviction (the chat-memory lifecycle) ---
+# Watcher eviction (the chat-memory lifecycle)
 
 
 def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
@@ -2848,7 +2844,7 @@ def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager
     assert nudger.nudge_count == 2
 
 
-# --- The auto-open reactor, fed from the observe stream ---
+# The auto-open reactor, fed from the observe stream
 
 
 def test_observe_events_feed_the_auto_open_reactor(
@@ -2881,7 +2877,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
 
 
-# --- Chats that have run on several agents (a hand-built record) ---
+# Chats that have run on several agents (a hand-built record)
 
 
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
