@@ -1199,6 +1199,10 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
     settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
     agent_types = settings["agent_types"]
     for harness in HarnessType:
+        if harness is HarnessType.SEED:
+            # The seed segment's pseudo-harness: no agent ever runs on it, so it has no agent
+            # type and nothing to launch through the wrapper.
+            continue
         command = agent_types[harness.value].get("command", "")
         assert "oom_priority/bin/agent_oom_launch.py" in command, f"{harness} launches unbanded"
         # The wrapper consumes argv[1] as the binary to exec, so it must actually be there.
