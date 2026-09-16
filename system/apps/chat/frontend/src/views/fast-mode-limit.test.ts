@@ -12,19 +12,10 @@ import {
 import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { ensureChatSettings, getChatSettings, updateChatSettings } from "../models/ChatSettings";
+import { installLocalStoragePolyfill } from "@imbue/workspace-ui/src/testing/localStorage";
 
 // The switch memory is kept in localStorage, which the node test env lacks.
-vi.hoisted(() => {
-  const store = new Map<string, string>();
-  globalThis.localStorage ??= {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-    clear: () => store.clear(),
-    key: () => null,
-    length: 0,
-  } as Storage;
-});
+installLocalStoragePolyfill();
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../models/ModelSettings", () => ({ getChatFastMode: vi.fn(), setFastMode: vi.fn() }));

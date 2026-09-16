@@ -1,21 +1,16 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type m from "mithril";
+import { installLocalStoragePolyfill } from "@imbue/workspace-ui/src/testing/localStorage";
+
+// The composer persists its draft in localStorage, which the node test env lacks.
+installLocalStoragePolyfill();
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
-// vi.hoisted. Mithril also captures requestAnimationFrame at import time, and the composer reads
-// localStorage, so both are polyfilled here too.
+// vi.hoisted. Mithril also captures requestAnimationFrame at import time, so it is polyfilled
+// here too.
 const mocks = vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-  const store = new Map<string, string>();
-  globalThis.localStorage ??= {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-    clear: () => store.clear(),
-    key: () => null,
-    length: 0,
-  } as Storage;
   // The node test env has no document; provide a minimal one for code that wires
   // document listeners when lifecycle hooks actually run (they don't in these
   // vnode-only tests, but imports must not explode).
