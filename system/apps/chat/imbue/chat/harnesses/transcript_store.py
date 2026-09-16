@@ -38,7 +38,7 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.path_watch import PathWatcher
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
-from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 
 logger = _loguru_logger
 
@@ -394,7 +394,7 @@ class TranscriptStore:
         return sum(len(lanes[pos].events) for pos in range(lane_pos)) + index
 
 
-class StoreBackedTranscriptLoader(TranscriptReader, ABC):
+class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
     """One agent's transcript, fully resident in a :class:`TranscriptStore`, read on demand.
 
     Owns the single lock and the store; subclasses supply discovery + incremental
@@ -405,12 +405,25 @@ class StoreBackedTranscriptLoader(TranscriptReader, ABC):
     files and emitting new events) is :class:`StoreBackedWatcher`.
     """
 
+    _agent_id: str
     _lock: threading.Lock
     _store: TranscriptStore
 
-    def _init_loader(self) -> None:
+    def _init_loader(self, agent_id: str) -> None:
+        self._agent_id = agent_id
         self._lock = threading.Lock()
         self._store = TranscriptStore.build()
+
+    def _ingest_locked(self, lane_id: str, event: dict[str, Any], source: EventSource | None = None) -> bool:
+        """Stamp the event with the agent it came from and add it to the store (see :meth:`TranscriptStore.ingest`).
+
+        Every event on the wire names its agent, so a chat that spans several agents can say
+        which segment each came from; stamping at ingest covers the REST reads and the live
+        stream alike, and stamping before the store's comparison keeps a re-serialised copy
+        equal to the copy already held.
+        """
+        event["agent_id"] = self._agent_id
+        return self._store.ingest(lane_id, event, source)
 
     # -- per-harness hooks ----------------------------------------------------------------
 
@@ -516,13 +529,11 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
     flooding the bounded SSE queues with history would evict clients).
     """
 
-    _agent_id: str
     _on_events: Callable[[str, list[dict[str, Any]]], None]
     _path_watcher: PathWatcher | None
 
     def _init_store_watcher(self, agent_id: str, on_events: Callable[[str, list[dict[str, Any]]], None]) -> None:
-        self._init_loader()
-        self._agent_id = agent_id
+        self._init_loader(agent_id)
         self._on_events = on_events
         self._path_watcher = None
 

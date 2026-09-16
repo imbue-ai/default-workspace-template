@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from app_instances.blueprint import status_code_for_error
 from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceStatus
 from app_instances.errors import InvalidParamsError
@@ -21,7 +22,10 @@ from imbue.chat.accounts import index_path
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.errors import ChatCreateRefusedError
+from imbue.chat.errors import ChatMovingError
 from imbue.chat.errors import ChatStartFailedError
 from imbue.chat.errors import ChatStopFailedError
 from imbue.chat.errors import ChatTitleConflictError
@@ -30,9 +34,14 @@ from imbue.chat.instances import AgentManagerNudger
 from imbue.chat.instances import parse_subagent_key
 from imbue.chat.instances import subagent_instance_key
 from imbue.chat.models import CreatedChat
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.errors import MngrError
@@ -319,6 +328,7 @@ class _LandingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         landed_id = _agent_id()
         _seed_agent(self, landed_id, "Chat-1")
@@ -336,6 +346,7 @@ class _VanishingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         return CreatedChat(chat_id=ChatId(_agent_id()), name="Chat-1", display_name="Chat 1")
 
@@ -560,3 +571,64 @@ def test_stop_and_start_refuse_unknown_keys_and_the_primary_agent(agent_manager:
         source.stop_instance(InstanceKey(primary_id))
     with pytest.raises(UnknownInstanceError):
         source.start_instance(InstanceKey(_agent_id()))
+
+
+def test_stop_start_and_rename_answer_a_conflict_while_the_chat_moves_to_another_agent(
+    broadcaster: WebSocketBroadcaster, true_binary: str
+) -> None:
+    """A converging chat lists as working from its retiring agent, but the verbs refuse with a 409 rather
+    than acting on that stand-in: a start would revive the agent the chat is leaving."""
+    store = InMemoryChatRecordStore()
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_record_store=store)
+    first, successor = _agent_id(), _agent_id()
+    seed_agent_state(agent_manager, first, name="Chat-1", labels={"display_name": "Chat 1"}, state="STOPPED")
+    store.write(
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(make_chat_agent_entry(1, first, is_archived=False),),
+            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=HandoffPhase.SWITCHING),
+        )
+    )
+    agent_manager.refresh_chat_records()
+    starter = _RecordingStarter(None)
+    source = _source(agent_manager, starter)
+    assert [(record.key, record.status) for record in source.list_instances()] == [(first, InstanceStatus.WORKING)]
+
+    with pytest.raises(ChatMovingError, match="switching") as stop_refusal:
+        source.stop_instance(InstanceKey(first))
+    with pytest.raises(ChatMovingError, match="switching"):
+        source.start_instance(InstanceKey(first))
+    with pytest.raises(ChatMovingError, match="switching"):
+        source.rename_instance(InstanceKey(first), InstanceTitle("Other"))
+
+    assert status_code_for_error(stop_refusal.value) == 409
+    assert starter.started == []
+    tracked = agent_manager.get_agent_by_id(first)
+    assert tracked is not None and (tracked.state, tracked.name) == ("STOPPED", "Chat-1")
+
+
+def test_a_recorded_chat_is_one_instance_keyed_by_its_first_agent_and_its_delete_destroys_every_member(
+    broadcaster: WebSocketBroadcaster, true_binary: str
+) -> None:
+    """An archived member is excluded because the record names it, never because of a label; the
+    instance is titled from the active agent and deleting it takes both agents and the record."""
+    store = InMemoryChatRecordStore()
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_record_store=store)
+    first, second = _agent_id(), _agent_id()
+    _seed_agent(agent_manager, first, f"archived-1-Chat-1-{first}", labels={"display_name": "Chat 1 (archived 1)"})
+    _seed_agent(agent_manager, second, "Chat-1", labels={"display_name": "Chat 1"})
+    store.write(make_two_member_chat_record(first, second))
+    agent_manager.refresh_chat_records()
+    source = _source(agent_manager)
+
+    records = source.list_instances()
+    assert [(record.key, record.title) for record in records] == [(first, "Chat 1")]
+    # A subagent view is keyed on the chat and its active agent.
+    subagent = source.create_instance(ActionId("subagent"), {"parent": first, "session": "s1"})
+    assert subagent.key == f"{first}.{second}.s1"
+
+    source.delete_instance(InstanceKey(first))
+
+    assert agent_manager.get_agent_by_id(first) is None and agent_manager.get_agent_by_id(second) is None
+    assert store.read(ChatId(first)) is None
+    assert source.list_instances() == []

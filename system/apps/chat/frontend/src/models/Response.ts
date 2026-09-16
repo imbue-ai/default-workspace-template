@@ -6,7 +6,8 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import { noteBackendArrivals } from "./OutgoingMessages";
+import { isHandoffPromptChip } from "./handoffPrompt";
+import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -62,6 +63,10 @@ export interface BaseTranscriptEvent {
   // conditional on every variant.
   message_uuid?: string;
   session_id?: string;
+  // The agent whose transcript this event came from. A chat can span several agents
+  // (docs/system/blueprint/chat-agent-split), so every event names its own; absent only on
+  // an event from a chat app that predates the split.
+  agent_id?: string;
 }
 
 /**
@@ -182,15 +187,42 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
 }
 
 /**
+ * The chat moved from one agent to the next (a handoff between harnesses): the chat-level
+ * event the backend synthesizes between two agents' segments (`chat_transcript.py`), never
+ * emitted by a harness. Rendered as a chip ("Switched from Claude to Codex") and treated as a
+ * turn boundary: the next agent starts fresh.
+ */
+export interface AgentSwitchEvent extends BaseTranscriptEvent {
+  type: "agent_switch";
+  from_agent_id: string;
+  to_agent_id: string;
+  from_harness: string;
+  to_harness: string;
+  // The retiring agent's position in the chat.
+  seq: number;
+  // The message the user switched with, when the handoff folded it into the successor's
+  // prompt: it is no event of the successor's own, so the switch carries it (with its
+  // send-time id) and the page shows it as the successor's opening turn. Null when the
+  // message arrived as a turn of its own (a fresh start) or there was none.
+  message_id: string | null;
+  message: string | null;
+  // Whether the switch was a fresh start: the retiring agent had no user turn, so no summary was
+  // asked for and no handoff prompt delivered. There was no handoff to show, so the page shows no
+  // node for it.
+  is_fresh_start: boolean;
+}
+
+/**
  * A single entry in the transcript event stream, discriminated by `type`.
  * Narrow on `event.type` before touching variant-specific fields.
  *
  * The first three types are the core contract: every harness emits them with the same
  * fields, which is why no view needs to know which harness produced an event. `special`
  * is the declared extension point -- a harness may emit the kinds it registers, and
- * renderers ignore them.
+ * renderers ignore them. `agent_switch` is the chat app's own: the seam between two agents.
  */
-export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
+export type TranscriptEvent =
+  UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent | AgentSwitchEvent;
 
 // For hook compatibility
 export interface ResponseItem {
@@ -487,6 +519,10 @@ class TranscriptStore {
 
 const storeByChat: Record<string, TranscriptStore> = {};
 const notFoundChatIds = new Set<string>();
+// Chats whose transcript snapshot has landed at least once. An empty window means two different
+// things -- an empty transcript, or one that has not loaded (or whose load failed) -- and a caller
+// that acts on "this chat has no user turn" must be able to tell them apart.
+const loadedChatIds = new Set<string>();
 
 /** Where a chat's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
@@ -557,6 +593,12 @@ export function isConversationNotFound(chatId: string): boolean {
   return notFoundChatIds.has(chatId);
 }
 
+/** Whether a transcript snapshot for this chat has landed, so an empty window means an empty
+ *  transcript rather than one that has not loaded. */
+export function isTranscriptLoaded(chatId: string): boolean {
+  return loadedChatIds.has(chatId);
+}
+
 /** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */
 export function getConversationLoadState(chatId: string): TranscriptLoadState {
   return loadStateByChat.get(chatId) ?? IDLE_LOAD_STATE;
@@ -564,6 +606,12 @@ export function getConversationLoadState(chatId: string): TranscriptLoadState {
 
 export function getEventsForChat(chatId: string): TranscriptEvent[] {
   return storeByChat[chatId]?.events ?? [];
+}
+
+/** Whether a switch marker on the chat's loaded transcript carries the message sent under ``messageId``:
+ *  the handoff folded it into the successor's prompt, and the marker is where the page shows it. */
+export function isMessageCarriedBySwitch(chatId: string, messageId: string): boolean {
+  return getEventsForChat(chatId).some((event) => event.type === "agent_switch" && event.message_id === messageId);
 }
 
 export function getEventCount(chatId: string): number {
@@ -622,10 +670,22 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
   // event is harmless. Only the live tail feeds this -- paging/backfill of old
   // history goes through the other append paths and must not drop live bubbles.
-  const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
+  // A successor's handoff prompt is the chat app's own message, not the real form of
+  // anything the page sent: the message it folds in is the switch marker's to show.
+  const userEventIds = newEvents
+    .filter((event) => event.type === "user_message" && !isHandoffPromptChip(event))
+    .map((event) => event.event_id);
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  // A switch marker is the real form of the message it carries (the successor's opening
+  // bubble), so it stands that message's bubble down by id: a bubble the switch's end
+  // brought back before the marker landed goes here, and one the marker preceded is
+  // never brought back (``trackBackendArrivals``).
+  const carriedMessageIds = newEvents.flatMap((event) =>
+    event.type === "agent_switch" && event.message_id !== null ? [event.message_id] : [],
+  );
+  dropOutgoingByMessageId(chatId, carriedMessageIds);
 }
 
 export function prependEvents(chatId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
@@ -686,6 +746,7 @@ export async function fetchEvents(chatId: string): Promise<TranscriptEvent[]> {
     }
     placeWindow(chatId, result);
     loadStateByChat.set(chatId, IDLE_LOAD_STATE);
+    loadedChatIds.add(chatId);
     return result.events;
   } catch (error) {
     // The not-found latch is fenced alongside the state because the panel acts on
@@ -897,15 +958,20 @@ export function removeMessageSentListener(listener: (chatId: string) => void): v
   messageSentListeners.delete(listener);
 }
 
+/** Tell the send listeners a message just went out for ``chatId`` (the switch route's send calls this too). */
+export function announceMessageSent(chatId: string): void {
+  for (const listener of messageSentListeners) {
+    listener(chatId);
+  }
+}
+
 export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<string> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
     return id;
   }
-  for (const listener of messageSentListeners) {
-    listener(chatId);
-  }
+  announceMessageSent(chatId);
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents

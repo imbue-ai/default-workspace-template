@@ -1,6 +1,6 @@
 """End-to-end tests for a chat panel opened during agent creation.
 
-``create-chat`` returns 201 as soon as the background ``mngr create`` thread
+``POST /api/chats/create`` returns 201 as soon as the background ``mngr create`` thread
 starts, but the agent is only registered with the ``AgentManager`` when that
 thread finishes. Every endpoint the freshly opened panel calls resolves the
 agent through that registry, so the panel's first ``/events`` fetch 404s and
@@ -227,14 +227,14 @@ def _create_chat_and_open_its_page(page: Page, base_url: str) -> str:
     page. The create mints the first free "Chat N" display name on its own.
     """
     request = urllib.request.Request(
-        f"{base_url}/api/agents/create-chat",
+        f"{base_url}/api/chats/create",
         data=b"{}",
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         created = json.loads(response.read())
-    page.goto(f"{base_url}/{created['agent_id']}")
+    page.goto(f"{base_url}/{created['chat_id']}")
     return str(created["display_name"])
 
 

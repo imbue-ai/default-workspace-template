@@ -8,7 +8,14 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 vi.mock("./Chats", () => ({ getChatById: mockGetChatById }));
 
-import { changedAxes, effectiveChoice, getChatFastMode, setFastMode, setModelChoice } from "./ModelSettings";
+import {
+  changedAxes,
+  effectiveChoice,
+  forgetPendingChoice,
+  getChatFastMode,
+  setFastMode,
+  setModelChoice,
+} from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
 import { chatSnapshotFixture } from "./chatSnapshotFixture";
@@ -144,6 +151,25 @@ describe("effectiveChoice", () => {
     expect(settled?.isPending).toBe(false);
     // Pending is cleared: a fresh render now reflects live, not the overlay.
     expect(effectiveChoice("a3", live("claude-sonnet-5", "medium", false, SONNET))?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("forgets a pending pick when asked, so the bar goes back to the live choice", async () => {
+    // A chat that moved to a new agent (spec 5.12): the pick was the old agent's, and no live
+    // choice from the new one will ever settle it, so it is dropped outright.
+    setModelChoice("a10", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
+    const opusLive = live("claude-opus-4-8", "medium", true, OPUS);
+    expect(effectiveChoice("a10", opusLive)?.isPending).toBe(true);
+
+    forgetPendingChoice("a10");
+    expect(effectiveChoice("a10", opusLive)).toEqual({
+      identity: { model_id: "claude-opus-4-8", effort: "medium", fast: true },
+      matched: OPUS,
+      isPending: false,
+    });
+    // Nothing pending is nothing to forget.
+    forgetPendingChoice("a10");
+    expect(effectiveChoice("a10", opusLive)?.isPending).toBe(false);
     await flush();
   });
 

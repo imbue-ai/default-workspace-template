@@ -15,6 +15,7 @@ async function loadHarnessCatalog(): Promise<typeof import("./HarnessCatalog")> 
 
 function catalogFixture(popups: HarnessCatalog["popups"]): HarnessCatalog {
   return {
+    label: "Codex",
     options: [],
     switch_mode: "on_change",
     picker_mode: "dynamic",

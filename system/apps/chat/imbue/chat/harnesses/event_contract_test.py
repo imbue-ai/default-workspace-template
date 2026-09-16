@@ -150,8 +150,8 @@ def test_codex_events_satisfy_the_contract() -> None:
         },
     ]
     events: list[dict[str, Any]] = []
-    for index, line in enumerate(lines):
-        events.extend(codex_parse_lines(line, index, tool_names))
+    for line in lines:
+        events.extend(codex_parse_lines(line, tool_names))
     _assert_contract(events, "codex")
 
 
@@ -209,7 +209,6 @@ def test_codex_and_pi_stamp_tk_decoration_and_permission_objects_resident() -> N
             "type": "response_item",
             "payload": {"type": "function_call_output", "call_id": "c1", "output": tk_output},
         },
-        0,
         {"c1": "exec"},
     )[0]
     assert "Updated cod-step-abcd -> closed" in codex_tk["tk_stamp"]
@@ -221,7 +220,6 @@ def test_codex_and_pi_stamp_tk_decoration_and_permission_objects_resident() -> N
             "type": "response_item",
             "payload": {"type": "function_call_output", "call_id": "c2", "output": permission_output},
         },
-        1,
         {"c2": "exec"},
     )[0]
     assert codex_permission["permission_request"]["request_id"] == "req-1"
@@ -269,7 +267,6 @@ def test_codex_error_marker_and_snippet_stamp_from_the_full_output() -> None:
             "type": "response_item",
             "payload": {"type": "function_call_output", "call_id": "c9", "output": output},
         },
-        0,
         {"c9": "exec"},
     )[0]
     assert event["permission_request"]["request_id"] == "req-9"
