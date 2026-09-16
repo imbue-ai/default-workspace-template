@@ -195,9 +195,9 @@ review gates are (4c): each item below names the condition that runs it, and
 an item whose condition does not hold is skipped, not run "as extra coverage".
 On a clean pull with no local footprint every condition is false and nothing
 here runs. The suites would test upstream's own code, which upstream already
-tested; the boots would repeat the pre-flight the apply itself performs on the
-merged backend before it restarts anything; and on a two-core workspace the
-full set costs over half an hour, which is what the user waits through.
+tested; so would the boots, of services that arrived exactly as upstream
+shipped them; and on a two-core workspace the full set costs over half an
+hour, which is what the user waits through.
 Widening the scope is the one deviation this rule never licenses; if you
 believe something should run in a situation the rule does not cover, that is
 a `question` gate (Step 6). Record which branch applied, with its evidence,
