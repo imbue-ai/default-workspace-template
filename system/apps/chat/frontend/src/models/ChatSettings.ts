@@ -43,18 +43,28 @@ export function ensureChatSettings(): Promise<ChatSettings> {
   return loading;
 }
 
-/** Replace the settings, on the page at once and on the backend; the backend's answer is what stays. */
+/**
+ * Replace the settings, on the page at once and on the backend; the backend's answer is what
+ * stays. A write the backend refuses or never receives puts the previous settings back, so the
+ * page never shows a limit that does not apply to the next chat, and resolves with them.
+ */
 export async function updateChatSettings(next: ChatSettings): Promise<ChatSettings> {
+  const previous = settings;
   settings = next;
   m.redraw();
-  const response = await m.request<{ settings: ChatSettings }>({
-    method: "PUT",
-    url: apiUrl("/api/settings"),
-    body: next,
-  });
-  settings = response.settings;
+  try {
+    const response = await m.request<{ settings: ChatSettings }>({
+      method: "PUT",
+      url: apiUrl("/api/settings"),
+      body: next,
+    });
+    settings = response.settings;
+  } catch (error) {
+    console.warn("Failed to save the chat settings", error);
+    settings = previous;
+  }
   m.redraw();
-  return settings;
+  return settings ?? DEFAULT_CHAT_SETTINGS;
 }
 
 /** Forget what was loaded, so the next read fetches afresh (tests). */
