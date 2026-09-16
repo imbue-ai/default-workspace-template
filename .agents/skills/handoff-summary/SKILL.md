@@ -9,8 +9,9 @@ metadata:
 
 The chat app is about to move this conversation to a new agent on another
 harness. That agent starts with none of your context: the chat app puts the
-file you write here into its first message, so it reads it before anything
-else. The point is to make the two sessions read as one long chat.
+file you write here into its first message (a file over 64 KB is pointed at
+instead, and the agent is told to read it first), so it reads it before
+anything else. The point is to make the two sessions read as one long chat.
 
 The slash command carries the output path, for example
 `/handoff-summary data/.apps/chat/chats/agent-abc/summaries/1.md`. Write the
