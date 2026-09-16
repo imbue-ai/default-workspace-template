@@ -36,6 +36,29 @@ vi.mock("../models/ModelSettings", () => ({
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
 
+// The workspace's chat settings as the page has them (null before the load), and every write
+// the fast-limit row asked for.
+const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
+  const defaults = { fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
+  return {
+    DEFAULT_CHAT_SETTINGS: defaults,
+    chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
+    settingsWrites: [] as unknown[],
+  };
+});
+vi.mock("../models/ChatSettings", () => ({
+  DEFAULT_CHAT_SETTINGS,
+  getChatSettings: () => chatSettingsState.settings,
+  ensureChatSettings: () => {
+    chatSettingsState.loads += 1;
+    return Promise.resolve(chatSettingsState.settings ?? DEFAULT_CHAT_SETTINGS);
+  },
+  updateChatSettings: (next: unknown) => {
+    settingsWrites.push(next);
+    return Promise.resolve(next);
+  },
+}));
+
 const providerState: { accounts: unknown[]; defaultId: string | null } = { accounts: [], defaultId: null };
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
@@ -131,6 +154,9 @@ beforeEach(() => {
   begun.length = 0;
   reopened.length = 0;
   pins.length = 0;
+  settingsWrites.length = 0;
+  chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+  chatSettingsState.loads = 0;
   providerState.defaultId = null;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
@@ -492,6 +518,49 @@ describe("the combo card", () => {
     expect(trigger.textContent).toContain("Opus");
     expect(trigger.textContent).toContain("High");
     expect(trigger.querySelector("svg")).not.toBeNull();
+  });
+
+  it("shows the workspace's fast-mode turn limit under the fast switch and writes a changed one", () => {
+    // The limit is what the fast switch's default position comes from, so it sits with it. A
+    // change is written whole over the settings the page has; an emptied or negative field is
+    // not a limit and writes nothing.
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    chatSettingsState.settings = { fast_mode_turn_limit: 1, is_fast_mode_notice_shown: true };
+    render();
+    click(".model-selector-trigger");
+    const input = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (input === null) throw new Error("no fast-limit input");
+    expect(input.value).toBe("1");
+    expect(input.disabled).toBe(false);
+    expect(screenText()).toContain("Fast for the first");
+    // The unit beside the field agrees with the number in it.
+    expect(input.nextElementSibling?.textContent).toBe("turn");
+
+    input.value = "3";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toEqual([{ fast_mode_turn_limit: 3, is_fast_mode_notice_shown: true }]);
+
+    input.value = "";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.value = "-2";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toHaveLength(1);
+  });
+
+  it("asks for the settings and keeps the limit field disabled until they are known", () => {
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    chatSettingsState.settings = null;
+    render();
+    click(".model-selector-trigger");
+    const input = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (input === null) throw new Error("no fast-limit input");
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe(String(DEFAULT_CHAT_SETTINGS.fast_mode_turn_limit));
+    expect(chatSettingsState.loads).toBeGreaterThan(0);
   });
 
   it("gives a read-only harness no model list to open", () => {
