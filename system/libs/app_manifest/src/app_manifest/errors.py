@@ -12,3 +12,7 @@ class ManifestLoadError(AppManifestError):
 
 class RegistryReadError(AppManifestError):
     """The registry file cannot be read or parsed at all (a bad row is skipped instead)."""
+
+
+class ScopeComputationError(AppManifestError):
+    """A creation's footprint cannot be computed: a git command failed, or a config it reads is unparseable."""
