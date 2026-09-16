@@ -19,6 +19,8 @@ declare module "@minds/embed-contract" {
   export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions";
   export const MAX_PERMISSION_RESOLUTION_ENTRIES: number;
   export const OPEN_SHARE_SETTINGS: "minds:open-share-settings";
+  // The focus-chat message (contract v4). Probed like PERMISSION_RESOLUTIONS.
+  export const FOCUS_CHAT: "minds:focus-chat";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

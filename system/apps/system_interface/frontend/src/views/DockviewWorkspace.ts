@@ -78,7 +78,12 @@ import type { MenuAnchor, SidebarTabRow } from "./Sidebar";
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import {
+  FOCUS_CHAT,
+  OPEN_SHARE_SETTINGS,
+  sendToEmbedder,
+  setEmbedderMessageHandler,
+} from "@imbue/workspace-ui/src/embed";
 import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
@@ -2120,6 +2125,46 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
   };
 }
 
+// The chat app's name in the inventory: every chat agent is one of its instances, keyed by the
+// agent id (the chat id the app sets on each agent it creates).
+const CHAT_APP_NAME = "chat";
+
+/**
+ * The view a focus-chat ask lands in: the mounted view when it already holds the chat (Everything
+ * holds the whole machine), else the first project whose tab set contains it, else the mounted
+ * view (the open files the chat into it). Null before any view is mounted.
+ */
+export function viewIdForChatFocus(
+  mountedViewId: string | null,
+  projects: readonly ProjectInfo[],
+  address: string,
+): string | null {
+  if (mountedViewId === null) return null;
+  if (isEverythingView(mountedViewId)) return mountedViewId;
+  if (projectForViewId(projects, mountedViewId)?.tabs.includes(address) === true) return mountedViewId;
+  const holder = projects.find((project) => project.tabs.includes(address));
+  return holder === undefined ? mountedViewId : holder.id;
+}
+
+/** ``minds:focus-chat`` from the embedder: show the chat, switching views if another one holds it. */
+function focusChatFromEmbedder(message: Record<string, unknown>): void {
+  const agentId = message.agentId;
+  if (typeof agentId !== "string" || agentId === "") return;
+  void focusChat(addressFor(CHAT_APP_NAME, agentId));
+}
+
+async function focusChat(address: string): Promise<void> {
+  if (!(await whenAddressListed(address))) {
+    console.warn(`[si] focus-chat ignored: nothing lists ${address}`);
+    return;
+  }
+  const targetViewId = viewIdForChatFocus(mountedViewId, availableProjects, address);
+  if (targetViewId === null) return;
+  if (targetViewId !== mountedViewId) await switchToView(targetViewId);
+  openAddressInGroup(address, null);
+  m.redraw();
+}
+
 function closeActiveTabFromEmbedder(): void {
   const activePanel = dockview?.activePanel;
   if (!activePanel) return;
@@ -2229,6 +2274,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   document.addEventListener("pointerdown", endDrag, true);
 
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
+  setEmbedderMessageHandler(FOCUS_CHAT, focusChatFromEmbedder);
 
   // The shell side of the app contract (contracts.md section 10).
   setChildFrameMessageHandler(SHELL_FOCUSED, activatePanelForChildFrame);
