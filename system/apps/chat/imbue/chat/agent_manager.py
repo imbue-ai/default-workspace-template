@@ -1629,11 +1629,6 @@ class AgentManager:
                 # take the chat's agent away and leave the create step skipped (its guard reads
                 # the record's last entry), so the chat would list nothing at all. Such a retry
                 # can only finish where the conversation already is.
-                # Once the successor is on the record it IS the chat's agent, and only the
-                # deliveries are left: destroying it to create another under the same id would
-                # take the chat's agent away and leave the create step skipped (its guard reads
-                # the record's last entry), so the chat would list nothing at all. Such a retry
-                # can only finish where the conversation already is.
                 is_successor_adopted = record.agents[-1].agent_id == transition.next_agent_id
                 if is_successor_adopted and transition.target_account_id != target.account.id:
                     raise HandoffError(
