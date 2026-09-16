@@ -99,6 +99,7 @@ import {
   addProjectsUpdatedListener,
   addTabReboundListener,
   addressFor,
+  addressOfInstanceKeyed,
   appNameFromAddress,
   appStoppedDetail,
   applyProjects,
@@ -1938,6 +1939,26 @@ function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TI
   });
 }
 
+/** Resolve to the address of the instance keyed ``key``: at once, when a later list carries it,
+ *  or null once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
+function whenInstanceKeyed(key: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<string | null> {
+  const listed = addressOfInstanceKeyed(key);
+  if (listed !== null) return Promise.resolve(listed);
+  return new Promise<string | null>((resolve) => {
+    const settle = (address: string | null): void => {
+      removeAppsUpdatedListener(listener);
+      clearTimeout(timer);
+      resolve(address);
+    };
+    const listener = (): void => {
+      const found = addressOfInstanceKeyed(key);
+      if (found !== null) settle(found);
+    };
+    const timer = setTimeout(() => settle(null), timeoutMs);
+    addAppsUpdatedListener(listener);
+  });
+}
+
 /** Dock ``address`` once the inventory lists it. */
 async function openAddressWhenListed(address: string, targetGroup: DockviewGroupPanel | null): Promise<void> {
   if (!(await whenAddressListed(address))) {
@@ -2125,10 +2146,6 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
   };
 }
 
-// The chat app's name in the inventory: every chat agent is one of its instances, keyed by the
-// agent id (the chat id the app sets on each agent it creates).
-const CHAT_APP_NAME = "chat";
-
 /**
  * The view a focus-chat ask lands in: the mounted view when it already holds the chat (Everything
  * holds the whole machine), else the first project whose tab set contains it, else the mounted
@@ -2146,16 +2163,19 @@ export function viewIdForChatFocus(
   return holder === undefined ? mountedViewId : holder.id;
 }
 
-/** ``minds:focus-chat`` from the embedder: show the chat, switching views if another one holds it. */
+/** ``minds:focus-chat`` from the embedder: show the chat that agent is, switching views if
+ *  another one holds it. The chat is whichever listed instance is keyed by the agent id; the
+ *  shell does not know which app that is. */
 function focusChatFromEmbedder(message: Record<string, unknown>): void {
   const agentId = message.agentId;
   if (typeof agentId !== "string" || agentId === "") return;
-  void focusChat(addressFor(CHAT_APP_NAME, agentId));
+  void focusChat(agentId);
 }
 
-async function focusChat(address: string): Promise<void> {
-  if (!(await whenAddressListed(address))) {
-    console.warn(`[si] focus-chat ignored: nothing lists ${address}`);
+async function focusChat(agentId: string): Promise<void> {
+  const address = await whenInstanceKeyed(agentId);
+  if (address === null) {
+    console.warn(`[si] focus-chat ignored: nothing lists an instance keyed ${agentId}`);
     return;
   }
   const targetViewId = viewIdForChatFocus(mountedViewId, availableProjects, address);
