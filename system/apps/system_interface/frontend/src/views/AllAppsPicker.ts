@@ -98,7 +98,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           (isStopped ? "project-rail-app-stopped text-faint " : "text-primary ") +
           "transition-all duration-(--dur-base) " +
           (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
-        ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(row.app)}`) : {}),
+        ...hoverTooltipAttrs(isStopped && !isFadingOut ? `${label} — ${appStoppedDetail(row.app)}` : null),
         onclick: isFadingOut ? undefined : () => attrs.onRunAction(row.app, row.action),
       },
       [
