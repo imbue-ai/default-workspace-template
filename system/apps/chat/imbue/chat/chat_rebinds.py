@@ -70,7 +70,12 @@ class RebindCancelledError(RuntimeError):
 
 
 class RebindStepError(RuntimeError):
-    """A step of the restart that mngr refused; the runner stops and a resume runs the step again."""
+    """A step of the restart that mngr refused; it fails the rebind with its reason, so the page offers a retry."""
+
+
+class AgentUntrackedError(RebindStepError):
+    """The agent is not in the tracked list at delivery time: the record keeps its phase for the next resume
+    rather than failing."""
 
 
 @pure
@@ -151,16 +156,32 @@ class RebindRunner:
     def run(self, chat_id: ChatId, rebind_id: str) -> None:
         """Take the rebind from whatever phase it is in to done or failed.
 
-        Quiet when the rebind is gone or the app is shutting down. A step mngr refused is logged
-        and left where it is: the record still carries the phase, and the next resume runs the
-        step again.
+        Quiet when the rebind is gone or the app is shutting down. A step mngr refused while
+        restarting fails the rebind with its reason: no verb but destroy answers a converging
+        chat and only the failed phase has a retry, whose steps find their work done. An agent
+        the tracked list does not hold at delivery time is not a refusal: the record keeps its
+        phase for the next resume.
         """
         try:
             self._run_phases(chat_id, rebind_id)
         except RebindCancelledError as e:
             logger.info("Rebind of chat {} stopped: {}", chat_id, e)
+        except AgentUntrackedError as e:
+            logger.warning("Rebind of chat {} waits for the next resume: {}", chat_id, e)
         except (RebindStepError, AgentStopError, BindingError, ChatRecordError, OSError) as e:
             logger.opt(exception=e).error("Rebind of chat {} could not finish its current step", chat_id)
+            self._fail_if_restarting(chat_id, rebind_id, str(e))
+
+    def _fail_if_restarting(self, chat_id: ChatId, rebind_id: str, error: str) -> None:
+        """Move a rebind whose restart step was refused to the failed phase; draining keeps its phase."""
+        try:
+            _, rebind = self._current(chat_id, rebind_id)
+            if rebind.phase is HandoffPhase.RESTARTING:
+                self._fail(chat_id, rebind_id, error)
+        except RebindCancelledError as e:
+            logger.info("Rebind of chat {} stopped: {}", chat_id, e)
+        except ChatRecordError as e:
+            logger.opt(exception=e).error("Rebind of chat {} could not record its failure", chat_id)
 
     def _run_phases(self, chat_id: ChatId, rebind_id: str) -> None:
         is_done = False
@@ -353,7 +374,7 @@ class RebindRunner:
         """
         agent_info = self._deps.get_agent_info(agent_id)
         if agent_info is None:
-            raise RebindStepError(
+            raise AgentUntrackedError(
                 f"agent {agent_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:

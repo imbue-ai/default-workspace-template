@@ -251,6 +251,7 @@ def _write_fake_mngr(tmp_path: Path) -> tuple[Path, Path]:
     script.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" >> "{log}"\n'
+        f'if [ "$1" = "rename" ] && [ -f "{fail_dir}/fail-rename" ]; then echo "host lock held" >&2; exit 3; fi\n'
         'if [ "$1" = "create" ]; then\n'
         f'  if [ -f "{fail_dir}/fail-create" ]; then echo "No provider account is signed in" >&2; exit 3; fi\n'
         f'  if [ -f "{fail_dir}/dup-once" ]; then rm "{fail_dir}/dup-once"; '
@@ -653,6 +654,52 @@ def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_
 
     assert workspace.record().handoff is None
     assert "did not produce a summary" in workspace.delivered_prompt()
+
+
+def test_a_refused_archive_fails_the_handoff_with_its_reason_and_a_retry_completes_it(tmp_path: Path) -> None:
+    """Past the point of no return every verb but destroy answers 409 and cancel is refused, so a step mngr
+    refuses there must land in the failed phase, whose retry reruns the switch from the stop."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    (workspace.fail_dir / "fail-rename").write_text("")
+    runner = _runner(workspace)
+
+    runner.run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is not None
+    assert record.handoff.phase is HandoffPhase.FAILED
+    assert record.handoff.failed_step is HandoffFailedStep.START
+    assert record.handoff.error is not None and "host lock held" in record.handoff.error
+    # The retiring agent was stopped but neither archived nor measured, and no successor was made.
+    assert workspace.stopped == [first]
+    assert record.agents[0].archived_name is None and record.agents[0].final_event_count is None
+    assert workspace.agents[first].name == "Chat-1" and successor not in workspace.agents
+    assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["rename"]
+
+    # The retry (what the route writes) runs the switch again: the archive lands this time, then the create.
+    (workspace.fail_dir / "fail-rename").unlink()
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(
+                    to_update(current.handoff.field_ref().phase, HandoffPhase.SWITCHING),
+                    to_update(current.handoff.field_ref().error, None),
+                    to_update(current.handoff.field_ref().failed_step, None),
+                )
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+    runner.run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["rename", "rename", "create"]
+    assert workspace.agents[first].name == archived_agent_name(1, "Chat-1", first)
+    assert workspace.agents[successor].harness is HarnessType.CODEX
 
 
 def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reuses_the_prompt(tmp_path: Path) -> None:

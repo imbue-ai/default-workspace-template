@@ -103,7 +103,13 @@ class HandoffCancelledError(RuntimeError):
 
 
 class HandoffStepError(RuntimeError):
-    """A step of the switch that mngr refused; the runner stops and a resume runs the step again."""
+    """A step of the switch that mngr refused. Past the point of no return it fails the handoff with its
+    reason, so the page offers a retry; before it the record keeps its phase for a cancel or a resume."""
+
+
+class SuccessorUntrackedError(HandoffStepError):
+    """The successor exists but the observe stream has not listed it yet: nothing is wrong, and the record
+    keeps its phase for the next resume rather than failing."""
 
 
 @pure
@@ -370,15 +376,32 @@ class HandoffRunner:
         """Take the handoff from whatever phase it is in to active or failed.
 
         Quiet when the handoff was cancelled or the app is shutting down. A step mngr refused
-        is logged and left where it is: the record still carries the phase, and the next
-        resume (a restart, or a retry) runs the step again.
+        while the chat can still be called off (draining, summarizing) is logged and left where
+        it is, for a cancel or the next resume; one refused past the point of no return
+        (switching) fails the handoff with its reason, since no verb but destroy answers a
+        converging chat and only the failed phase has a retry. A successor the observe stream
+        has not listed yet is not a refusal: the record keeps its phase for the next resume.
         """
         try:
             self._run_phases(chat_id, handoff_id)
         except HandoffCancelledError as e:
             logger.info("Handoff of chat {} stopped: {}", chat_id, e)
+        except SuccessorUntrackedError as e:
+            logger.warning("Handoff of chat {} waits for the next resume: {}", chat_id, e)
         except (HandoffStepError, AgentStopError, ChatRecordError, OSError) as e:
             logger.opt(exception=e).error("Handoff of chat {} could not finish its current step", chat_id)
+            self._fail_if_past_the_point_of_no_return(chat_id, handoff_id, str(e))
+
+    def _fail_if_past_the_point_of_no_return(self, chat_id: ChatId, handoff_id: str, error: str) -> None:
+        """Move a handoff whose switching step was refused to the failed phase; earlier phases keep theirs."""
+        try:
+            _, handoff = self._current(chat_id, handoff_id)
+            if handoff.phase is HandoffPhase.SWITCHING:
+                self._fail(chat_id, handoff_id, error, HandoffFailedStep.START)
+        except HandoffCancelledError as e:
+            logger.info("Handoff of chat {} stopped: {}", chat_id, e)
+        except ChatRecordError as e:
+            logger.opt(exception=e).error("Handoff of chat {} could not record its failure", chat_id)
 
     def _run_phases(self, chat_id: ChatId, handoff_id: str) -> None:
         is_done = False
@@ -734,7 +757,9 @@ class HandoffRunner:
         """The tracked successor, or the step error that leaves the record for the next resume."""
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
-            raise HandoffStepError(f"agent {successor_id} of chat {chat_id} is untracked; the switch resumes later")
+            raise SuccessorUntrackedError(
+                f"agent {successor_id} of chat {chat_id} is untracked; the switch resumes later"
+            )
         return successor_info
 
     def _recreate_after_destroying_half_made(
@@ -882,7 +907,7 @@ class HandoffRunner:
         """
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
-            raise HandoffStepError(
+            raise SuccessorUntrackedError(
                 f"agent {successor_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         self._deps.ensure_watcher(successor_info)
