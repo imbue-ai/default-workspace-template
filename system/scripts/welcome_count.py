@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 DEFAULT_COUNT_PATH = Path("data/.state/welcome/count")
 ENV_COUNT_PATH = "MINDS_WELCOME_COUNT_FILE"
 
 
-def count_path(environ: dict[str, str] | os._Environ[str], cwd: Path) -> Path:
+def count_path(environ: Mapping[str, str], cwd: Path) -> Path:
     path = Path(environ.get(ENV_COUNT_PATH) or DEFAULT_COUNT_PATH)
     return path if path.is_absolute() else cwd / path
 
