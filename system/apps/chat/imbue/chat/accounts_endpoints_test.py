@@ -354,7 +354,7 @@ def test_account_model_options_offers_the_catalog_for_a_static_harness_and_a_cod
                     id="gpt-6-astra",
                     model="gpt-6-astra",
                     displayName="GPT-6 Astra",
-                    supportedReasoningEfforts=(
+                    supported_reasoning_efforts=(
                         ReasoningEffortOption(reasoningEffort="low"),
                         ReasoningEffortOption(reasoningEffort="high"),
                     ),
