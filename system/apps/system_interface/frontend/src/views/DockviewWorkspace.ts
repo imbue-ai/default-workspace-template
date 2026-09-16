@@ -12,8 +12,8 @@
  * Everything (every instance on the machine). The rules the dock enforces are narrow:
  *   - opening an instance in a project files its address into the project's tab set;
  *   - closing a tab changes no tab set and stops nothing;
- *   - an instance its app stops listing leaves every tab and tab set (the shell prunes the
- *     saved layouts and tab sets; this dock drops the live panel when the list arrives).
+ *   - an instance leaves every tab and tab set only when it is deleted through the shell; one its
+ *     app stops listing keeps its tabs, which show it as unavailable until it is listed again.
  *
  * The dock is never empty. A view with no panels gets a New Tab launcher, which is also what
  * the "+" opens (and where a freshly-created project lands). A New Tab is otherwise an ordinary
@@ -137,8 +137,6 @@ import {
   fetchLayout,
   isOwnSaveId,
   mintTabId,
-  panelParamsInDocument,
-  panelsWithUnlistedAddresses,
   parsePanelParams,
   saveLayout,
 } from "../models/Layouts";
@@ -195,10 +193,6 @@ let membershipDialog: MembershipDialogState | null = null;
 // Single shared dockview state
 let dockview: DockviewComponent | null = null;
 let dockviewContainer: HTMLElement | null = null;
-// The panels a restore in progress will remove as soon as ``fromJSON`` has rebuilt the grid:
-// their addresses left the inventory, so they get a silent placeholder rather than the
-// "could not be restored" warning a genuinely unknown panel earns.
-let panelsPrunedByRestore: ReadonlySet<string> = new Set();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
 // True while a view's content is being mounted. The teardown half of that removes every
@@ -455,7 +449,7 @@ function openTabMenuAt(
 }
 
 /** The instance a panel shows, resolved against the inventory, or null for a launcher or an
- *  address the machine no longer lists. */
+ *  address the machine does not list right now. */
 function resolvedInstanceForPanel(panelId: string): ResolvedInstance | null {
   const params = instanceParamsOf(panelId);
   return params === null ? null : findInstance(params.address);
@@ -651,7 +645,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   // ``init`` runs before dockview lists the panel among its ``panels``.
   let params: PanelParams | null = null;
 
-  /** The instance the tab shows, resolved against the inventory; null for a launcher or an unlisted address. */
+  /** The instance the tab shows, resolved against the inventory; null for a launcher or an address not listed right now. */
   const resolvedInstance = (): ResolvedInstance | null =>
     params === null || params.kind === "launcher" ? null : findInstance(params.address);
 
@@ -736,8 +730,10 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const updateStatusDot = (): void => {
     const resolved = resolvedInstance();
     if (resolved === null) {
-      statusDot.style.display = "none";
-      setHoverTooltip(statusDot, null);
+      const isUnavailable = params?.kind === "instance" && isAddressUnlisted(params.address);
+      statusDot.style.display = isUnavailable ? "" : "none";
+      statusDot.setAttribute("data-status", UNAVAILABLE_STATUS);
+      setHoverTooltip(statusDot, isUnavailable ? UNAVAILABLE_STATUS : null);
       return;
     }
     statusDot.style.display = "";
@@ -826,7 +822,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       updateStatusDot();
     },
     dispose() {
-      // A tab torn down mid-edit (a pushed view switch, a rebind, a prune) gets no blur for its
+      // A tab torn down mid-edit (a pushed view switch, a rebind, a delete) gets no blur for its
       // editor, so the edit ends here or the pushed-layout deferral would never lift.
       endTitleEdit(false);
       if (!isOverflowRow) tabHandlesByPanelId.delete(options.id);
@@ -1162,8 +1158,8 @@ export function refreshProjects(): void {
 /**
  * The active view's tab list: every instance it holds, docked or not.
  *
- * A project lists its tab set, resolved against the inventory (an address the machine no
- * longer lists is skipped: the shell prunes it from the tab set on the same observation).
+ * A project lists its tab set, resolved against the inventory (an address the machine does not
+ * list right now is skipped until it is listed again).
  * Everything lists the machine.
  */
 export function getSidebarRows(): SidebarTabRow[] {
@@ -1662,14 +1658,14 @@ function takeProjects(projects: ProjectInfo[]): void {
  * Mount a layout into the dockview, replacing whatever is currently shown.
  *
  * A layout with no dockview (never arranged, or nothing could be fetched) mounts the New Tab
- * launcher. Panels whose address the machine no longer lists are dropped before the restore:
- * that observation is what prunes references, and the shell's own file already lost them.
+ * launcher. A panel whose address the machine does not list is restored like any other and
+ * shows the instance as unavailable.
  */
 async function applyLayout(layout: { dockview: SerializedDockview | null } | null, generation: number): Promise<void> {
   if (!dockview) return;
   // Every page url is derived from its app's origin label, which only resolves once the app
   // list has loaded; bounded, so a workspace that reports no apps still proceeds.
-  const isInventoryKnown = await whenAppsLoaded();
+  await whenAppsLoaded();
   if (!dockview || generation !== viewMountGeneration) return;
   const dv = dockview;
   isApplyingLayout = true;
@@ -1679,24 +1675,12 @@ async function applyLayout(layout: { dockview: SerializedDockview | null } | nul
   dv.clear();
 
   if (layout !== null && layout.dockview !== null) {
-    // Nothing is unlisted until the inventory has arrived: an empty seed is not an answer, and
-    // the apps_updated that brings the list prunes then (contracts section 8).
-    const unlisted = new Set(
-      isInventoryKnown
-        ? panelsWithUnlistedAddresses(panelParamsInDocument(layout.dockview), (address) => !isAddressUnlisted(address))
-        : [],
-    );
-    panelsPrunedByRestore = unlisted;
     try {
       dv.fromJSON(layout.dockview);
     } catch (e) {
       console.warn(`[si] could not restore the saved arrangement of ${mountedViewId ?? "?"}; starting it over`, e);
       dv.clear();
     }
-    for (const panel of dv.panels.slice()) {
-      if (unlisted.has(panel.id)) dv.removePanel(panel);
-    }
-    panelsPrunedByRestore = new Set();
     // An instance is a singleton with one page, so an arrangement naming the same one twice
     // would give two tabs a page to fight over. The first occurrence keeps it.
     for (const duplicatePanelId of duplicateLiveKeyPanelIds(
@@ -1856,19 +1840,15 @@ function syncTabTitlesFromInventory(): void {
   }
 }
 
-/** The inventory moved: drop the panels whose addresses left it, and re-sync the titles. */
+/**
+ * The inventory moved: re-sync the titles, and let go of the undocked pages of instances the
+ * machine does not list. A docked one stays: its page shows the instance as unavailable, with
+ * no frame loaded, and loads it again once the app lists it.
+ */
 function reconcilePanelsWithInventory(): void {
   if (!dockview) return;
-  for (const panel of [...dockview.panels]) {
-    const params = parsePanelParams(panel.params);
-    if (params === null || params.kind === "launcher") continue;
-    if (!isAddressUnlisted(params.address)) continue;
-    destroyLiveSurface(params.address);
-    dockview.removePanel(panel);
-  }
-  // Pages of instances that are gone but were not docked in this view go too.
   for (const key of liveSurfaceKeys()) {
-    if (isAddressUnlisted(key)) destroyLiveSurface(key);
+    if (isAddressUnlisted(key) && liveSurfaceBoundPanelId(key) === null) destroyLiveSurface(key);
   }
   syncTabTitlesFromInventory();
 }
@@ -2044,9 +2024,7 @@ function renderLiveContent(surface: LiveSurface): m.Children {
     if (app !== undefined && stopped !== null) {
       return m(StoppedAppPlaceholder, { ...stopped, appName: app.name });
     }
-    const note = isAddressUnlisted(address)
-      ? "This tab's app no longer lists it."
-      : "Waiting for this tab's app to list it.";
+    const note = isAddressUnlisted(address) ? UNAVAILABLE_PANEL_TEXT : "Waiting for this tab's app to list it.";
     return m(
       "div",
       { class: "dockview-panel-unrecoverable flex h-full items-center justify-center p-4 text-center" },
@@ -2074,15 +2052,16 @@ function renderLiveContent(surface: LiveSurface): m.Children {
 
 const UNRECOVERABLE_PANEL_TEXT =
   "This tab's contents could not be restored. Close it and open it again from the sidebar.";
-const UNLISTED_PANEL_TEXT = "This tab's app no longer lists it.";
+const UNAVAILABLE_PANEL_TEXT = "This isn't available right now. The tab reconnects when it's back.";
+const UNAVAILABLE_STATUS = "unavailable";
 
 /**
  * A dockview panel is only a place: an empty div dockview creates,
  * positions, hides and disposes at will, standing in for a live page that outlives it.
  *
  * Which page is learned in ``init``, from the params dockview hands over: the ones ``addPanel``
- * was given, or the ones ``fromJSON`` restored. A slot whose params name no instance, or whose
- * address the restore is about to prune, shows a placeholder and binds no page.
+ * was given, or the ones ``fromJSON`` restored. A slot whose params name no instance shows a
+ * placeholder and binds no page.
  */
 function createLiveSlotRenderer(panelId: string): IContentRenderer {
   const element = document.createElement("div");
@@ -2093,10 +2072,6 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
       const params = parsePanelParams(parameters.params);
       if (params === null || params.kind !== "instance") {
         element.appendChild(unrecoverablePanelElement(panelId));
-        return;
-      }
-      if (panelsPrunedByRestore.has(panelId)) {
-        element.appendChild(createPlaceholderElement(UNLISTED_PANEL_TEXT));
         return;
       }
       const surface = ensureLiveSurface(params.address, params.tabId, mountLiveContent);

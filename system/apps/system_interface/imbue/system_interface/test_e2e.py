@@ -726,9 +726,7 @@ def test_a_new_tab_alone_in_a_pane_is_taken_while_the_other_pane_keeps_its_tab(t
         stub_two_tab.hover()
         stub_two_tab.locator('[aria-label="Close tab"]').click()
         expect(_tab(page, "Stub 2")).to_have_count(0, timeout=10000)
-        right_group = page.locator(
-            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text="New tab")
-        )
+        right_group = page.locator(".dv-groupview", has=page.locator(".dv-default-tab-content", has_text="New tab"))
         expect(right_group).to_have_class(re.compile(r"\bdv-active-group\b"))
 
         _open_all_apps(page)
@@ -1158,6 +1156,67 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
         expect(page.locator(".dv-default-tab-content", has_text="Stub 1")).to_have_count(0)
+
+
+def _tell_the_shell_the_stub_list_changed(server: E2EServer) -> None:
+    request = urllib.request.Request(f"{server.base_url}/api/apps/{_STUB_APP_NAME}/changed", data=b"", method="POST")
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_it_is_listed_again(
+    tmp_path: Path, page: Page
+) -> None:
+    """An app dropping an instance from its list for a while is not a delete.
+
+    The tab stays in the dock, the project's tab set, and the saved layout (also across a reload),
+    shows the instance as unavailable without loading its page, and loads the page again once
+    the app lists the instance again.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 30) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        frame_input = page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")
+        expect(frame_input).to_be_visible(timeout=15000)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+
+        fixture_record = server.stub_source.records[0]
+        server.stub_source.records.clear()
+        _tell_the_shell_the_stub_list_changed(server)
+
+        placeholder = page.get_by_text("This isn't available right now.")
+        expect(placeholder).to_be_visible(timeout=15000)
+        expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(0)
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
+        expect(page.locator('.dv-tab-process-dot[data-status="unavailable"]')).to_have_count(1)
+
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        stub_page_requests: list[str] = []
+        page.on(
+            "request",
+            lambda request: stub_page_requests.append(request.url)
+            if request.url.startswith(server.stub_url)
+            else None,
+        )
+        expect(placeholder).to_be_visible(timeout=15000)
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
+        page.wait_for_timeout(3000)
+        assert stub_page_requests == []
+        assert _FIXTURE_ADDRESS in _project_tabs(server.base_url)
+        assert any(
+            _FIXTURE_ADDRESS in path.read_text() for path in _client_layout_files(server.state_dir, STARTER_PROJECT_ID)
+        )
+
+        server.stub_source.records.append(fixture_record)
+        _tell_the_shell_the_stub_list_changed(server)
+        expect(frame_input).to_be_visible(timeout=15000)
+        expect(placeholder).to_have_count(0)
+        assert stub_page_requests != []
 
 
 @pytest.mark.timeout(120, func_only=False)

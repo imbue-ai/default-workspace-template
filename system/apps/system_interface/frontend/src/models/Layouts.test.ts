@@ -11,14 +11,7 @@ import {
 } from "dockview-core";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  isOwnSaveId,
-  mintSaveId,
-  mintTabId,
-  panelParamsInDocument,
-  panelsWithUnlistedAddresses,
-  parsePanelParams,
-} from "./Layouts";
+import { isOwnSaveId, mintSaveId, mintTabId, panelParamsInDocument, parsePanelParams } from "./Layouts";
 import type { PanelParams } from "./Layouts";
 
 describe("tab ids", () => {
@@ -82,22 +75,6 @@ describe("panelParamsInDocument", () => {
       p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
       p2: { kind: "launcher" },
     });
-  });
-});
-
-describe("panelsWithUnlistedAddresses", () => {
-  it("names the panels whose address no app lists any more, never a launcher", () => {
-    const params: Record<string, PanelParams> = {
-      p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
-      p2: {
-        kind: "instance",
-        address: "app:terminal?instance=terminal-9",
-        tabId: "tab-0000000000000002",
-        lastFocusedMs: 0,
-      },
-      p3: { kind: "launcher" },
-    };
-    expect(panelsWithUnlistedAddresses(params, (address) => address === "app:files")).toEqual(["p2"]);
   });
 });
 

@@ -146,14 +146,3 @@ export async function saveLayout(
   const answer = (await response.json()) as { updated_at: string | null };
   return { updatedAt: answer.updated_at };
 }
-
-/** The panels of a layout whose params name an address no longer listed, so a restore can drop
- *  them (the observation that prunes references, contracts.md section 4.1). */
-export function panelsWithUnlistedAddresses(
-  paramsByPanelId: Readonly<Record<string, PanelParams>>,
-  isListed: (address: string) => boolean,
-): string[] {
-  return Object.entries(paramsByPanelId)
-    .filter(([, params]) => params.kind === "instance" && !isListed(params.address))
-    .map(([panelId]) => panelId);
-}
