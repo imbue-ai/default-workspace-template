@@ -21,6 +21,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
@@ -29,6 +30,8 @@ from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+
+logger = _loguru_logger
 
 SEED_FILENAME: Final[str] = "seed.jsonl"
 # The ``source`` every seed event carries, so a reader can tell a seeded turn from a harness's.
@@ -124,12 +127,19 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     events: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
         if not line.strip():
             continue
         parsed = json.loads(line)
-        if isinstance(parsed, dict):
-            events.append(parsed)
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "Skipping line {} of the seed file {}: an event is an object, not {}",
+                line_number,
+                path,
+                type(parsed).__name__,
+            )
+            continue
+        events.append(parsed)
     return events
 
 

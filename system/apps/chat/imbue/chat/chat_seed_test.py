@@ -1,6 +1,9 @@
+import json
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+
+from loguru import logger
 
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
@@ -48,6 +51,19 @@ def test_the_seed_file_reads_back_the_events_it_was_written_with(tmp_path: Path)
     assert path == tmp_path / "chats" / _CHAT_ID / SEED_FILENAME
     assert read_seed_events(tmp_path / "chats" / _CHAT_ID) == events
     assert not any(candidate.suffix == ".tmp" for candidate in path.parent.iterdir())
+
+
+def test_a_seed_line_that_is_not_an_object_is_skipped_with_a_warning(tmp_path: Path) -> None:
+    events = seed_events(_CHAT_ID, _turns(), _CREATED_AT)
+    path = write_seed_file(tmp_path, events)
+    path.write_text(json.dumps(events[0]) + "\n[1, 2]\n" + json.dumps(events[1]) + "\n")
+    warnings: list[str] = []
+    handler_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        assert read_seed_events(tmp_path) == events
+    finally:
+        logger.remove(handler_id)
+    assert len(warnings) == 1 and "line 2" in warnings[0]
 
 
 def test_a_chat_folder_without_a_seed_file_reads_as_no_events(tmp_path: Path) -> None:
