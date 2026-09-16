@@ -129,7 +129,8 @@ file, pulled-in ones included: upstream's testing never answers the local
 question of who depends on the file -- but only a workspace that has files of
 its own can have a dependent. The output's `local_only` list is the
 workspace's own content beside the merged set, and `has_local_footprint` says
-whether any of it is outside the docs class; both 4a and 4b read it.
+whether any local content at all -- `local_only` or merged -- is outside the
+docs class; both 4a and 4b read it.
 
 ### 4a. Identify impacted services, skills, and creations
 
@@ -215,14 +216,14 @@ in your report.
   `uv run pytest`.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
-  own -- one the workspace created, or a built-in one it has modified (a file
-  of it in `local_only`) -- against a scratch
-  data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
-  `update-app`), never the live store. A service that arrived exactly as
-  upstream shipped it is not booted here: upstream tested it, and for the
-  shell and the chat app the apply pre-flights the merged copy itself before
-  anything live restarts. This runs on the host's global
-  toolchain, so it does not exercise a global-dependency bump.
+  own -- one the workspace created, or a built-in one it has modified (a
+  file of it in `local_only`) -- against a scratch data copy via
+  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  never the live store. A service that arrived exactly as upstream shipped
+  it is not booted here: upstream tested it, and for the shell and the chat
+  app the apply pre-flights the merged copy itself before anything live
+  restarts. This runs on the host's global toolchain, so it does not
+  exercise a global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
