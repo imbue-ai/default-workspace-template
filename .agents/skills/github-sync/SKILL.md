@@ -189,10 +189,13 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     config file is gitignored under `data/system/`). The now-active hook pushes
     the commit.
 
-11. **Report**: the repo URL, that every commit now auto-pushes, that
-    workspace data under `data/` stays out of GitHub (the restic host backup
-    covers it), and that pushes queue while the latchkey gateway is
-    unreachable and go out with the next commit once it is back.
+11. **Report**, in plain language (`.agents/shared/references/user-facing-language.md`):
+    where the copy lives (the repo URL, since they may want to open it), that
+    from now on every change you save is copied there automatically, that the
+    files in their workspace folders (uploads, notes, app data) are protected by
+    a separate backup rather than this one, and that if the connection drops
+    the copy catches up on its own. No commits, pushes, hooks, or gateways in
+    the message.
 
 ## Status
 
