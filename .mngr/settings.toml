@@ -530,13 +530,16 @@ host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
-# so setup_system.sh provisions an identical toolchain everywhere. Set here
-# (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep. Served from imbue's artifact mirror rather than
-# cloud.debian.org, which prunes old releases: the same image release the
-# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
-# is the manifest; bump both together, uploading the new release with
-# `minds-admin artifacts upload` before landing the bump here).
+# so setup_system.sh provisions an identical toolchain everywhere. mngr_lima's
+# library default is now this same release from the same mirror; the pin stays
+# here so the workspace's guest image is chosen by the template rather than by
+# whichever mngr version the desktop app happens to ship. Served from imbue's
+# artifact mirror rather than cloud.debian.org, which prunes old releases: the
+# same image release the gen-2 cloud slices boot (mngr's
+# apps/minds_admin/.../slices/mirror_artifacts.py is the manifest and
+# libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
+# them together, uploading the new release with `minds-admin artifacts upload`
+# before landing the bump here).
 default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
 default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
