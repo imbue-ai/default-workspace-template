@@ -303,8 +303,8 @@ def _build_chat_create_command(
     # The project the chat starts out filed in: the one it was created inside
     # when there is one, else whatever the primary agent carries. The chat agent
     # belongs to its workspace by sharing the host; it carries no workspace
-    # label. (Fast-mode launch settings ride the ``first`` create template now,
-    # so the builder no longer takes a fast-mode flag.)
+    # label. (Fast-mode launch settings ride the ``fast`` create template, so the
+    # builder takes no fast-mode flag.)
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
