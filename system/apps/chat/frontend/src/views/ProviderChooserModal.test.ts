@@ -9,6 +9,9 @@
  *
  * So the assertions here are mostly "this renders at all". That is the bug class; anything
  * fancier would be testing the dialog's copy rather than the failure mode.
+ *
+ * The exception is picking a signed-in account, which hands the chosen account to the caller
+ * and closes the chooser; those tests assert that behavior against the real chooser state.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
