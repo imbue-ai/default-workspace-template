@@ -187,8 +187,9 @@ fi
 
 A clean published repo prints nothing and exits 0; read the output, not the exit
 code. `NO BASE` means the tip is `template:` snapshots all the way down -- a
-parentless publish that §8's own guard rejects -- and the question cannot be
-answered at all, so STOP and surface that rather than reading it as clean.
+parentless publish that `publish-template` §8's own guard rejects -- and the
+question cannot be answered at all, so STOP and surface that rather than
+reading it as clean.
 
 If it prints `CONTAINS`, **STOP and tell the user plainly**: the published repo
 contains this workspace's own commits (other apps and anything else committed
