@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1204,6 +1205,50 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     assert "finish_report_path: " in frontmatter_template
 
 
+def test_the_staged_skill_copy_can_actually_run_on_its_own() -> None:
+    """From Step 3 the apply runs out of a `git archive` of this skill directory.
+
+    Nothing outside `.agents/skills/update-self/` is in that archive, so a
+    module here that reaches out of the skill dir at import time -- for a shared
+    helper under `.agents/shared/`, say -- leaves every staged subcommand dying
+    before it parses argv. That breaks the apply for exactly the workspaces
+    updating INTO the release that introduces it, and the rest of this file
+    cannot see it: these tests import the in-tree copy, where the neighbour
+    exists. So stage it for real and run it.
+
+    Laid down from `git ls-files` rather than `git archive HEAD`, so this reads
+    the tree you are editing: the archive would only ever show the last commit,
+    and an import that reaches outside the skill dir is worth catching before
+    it is committed. Restricting to tracked files keeps the archive's other
+    property -- an untracked neighbour is not there to be imported either.
+    """
+    skill_dir_rel = Path(update_self.SKILL_DIR_REL)
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", str(skill_dir_rel)],
+        cwd=_WORKSPACE_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split("\0")
+
+    with tempfile.TemporaryDirectory() as staged:
+        for relative in filter(None, tracked):
+            destination = Path(staged) / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(_WORKSPACE_ROOT / relative, destination)
+        entry = Path(staged) / skill_dir_rel / "scripts/update_self.py"
+        assert entry.is_file(), "the staged copy has no entry point"
+
+        completed = subprocess.run(
+            [sys.executable, str(entry), "--help"],
+            cwd=staged,
+            capture_output=True,
+            text=True,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     """Every ``update_self.py`` invocation from Step 3 on must use the staged copy.
 
@@ -1581,10 +1626,8 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(("git", "rev-parse", "HEAD"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "rev-parse", _MERGE_REF), _Result(stdout="fedcba9876543"))
     runner.respond(("git", "diff"), _Result(stdout=name_status))
-    # The ledger's origin walk reads the shared `FIRST_PARENT_LOG_ARGS` format:
-    # <sha>\t<parents>\t<subject>, here a root commit with no parents.
     runner.respond(
-        ("git", "log"), _Result(stdout=f"{_ROLLBACK}\t\tInitial workspace commit")
+        ("git", "log"), _Result(stdout=f"{_ROLLBACK} Initial workspace commit")
     )
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))

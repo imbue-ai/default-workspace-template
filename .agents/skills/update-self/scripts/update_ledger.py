@@ -2,28 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 from pathlib import Path
 
 from update_runtime import ApplyError, Runner, git_out
-
-# The marker rule is shared with publish-template, update-published-template and
-# migrate-workspace, so it lives in one stdlib-only script; this module applies
-# it to the workspace's own log.
-_RESOLVE_TEMPLATE_BASE_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "shared"
-    / "scripts"
-    / "resolve_template_base.py"
-)
-_resolve_template_base_spec = importlib.util.spec_from_file_location(
-    "resolve_template_base", _RESOLVE_TEMPLATE_BASE_PATH
-)
-assert _resolve_template_base_spec is not None
-assert _resolve_template_base_spec.loader is not None
-_resolve_template_base = importlib.util.module_from_spec(_resolve_template_base_spec)
-_resolve_template_base_spec.loader.exec_module(_resolve_template_base)
 
 _VERSION_HISTORY_REL = "docs/VERSION_HISTORY.md"
 
@@ -108,9 +90,23 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     resolves a merge to its upstream parent; this wants where the mind started.)
     The version uses ``git describe`` (reachability), never ``--points-at``: no
     tag is ever *on* a template base, only on an ancestor of it.
+
+    The rule is spelled out here rather than imported from
+    ``.agents/shared/scripts/resolve_template_base.py`` (whose ``--origin`` is the
+    same rule, and which the skills reach as a CLI): the apply is staged and run
+    from ``data/.tasks/update-self/skill-at-target/``, a ``git archive`` of the
+    update-self skill directory alone, so nothing outside it can be imported --
+    see ``update_banding._load_bands``. Keep the two in step.
     """
-    log = git_out(runner, repo_root, list(_resolve_template_base.FIRST_PARENT_LOG_ARGS))
-    creation = _resolve_template_base.find_workspace_origin(log.splitlines())
+    log = git_out(
+        runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"]
+    )
+    creation = ""
+    for line in log.splitlines():
+        sha, _, subject = line.partition(" ")
+        if subject == "Initial workspace commit":
+            creation = sha  # the newest: the log is newest-first
+            break
     if not creation:
         revs = git_out(runner, repo_root, ["rev-list", "--first-parent", "HEAD"])
         creation = revs.splitlines()[-1] if revs else "HEAD"
