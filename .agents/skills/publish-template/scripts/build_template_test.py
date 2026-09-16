@@ -29,6 +29,15 @@ _needs_scanners = pytest.mark.skipif(
     reason=f"needs the workspace image's secret scanners ({', '.join(_SCANNERS)})",
 )
 
+# A test that assembles for real runs both scanners, two `uv run --no-project`
+# resolutions and a boot smoke-check in one subprocess. `timeout_func_only`
+# leaves the `built_snapshot` fixture's assembly unclocked, but a test that
+# calls the script from its own body is clocked against the suite's 10s
+# unit-test budget, which a loaded box does overrun. Only the tests that reach
+# the scanners get this; the refusal tests return at exit 2/5 and keep the
+# tight budget, where a hang is a real defect.
+_REAL_ASSEMBLY_TIMEOUT_SECONDS = 180
+
 
 def _git(*args: str, cwd: Path) -> str:
     return subprocess.run(
@@ -261,6 +270,7 @@ def test_assembly_refuses_an_update_self_merge_as_the_base(tmp_path: Path) -> No
 
 
 @_needs_scanners
+@pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
 def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) -> None:
     source, base_ref = _make_source_repo(tmp_path)
     _update_self(source, base_ref)
@@ -279,6 +289,7 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
 
 
 @_needs_scanners
+@pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
 def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
     """Its history carries the source mind's Initial workspace commit too.
 
@@ -311,6 +322,7 @@ def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) ->
 
 
 @_needs_scanners
+@pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
 def test_an_opted_in_data_path_ships_in_the_snapshot(tmp_path: Path) -> None:
     """The template gitignores all of data/, so `git add -A` alone drops it.
 
