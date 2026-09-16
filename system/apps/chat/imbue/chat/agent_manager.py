@@ -906,6 +906,10 @@ class AgentManager:
             if auto_open is not None
             else AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=DisconnectedShell())
         )
+        # A restored seeded chat is still owed its tab when no client saw it before this app
+        # restarted; the ledger tells the reactor which, so a delivered one stays as it was.
+        for restored_chat_id in manager._provisional_chats:
+            manager._auto_open.request_open(restored_chat_id)
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks

@@ -599,14 +599,32 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     finally:
         first.stop()
 
-    second = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=RecordingShell(client_ids=[]))
+    second = AgentManager.build(
+        broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats", auto_open=reactor
+    )
     try:
         restored = second.get_provisional_chat(seeded.chat_id)
         assert restored is not None
         assert restored.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
         assert restored.name == "Getting started" and restored.is_seeded is True
+        # Its tab is still owed: nobody was connected to see it before the restart.
+        assert reactor.pending_chat_ids() == {ChatId(seeded.chat_id)}
     finally:
         second.stop()
+
+    # A tab the ledger says was delivered is not popped again by a restart.
+    delivered_ledger = AutoOpenLedger(path=None)
+    delivered_ledger.mark_delivered(ChatId(seeded.chat_id))
+    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=RecordingShell(client_ids=[]))
+    third = AgentManager.build(
+        broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats", auto_open=delivered_reactor
+    )
+    try:
+        assert third.get_provisional_chat(seeded.chat_id) is not None
+        assert delivered_reactor.pending_chat_ids() == set()
+    finally:
+        third.stop()
 
 
 def _seed_failed_chat(
