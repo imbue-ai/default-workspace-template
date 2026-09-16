@@ -19,6 +19,7 @@ from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 from pydantic import Field
 
@@ -67,40 +68,43 @@ def seed_events(chat_id: ChatId, turns: tuple[SeedTurn, ...], created_at: dateti
     events: list[dict[str, Any]] = []
     for index, turn in enumerate(turns):
         event_id = seed_event_id(chat_id, index)
-        if turn.role is SeedRole.USER:
-            events.append(
-                {
-                    "timestamp": timestamp,
-                    "type": "user_message",
-                    "event_id": event_id,
-                    "source": SEED_SOURCE,
-                    "role": "user",
-                    "content": turn.text,
-                    "message_uuid": event_id,
-                    "agent_id": str(chat_id),
-                }
-            )
-        else:
-            events.append(
-                {
-                    "timestamp": timestamp,
-                    "type": "assistant_message",
-                    "event_id": event_id,
-                    "source": SEED_SOURCE,
-                    "role": "assistant",
-                    "model": "",
-                    "text": turn.text,
-                    "tool_calls": [],
-                    "stop_reason": None,
-                    "usage": None,
-                    "message_uuid": event_id,
-                    "is_auth_error": False,
-                    "is_api_error": False,
-                    "api_error_kind": None,
-                    "is_provider_fault": False,
-                    "agent_id": str(chat_id),
-                }
-            )
+        match turn.role:
+            case SeedRole.USER:
+                events.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": SEED_SOURCE,
+                        "role": "user",
+                        "content": turn.text,
+                        "message_uuid": event_id,
+                        "agent_id": str(chat_id),
+                    }
+                )
+            case SeedRole.ASSISTANT:
+                events.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "assistant_message",
+                        "event_id": event_id,
+                        "source": SEED_SOURCE,
+                        "role": "assistant",
+                        "model": "",
+                        "text": turn.text,
+                        "tool_calls": [],
+                        "stop_reason": None,
+                        "usage": None,
+                        "message_uuid": event_id,
+                        "is_auth_error": False,
+                        "is_api_error": False,
+                        "api_error_kind": None,
+                        "is_provider_fault": False,
+                        "agent_id": str(chat_id),
+                    }
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
     return events
 
 
