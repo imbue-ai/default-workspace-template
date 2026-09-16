@@ -214,7 +214,7 @@ describe("Sidebar", () => {
 
     root.querySelector<HTMLElement>('[aria-label="Actions for chat one"]')!.click();
     m.redraw.sync();
-    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
       .find((el) => el.textContent?.trim() === "Rename")!
       .click();
     m.redraw.sync();

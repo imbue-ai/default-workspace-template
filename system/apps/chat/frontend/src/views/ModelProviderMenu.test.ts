@@ -187,15 +187,15 @@ describe("the combo card", () => {
     catalogState.catalog = catalogOf({ switch_mode: "read_only" });
     render();
     click(".model-selector-trigger");
-    const modelRow = document.querySelector<HTMLElement>('[data-card-row="model"]')!;
+    const modelRow = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
     expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
 
     catalogState.catalog = catalogOf();
     render();
-    // The card stays open and mithril patches the row rather than replacing it, so the row
-    // keeps whatever its first render attached.
-    expect(document.querySelector('[data-card-row="model"]')).toBe(modelRow);
-    expect(hoverTooltipText(modelRow)).toBeNull();
+    // The read-only value row gives way to the interactive submenu row; whatever element
+    // stands in the slot now must explain nothing.
+    const switched = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
+    expect(hoverTooltipText(switched)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
