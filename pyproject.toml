@@ -150,12 +150,11 @@ norecursedirs = [
     "{arch}",
 ]
 timeout_func_only = true
-# The sub-projects register these through imbue_common's conftest hooks; the
-# root-level tests (system/*.py, system/scripts/, .agents/) have no conftest,
-# so the same markers are declared here for them.
+# Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "release: marks tests as being required for release (but not for merging PRs)",
+    "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 addopts = [
     "--timeout=10",
