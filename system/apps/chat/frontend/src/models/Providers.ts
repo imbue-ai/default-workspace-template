@@ -358,9 +358,9 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
-// What to do once a sign-in succeeds. Signing in from the page of a chat that awaits an
-// account means the user was trying to start that chat and had to authenticate on the way, so
-// it launches on the account they just added. Signing in from inside a running chat means they
+// What to do once a sign-in succeeds or a signed-in account is picked. Signing in from the page
+// of a chat that awaits an account means the user was trying to start that chat and had to
+// authenticate on the way, so it launches on the account they just added. Signing in from inside a running chat means they
 // were adding a provider for later and should not be moved. The caller knows which it is;
 // nothing here can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
