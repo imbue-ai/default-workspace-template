@@ -718,3 +718,16 @@ CODEX_CODE_MODE_TRAJECTORY_PATH: Final[Path] = (
 def codex_code_mode_trajectory_document() -> dict[str, Any]:
     """The trimmed live codex document at CODEX_CODE_MODE_TRAJECTORY_PATH."""
     return json.loads(CODEX_CODE_MODE_TRAJECTORY_PATH.read_text())
+
+
+# A codex code-mode program that reads two skill files, one of them twice, the way a codex agent
+# invokes a skill. Kept as JavaScript rather than as Python so it keeps the `await` a real program
+# carries.
+CODEX_SKILL_READING_PROGRAM_PATH: Final[Path] = (
+    Path(__file__).parent / "test_fixtures" / "codex_skill_reading_program.js"
+)
+
+
+def codex_skill_reading_program() -> str:
+    """The code-mode program at CODEX_SKILL_READING_PROGRAM_PATH, exactly as a codex `_raw` argument carries it."""
+    return CODEX_SKILL_READING_PROGRAM_PATH.read_text()

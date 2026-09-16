@@ -16,8 +16,9 @@ skill is the single canonical path for that.
 
 This is the **system-interface specialization of the generic creation
 lifecycle.** It reuses the generic update orchestration -- the task file, the
-generic `harden-worker`, and the report poll -- from `update-creation` with
-`type=system-interface`, and adds the one thing the system interface needs
+generic worker contract at `.agents/shared/worker/SKILL.md`, and the report
+poll -- from `update-creation` with `type=system-interface`, and adds the one
+thing the system interface needs
 that no other creation does: a pre-merge **preview**, then a go-live through
 the general **update apply** (`update_self.py apply`), which lands the merge
 and reveals it as one atomic, rollback-on-failure motion. The
@@ -94,7 +95,7 @@ specifics:
   when a real conversation motivates the change (the motivating agent id + what
   looks wrong in plain words -- see the next bullet; omit it, or write "no real
   scenario", for net-new work), and `## Success criteria` (what "done" looks
-  like, plus the standing line: *follow the installed `harden-worker` sub-skill;
+  like, plus the standing line: *follow `.agents/shared/worker/SKILL.md`;
   it composes `harden-creation.md`, `op-update.md`, and
   `type-system-interface.md` for how to run, test, verify, and what not to
   touch; report `done` only when its testing contract and the review gates all
@@ -125,9 +126,8 @@ specifics:
   A change can be partly both -- anchored in a real conversation but adding
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
-- **Launch** with `--template worker` (installs the generic
-  `harden-worker`) per `update-creation` Step 3, then background-poll per
-  `.agents/shared/references/lead-proxy.md`.
+- **Launch** with `--template worker` per `update-creation` Step 3, then
+  background-poll per `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
   `done` you do **not** merge here (that is `update-creation` Step 4's behavior
   for other creations). Instead, go to the preview below. On `stuck` or a
@@ -343,9 +343,17 @@ python3 system/scripts/layout.py close si-preview
 ```
 
 Do this on every one of those exits, not only the successful one. Once the
-preview is down and its tab is closed, the worker can be destroyed per
-`launch-task` (after a failed apply, keep it until the diagnosis is done -- its
-branch and report are the retry's input). Close the `update-$SLUG` ticket the
+preview is down and its tab is closed, destroy the worker (this flow does not
+pass through `update-creation` Step 4, so the destroy is yours). After a `0`:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-$SLUG
+```
+
+After a failed apply (`1`, `2`, `3`), stop it instead
+(`create_worker.py stop --name update-$SLUG`) and keep it until the diagnosis
+is done -- its branch and report are the retry's input, and a diagnosed retry
+re-runs the apply against the kept branch. Close the `update-$SLUG` ticket the
 orchestration opened, and release the editing lease taken in Step 4 with
 `tk close "$LEASE_ID" "Apply finished."` -- on every exit code, since a lease
 left open blocks the next pass (on a rejection no lease was taken -- Step 4

@@ -10,7 +10,7 @@ metadata:
 
 ## Instructions
 
-Latchkey is a CLI tool that automatically injects credentials into curl commands. Credentials are managed on the outside by the Minds app - sending a permission request also triggers a login flow if necessary.
+Latchkey is a CLI tool that automatically injects credentials into curl commands. Credentials are managed on the outside by the Mind app - sending a permission request also triggers a login flow if necessary.
 
 Use this skill when the user asks you to work on their behalf with services that have HTTP APIs, like AWS, GitLab, Google Drive, Discord or others.
 
@@ -202,7 +202,7 @@ Returns auth options, credentials status, and developer notes about the service.
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
 The user can do that from the Permissions tab of this machine's options in the
-Minds app (the key icon in the tabs along the top): "Add connection" lists the
+Mind app (the key icon in the tabs along the top): "Add connection" lists the
 services that already have an account here under "Add another account", and the
 ones that do not under "Connect a new service".
 
@@ -228,7 +228,7 @@ as the key means "unknown account".
 When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
 
 - By re-sending the permission request to the user (use this when there's just a single account for the given service)
-- By having the user reconnect the account from the Permissions tab of this machine's options in the Minds app (the key icon in the tabs along the top): "Add connection" then "Add another account" for that service. Tell the user to do that if there is more than one account configured for the given service.
+- By having the user reconnect the account from the Permissions tab of this machine's options in the Mind app (the key icon in the tabs along the top): "Add connection" then "Add another account" for that service. Tell the user to do that if there is more than one account configured for the given service.
 
 
 ## When the gateway is unreachable
@@ -236,7 +236,7 @@ When the existing credentials are expired or invalid, there are currently two wa
 Every command above is routed through the Latchkey gateway at
 `$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as
 a transient outage. It usually helps if the user restarts the
-Minds app. Requests to /permissions and /permission-requests are
+Mind app. Requests to /permissions and /permission-requests are
 routed to the user's computer so they will fail if it's offline.
 
 
@@ -246,7 +246,7 @@ routed to the user's computer so they will fail if it's offline.
 - Return code, stdout and stderr are passed back from curl
 - Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
 - Do not ask the user to run Latchkey commands.
-- Do not explicitly call `latchkey auth` commands! They are run automatically by the Minds app on the user's computer as part of the permission request approval process. Even for services that do not support browser auth, the Minds app usually provides an interface for the user to paste manually obtained credentials (e.g. an API key).
+- Do not explicitly call `latchkey auth` commands! They are run automatically by the Mind app on the user's computer as part of the permission request approval process. Even for services that do not support browser auth, the Mind app usually provides an interface for the user to paste manually obtained credentials (e.g. an API key).
 
 
 ## Currently supported services

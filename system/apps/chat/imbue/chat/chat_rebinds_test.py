@@ -389,17 +389,34 @@ def test_a_failed_start_leaves_the_failed_phase_with_mngrs_words_and_the_binding
     assert workspace.record() is None
 
 
-def test_a_refused_relabel_leaves_the_phase_for_the_next_resume(tmp_path: Path) -> None:
-    workspace, _agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
+def test_a_refused_relabel_fails_the_rebind_with_its_reason_and_a_retry_completes_it(tmp_path: Path) -> None:
+    """No verb but destroy answers a converging chat and cancel is refused for a rebind, so a step mngr refuses
+    while restarting must land in the failed phase, whose retry finds the binding rewritten and carries on."""
+    workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
     (workspace.fail_dir / "fail-label").touch()
 
     _runner(workspace).run(workspace.chat_id, "rebind-1")
 
     record = workspace.record()
     assert record is not None and record.rebind is not None
-    assert record.rebind.phase is HandoffPhase.RESTARTING and record.rebind.error is None
+    assert record.rebind.phase is HandoffPhase.FAILED
+    assert record.rebind.error is not None and "host lock held" in record.rebind.error
     assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["label"]
     assert workspace.delivered == []
+
+    (workspace.fail_dir / "fail-label").unlink()
+    workspace.store.write(
+        record.with_converging(
+            record.rebind.model_copy_update(
+                to_update(record.rebind.field_ref().phase, HandoffPhase.RESTARTING),
+                to_update(record.rebind.field_ref().error, None),
+            )
+        )
+    )
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+    assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["label", "label", "start"]
+    assert workspace.delivered == [(agent_id, "Carry on on the other account", "trigger-1")]
+    assert workspace.record() is None
 
 
 def test_a_resume_after_the_env_was_rewritten_still_finds_the_sessions_where_they_were(tmp_path: Path) -> None:

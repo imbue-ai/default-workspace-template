@@ -129,7 +129,7 @@ describe("startChatOnAccount", () => {
     await startChatOnAccount("account-1");
 
     // Started from Everything, the chat is filed in no project.
-    expect(createChat).toHaveBeenCalledWith("", "account-1", "");
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
   });
 
@@ -142,7 +142,7 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    expect(createChat).toHaveBeenCalledWith("project-7", "account-1", "");
+    expect(createChat).toHaveBeenCalledWith("project-7", "account-1", "", null);
   });
 
   it("passes a first message through and reports whether the chat opened", async () => {
@@ -152,7 +152,7 @@ describe("startChatOnAccount", () => {
     deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
     expect(await startChatOnAccount("account-1", "Carry on here")).toBe(true);
-    expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here");
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here", null);
 
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     createChat.mockRejectedValueOnce(new Error("no usable account"));

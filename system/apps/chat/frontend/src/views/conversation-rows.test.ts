@@ -110,9 +110,9 @@ describe("buildConversationRows", () => {
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
   });
 
-  // A chat that moved to another agent shows the seam as its own row, keyed by the
-  // switch event, between the two agents' turns.
-  it("renders an agent switch as a chip row between the agents' turns", () => {
+  // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by
+  // the switch event, between the two agents' turns.
+  it("renders an agent switch as a handoff node row between the agents' turns", () => {
     const agentSwitch: AgentSwitchEvent = {
       timestamp: "t3",
       type: "agent_switch",
@@ -124,6 +124,9 @@ describe("buildConversationRows", () => {
       from_harness: "claude",
       to_harness: "codex",
       seq: 1,
+      message_id: null,
+      message: null,
+      is_fresh_start: false,
     };
     const events: TranscriptEvent[] = [
       userMsg("t1", "hello"),
@@ -134,8 +137,16 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "sw1", "a-t4"]);
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
     expect(rows[2].anchorEventId).toBe("sw1");
+
+    // A fresh start had no handoff to show: no row stands between the two agents' turns.
+    const fresh = buildConversationRows(
+      "agent-1",
+      [events[0], events[1], { ...agentSwitch, is_fresh_start: true }, events[3]],
+      true,
+    );
+    expect(fresh.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
   });
 });
 

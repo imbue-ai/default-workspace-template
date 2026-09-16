@@ -26,7 +26,7 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    I undid it; everything is safe".
 2. **Held back by your app version** -- if and only if `held_back_by_ceiling`
    is `true` in `/tmp/update-self-target.json`: "there's a newer version
-   available (`latest_available`), but it needs a newer Minds app than you're
+   available (`latest_available`), but it needs a newer Mind app than you're
    running, so I stopped at X". Do not derive this by comparing `ref` against
    `latest_available` yourself -- those also differ when the user's own
    `--override` picked an older tag, and the flag already accounts for that.

@@ -18,12 +18,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 
 # Continuing a chat that moved to you
 
-- When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, you are continuing a chat that ran on another agent before you (the chat app moved it to your harness). The user sees one unbroken conversation and does not know or care that the agent changed.
-- Your first message names the summary your predecessor wrote, or says there is none. Read it before anything else.
-- If there is no summary, or it leaves you unsure, gather context yourself: list the chat's earlier agents with `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` and read their transcripts with `mngr transcript <agent-id>` or the find-transcripts skill.
-- Check `tk steps` for open steps; continue the ones that still apply and close the rest with a one-line summary.
-- Never message, start, or otherwise touch a predecessor. It is archived and kept only for its transcript.
-- Do not tell the user about any of this by default. The switch is automated and nothing they need to think about; mention it only if they ask.
+- When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, this chat ran on another agent before you, and your first message says what to do. If it does not, `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` lists your predecessors and `mngr transcript <agent-id>` reads their transcripts. Never touch a predecessor, and do not mention the switch to the user unless they ask.
 
 # Task management (CRITICAL — read this before doing real work)
 
@@ -127,8 +122,6 @@ Only after doing all of the above should you begin writing code.
 - To run tests for a single project: "cd system/vendor/mngr && uv run pytest", "cd system/apps/system_interface && uv run pytest", or "cd system/apps/chat && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
 - While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
 - For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
-- When running pytest with a tool or Bash tool timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
-- Running pytest will produce files in .test_output/ (relative to the directory you ran from) for things like slow tests and coverage reports.
 - Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI when a PR exists. Do *not* run *all* the acceptance tests locally to validate changes--let CI run them once a PR is opened (it's faster than running them locally).
 - If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
 - Tasks are not allowed to finish without all tests passing (in CI, if a PR exists).
@@ -236,6 +229,8 @@ The upstream is defined in `system/config/parent.toml`.
 
 - **Prefer an applicable skill over reinventing.** Skill descriptions are auto-injected into your context, so match by purpose, not by name.
 
+- **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.
+
 - **Run a skill's steps one at a time in chat.** When a skill exposes per-step subcommands (plus a `run all`), drive the subcommands individually -- mirror each as a `tk` step and surface its output -- so the user gets a rich progress view, pausing only at the skill's declared `[prose]` steps. Reserve `run all` for headless or scheduled runs where there's no chat to show progress in.
 
 - **Live first, ratify at turn-end.** Handle the user's immediate request *live* in the current chat to keep it interactive; at turn-end, formalize the work through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline in the main agent). Route by situation:
@@ -245,6 +240,8 @@ The upstream is defined in `system/config/parent.toml`.
   - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.
 
   For non-skill contract-bearing files (hook scripts, this file) there is no worker pipeline -- apply the live change carefully and add manual rigor at turn-end (real fixtures, end-to-end exercise of new code paths).
+
+- **A change to hardened code carries its tests.** When you change code a harden pass already covered, extend that code's tests in the same commit. Code a change leaves untested is a regression even when it works.
 
 # Apps and services
 

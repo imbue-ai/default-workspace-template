@@ -125,6 +125,35 @@ describe("the bubbles of a chat switching harness", () => {
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this", "once more"]);
   });
 
+  it("leaves the confirming message to the switch marker that carries it, and the others to their own turns", () => {
+    // The handoff folds the confirming message into the successor's prompt, and the switch
+    // marker shows it as the successor's opening turn: it does not come back as a bubble, and
+    // the prompt's arrival (not counted: Response.ts leaves it out) consumes nothing.
+    listeners.length = 0;
+    trackBackendArrivals((_chat, messageId) => messageId === "trigger-1");
+    const chat = `a-${Math.random()}`;
+    const heldSends = [
+      { message_id: "trigger-1", text: "Carry on in Codex" },
+      { message_id: "m-2", text: "and this" },
+    ];
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-old" },
+        handoff: handoffStateFixture({ held_sends: heldSends }),
+      }),
+    ]);
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-new" },
+        handoff: handoffStateFixture({ phase: "switching", held_sends: heldSends }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
+    expect(getOutgoingMessages(chat).map((o) => [o.content, o.messageId])).toEqual([["and this", "m-2"]]);
+    noteBackendArrivals(chat, ["u-2"]);
+    expect(getOutgoingMessages(chat)).toEqual([]);
+  });
+
   it("brings every held send back for a page that first saw the switch once the successor was named", () => {
     // A page loaded (or reconnected) while the held sends were being delivered: its first
     // snapshot already names the successor, so the agent alone would read as a cancel.

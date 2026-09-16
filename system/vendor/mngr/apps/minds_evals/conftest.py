@@ -4,7 +4,12 @@ import pytest
 from loguru import logger
 
 from imbue.imbue_common.conftest_hooks import register_conftest_hooks
+from imbue.imbue_common.conftest_hooks import register_marker
 
+register_marker(
+    "chromium: drives a real headless Chromium. Applied automatically to every test that uses the"
+    " `chromium_path` fixture"
+)
 register_conftest_hooks(globals())
 
 # Generated harbor datasets and local job results live under this app but embed

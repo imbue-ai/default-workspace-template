@@ -380,7 +380,7 @@ def _parse_assistant_message(
     # A failed turn surfaces as a synthetic assistant message (e.g. "API Error: 529
     # Overloaded", "You've hit your monthly spend limit"). Classify it so the frontend can
     # style it as an error and, for a provider-side failure (5xx / overloaded), add a "not
-    # Minds' fault" note. Gated on the synthetic model: only Claude Code's own
+    # Mind's fault" note. Gated on the synthetic model: only Claude Code's own
     # framework-generated notices are failures, so a REAL assistant message that quotes
     # "API Error: 500" or an error JSON (routine in a coding chat) is not mistaken for an
     # outage, and an agent helping with a credential does not get its own reply painted as
@@ -692,7 +692,7 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 # live queue as out-of-band ``queue-operation`` records that carry no ``uuid`` and
 # so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
 # law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
-# queue through exactly one dequeue/remove/popAll record. In the real Minds flow
+# queue through exactly one dequeue/remove/popAll record. In the real Mind flow
 # EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
 # commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
 # slash commands / task-notifications also leave via dequeue/remove -- none of

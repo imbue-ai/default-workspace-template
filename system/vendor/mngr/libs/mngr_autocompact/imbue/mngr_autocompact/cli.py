@@ -23,7 +23,8 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import OutputFormat
 from imbue.mngr_autocompact.config import AutoCompactPluginConfig
-from imbue.mngr_autocompact.manager import compact_agent
+from imbue.mngr_autocompact.config import ContextCompactionMode
+from imbue.mngr_autocompact.manager import compact_agent_if_stale
 from imbue.mngr_autocompact.manager import compact_all_agents
 from imbue.mngr_autocompact.manager import get_stale_agents
 from imbue.mngr_autocompact.manager import is_agent_stale_for_compaction
@@ -140,7 +141,11 @@ def check(ctx: click.Context, **kwargs: object) -> None:
     if opts.target is not None:
         live_agent = _resolve_target_agent(opts.target, mngr_ctx)
         config = live_agent.mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
-        stale_agents = [live_agent.name] if is_agent_stale_for_compaction(live_agent, config) else []
+        stale_agents = (
+            [live_agent.name]
+            if is_agent_stale_for_compaction(live_agent, config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER)
+            else []
+        )
     else:
         stale_agents = get_stale_agents(mngr_ctx)
 
@@ -175,7 +180,11 @@ def run(ctx: click.Context, **kwargs: object) -> None:
     if opts.target is not None:
         live_agent = _resolve_target_agent(opts.target, mngr_ctx)
         config = live_agent.mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
-        compacted = [live_agent.name] if compact_agent(live_agent, config) else []
+        compacted = (
+            [live_agent.name]
+            if compact_agent_if_stale(live_agent, config, expected_mode=ContextCompactionMode.PROACTIVE_TIMER)
+            else []
+        )
     else:
         compacted = compact_all_agents(mngr_ctx)
 

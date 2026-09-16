@@ -641,8 +641,8 @@ def web_chrome_dist_dir() -> Path:
 
 
 _WEB_CHROME_PLACEHOLDER_PAGE = (
-    "<!doctype html><html><head><title>minds</title></head><body>"
-    "<h1>The minds web client is not built</h1>"
+    "<!doctype html><html><head><title>Mind</title></head><body>"
+    "<h1>The Mind web client is not built</h1>"
     "<p>The web-chrome bundle was not found on this server. Build it with "
     "<code>pnpm -C apps/remote_service_connector/frontend_web build</code> (normally done "
     "by <code>minds-admin env deploy</code>) or point WEB_CHROME_FRONTEND_DIST at a build.</p>"

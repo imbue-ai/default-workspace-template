@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 from click.testing import Result
 
+from imbue.imbue_common.primitives import PositiveInt
 from imbue.minds_evals import ci_matrix
 from imbue.minds_evals.cli import main
 from imbue.minds_evals.data_types import CellDecision
@@ -14,7 +15,12 @@ from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import FrozenPair
 from imbue.minds_evals.data_types import HarnessConfigEntry
 from imbue.minds_evals.data_types import MatrixCell
+from imbue.minds_evals.data_types import NightlySuite
+from imbue.minds_evals.data_types import NightlySuiteArm
+from imbue.minds_evals.data_types import OraclePass
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import ResolvedSuite
+from imbue.minds_evals.data_types import SuiteArm
 from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import read_scheduled_workflow_text
@@ -22,12 +28,38 @@ from imbue.minds_evals.testing import read_scheduled_workflow_text
 _MNGR_SHA = "a" * 40
 _DWT_SHA = "b" * 40
 _CONFIG_PATH = "apps/minds_evals/configs/nightly.json"
+_OTHER_CONFIG_PATH = "apps/minds_evals/configs/nightly-stepped.json"
 
 
 def _write_configs(tmp_path: Path, *entries: dict[str, Any], name: str = "harness_configs.json") -> Path:
     path = tmp_path / name
     path.write_text(json.dumps({"harness_configs": list(entries)}))
     return path
+
+
+def _write_suites(tmp_path: Path, *suites: dict[str, Any], name: str = "nightly_suites.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps({"suites": list(suites)}))
+    return path
+
+
+def _write_eval_config(repo_root: Path, relative_path: str) -> str:
+    """An eval config in a checkout of its own, which is what a suite's path is resolved against.
+    Its contents are nobody's business here: the suite file is checked for whether the path names a
+    file, not for what the file says."""
+    config_path = repo_root / relative_path
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"personas": []}))
+    return relative_path
+
+
+def _suite(*entries: HarnessConfigEntry, config: str = _CONFIG_PATH, attempts: int = 1) -> ResolvedSuite:
+    """One suite over the given harness configs, as `resolve_suites` would hand it over."""
+    return ResolvedSuite(
+        config=config,
+        config_slug=ci_matrix.config_slug(config),
+        arms=tuple(SuiteArm(entry=entry, attempts=PositiveInt(attempts)) for entry in entries),
+    )
 
 
 def _resolved_pair(pair: str = "main", mngr_sha: str = _MNGR_SHA, dwt_sha: str = _DWT_SHA) -> FrozenPair:
@@ -70,6 +102,37 @@ def test_the_checked_in_files_nightly_set_is_exactly_these_configs() -> None:
         "haiku",
         "pi-gpt-5-mini",
     ]
+
+
+def test_the_checked_in_suite_file_runs_exactly_these_arms_on_exactly_these_configs() -> None:
+    """Which cells run every night is a spend decision -- one box per case per cell -- and this file
+    is where it is recorded. Adding a suite, or an arm to one, is a real cost increase, so it is a
+    deliberate edit here rather than a line nobody reviewed. The arms of the first suite are not
+    listed at all, which is how a suite says "every nightly harness config"."""
+    entries = ci_matrix.load_harness_configs(ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH)
+    suites = ci_matrix.load_nightly_suites(ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH, ci_matrix.REPO_ROOT)
+
+    resolved = ci_matrix.resolve_suites(suites, entries)
+
+    assert [(suite.config_slug, tuple(arm.entry.name for arm in suite.arms)) for suite in resolved] == [
+        ("eval-config-small", ("default", "haiku", "pi-gpt-5-mini", "codex-sol-low", "codex-terra")),
+        ("eval-config-time-to-mock", ("opus-standard", "codex-sol-low", "codex-terra")),
+    ]
+    assert all(int(arm.attempts) == 1 for suite in resolved for arm in suite.arms)
+
+
+def test_the_checked_in_suite_file_names_an_arm_the_nightly_set_leaves_out() -> None:
+    """A suite's named list is not a subset of the nightly set: it runs what that config is worth
+    running on, whatever the flag that decides the every-config set says. `opus-standard` is too
+    expensive to run against everything and is still worth one suite naming it."""
+    entries = ci_matrix.load_harness_configs(ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH)
+    suites = ci_matrix.load_nightly_suites(ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH, ci_matrix.REPO_ROOT)
+
+    named = {arm.name for suite in suites for arm in suite.harness_configs}
+    nightly = {entry.name for entry in ci_matrix.select_harness_configs(entries, "")}
+
+    assert "opus-standard" in named
+    assert "opus-standard" not in nightly
 
 
 def test_the_checked_in_file_holds_a_default_config_that_requests_no_model() -> None:
@@ -260,6 +323,310 @@ def test_load_harness_configs_refuses_an_empty_list(tmp_path: Path) -> None:
 
     with pytest.raises(CiMatrixError, match="names no harness configs"):
         ci_matrix.load_harness_configs(path)
+
+
+def test_load_nightly_suites_reads_each_suites_config_and_arms(tmp_path: Path) -> None:
+    config = _write_eval_config(tmp_path, "apps/minds_evals/configs/eval-config-small.json")
+    other = _write_eval_config(tmp_path, "apps/minds_evals/configs/eval-config-stepped.json")
+    suites_path = _write_suites(
+        tmp_path,
+        {"config": config, "harness_configs": []},
+        {"config": other, "harness_configs": [{"name": "haiku"}, {"name": "opus-standard", "attempts": 3}]},
+    )
+
+    suites = ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+    assert [suite.config for suite in suites] == [config, other]
+    assert [(arm.name, int(arm.attempts)) for arm in suites[1].harness_configs] == [("haiku", 1), ("opus-standard", 3)]
+    assert suites[0].harness_configs == ()
+
+
+def test_load_nightly_suites_refuses_a_file_that_is_not_json(tmp_path: Path) -> None:
+    suites_path = tmp_path / "nightly_suites.json"
+    suites_path.write_text("{not json")
+
+    with pytest.raises(CiMatrixError, match="not valid JSON"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_a_file_that_does_not_exist(tmp_path: Path) -> None:
+    with pytest.raises(CiMatrixError, match="cannot read"):
+        ci_matrix.load_nightly_suites(tmp_path / "absent.json", tmp_path)
+
+
+def test_load_nightly_suites_refuses_an_unknown_key(tmp_path: Path) -> None:
+    """A misspelled key has to be an error rather than a silently ignored one: a suite whose
+    `harness_configs` was typed `harness_config` would run every nightly arm against a config that
+    was meant for three of them, and the bill is the first thing that would say so."""
+    config = _write_eval_config(tmp_path, "configs/eval-config-small.json")
+    suites_path = _write_suites(tmp_path, {"config": config, "harness_config": []})
+
+    with pytest.raises(CiMatrixError, match="harness_config"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_an_empty_list(tmp_path: Path) -> None:
+    """A run with no suites has no cells, and a run with no cells skips both paid jobs and reports
+    every pair as already green -- so it would read as a verified night."""
+    suites_path = _write_suites(tmp_path)
+
+    with pytest.raises(CiMatrixError, match="names no suites"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+@pytest.mark.parametrize("bad_config", ["/etc/passwd.json", "configs/eval-config.toml", "-leading-dash.json", ""])
+def test_load_nightly_suites_refuses_a_config_that_is_not_a_repo_relative_json_path(
+    tmp_path: Path, bad_config: str
+) -> None:
+    """The path is echoed into every green marker key of the suite and onto the generate command
+    line, so it is held to the shape the dispatch input is held to."""
+    suites_path = _write_suites(tmp_path, {"config": bad_config})
+
+    with pytest.raises(CiMatrixError, match="repo-relative"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_a_config_that_is_not_in_the_checkout(tmp_path: Path) -> None:
+    """Checked here, on the free job, rather than minutes into a paid runner per pair: generation is
+    the first thing an oracle pass does and the first thing it would fail at."""
+    suites_path = _write_suites(tmp_path, {"config": "configs/eval-config-absent.json"})
+
+    with pytest.raises(CiMatrixError, match="not in the checkout"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_the_same_config_in_two_suites(tmp_path: Path) -> None:
+    """Two suites over one config would share an oracle pass, a set of job names and, for any arm
+    they both name, a green marker key."""
+    config = _write_eval_config(tmp_path, "configs/eval-config-small.json")
+    suites_path = _write_suites(
+        tmp_path, {"config": config, "harness_configs": [{"name": "haiku"}]}, {"config": config}
+    )
+
+    with pytest.raises(CiMatrixError, match="twice"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_two_configs_whose_file_names_shorten_to_one_word(tmp_path: Path) -> None:
+    """Only the file name reaches a job name, an artifact name and a summary file name, so two
+    configs under different directories with one file name are two suites whose every reported name
+    is the same -- including the summary files `notify` merges into one directory, where the second
+    upload would silently replace the first."""
+    first = _write_eval_config(tmp_path, "configs/eval-config-small.json")
+    second = _write_eval_config(tmp_path, "configs/experiments/eval-config-small.json")
+    suites_path = _write_suites(tmp_path, {"config": first}, {"config": second})
+
+    with pytest.raises(CiMatrixError, match="shorten to"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_a_config_whose_file_name_is_too_long_to_name_a_job(tmp_path: Path) -> None:
+    config = _write_eval_config(tmp_path, "configs/{}.json".format("eval-config-" + "x" * 19))
+    suites_path = _write_suites(tmp_path, {"config": config})
+
+    with pytest.raises(CiMatrixError, match="at most 30"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+def test_load_nightly_suites_refuses_the_reserved_oracle_name_as_a_config(tmp_path: Path) -> None:
+    """A suite whose slug is `oracle` names its cells' artifacts after its own oracle pass, and both
+    uploads overwrite, so one would silently replace the other."""
+    config = _write_eval_config(tmp_path, "configs/oracle.json")
+    suites_path = _write_suites(tmp_path, {"config": config})
+
+    with pytest.raises(CiMatrixError, match="reserved"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+@pytest.mark.parametrize("bad_attempts", [0, -1, 1.5, "two"])
+def test_load_nightly_suites_refuses_an_attempt_count_that_is_not_a_positive_whole_number(
+    tmp_path: Path, bad_attempts: object
+) -> None:
+    """Attempts become harbor's `-k`, which is a sample count: zero of them measures nothing and
+    pays for a runner to do it."""
+    config = _write_eval_config(tmp_path, "configs/eval-config-small.json")
+    suites_path = _write_suites(
+        tmp_path, {"config": config, "harness_configs": [{"name": "haiku", "attempts": bad_attempts}]}
+    )
+
+    with pytest.raises(CiMatrixError, match="attempts"):
+        ci_matrix.load_nightly_suites(suites_path, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("config_path", "slug"),
+    [
+        ("apps/minds_evals/configs/eval-config-small.json", "eval-config-small"),
+        ("apps/minds_evals/configs/eval-config-time-to-mock.json", "eval-config-time-to-mock"),
+        ("configs/Eval_Config.json", "eval-config"),
+        ("configs/eval-config-v1.2.json", "eval-config-v1.2"),
+    ],
+)
+def test_the_config_slug_is_the_file_name_as_a_job_name_spells_it(config_path: str, slug: str) -> None:
+    """The slug is what every job, artifact and summary name carries in place of the path: one word,
+    lowercase, no extension, and a dot kept where a config names a version."""
+    assert ci_matrix.config_slug(config_path) == slug
+
+
+def test_resolve_suites_takes_every_nightly_arm_for_a_suite_that_names_none(tmp_path: Path) -> None:
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "haiku", "is_nightly": True, "model": "haiku", "effort": "medium"},
+        {"name": "opus-standard", "is_nightly": False, "model": "opus[1m]", "effort": "high"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+
+    resolved = ci_matrix.resolve_suites((NightlySuite(config=_CONFIG_PATH),), entries)
+
+    assert [arm.entry.name for arm in resolved[0].arms] == ["default", "haiku"]
+    assert resolved[0].config_slug == "nightly"
+
+
+def test_resolve_suites_takes_a_named_arm_whatever_its_nightly_flag_says(tmp_path: Path) -> None:
+    """Which is what a suite's own list is for: the arms worth running against one config, rather
+    than the set worth running against every config."""
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "opus-standard", "is_nightly": False, "model": "opus[1m]", "effort": "high"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+    suite = NightlySuite(config=_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="opus-standard"),))
+
+    resolved = ci_matrix.resolve_suites((suite,), entries)
+
+    assert [arm.entry.name for arm in resolved[0].arms] == ["opus-standard"]
+
+
+def test_resolve_suites_keeps_the_order_a_suite_wrote_its_arms_in(tmp_path: Path) -> None:
+    """The order decides which cells the matrix lists first, and so the order of the grid's columns
+    in the Slack report: a suite that wrote two arms side by side wants to read them that way."""
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "haiku", "is_nightly": True, "model": "haiku", "effort": "medium"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+    suite = NightlySuite(
+        config=_CONFIG_PATH,
+        harness_configs=(NightlySuiteArm(name="haiku"), NightlySuiteArm(name="default")),
+    )
+
+    resolved = ci_matrix.resolve_suites((suite,), entries)
+
+    assert [arm.entry.name for arm in resolved[0].arms] == ["haiku", "default"]
+
+
+def test_resolve_suites_refuses_an_arm_the_harness_configs_file_does_not_hold(tmp_path: Path) -> None:
+    """The suite file names arms; the harness configs file defines them. A name in one and not the
+    other is a cell nothing could drive, and it has to fail before the pairs are frozen."""
+    configs_path = _write_configs(tmp_path, {"name": "default", "is_nightly": True})
+    entries = ci_matrix.load_harness_configs(configs_path)
+    suite = NightlySuite(config=_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="sonnet"),))
+
+    with pytest.raises(CiMatrixError, match="does not hold; it holds default"):
+        ci_matrix.resolve_suites((suite,), entries)
+
+
+def test_resolve_suites_refuses_one_suite_naming_an_arm_twice(tmp_path: Path) -> None:
+    """Two cells of one arm share a concurrency group and a green marker key, so the second would
+    wait for the first and then claim its verdict."""
+    configs_path = _write_configs(tmp_path, {"name": "default", "is_nightly": True})
+    entries = ci_matrix.load_harness_configs(configs_path)
+    suite = NightlySuite(
+        config=_CONFIG_PATH,
+        harness_configs=(NightlySuiteArm(name="default"), NightlySuiteArm(name="default", attempts=PositiveInt(2))),
+    )
+
+    with pytest.raises(CiMatrixError, match="twice"):
+        ci_matrix.resolve_suites((suite,), entries)
+
+
+def test_resolve_suites_refuses_a_cell_whose_name_would_not_fit_where_it_is_reported(tmp_path: Path) -> None:
+    """A cell's name is `<pair>-<config slug>-<arm>`, and both halves are within their own limit
+    here: it is the two together, under the longest pair name, that no longer fits a job title."""
+    configs_path = _write_configs(tmp_path, {"name": "a" * 30, "is_nightly": True})
+    entries = ci_matrix.load_harness_configs(configs_path)
+    suite = NightlySuite(
+        config="apps/minds_evals/configs/{}.json".format("b" * 30),
+        harness_configs=(NightlySuiteArm(name="a" * 30),),
+    )
+
+    with pytest.raises(CiMatrixError, match="at most 64"):
+        ci_matrix.resolve_suites((suite,), entries)
+
+
+def test_a_dispatched_config_replaces_the_suite_file_with_one_ad_hoc_suite(tmp_path: Path) -> None:
+    """Naming a config is asking about that config, so it runs instead of the checked-in suites --
+    on the arms the dispatch named, which is the only way to ask for an arm the suite for that
+    config would not have run."""
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "opus-standard", "is_nightly": False, "model": "opus[1m]", "effort": "high"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+    checked_in = (NightlySuite(config=_OTHER_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="default"),)),)
+
+    suites = ci_matrix.suites_for_run(
+        suites=checked_in, entries=entries, config_path=_CONFIG_PATH, selection="opus-standard"
+    )
+
+    assert [suite.config for suite in suites] == [_CONFIG_PATH]
+    assert [arm.name for arm in suites[0].harness_configs] == ["opus-standard"]
+
+
+def test_a_dispatched_config_with_no_arms_runs_the_nightly_set(tmp_path: Path) -> None:
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "opus-standard", "is_nightly": False, "model": "opus[1m]", "effort": "high"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+
+    suites = ci_matrix.suites_for_run(suites=(), entries=entries, config_path=_CONFIG_PATH, selection="")
+
+    assert [arm.name for arm in suites[0].harness_configs] == ["default"]
+
+
+def test_a_dispatched_arm_list_alone_runs_every_checked_in_config_on_exactly_those_arms(tmp_path: Path) -> None:
+    """Which is what makes "try this arm tonight" one input to type: the configs stay the checked-in
+    ones, because a dispatch form has no way to say which of them an arm belongs to."""
+    configs_path = _write_configs(
+        tmp_path,
+        {"name": "default", "is_nightly": True},
+        {"name": "haiku", "is_nightly": True, "model": "haiku", "effort": "medium"},
+    )
+    entries = ci_matrix.load_harness_configs(configs_path)
+    checked_in = (
+        NightlySuite(config=_CONFIG_PATH),
+        NightlySuite(config=_OTHER_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="default"),)),
+    )
+
+    suites = ci_matrix.suites_for_run(suites=checked_in, entries=entries, config_path="", selection="haiku")
+
+    assert [(suite.config, [arm.name for arm in suite.harness_configs]) for suite in suites] == [
+        (_CONFIG_PATH, ["haiku"]),
+        (_OTHER_CONFIG_PATH, ["haiku"]),
+    ]
+
+
+def test_a_run_that_names_neither_a_config_nor_an_arm_gets_the_suite_file_as_written(tmp_path: Path) -> None:
+    """A schedule fires with every input empty, which is the whole point of the file."""
+    configs_path = _write_configs(tmp_path, {"name": "default", "is_nightly": True})
+    entries = ci_matrix.load_harness_configs(configs_path)
+    checked_in = (NightlySuite(config=_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="default"),)),)
+
+    assert ci_matrix.suites_for_run(suites=checked_in, entries=entries, config_path="", selection="") == checked_in
+
+
+def test_a_dispatched_config_that_is_not_a_repo_relative_json_path_is_refused(tmp_path: Path) -> None:
+    configs_path = _write_configs(tmp_path, {"name": "default", "is_nightly": True})
+    entries = ci_matrix.load_harness_configs(configs_path)
+
+    with pytest.raises(CiMatrixError, match="repo-relative"):
+        ci_matrix.suites_for_run(suites=(), entries=entries, config_path="configs/eval-config.toml", selection="")
 
 
 def test_an_empty_selection_takes_every_nightly_config(tmp_path: Path) -> None:
@@ -521,34 +888,127 @@ def test_read_frozen_pairs_refuses_the_same_pair_twice(tmp_path: Path) -> None:
 
 
 def test_a_cell_whose_marker_is_green_is_skipped() -> None:
-    entries = (HarnessConfigEntry(name="default", is_nightly=True),)
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
     pair = _resolved_pair()
-    green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[0])})
+    green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
 
-    matrix = ci_matrix.decide_matrix(
-        pairs=[pair], entries=entries, config_path=_CONFIG_PATH, green_keys=green, is_forced=False
-    )
+    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=False)
 
     assert [cell.decision for cell in matrix.cells] == [CellDecision.SKIP]
     assert [decided.decision for decided in matrix.pairs] == [PairDecision.SKIP]
     assert matrix.is_any_cell_running is False
+    assert matrix.oracle_matrix["include"] == []
 
 
 def test_force_runs_a_cell_whose_marker_is_green() -> None:
-    entries = (HarnessConfigEntry(name="default", is_nightly=True),)
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
     pair = _resolved_pair()
-    green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[0])})
+    green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
 
-    matrix = ci_matrix.decide_matrix(
-        pairs=[pair], entries=entries, config_path=_CONFIG_PATH, green_keys=green, is_forced=True
-    )
+    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=True)
 
     assert [cell.decision for cell in matrix.cells] == [CellDecision.RUN]
     assert [decided.decision for decided in matrix.pairs] == [PairDecision.RUN]
 
 
+def test_a_cell_carries_its_own_suites_config_and_attempts() -> None:
+    """Everything a cell's job needs is spelled out in the cell, because the workflow reads values
+    and composes nothing: the config it generates from, the one word its job and artifact names
+    carry, and how many times harbor runs each case."""
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
+
+    matrix = ci_matrix.decide_matrix(
+        pairs=[_resolved_pair()],
+        suites=[_suite(entry, config="apps/minds_evals/configs/eval-config-time-to-mock.json", attempts=3)],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    cell = matrix.cells[0]
+    assert cell.config == "apps/minds_evals/configs/eval-config-time-to-mock.json"
+    assert cell.config_slug == "eval-config-time-to-mock"
+    assert int(cell.attempts) == 3
+
+
+def test_an_arm_that_asks_for_nothing_runs_each_case_once() -> None:
+    """One attempt is the count that costs nothing extra, so it is what every arm gets unless a
+    suite says otherwise -- and the workflow passes no `-k` at all for it."""
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
+    suite = NightlySuite(config=_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="default"),))
+
+    resolved = ci_matrix.resolve_suites((suite,), (entry,))
+    matrix = ci_matrix.decide_matrix(
+        pairs=[_resolved_pair()], suites=resolved, green_keys=frozenset(), is_forced=False
+    )
+
+    assert int(matrix.cells[0].attempts) == 1
+
+
+def test_the_attempt_count_is_not_part_of_the_green_marker_key() -> None:
+    """A marker says which arm was verified, and the number of samples a night buys of it is not
+    part of which arm it is: keying on it would re-run every cell of a suite the night its attempts
+    changed, and re-verify nothing."""
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
+    pair = _resolved_pair()
+
+    keys = {
+        int(attempts): ci_matrix.decide_matrix(
+            pairs=[pair], suites=[_suite(entry, attempts=attempts)], green_keys=frozenset(), is_forced=False
+        )
+        .cells[0]
+        .cache_key
+        for attempts in (1, 3)
+    }
+
+    assert keys[1] == keys[3]
+
+
+def test_two_suites_give_a_pair_a_cell_of_each_and_an_oracle_pass_of_each() -> None:
+    """A suite's oracle exercises its own generated task, verifier container and grading, so one
+    suite's pass says nothing about another's -- and a cell gates on the pass of its own config."""
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
+
+    matrix = ci_matrix.decide_matrix(
+        pairs=[_resolved_pair()],
+        suites=[_suite(entry), _suite(entry, config=_OTHER_CONFIG_PATH)],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    assert [(cell.config_slug, cell.harness_config) for cell in matrix.cells] == [
+        ("nightly", "default"),
+        ("nightly-stepped", "default"),
+    ]
+    assert [(entry["pair"], entry["config_slug"]) for entry in matrix.oracle_matrix["include"]] == [
+        ("main", "nightly"),
+        ("main", "nightly-stepped"),
+    ]
+    assert matrix.configs == (_CONFIG_PATH, _OTHER_CONFIG_PATH)
+
+
+def test_a_suite_whose_cells_are_all_green_buys_no_oracle_pass_while_the_other_suite_runs() -> None:
+    """The oracle is the expensive pass a night starts with, and it is per suite: a config verified
+    last night must not pay for one because another config's arm moved."""
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
+    pair = _resolved_pair()
+    green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
+
+    matrix = ci_matrix.decide_matrix(
+        pairs=[pair],
+        suites=[_suite(entry), _suite(entry, config=_OTHER_CONFIG_PATH)],
+        green_keys=green,
+        is_forced=False,
+    )
+
+    assert [(cell.config_slug, cell.decision) for cell in matrix.cells] == [
+        ("nightly", CellDecision.SKIP),
+        ("nightly-stepped", CellDecision.RUN),
+    ]
+    assert [entry["config_slug"] for entry in matrix.oracle_matrix["include"]] == ["nightly-stepped"]
+
+
 def test_a_pair_runs_when_any_one_of_its_cells_does() -> None:
-    """The pair's oracle pass serves every cell of the pair, so one unverified arm is enough to
+    """A suite's oracle pass serves every cell of that suite, so one unverified arm is enough to
     make the pair run."""
     entries = (
         HarnessConfigEntry(name="default", is_nightly=True),
@@ -557,9 +1017,7 @@ def test_a_pair_runs_when_any_one_of_its_cells_does() -> None:
     pair = _resolved_pair()
     green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[0])})
 
-    matrix = ci_matrix.decide_matrix(
-        pairs=[pair], entries=entries, config_path=_CONFIG_PATH, green_keys=green, is_forced=False
-    )
+    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(*entries)], green_keys=green, is_forced=False)
 
     assert [(cell.harness_config, cell.decision) for cell in matrix.cells] == [
         ("default", CellDecision.SKIP),
@@ -571,12 +1029,11 @@ def test_a_pair_runs_when_any_one_of_its_cells_does() -> None:
 def test_an_unresolved_pair_carries_no_cells_and_leaves_the_others_alone() -> None:
     """A pair with no SHAs has nothing to check out and nothing to key a marker on, so it is
     reported rather than aborting the run: the pairs answer different questions."""
-    entries = (HarnessConfigEntry(name="default", is_nightly=True),)
+    entry = HarnessConfigEntry(name="default", is_nightly=True)
 
     matrix = ci_matrix.decide_matrix(
         pairs=[_unresolved_pair(), _resolved_pair()],
-        entries=entries,
-        config_path=_CONFIG_PATH,
+        suites=[_suite(entry)],
         green_keys=frozenset(),
         is_forced=False,
     )
@@ -601,8 +1058,7 @@ def test_the_job_matrices_hold_only_what_runs() -> None:
 
     matrix = ci_matrix.decide_matrix(
         pairs=[running_pair, green_pair, _unresolved_pair(pair="custom")],
-        entries=entries,
-        config_path=_CONFIG_PATH,
+        suites=[_suite(*entries)],
         green_keys=green,
         is_forced=False,
     )
@@ -622,8 +1078,7 @@ def test_a_cells_harbor_args_decode_back_to_the_argv_the_run_line_takes() -> Non
 
     matrix = ci_matrix.decide_matrix(
         pairs=[_resolved_pair()],
-        entries=(entry,),
-        config_path=_CONFIG_PATH,
+        suites=[_suite(entry)],
         green_keys=frozenset(),
         is_forced=False,
     )
@@ -659,25 +1114,29 @@ def test_the_summary_names_every_arm_and_every_unresolved_pair() -> None:
 
     matrix = ci_matrix.decide_matrix(
         pairs=[pair, _unresolved_pair()],
-        entries=entries,
-        config_path=_CONFIG_PATH,
+        suites=[_suite(*entries)],
         green_keys=frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[1])}),
         is_forced=False,
     )
     summary = ci_matrix.render_matrix_summary_markdown(matrix, "imbue-ai/mngr-internal")
 
     assert summary.startswith("## Arms")
-    assert "| `main` | `default` | `main` (`aaaaaaaaaaaa`) | `main` (`bbbbbbbbbbbb`) | **run** |" in summary
-    assert "| `main` | `haiku` | `main` (`aaaaaaaaaaaa`) | `main` (`bbbbbbbbbbbb`) | **skip** |" in summary
-    assert "| `released` | - | `minds-v9.9.9` (`unresolved`) | `minds-v9.9.9` (`unresolved`) | **unresolved** |" in (
-        summary
+    assert (
+        "| `main` | `nightly` | `default` | `main` (`aaaaaaaaaaaa`) | `main` (`bbbbbbbbbbbb`) | **run** |" in summary
     )
+    assert "| `main` | `nightly` | `haiku` | `main` (`aaaaaaaaaaaa`) | `main` (`bbbbbbbbbbbb`) | **skip** |" in summary
+    assert (
+        "| `released` | - | - | `minds-v9.9.9` (`unresolved`) | `minds-v9.9.9` (`unresolved`) | **unresolved** |"
+        in summary
+    )
+    assert "- configs: `{}`".format(_CONFIG_PATH) in summary
     assert "gh cache list --repo imbue-ai/mngr-internal --key minds-evals-green-" in summary
 
 
 def _invoke_ci_matrix(pairs_path: Path, configs_path: Path, output_path: Path, *extra_arguments: str) -> Result:
     """The command with the arguments the workflow's resolve step always passes, plus whatever the
-    caller is varying."""
+    caller is varying. The config makes it one ad-hoc suite over the harness configs file the test
+    wrote, which is what a dispatch naming a config gets."""
     return CliRunner().invoke(
         main,
         [
@@ -693,6 +1152,63 @@ def _invoke_ci_matrix(pairs_path: Path, configs_path: Path, output_path: Path, *
             *extra_arguments,
         ],
     )
+
+
+def test_ci_matrix_decides_the_checked_in_suites_when_a_dispatch_names_no_config(tmp_path: Path) -> None:
+    """End to end over the files a schedule actually reads: both checked-in files and the frozen
+    pairs, with no dispatch input at all. Every cell of every suite, at the arms the suites name."""
+    pairs_path = _write_pairs(tmp_path, _resolved_pair())
+    output_path = tmp_path / "matrix.json"
+
+    result = CliRunner().invoke(
+        main,
+        ["ci-matrix", "--pairs", str(pairs_path), "--config", "", "--output", str(output_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    decided = json.loads(output_path.read_text())
+    assert [(cell["config_slug"], cell["harness_config"]) for cell in decided["cells"]] == [
+        ("eval-config-small", "default"),
+        ("eval-config-small", "haiku"),
+        ("eval-config-small", "pi-gpt-5-mini"),
+        ("eval-config-small", "codex-sol-low"),
+        ("eval-config-small", "codex-terra"),
+        ("eval-config-time-to-mock", "opus-standard"),
+        ("eval-config-time-to-mock", "codex-sol-low"),
+        ("eval-config-time-to-mock", "codex-terra"),
+    ]
+    assert [entry["config_slug"] for entry in decided["oracle_matrix"]["include"]] == [
+        "eval-config-small",
+        "eval-config-time-to-mock",
+    ]
+
+
+def test_ci_matrix_refuses_a_suite_file_naming_a_config_that_is_not_in_the_checkout(tmp_path: Path) -> None:
+    """The person who reaches this edited the suite file, and the run they broke is the whole
+    nightly: it reads as a usage error naming the config rather than as a traceback."""
+    configs_path = _write_configs(tmp_path, {"name": "default", "is_nightly": True})
+    suites_path = _write_suites(tmp_path, {"config": "apps/minds_evals/configs/eval-config-absent.json"})
+    pairs_path = _write_pairs(tmp_path, _resolved_pair())
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "ci-matrix",
+            "--pairs",
+            str(pairs_path),
+            "--harness-configs",
+            str(configs_path),
+            "--nightly-suites",
+            str(suites_path),
+            "--config",
+            "",
+            "--output",
+            str(tmp_path / "matrix.json"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "eval-config-absent.json" in result.output
 
 
 def test_ci_matrix_writes_the_decision_and_the_summary(tmp_path: Path) -> None:
@@ -718,9 +1234,9 @@ def test_ci_matrix_writes_the_decision_and_the_summary(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     decided = json.loads(output_path.read_text())
-    assert [(cell["pair"], cell["harness_config"]) for cell in decided["cells"]] == [
-        ("main", "default"),
-        ("main", "haiku"),
+    assert [(cell["pair"], cell["config_slug"], cell["harness_config"]) for cell in decided["cells"]] == [
+        ("main", "nightly", "default"),
+        ("main", "nightly", "haiku"),
     ]
     assert [(pair["pair"], pair["decision"]) for pair in decided["pairs"]] == [
         ("main", "run"),
@@ -848,9 +1364,9 @@ def test_the_workflow_reads_matrix_entries_by_names_the_entry_it_fans_out_over_c
     # nothing at all.
     assert oracle_fields, "no matrix fields found in the oracle job"
     assert evaluate_fields, "no matrix fields found in the evaluate job"
-    # `oracle_matrix` dumps each DecidedPair without its decision, which is exactly a FrozenPair.
-    assert oracle_fields <= set(FrozenPair.model_fields), "an oracle entry does not carry {}".format(
-        sorted(oracle_fields - set(FrozenPair.model_fields))
+    # `oracle_matrix` dumps one OraclePass per (pair, eval config) with a cell to run.
+    assert oracle_fields <= set(OraclePass.model_fields), "an oracle entry does not carry {}".format(
+        sorted(oracle_fields - set(OraclePass.model_fields))
     )
     cell_fields = set(MatrixCell.model_fields) - {"decision"}
     assert evaluate_fields <= cell_fields, "a cell entry does not carry {}".format(
@@ -871,6 +1387,46 @@ def test_the_workflow_validates_the_harness_configs_file_this_package_defaults_t
     relative_path = ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH.relative_to(repo_root)
 
     assert "HARNESS_CONFIGS: {}\n".format(relative_path) in read_scheduled_workflow_text()
+
+
+def test_the_workflow_validates_the_suite_file_this_package_defaults_to() -> None:
+    """The nightly reads the file named here, and the tests above validate the one
+    `CHECKED_IN_NIGHTLY_SUITES_PATH` names. Two different files would leave the tests green over a
+    file no run reads."""
+    repo_root = SCHEDULED_WORKFLOW_PATH.parents[2]
+    relative_path = ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH.relative_to(repo_root)
+
+    assert "NIGHTLY_SUITES: {}\n".format(relative_path) in read_scheduled_workflow_text()
+
+
+def test_the_workflow_asks_harbor_for_more_attempts_only_when_a_suite_wants_them() -> None:
+    """`-k` is a sample count, and every extra sample is another box per case: passing it at one
+    would cost nothing but say nothing either, and passing an empty value would fail the run. The
+    flag is composed in shell from the cell's own attempts, so what the count means is pinned from
+    this side."""
+    workflow_text = read_scheduled_workflow_text()
+
+    assert "ATTEMPTS: ${{ matrix.attempts }}" in workflow_text
+    assert "if (( ATTEMPTS > 1 )); then" in workflow_text
+    assert 'attempt_args=(-k "$ATTEMPTS")' in workflow_text
+    # Concurrency covers every attempt of every case, because the job's timeout is written for one
+    # wave: leaving it at the case count would run the attempts in series and time the cell out.
+    assert '"$(( CASE_COUNT * ATTEMPTS ))"' in workflow_text
+
+
+def test_the_workflow_gates_every_cell_on_the_oracle_pass_of_its_own_eval_config() -> None:
+    """An oracle pass exercises its config's generated task, verifier container and grading, so
+    another config's pass says nothing about this cell's. The gate is an artifact name and a file
+    name composed in YAML, and reading the wrong one is silent: a cell would start on a suite whose
+    infrastructure was never checked, or refuse to start on one that passed."""
+    workflow_text = read_scheduled_workflow_text()
+    evaluate_block = _job_block(workflow_text, "evaluate")
+
+    assert "name: minds-evals-summary-${{ matrix.pair }}-${{ matrix.config_slug }}-oracle" in evaluate_block
+    assert (
+        "ORACLE_SUMMARY: ${{ runner.temp }}/oracle-summary/"
+        "oracle-summary-${{ matrix.pair }}-${{ matrix.config_slug }}.json" in evaluate_block
+    )
 
 
 def test_the_workflow_lists_the_markers_under_the_prefix_this_package_writes() -> None:

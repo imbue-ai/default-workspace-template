@@ -3,7 +3,11 @@ import json
 import shlex
 import subprocess
 import time
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
+from typing import Final
 
 import pytest
 from harbor.environments.base import ExecResult
@@ -14,10 +18,15 @@ from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import RegisteredApp
+from imbue.minds_evals.data_types import TokenBuckets
+from imbue.minds_evals.data_types import TurnEntryKind
+from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
@@ -893,6 +902,8 @@ def _run_collector(
     preexisting_registrations: frozenset[str] | None = TEMPLATE_PREEXISTING_APPS,
     downloadable_content_by_source: dict[str, str] | None = None,
     chat_agent_id: str = "chat-1",
+    entry_records: tuple[EntryRecord, ...] = (),
+    turn_records: tuple[TurnRecord, ...] = (),
 ) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
     environment.downloadable_content_by_source = dict(downloadable_content_by_source or {})
@@ -904,6 +915,8 @@ def _run_collector(
         workspace_agent_id="ws-1",
         chat_agent_id=chat_agent_id,
         case=case,
+        entry_records=entry_records,
+        turn_records=turn_records,
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,
         preexisting_registrations=preexisting_registrations,
@@ -2357,3 +2370,393 @@ def test_collector_drives_no_browser_when_the_case_declares_no_flows(tmp_path: P
     assert _flow_entries(collector) == []
     assert not any("box_flow_step.py" in command for command in environment.exec_commands)
     assert not any("mngr forward" in command for command in environment.exec_commands)
+
+
+_PROCESS_BLOCK: Final[dict[str, object]] = {
+    "required_skills": ["build-app"],
+    "forbidden_skills": ["crystallize-creation"],
+    "max_worker_launches": 0,
+}
+
+
+def _stream_invoking(skill_names: list[str]) -> str:
+    """The chat agent's stream, followed by one `Skill` call per name."""
+    invocations = [
+        {
+            "type": "step",
+            "event_id": "skill-" + name,
+            "emitter": "claude/common_transcript",
+            "timestamp": "2026-09-01T00:00:09Z",
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "call-" + name, "function_name": "Skill", "arguments": {"skill": name}}],
+        }
+        for name in skill_names
+    ]
+    return atif_stream_jsonl() + "".join(json.dumps(record) + "\n" for record in invocations)
+
+
+def _entry_by_id(collector: evidence_collection.EvidenceCollector) -> dict[str, ManifestEntry]:
+    return {entry.entry_id: entry for entry in collector.entries}
+
+
+def test_collector_records_a_process_case_the_agent_worked_as_asked(tmp_path: Path) -> None:
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_invoking(["build-app"]),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(process=_PROCESS_BLOCK)),
+        _collector_rules(),
+        downloadable_content_by_source=downloads,
+    )
+
+    entries = _entry_by_id(collector)
+    assert {
+        entry_id: entries[entry_id].status
+        for entry_id in ("skill_required_build_app", "skill_forbidden_crystallize_creation", "worker_launches")
+    } == {
+        "skill_required_build_app": CheckStatus.PASSED,
+        "skill_forbidden_crystallize_creation": CheckStatus.PASSED,
+        "worker_launches": CheckStatus.PASSED,
+    }
+    assert entries["skill_required_build_app"].check_class == CheckClass.PROCESS
+    assert "call-build-app" in entries["skill_required_build_app"].detail
+    assert "process_checks" in {phase.name for phase in collector.manifest().phases}
+
+
+def test_collector_records_the_skills_a_process_case_asked_about_against_the_agent(tmp_path: Path) -> None:
+    # The agent reached for the skill the case forbade and never reached for the one it required.
+    # Both are things the agent did, so both are failures rather than unmeasured checks.
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_invoking(["crystallize-creation"]),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(process=_PROCESS_BLOCK)),
+        _collector_rules(),
+        downloadable_content_by_source=downloads,
+    )
+
+    entries = _entry_by_id(collector)
+    required = entries["skill_required_build_app"]
+    forbidden = entries["skill_forbidden_crystallize_creation"]
+    assert (required.status, required.reason) == (CheckStatus.FAILED, evidence_collection.REASON_SKILL_NOT_INVOKED)
+    # The detail names what the agent did invoke, so a renamed skill is told from one never used.
+    assert "crystallize-creation" in required.detail
+    assert (forbidden.status, forbidden.reason) == (
+        CheckStatus.FAILED,
+        evidence_collection.REASON_FORBIDDEN_SKILL_INVOKED,
+    )
+    assert collector.manifest().is_evidence_complete is True
+
+
+def test_collector_matches_a_bare_skill_name_to_its_plugin_qualified_invocation(tmp_path: Path) -> None:
+    # The template's design skill is contributed by a plugin, so claude invokes it as
+    # `frontend-design:frontend-design`; a case that asks for `frontend-design` means that skill.
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_invoking(["build-app", "frontend-design:frontend-design"]),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(process={"required_skills": ["build-app", "frontend-design"]})),
+        _collector_rules(),
+        downloadable_content_by_source=downloads,
+    )
+
+    entries = _entry_by_id(collector)
+    assert entries["skill_required_frontend_design"].status == CheckStatus.PASSED
+    # And the detail names the qualified call the match came from, so a reader can see which
+    # invocation answered a check written under the bare name.
+    assert "call-frontend-design:frontend-design" in entries["skill_required_frontend_design"].detail
+
+
+def test_collector_records_a_worker_launch_past_the_cap_as_a_failure(tmp_path: Path) -> None:
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_launching([WORKER_NAME]),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+        **_worker_stream_download(WORKER_NAME, []),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(process={"max_worker_launches": 0})),
+        _capped_worker_rules(worker_capture_output("1", "0", "", "")),
+        downloadable_content_by_source=downloads,
+    )
+
+    entry = _entry_by_id(collector)["worker_launches"]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, evidence_collection.REASON_WORKER_LAUNCHES_EXCEEDED)
+    assert WORKER_NAME in entry.detail
+
+
+def test_collector_cannot_judge_the_process_without_a_transcript(tmp_path: Path) -> None:
+    # The process checks are read off the agent's own transcript, so a capture that failed is the
+    # instrument failing: the entries are errors, which void the trial rather than scoring it.
+    rules = _collector_rules(transcript_capture=transcript_capture_output("127", "127", "sh: 1: mngr: not found"))
+
+    collector, _environment = _run_collector(tmp_path, _case_config(_authored(process=_PROCESS_BLOCK)), rules)
+
+    process_entries = [entry for entry in collector.entries if entry.check_class == CheckClass.PROCESS]
+    assert [entry.entry_id for entry in process_entries] == [
+        "skill_required_build_app",
+        "skill_forbidden_crystallize_creation",
+        "worker_launches",
+    ]
+    assert {entry.status for entry in process_entries} == {CheckStatus.ERROR}
+    assert {entry.reason for entry in process_entries} == {evidence_collection.REASON_TRANSCRIPT_UNCAPTURED}
+    assert evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED in process_entries[0].detail
+    assert collector.manifest().is_evidence_complete is False
+
+
+def test_collector_cannot_judge_the_process_from_a_transcript_that_came_out_empty(tmp_path: Path) -> None:
+    # The capture succeeded and the file arrived with nothing of the agent in it. Reading that as
+    # evidence would charge the agent for every required skill and wave off any worker it launched,
+    # so it is the same instrument failure as a capture that never ran.
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: json.dumps({"type": "header", "schema_version": "ATIF-v1.7"}) + "\n",
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(process=_PROCESS_BLOCK)),
+        _collector_rules(),
+        downloadable_content_by_source=downloads,
+    )
+
+    process_entries = [entry for entry in collector.entries if entry.check_class == CheckClass.PROCESS]
+    assert {entry.status for entry in process_entries} == {CheckStatus.ERROR}
+    assert {entry.reason for entry in process_entries} == {evidence_collection.REASON_TRANSCRIPT_EMPTY}
+    assert collector.manifest().is_evidence_complete is False
+
+
+# --- the timing class ---
+
+
+_TIMING_BLOCK: Final[dict[str, object]] = {
+    "fast_seconds": 150,
+    "slow_seconds": 600,
+    "requires_no_failures": ["app"],
+}
+
+
+def _timing_turn(index: int, sent_at: str, replied_at: str) -> TurnRecord:
+    """A turn record with only the times the timing measurement reads filled in."""
+    return TurnRecord(
+        index=index,
+        entry_index=0,
+        exchange=0,
+        sent_at=sent_at,
+        replied_at=replied_at,
+        reply_seconds=0.0,
+        agent_message_count=1,
+        message_count=0,
+        tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
+        cost_usd=None,
+    )
+
+
+def _opening_entry() -> EntryRecord:
+    return EntryRecord(index=0, kind=TurnEntryKind.LITERAL, exchange_count=1, outcome=TurnOutcome.COMPLETED)
+
+
+def test_goal_satisfaction_timing_spans_the_case_from_its_first_message_to_the_satisfying_reply() -> None:
+    # The goal entry spoke once and was satisfied by the reply to its own message; the span still
+    # starts at the case's opening ask, which is what the client waited from.
+    turns = (
+        _timing_turn(1, "2026-09-15T12:00:00+00:00", "2026-09-15T12:01:00+00:00"),
+        _timing_turn(2, "2026-09-15T12:01:10+00:00", "2026-09-15T12:03:20+00:00"),
+    )
+    entries = (
+        _opening_entry(),
+        EntryRecord(
+            index=1,
+            kind=TurnEntryKind.GOAL,
+            exchange_count=1,
+            outcome=TurnOutcome.SATISFIED,
+            detail="I can see it.",
+            satisfied_at="2026-09-15T12:03:20+00:00",
+            satisfied_at_turn=2,
+        ),
+    )
+
+    timing = evidence_collection.measure_goal_satisfaction_timing(entries, turns)
+
+    assert timing is not None
+    assert (timing.seconds, timing.turn_index) == (200.0, 2)
+
+
+def test_goal_satisfaction_timing_reads_a_goal_the_previous_entrys_reply_already_met() -> None:
+    # The common shape in a live run: the opening ask's reply already satisfied the client, so the
+    # goal entry sent nothing and the satisfying turn is not one of its own exchanges.
+    turns = (_timing_turn(1, "2026-09-15T12:00:00+00:00", "2026-09-15T12:02:05+00:00"),)
+    entries = (
+        _opening_entry(),
+        EntryRecord(
+            index=1,
+            kind=TurnEntryKind.GOAL,
+            exchange_count=0,
+            outcome=TurnOutcome.SATISFIED,
+            detail="The first reply already answered me.",
+            satisfied_at="2026-09-15T12:02:05+00:00",
+            satisfied_at_turn=1,
+        ),
+    )
+
+    timing = evidence_collection.measure_goal_satisfaction_timing(entries, turns)
+
+    assert timing is not None
+    assert (timing.seconds, timing.turn_index) == (125.0, 1)
+
+
+def test_goal_satisfaction_timing_is_unmeasured_when_no_client_was_ever_satisfied() -> None:
+    turns = (_timing_turn(1, "2026-09-15T12:00:00+00:00", "2026-09-15T12:02:05+00:00"),)
+    entries = (
+        _opening_entry(),
+        EntryRecord(index=1, kind=TurnEntryKind.GOAL, exchange_count=3, outcome=TurnOutcome.BUDGET_EXHAUSTED),
+    )
+
+    assert evidence_collection.measure_goal_satisfaction_timing(entries, turns) is None
+
+
+def test_goal_satisfaction_timing_is_unmeasured_when_no_turn_was_ever_answered() -> None:
+    # Nothing to anchor the span on: a trial that died before its first reply leaves no turn record.
+    entries = (
+        EntryRecord(
+            index=0,
+            kind=TurnEntryKind.GOAL,
+            exchange_count=0,
+            outcome=TurnOutcome.SATISFIED,
+            satisfied_at="2026-09-15T12:02:05+00:00",
+            satisfied_at_turn=1,
+        ),
+    )
+
+    assert evidence_collection.measure_goal_satisfaction_timing(entries, ()) is None
+
+
+def _satisfied_records(seconds: float) -> tuple[tuple[EntryRecord, ...], tuple[TurnRecord, ...]]:
+    """A one-turn conversation whose client was satisfied after the given number of seconds."""
+    replied_at = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    turns = (_timing_turn(1, "2026-09-15T12:00:00+00:00", replied_at.isoformat()),)
+    entries = (
+        _opening_entry(),
+        EntryRecord(
+            index=1,
+            kind=TurnEntryKind.GOAL,
+            exchange_count=0,
+            outcome=TurnOutcome.SATISFIED,
+            satisfied_at=replied_at.isoformat(),
+            satisfied_at_turn=1,
+        ),
+    )
+    return entries, turns
+
+
+def test_collector_records_the_measured_time_to_the_clients_goal(tmp_path: Path) -> None:
+    entries, turns = _satisfied_records(140.0)
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(timing=_TIMING_BLOCK)),
+        _collector_rules(),
+        entry_records=entries,
+        turn_records=turns,
+    )
+
+    entry = _entry_by_id(collector)["time_to_goal"]
+    assert (entry.check_class, entry.status, entry.reason) == (CheckClass.TIMING, CheckStatus.PASSED, "")
+    # The seconds ride on the entry so the grade-time criterion never recomputes them, and the
+    # detail names both anchors so a reader can place the number on the curve.
+    assert entry.value == 140.0
+    assert entry.detail == "140.0s to the reply to client message 1 (fast 150s, slow 600s)"
+    assert "timing_checks" in {phase.name for phase in collector.manifest().phases}
+
+
+def test_collector_records_an_unbounded_time_when_the_client_was_never_satisfied(tmp_path: Path) -> None:
+    # Not an ERROR: an agent that never got the client to the mockup took unboundedly long, which is
+    # a measurement of the agent and scores zero rather than voiding the trial.
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(timing=_TIMING_BLOCK)),
+        _collector_rules(),
+        entry_records=(_opening_entry(),),
+        turn_records=(_timing_turn(1, "2026-09-15T12:00:00+00:00", "2026-09-15T12:01:00+00:00"),),
+    )
+
+    entry = _entry_by_id(collector)["time_to_goal"]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, evidence_collection.REASON_GOAL_NEVER_SATISFIED)
+    assert entry.value is None
+    assert collector.manifest().is_evidence_complete is True
+
+
+def test_collector_records_which_prerequisite_zeroed_a_fast_trials_time(tmp_path: Path) -> None:
+    # An empty registry means nothing was delivered, so the app class fails -- and a fast trial that
+    # delivered nothing must not be credited for the speed. The entry says so in as many words.
+    entries, turns = _satisfied_records(90.0)
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(timing=_TIMING_BLOCK)),
+        _collector_rules(registry_text=""),
+        entry_records=entries,
+        turn_records=turns,
+    )
+
+    recorded = _entry_by_id(collector)
+    assert recorded["app_registered"].status == CheckStatus.FAILED
+    entry = recorded["time_to_goal"]
+    assert (entry.status, entry.reason) == (
+        CheckStatus.FAILED,
+        evidence_collection.REASON_TIMING_PREREQUISITE_FAILED,
+    )
+    # The measurement is kept: the entry has to say both how fast it was and why that earned nothing.
+    assert entry.value == 90.0
+    assert "a required check failed in the app class(es)" in entry.detail
+
+
+def test_collector_leaves_a_timing_prerequisite_alone_when_another_class_failed(tmp_path: Path) -> None:
+    # Only the classes the case named gate the time. A failing test command is recorded and never
+    # gated, so it cannot reach the clock even indirectly.
+    entries, turns = _satisfied_records(90.0)
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored(timing=_TIMING_BLOCK, test_commands=["uv run pytest -q"])),
+        _collector_rules(test_exit_code="1"),
+        entry_records=entries,
+        turn_records=turns,
+    )
+
+    recorded = _entry_by_id(collector)
+    assert recorded["test_command_0"].status == CheckStatus.FAILED
+    assert recorded["time_to_goal"].status == CheckStatus.PASSED
+
+
+def test_collector_records_no_timing_entry_for_a_case_that_did_not_ask_for_one(tmp_path: Path) -> None:
+    collector, _environment = _run_collector(tmp_path, _case_config(_authored()), _collector_rules())
+
+    assert CheckClass.TIMING not in {entry.check_class for entry in collector.entries}
+    assert "timing_checks" not in {phase.name for phase in collector.manifest().phases}
+
+
+def test_oracle_evidence_fabricates_a_green_timing_entry_at_the_cases_fast_anchor() -> None:
+    # `-a oracle` has no workspace and no conversation, so without a fabricated measurement the
+    # timing class would score zero on every oracle run and the calibration would be meaningless.
+    case = _case_config(_authored(timing=_TIMING_BLOCK))
+
+    files = evidence_collection.oracle_evidence_files(case)
+
+    manifest = json.loads(files[evidence_collection.MANIFEST_FILENAME])
+    timing_entries = [entry for entry in manifest["entries"] if entry["check_class"] == "timing"]
+    assert [(entry["entry_id"], entry["status"], entry["value"]) for entry in timing_entries] == [
+        ("time_to_goal", "passed", 150.0)
+    ]
+    assert manifest["is_evidence_complete"] is True

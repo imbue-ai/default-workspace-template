@@ -8,11 +8,14 @@ the manager owns the record, the lock, and the tracked agents, and hands the run
 needs as bound callables (``HandoffDeps``), the same shape the harness sessions take.
 
 The phases, in order: ``draining`` (wait out an in-flight send, return the queue to the
-composer), ``summarizing`` (reuse a fresh summary or ask the retiring agent for one),
-``switching`` (stop, archive, record the segment's length, create the successor, deliver the
-held sends), then active again with the ``agent_switch`` chip between the two segments. A
-failed create leaves the chat in the ``failed`` phase, which a retry on any account runs the
-create step of again with the same prompt.
+composer), ``summarizing`` (reuse a fresh summary or ask the retiring agent for one; skipped
+outright for a retiring agent that never received a user turn), ``switching`` (stop, archive,
+record the segment's length, create the successor silent, apply the model the user picked for
+it, deliver the handoff prompt as its first message, then the held sends), then active again
+with the ``agent_switch`` chip between the two segments. A create or a model pick that fails
+leaves the chat in the ``failed`` phase, which a retry runs the failed step of again: the
+successor is created under a pre-minted id, so a retry after a failed pick adopts it rather
+than creating another.
 """
 
 import shlex
@@ -44,6 +47,7 @@ from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.chat_transcript import agent_switch_event
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import HANDOFF_PROMPT_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import TranscriptReader
@@ -51,8 +55,12 @@ from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
+from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelApplyError
+from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -81,14 +89,13 @@ _SUMMARY_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
 # How long one ``mngr rename`` (a metadata write) may take.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
-# The successor's ``mngr create`` provisions, starts, awaits readiness (45s in this workspace)
-# and delivers the prompt before it returns.
+# The successor's ``mngr create`` provisions, starts, and awaits readiness (45s in this
+# workspace) before it returns; the prompt is delivered afterwards, through the send path.
 _CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
 # How much of a failed create's output the failed phase carries.
 _CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
 
 _SUMMARIES_DIRNAME: Final[str] = "summaries"
-_PROMPT_FILENAME_PREFIX: Final[str] = "handoff-prompt-"
 
 
 class HandoffCancelledError(RuntimeError):
@@ -96,7 +103,13 @@ class HandoffCancelledError(RuntimeError):
 
 
 class HandoffStepError(RuntimeError):
-    """A step of the switch that mngr refused; the runner stops and a resume runs the step again."""
+    """A step of the switch that mngr refused. Past the point of no return it fails the handoff with its
+    reason, so the page offers a retry; before it the record keeps its phase for a cancel or a resume."""
+
+
+class SuccessorUntrackedError(HandoffStepError):
+    """The successor exists but the observe stream has not listed it yet: nothing is wrong, and the record
+    keeps its phase for the next resume rather than failing."""
 
 
 @pure
@@ -161,8 +174,9 @@ def summary_path(chat_files_root: Path, chat_id: ChatId, retiring_seq: int) -> P
 
 
 @pure
-def prompt_path(chat_files_root: Path, chat_id: ChatId, next_seq: int) -> Path:
-    return chat_files_root / chat_id / f"{_PROMPT_FILENAME_PREFIX}{next_seq}.md"
+def prompt_message_id(handoff_id: str) -> str:
+    """The send-time id the handoff prompt is delivered under (contract A4), one per handoff."""
+    return f"handoff-prompt-{handoff_id}"
 
 
 @pure
@@ -172,14 +186,34 @@ def summary_request_message(path: Path) -> str:
 
 
 @pure
+def is_genuine_user_turn(event: dict[str, Any]) -> bool:
+    """Whether a transcript event is a turn that carries the user's own words: a ``user_message`` with no
+    display decision, or a handoff prompt.
+
+    A chip (the summary request itself, a nudge), a hidden framework line (``/welcome``), or a
+    permission verdict is not one. The handoff prompt is, although it renders as a chip: it
+    carries the message the user switched with and the summary, so a successor that has only
+    received it has context to hand on.
+    """
+    if event.get("type") != "user_message":
+        return False
+    return event.get("display") is None or event.get("display_label") == HANDOFF_PROMPT_LABEL
+
+
+@pure
+def has_user_turn(events: list[dict[str, Any]]) -> bool:
+    """Whether the transcript holds any genuine user turn: what makes a handoff worth a summary at all."""
+    return any(is_genuine_user_turn(event) for event in events)
+
+
+@pure
 def last_user_turn_epoch(events: list[dict[str, Any]]) -> float | None:
     """When the transcript's last genuine user turn happened, or None when it has none.
 
-    A genuine turn is a ``user_message`` with no display decision: a chip (the summary request
-    itself, a nudge), a hidden framework line, or a permission verdict is not one.
+    A genuine turn is one ``is_genuine_user_turn`` accepts.
     """
     for event in reversed(events):
-        if event.get("type") == "user_message" and event.get("display") is None:
+        if is_genuine_user_turn(event):
             return parse_iso_timestamp_to_epoch(event.get("timestamp"))
     return None
 
@@ -265,7 +299,6 @@ class SuccessorCreateSpec(FrozenModel):
     project_id: str = Field(description="The project label to carry, '' for none")
     account_id: str = Field(description="The account the successor is bound to")
     extra_labels: tuple[str, ...] = Field(description="Further ``KEY=VALUE`` labels: the chat membership")
-    message_file: Path = Field(description="The file holding the handoff prompt, the successor's first message")
 
 
 class HandoffDeps(FrozenModel):
@@ -293,6 +326,9 @@ class HandoffDeps(FrozenModel):
     resolve_account: Callable[[str], Account]
     # The send path the message route takes, revival included; raises ``SendFailedError``.
     deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    # Apply a model pick to a running agent, validated against its option set as the model
+    # bar's own pick is; raises ``ModelApplyError`` with the reason the failed page shows.
+    apply_model: Callable[[AgentInfo, ModelPick], None]
     # Interrupt the agent's turn and return its queue as one block (the stop button's path).
     drain_to_composer: Callable[[AgentInfo], str]
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
@@ -340,15 +376,32 @@ class HandoffRunner:
         """Take the handoff from whatever phase it is in to active or failed.
 
         Quiet when the handoff was cancelled or the app is shutting down. A step mngr refused
-        is logged and left where it is: the record still carries the phase, and the next
-        resume (a restart, or a retry) runs the step again.
+        while the chat can still be called off (draining, summarizing) is logged and left where
+        it is, for a cancel or the next resume; one refused past the point of no return
+        (switching) fails the handoff with its reason, since no verb but destroy answers a
+        converging chat and only the failed phase has a retry. A successor the observe stream
+        has not listed yet is not a refusal: the record keeps its phase for the next resume.
         """
         try:
             self._run_phases(chat_id, handoff_id)
         except HandoffCancelledError as e:
             logger.info("Handoff of chat {} stopped: {}", chat_id, e)
+        except SuccessorUntrackedError as e:
+            logger.warning("Handoff of chat {} waits for the next resume: {}", chat_id, e)
         except (HandoffStepError, AgentStopError, ChatRecordError, OSError) as e:
             logger.opt(exception=e).error("Handoff of chat {} could not finish its current step", chat_id)
+            self._fail_if_past_the_point_of_no_return(chat_id, handoff_id, str(e))
+
+    def _fail_if_past_the_point_of_no_return(self, chat_id: ChatId, handoff_id: str, error: str) -> None:
+        """Move a handoff whose switching step was refused to the failed phase; earlier phases keep theirs."""
+        try:
+            _, handoff = self._current(chat_id, handoff_id)
+            if handoff.phase is HandoffPhase.SWITCHING:
+                self._fail(chat_id, handoff_id, error, HandoffFailedStep.START)
+        except HandoffCancelledError as e:
+            logger.info("Handoff of chat {} stopped: {}", chat_id, e)
+        except ChatRecordError as e:
+            logger.opt(exception=e).error("Handoff of chat {} could not record its failure", chat_id)
 
     def _run_phases(self, chat_id: ChatId, handoff_id: str) -> None:
         is_done = False
@@ -417,8 +470,20 @@ class HandoffRunner:
 
     def _summarize(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
         outcome = self._summary_outcome(chat_id, handoff_id, record, handoff)
-        # The prompt is built once, here, and resent verbatim by every retry (spec 5.8); the
-        # trigger message rides inside it, so it leaves the held list.
+        if outcome is SummaryOutcome.SKIPPED:
+            # A fresh start: no prompt, and the confirming message (if any) stays a held send,
+            # delivered to the successor as an ordinary first message.
+            self._update_handoff(
+                chat_id,
+                handoff_id,
+                lambda current: current.model_copy_update(
+                    to_update(current.field_ref().phase, HandoffPhase.SWITCHING),
+                    to_update(current.field_ref().summary_outcome, outcome),
+                ),
+            )
+            return
+        # The prompt is built once, here, and delivered verbatim by whichever attempt lands the
+        # successor (spec 5.8); the trigger message rides inside it, so it leaves the held list.
         prompt = self._render_prompt(record, handoff, outcome, handoff.trigger_text)
         self._update_handoff(
             chat_id,
@@ -434,7 +499,14 @@ class HandoffRunner:
     def _summary_outcome(
         self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord
     ) -> SummaryOutcome:
-        """Reuse a fresh summary, else ask the retiring agent for one and wait for the proceed conditions (spec 5.5)."""
+        """Reuse a fresh summary, else ask the retiring agent for one and wait for the proceed conditions (spec 5.5).
+
+        A fresh start (the retiring agent never received a user turn) asks for nothing: there is
+        no context for a summary to carry.
+        """
+        if handoff.is_fresh_start:
+            logger.info("Handoff of chat {}: the retiring agent had no user turn, so no summary is asked for", chat_id)
+            return SummaryOutcome.SKIPPED
         retiring_id = record.agents[-1].agent_id
         agent_info = self._deps.get_agent_info(retiring_id)
         if agent_info is None:
@@ -494,15 +566,24 @@ class HandoffRunner:
     def _render_prompt(
         self, record: ChatRecord, handoff: ChatHandoffRecord, outcome: SummaryOutcome, trigger_text: str
     ) -> str:
-        """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message."""
+        """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message.
+
+        The summary travels inside the prompt, so the successor has its context before its first
+        tool call; the path stays beside it for a re-read and for the file's own readers.
+        """
         template = string.Template(self._deps.prompt_template_path.read_text())
         retiring = record.agents[-1]
         path = summary_path(self._deps.chat_files_root, record.chat_id, handoff.retiring_seq)
         match outcome:
             case SummaryOutcome.REUSED | SummaryOutcome.WRITTEN:
-                summary_line = f"Your predecessor's summary is at {path}; read it first."
+                summary = (
+                    f"Your predecessor's summary, also on disk at {path}:\n\n"
+                    f"<predecessor-summary>\n{path.read_text().strip()}\n</predecessor-summary>"
+                )
             case SummaryOutcome.MISSING:
-                summary_line = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
+                summary = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
+            case SummaryOutcome.SKIPPED:
+                raise HandoffStepError(f"the handoff of chat {record.chat_id} is a fresh start and takes no prompt")
             case _ as unreachable:
                 assert_never(unreachable)
         predecessors = "\n".join(
@@ -516,7 +597,7 @@ class HandoffRunner:
                 chat_id=record.chat_id,
                 predecessor_harness=HARNESS_LABEL[retiring.harness],
                 successor_harness=HARNESS_LABEL[handoff.target_harness],
-                summary_line=summary_line,
+                summary=summary,
                 predecessors=predecessors,
                 source_lane=retiring.lane,
                 target_lane=handoff.target_lane,
@@ -532,11 +613,15 @@ class HandoffRunner:
     # -- switching -----------------------------------------------------------------------------
 
     def _switch(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
-        """Stop, archive, and measure the retiring agent, then create the successor and hand it the held sends.
+        """Stop, archive, and measure the retiring agent, then create the successor, set its model, and hand it
+        the prompt and the held sends.
 
-        The phase outlasts the successor's appearance in the record: the held sends are
-        delivered after it is appended, so a resume that finds it there (the last process
-        died mid-delivery) has only the delivery left to do.
+        The successor is tracked the moment its create returns and only appended to the record
+        once its model pick has applied, so a pick that fails leaves the chat listing its
+        retiring agent, as a failed create does, and a retry adopts the successor rather than
+        creating another. The phase outlasts the successor's appearance in the record: the
+        prompt and the held sends are delivered after it is appended, so a resume that finds it
+        there (the last process died mid-delivery) has only the delivery left to do.
         """
         if record.agents[-1].agent_id != handoff.next_agent_id:
             retiring = _retiring_entry(record, handoff)
@@ -546,9 +631,14 @@ class HandoffRunner:
             successor_state = self._create_successor(chat_id, handoff_id, record_after_count, handoff)
             if successor_state is None:
                 return
-            self._adopt_successor(
-                chat_id, handoff_id, _retiring_entry(record_after_count, handoff), handoff, successor_state
-            )
+            # Tracked first: the record's handoff names the successor, so a tracked successor
+            # the record has yet to append is hidden, whereas an appended one that is not
+            # tracked yet would list the chat as nothing for that instant.
+            self._deps.note_agent_created(successor_state)
+            if not self._apply_model_pick(chat_id, handoff_id, handoff):
+                return
+            self._adopt_successor(chat_id, handoff_id, _retiring_entry(record_after_count, handoff), handoff)
+        self._deliver_prompt(chat_id, handoff_id)
         self._deliver_held_sends(chat_id, handoff_id, handoff.next_agent_id)
 
     def _stop_retiring(self, chat_id: ChatId, retiring: ChatAgentEntry) -> None:
@@ -614,13 +704,12 @@ class HandoffRunner:
         try:
             account = self._deps.resolve_account(handoff.target_account_id)
         except AccountError as e:
-            self._fail(chat_id, handoff_id, f"The account the chat was moving to is gone: {e}")
+            self._fail(
+                chat_id, handoff_id, f"The account the chat was moving to is gone: {e}", HandoffFailedStep.START
+            )
             return None
-        if handoff.prompt is None:
+        if handoff.prompt is None and not handoff.is_fresh_start:
             raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
-        prompt_file = prompt_path(self._deps.chat_files_root, chat_id, handoff.next_seq)
-        prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        prompt_file.write_text(handoff.prompt)
         spec = SuccessorCreateSpec(
             name=handoff.chat_title,
             chat_id=chat_id,
@@ -629,7 +718,6 @@ class HandoffRunner:
             project_id=handoff.project_label,
             account_id=account.id,
             extra_labels=(f"chat_id={chat_id}", f"chat_seq={handoff.next_seq}"),
-            message_file=prompt_file,
         )
         command = self._deps.build_create_command(spec)
         first_error = self._run_create(chat_id, command)
@@ -639,9 +727,40 @@ class HandoffRunner:
             else first_error
         )
         if error is not None:
-            self._fail(chat_id, handoff_id, error)
+            self._fail(chat_id, handoff_id, error, HandoffFailedStep.START)
             return None
         return _successor_state(chat_id, handoff, account.id, self._deps.work_dir)
+
+    def _apply_model_pick(self, chat_id: ChatId, handoff_id: str, handoff: ChatHandoffRecord) -> bool:
+        """Put the successor on the model the user picked, or fail the switch at that step. True when it is set.
+
+        Runs before the successor's first message, on an agent that is up and idle, so the pick
+        governs the whole segment; a successor with no pick keeps its harness's default.
+        """
+        if handoff.model_pick is None:
+            return True
+        successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
+        try:
+            self._deps.apply_model(successor_info, handoff.model_pick)
+        except ModelApplyError as e:
+            self._fail(chat_id, handoff_id, str(e), HandoffFailedStep.MODEL)
+            return False
+        logger.info(
+            "Handoff of chat {}: agent {} runs on model {}",
+            chat_id,
+            handoff.next_agent_id,
+            handoff.model_pick.model_id,
+        )
+        return True
+
+    def _require_successor_info(self, chat_id: ChatId, successor_id: str) -> AgentInfo:
+        """The tracked successor, or the step error that leaves the record for the next resume."""
+        successor_info = self._deps.get_agent_info(successor_id)
+        if successor_info is None:
+            raise SuccessorUntrackedError(
+                f"agent {successor_id} of chat {chat_id} is untracked; the switch resumes later"
+            )
+        return successor_info
 
     def _recreate_after_destroying_half_made(
         self, chat_id: ChatId, successor_id: str, command: list[str]
@@ -660,15 +779,16 @@ class HandoffRunner:
             )
         return self._run_create(chat_id, command)
 
-    def _fail(self, chat_id: ChatId, handoff_id: str, error: str) -> None:
-        """The failed phase (spec 5.10): the chat has no running agent, the page shows why, and a retry reruns the create."""
-        logger.warning("Handoff of chat {} failed: {}", chat_id, error)
+    def _fail(self, chat_id: ChatId, handoff_id: str, error: str, step: HandoffFailedStep) -> None:
+        """The failed phase (spec 5.10): the chat lists its retiring agent, the page shows why, and a retry reruns ``step``."""
+        logger.warning("Handoff of chat {} failed at its {} step: {}", chat_id, step.value, error)
         self._update_handoff(
             chat_id,
             handoff_id,
             lambda current: current.model_copy_update(
                 to_update(current.field_ref().phase, HandoffPhase.FAILED),
                 to_update(current.field_ref().error, error),
+                to_update(current.field_ref().failed_step, step),
             ),
         )
 
@@ -694,14 +814,15 @@ class HandoffRunner:
         return failure_notice(f"mngr create exited with code {result.returncode}", output_tail.text())
 
     def _adopt_successor(
-        self,
-        chat_id: ChatId,
-        handoff_id: str,
-        retiring: ChatAgentEntry,
-        handoff: ChatHandoffRecord,
-        successor_state: AgentStateItem,
+        self, chat_id: ChatId, handoff_id: str, retiring: ChatAgentEntry, handoff: ChatHandoffRecord
     ) -> None:
-        """Make the successor the chat's agent: append its entry to the record, track it, and emit the chip."""
+        """Make the tracked successor the chat's agent: append its entry to the record and emit the chip.
+
+        The entry keeps the message the user switched with when a prompt was built, which is
+        what folded it in (a fresh start builds none and delivers the message as a turn of its
+        own), so the chip can show it.
+        """
+        is_message_folded = handoff.prompt is not None and bool(handoff.trigger_text)
         successor = ChatAgentEntry(
             seq=handoff.next_seq,
             agent_id=handoff.next_agent_id,
@@ -709,11 +830,10 @@ class HandoffRunner:
             account_id=handoff.target_account_id,
             harness=handoff.target_harness,
             started_at=self._deps.now(),
+            opening_message_id=handoff.trigger_message_id if is_message_folded else None,
+            opening_message=handoff.trigger_text if is_message_folded else None,
+            is_fresh_start=handoff.is_fresh_start,
         )
-        # Tracked first: the record's handoff names the successor, so a tracked successor the
-        # record has yet to append is hidden, whereas an appended one that is not tracked yet
-        # would list the chat as nothing for that instant.
-        self._deps.note_agent_created(successor_state)
         self._deps.update_record(
             chat_id,
             handoff_id,
@@ -739,9 +859,42 @@ class HandoffRunner:
                         seq=successor.seq,
                         recorded_event_count=None,
                         ended_at=None,
+                        opening_message_id=successor.opening_message_id,
+                        opening_message=successor.opening_message,
+                        is_fresh_start=successor.is_fresh_start,
                     ),
                 )
             ],
+        )
+
+    def _deliver_prompt(self, chat_id: ChatId, handoff_id: str) -> None:
+        """Hand the successor its handoff prompt as its first message, once.
+
+        The prompt goes through the send path rather than ``mngr create --message`` so the
+        model pick lands before the first turn; a refusal is logged like a held send's, since
+        the successor still has the transcript and the ``AGENTS.md`` backstop. The record
+        remembers the delivery so a resume does not repeat it.
+        """
+        _, handoff = self._current(chat_id, handoff_id)
+        if handoff.prompt is None or handoff.is_prompt_delivered:
+            return
+        successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
+        self._deps.ensure_watcher(successor_info)
+        deliver_held_send(
+            self._deps.deliver,
+            successor_info,
+            HeldSend(
+                message_id=prompt_message_id(handoff_id),
+                text=handoff.prompt,
+                origin=HeldSendOrigin.SCRIPT,
+                received_at=self._deps.now(),
+            ),
+            chat_id,
+        )
+        self._update_handoff(
+            chat_id,
+            handoff_id,
+            lambda current: current.model_copy_update(to_update(current.field_ref().is_prompt_delivered, True)),
         )
 
     def _deliver_held_sends(self, chat_id: ChatId, handoff_id: str, successor_id: str) -> None:
@@ -756,7 +909,7 @@ class HandoffRunner:
         """
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
-            raise HandoffStepError(
+            raise SuccessorUntrackedError(
                 f"agent {successor_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         self._deps.ensure_watcher(successor_info)

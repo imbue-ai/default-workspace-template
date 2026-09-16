@@ -63,8 +63,11 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.claude import auth_endpoints
 from imbue.chat.harnesses.interrupt import restart_drain
+from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
+from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import get_catalog
@@ -251,6 +254,9 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
                 seq=segment.seq,
                 recorded_event_count=segment.recorded_event_count,
                 ended_at=segment.ended_at,
+                opening_message_id=segment.opening_message_id,
+                opening_message=segment.opening_message,
+                is_fresh_start=segment.is_fresh_start,
             )
             for segment in segments
         ),
@@ -583,8 +589,8 @@ def _get_harnesses_endpoint() -> Response:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
     One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability); the
-    frontend keys in by an agent's harness.
+    switch mode, picker mode, powered-by label, shoulder-tap capability, plus the
+    harness's popups and user-facing name); the frontend keys in by an agent's harness.
 
     Every harness is always included, deliberately: what the user has signed in to
     decides what they can LAUNCH, not what the app can render. A codex or pi agent that
@@ -606,6 +612,9 @@ def _get_harnesses_endpoint() -> Response:
         # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        # The harness's user-facing name, from the same table the account labels and the
+        # handoff prompt use, so the page names a harness the way the backend does.
+        catalog["label"] = HARNESS_LABEL[harness]
         catalogs[harness.value] = catalog
     return json_response(catalogs)
 
@@ -643,26 +652,10 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
     req = SetModelChoiceRequest.model_validate(request.get_json())
     agent_manager: AgentManager = get_state().agent_manager
     options = _agent_switch_options(agent_manager, agent_info)
-    # The picker only ever sends a valid option id, so validation is an exact id lookup.
-    option = next((opt for opt in options if opt.id == req.model_id), None)
-    if option is None:
-        return json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
-
-    # Flat guards (rather than a branch per axis-presence) so effort is validated
-    # against the model's declared set: required + in-set when the model has efforts,
-    # and absent when it does not.
-    declared_efforts = {choice.level for choice in option.efforts}
-    has_effort_axis = len(option.efforts) > 0
-    if has_effort_axis and req.effort is None:
-        return json_response(ErrorResponse(detail="This model requires an effort level").model_dump(), 400)
-    if has_effort_axis and req.effort is not None and req.effort not in declared_efforts:
-        return json_response(
-            ErrorResponse(detail=f"'{req.effort}' is not a valid effort for '{req.model_id}'").model_dump(), 400
-        )
-    if not has_effort_axis and req.effort is not None:
-        return json_response(ErrorResponse(detail=f"'{req.model_id}' has no effort axis").model_dump(), 400)
-    if req.fast and not option.supports_fast:
-        return json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
+    try:
+        validate_model_pick(options, req.model_id, req.effort, req.fast)
+    except InvalidModelPickError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
 
     # The live read is harness-neutral (shared reader), so the resolver -- which owns only
     # the switch/offer side -- is built inline from agent_info rather than cached.
@@ -1072,6 +1065,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             switch_request.message,
             message_id,
             _held_send_origin(switch_request),
+            model_pick=switch_request.model,
         )
     except ChatConvergingError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
@@ -1262,6 +1256,7 @@ def _run_create_chat() -> CreatedChat | Response:
             message=create_request.message,
             labels=create_request.labels,
             is_installation_check_skipped=create_request.is_installation_check_skipped,
+            model_pick=create_request.model,
         )
     except AgentNameConflictError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)

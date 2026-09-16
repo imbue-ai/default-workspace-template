@@ -60,6 +60,16 @@ def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:
     assert decision.display_label == "deep-research"
 
 
+def test_the_handoff_prompt_is_a_chip_since_the_user_did_not_type_it() -> None:
+    """The successor's first message goes through the send path and lands in its transcript as a user message;
+    the page shows it collapsed rather than as the user's own words."""
+    prompt = 'You are continuing the chat "Chat 1" (chat id agent-abc). It ran on Claude Code until now.\n\nRead it.'
+    decision = classify_user_message(prompt)
+    assert decision is not None
+    assert (decision.display, decision.display_label) == (DisplayKind.CHIP, "Handoff prompt")
+    assert classify_user_message("You are continuing to be helpful, thanks") is None
+
+
 def test_the_handoff_summary_request_is_a_chip_that_names_itself() -> None:
     decision = classify_user_message(f"{HANDOFF_SUMMARY_COMMAND} data/.apps/chat/chats/agent-abc/summaries/1.md")
     assert decision is not None

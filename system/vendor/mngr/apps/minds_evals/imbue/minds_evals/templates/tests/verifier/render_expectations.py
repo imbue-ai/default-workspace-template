@@ -27,6 +27,52 @@ def _declared_actions(check: dict[str, Any]) -> str:
     return str(check.get("actions") or check.get("steps") or "")
 
 
+def _process_line(check: dict[str, Any]) -> str:
+    """One process check as a line the judge reads: what the case asked of the way the agent worked.
+
+    Stated as an expectation rather than as a verdict -- the manifest carries whether it held, and
+    the judge weighs that itself.
+    """
+    kind = str(check.get("kind") or "")
+    if kind == "required_skill":
+        return "- The `{}` skill was to be invoked.".format(check.get("skill"))
+    elif kind == "forbidden_skill":
+        return "- The `{}` skill was not to be invoked.".format(check.get("skill"))
+    elif kind == "max_worker_launches":
+        return "- At most {} background worker(s) were to be launched.".format(check.get("max_worker_launches"))
+    else:
+        return "- (a `{}` process check, which this renderer cannot describe)".format(kind)
+
+
+def _seconds_text(raw_value: Any) -> str:
+    """An anchor as the judge should read it. Anchors are authored as whole seconds and travel as
+    floats, so the trailing `.0` is dropped; anything this cannot read is printed as it came, since
+    a renderer that raised would fail the grade before a criterion ran."""
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+        return str(raw_value)
+    return str(int(raw_value)) if float(raw_value).is_integer() else str(raw_value)
+
+
+def _timing_line(check: dict[str, Any]) -> str:
+    """One timing check as a line the judge reads: how long the case allowed, and what the time was
+    conditional on.
+
+    Stated as an expectation rather than as a verdict, like every other class: the manifest entry
+    carries the time actually measured and why it counted or did not.
+    """
+    prerequisites = [str(name) for name in (check.get("requires_no_failures") or [])]
+    conditional_clause = (
+        " -- and the time only counts if nothing failed in: {}".format(
+            ", ".join("`{}`".format(name) for name in prerequisites)
+        )
+        if prerequisites
+        else ""
+    )
+    return "- The client's goal was to be met within {} second(s), and no later than {} second(s){}.".format(
+        _seconds_text(check.get("fast_seconds")), _seconds_text(check.get("slow_seconds")), conditional_clause
+    )
+
+
 def render_expectations(case: dict[str, Any]) -> str:
     """The judge-facing markdown for one case: the outcome prose plus every declared check."""
     expectations = case.get("expectations") or {}
@@ -74,6 +120,20 @@ def render_expectations(case: dict[str, Any]) -> str:
             lines.append("- **{}**".format(check.get("name")))
             lines.append("  - Actions: {}".format(_declared_actions(check)))
             lines.append("  - Expected end state: {}".format(check.get("expect")))
+        lines.append("")
+
+    process_checks = expectations.get("process_checks") or []
+    if process_checks:
+        lines += ["## How the work was to be done", ""]
+        for check in process_checks:
+            lines.append(_process_line(check))
+        lines.append("")
+
+    timing_checks = expectations.get("timing_checks") or []
+    if timing_checks:
+        lines += ["## How quickly the work was to be done", ""]
+        for check in timing_checks:
+            lines.append(_timing_line(check))
         lines.append("")
 
     test_commands = expectations.get("test_commands") or []

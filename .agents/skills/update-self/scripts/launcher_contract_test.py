@@ -9,7 +9,7 @@ the update exists for. Staging a newer launcher alongside would not help: it
 may itself depend on settings or plugins the merge has not landed yet.
 
 So every ``create_worker.py`` invocation in the update-self prose is held to
-the launcher interface of the oldest release the Minds app offers an update
+the launcher interface of the oldest release the Mind app offers an update
 from (``minds-v0.3.17``). Adding a flag here means checking that release's
 ``create_worker.py`` still accepts it, or doing the work with plain ``mngr``
 commands instead, as the predecessor cleanup in Step 3b does.

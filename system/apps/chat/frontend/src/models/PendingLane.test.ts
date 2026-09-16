@@ -22,9 +22,11 @@ import { chatSnapshotFixture } from "./chatSnapshotFixture";
 import type { ProviderAccount } from "./Providers";
 import {
   getPendingAccountId,
+  getPendingPick,
   isSwitchTarget,
   pendingSwitchTarget,
   setPendingAccount,
+  setPendingSwitch,
   switchKind,
   trackPendingLaneSettlement,
 } from "./PendingLane";
@@ -51,6 +53,20 @@ describe("the pending lane", () => {
     expect(getPendingAccountId("agent-2")).toBeNull();
     setPendingAccount("agent-1", null);
     expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("carries the model picked for the switch, which goes with the account it was picked for", () => {
+    const pick = { identity: { model_id: "gpt-6-astra", effort: "high", fast: false }, label: "GPT-6 Astra · High" };
+    setPendingSwitch("agent-1", "acct-openai", pick);
+    expect(getPendingAccountId("agent-1")).toBe("acct-openai");
+    expect(getPendingPick("agent-1")).toEqual(pick);
+    // Choosing the account without a pick, or another account, forgets the pick: it named a
+    // model of the harness it was made for.
+    setPendingAccount("agent-1", "acct-openai");
+    expect(getPendingPick("agent-1")).toBeNull();
+    setPendingSwitch("agent-1", "acct-openai", pick);
+    setPendingAccount("agent-1", null);
+    expect(getPendingPick("agent-1")).toBeNull();
   });
 
   it("makes the next send a switch for any signed-in account but the chat's own", () => {

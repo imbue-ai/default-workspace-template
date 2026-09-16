@@ -118,6 +118,20 @@ def test_finalize_splits_a_flow_case_between_quality_and_outcome(finalize: Modul
     assert finalize.OUTCOME_SHARE == 0.5
 
 
+def _finished_state(tmp_path: Path) -> Path:
+    """A state.json reporting a conversation that ran to the end, which is the only window in which
+    missing outcome evidence is diagnosed at all."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"test_state": "finished"}))
+    return state_path
+
+
+def _manifest(tmp_path: Path, entries: list[dict[str, Any]]) -> Path:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({"entries": entries}))
+    return manifest_path
+
+
 def _grade_case(
     finalize: ModuleType,
     tmp_path: Path,
@@ -430,3 +444,57 @@ def test_a_pi_coding_trial_that_failed_its_gates_still_grades_zero(finalize: Mod
     # The harness is stamped on a gated-closed trial too, so a reader of a zero can still tell a
     # dimension that did not apply from one that failed to emit.
     assert _details_of(tmp_path)["harness"] == {"name": "pi-coding", "is_harness_quality_scored": False}
+
+
+def test_process_expectations_are_registered_as_their_own_scored_criterion() -> None:
+    assert ("process", "process_checks", "process_expectations_met") in _criterion_by_class()
+
+
+def test_an_unmeasurable_process_class_voids_the_trial(finalize: ModuleType, tmp_path: Path) -> None:
+    # Unlike the flows, the process checks are read off the agent's own captured transcript: a class
+    # where every entry errored means that transcript never came out of the workspace, so there is
+    # nothing to grade the agent's work off and the trial is worth erroring.
+    assert finalize.SCORED_CLASS_BY_EXPECTATION_KEY["process_checks"] == "process"
+
+    unmeasured = finalize._evidence_failure(
+        {"outcome": 0.0},
+        {"process_checks": [{"check_id": "skill_required_build_app"}]},
+        _finished_state(tmp_path),
+        _manifest(tmp_path, [{"check_class": "process", "status": "error"}]),
+    )
+
+    assert unmeasured is not None
+    assert "process" in unmeasured
+
+
+def test_a_process_class_that_was_measured_grades_normally(finalize: ModuleType, tmp_path: Path) -> None:
+    # A recorded failure is the agent's, and must score rather than void the trial.
+    measured = finalize._evidence_failure(
+        {"outcome": 0.0},
+        {"process_checks": [{"check_id": "skill_required_build_app"}]},
+        _finished_state(tmp_path),
+        _manifest(tmp_path, [{"check_class": "process", "status": "failed"}]),
+    )
+
+    assert measured is None
+
+
+def test_timing_is_registered_as_its_own_scored_criterion() -> None:
+    assert ("timing", "timing_checks", "time_to_goal_within_expectations") in _criterion_by_class()
+
+
+def test_an_unsatisfied_goal_scores_zero_instead_of_voiding_the_trial(finalize: ModuleType, tmp_path: Path) -> None:
+    # The timing class's one unmeasurable state is an agent that never got its client to say the
+    # goal was met. That is unboundedly slow -- a measurement of the agent -- so it scores zero on
+    # the curve rather than being reported as the harness failing to measure.
+    assert "timing_checks" not in finalize.SCORED_CLASS_BY_EXPECTATION_KEY
+    assert "timing" not in finalize.SCORED_CLASS_BY_EXPECTATION_KEY.values()
+
+    unmeasured = finalize._evidence_failure(
+        {"outcome": 0.0},
+        {"timing_checks": [{"check_id": "time_to_goal"}]},
+        _finished_state(tmp_path),
+        _manifest(tmp_path, [{"check_class": "timing", "status": "failed"}]),
+    )
+
+    assert unmeasured is None

@@ -1197,7 +1197,7 @@ def init_supertokens() -> None:
             api_key=api_key,
         ),
         app_info=InputAppInfo(
-            app_name="Minds",
+            app_name="Mind",
             api_domain=website_domain,
             website_domain=website_domain,
             # The SDK middleware serves its routes (browser session refresh)

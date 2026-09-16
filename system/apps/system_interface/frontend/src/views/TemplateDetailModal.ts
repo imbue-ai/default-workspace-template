@@ -75,7 +75,7 @@ export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
       // element still takes the hover that explains why.
       const startAttrs = {
         "aria-disabled": isStartDisabled ? "true" : undefined,
-        ...(isStartDisabled && startDisabledReason !== null ? hoverTooltipAttrs(startDisabledReason) : {}),
+        ...hoverTooltipAttrs(isStartDisabled ? startDisabledReason : null),
       };
       return m(
         Modal,

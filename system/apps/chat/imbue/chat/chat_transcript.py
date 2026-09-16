@@ -3,7 +3,8 @@
 A chat is a sequence of agent transcripts (``docs/system/blueprint/chat-agent-split/`` 4.7).
 The read routes (``/api/chats/<chat_id>/events`` and the event detail) read through this
 facade rather than through one agent's watcher. Between two segments sits one synthesized
-``agent_switch`` event, the chip that says which agent the chat moved to.
+``agent_switch`` event, the chip that says which agent the chat moved to, carrying the message
+the user switched with when the handoff folded it into the successor's prompt.
 
 Offsets and totals are chat-global. An archived segment's length is the count recorded on the
 chat record when its agent was archived, so the total and any offset are known without loading
@@ -52,6 +53,17 @@ class TranscriptSegment(FrozenModel):
         description="The segment's length as recorded when its agent was archived; None for the live segment"
     )
     ended_at: datetime | None = Field(description="When its agent was archived; None for the live segment")
+    opening_message_id: str | None = Field(
+        default=None,
+        description="The send-time id of the message the user switched to this agent with, if one was folded into its prompt",
+    )
+    opening_message: str | None = Field(
+        default=None, description="That message's text, which the switch marker before this segment carries"
+    )
+    is_fresh_start: bool = Field(
+        default=False,
+        description="Whether the switch to this segment was a fresh start: no summary asked for, no prompt delivered",
+    )
 
 
 class _EventPosition(FrozenModel):
@@ -70,7 +82,13 @@ def agent_switch_event_id(chat_id: ChatId, retiring_seq: int) -> str:
 
 @pure
 def agent_switch_event(chat_id: ChatId, retiring: TranscriptSegment, successor: TranscriptSegment) -> dict[str, Any]:
-    """The chip between two segments: the chat moved from one agent to the next."""
+    """The chip between two segments: the chat moved from one agent to the next.
+
+    It carries the message the user switched with, when the handoff folded that message into
+    the successor's prompt: the page shows it as the successor's opening turn, since no event of
+    the successor's own holds it. It also says whether the switch was a fresh start, which asked
+    for no summary and delivered no prompt.
+    """
     return {
         "type": AGENT_SWITCH_EVENT_TYPE,
         "event_id": agent_switch_event_id(chat_id, retiring.seq),
@@ -82,6 +100,9 @@ def agent_switch_event(chat_id: ChatId, retiring: TranscriptSegment, successor: 
         "from_harness": retiring.harness.value,
         "to_harness": successor.harness.value,
         "seq": retiring.seq,
+        "message_id": successor.opening_message_id,
+        "message": successor.opening_message,
+        "is_fresh_start": successor.is_fresh_start,
     }
 
 

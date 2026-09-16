@@ -170,6 +170,34 @@ def test_on_before_send_message_skips_when_disabled(tmp_path: Path, temp_mngr_ct
     assert agent.compaction_count == 0
 
 
+def test_on_before_send_message_skips_when_proactive_timer(tmp_path: Path, temp_mngr_ctx: MngrContext) -> None:
+    host = FakeHost(host_dir=tmp_path)
+    plugin_config = AutoCompactPluginConfig(
+        mode=ContextCompactionMode.PROACTIVE_TIMER,
+        cache_ttl_minutes=60,
+        epsilon_offset_minutes=2,
+    )
+    new_config = temp_mngr_ctx.config.model_copy_update(
+        to_update(temp_mngr_ctx.config.field_ref().plugins, {PluginName("autocompact"): plugin_config})
+    )
+    ctx = temp_mngr_ctx.model_copy_update(to_update(temp_mngr_ctx.field_ref().config, new_config))
+
+    agent = _TestAgent(
+        id=AgentId.generate(),
+        name=AgentName("test-agent"),
+        agent_type=AgentTypeName("test"),
+        mngr_ctx=ctx,
+        host=host,
+        running=True,
+        cache_ttl=60,
+        context_tokens=150_000,
+        idle_since_dt=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+
+    on_before_send_message(cast(Any, agent), cast(Any, host), "hello")
+    assert agent.compaction_count == 0
+
+
 def test_on_before_send_message_non_compaction_agent(tmp_path: Path) -> None:
     host = FakeHost(host_dir=tmp_path)
     agent = _DummyNonCompactionAgent(

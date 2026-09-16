@@ -112,7 +112,7 @@ def _target() -> HostTarget:
 # a packaged app beside a dev one: a launcher process and, under it, the backend
 # exec'd through its interpreter. Only the second of each pair is the app.
 _PS_TWO_APPS = """\
-  501 /Applications/Minds.app/Contents/Resources/uv/uv run --project /Applications/Minds.app/Contents/Resources/pyproject --active minds -v --format jsonl --log-file /Users/me/.minds/logs/minds-events.jsonl run --host 127.0.0.1 --port 60686 --no-browser
+  501 /Applications/Mind.app/Contents/Resources/uv/uv run --project /Applications/Mind.app/Contents/Resources/pyproject --active minds -v --format jsonl --log-file /Users/me/.minds/logs/minds-events.jsonl run --host 127.0.0.1 --port 60686 --no-browser
   502 /Users/me/.minds/.venv/bin/python3 /Users/me/.minds/.venv/bin/minds -v --format jsonl --log-file /Users/me/.minds/logs/minds-events.jsonl run --host 127.0.0.1 --port 60686 --no-browser
   503 uv run --package minds minds -vv --format jsonl --log-file /Users/me/.minds-staging/logs/minds-events.jsonl run --host 127.0.0.1 --port 61814 --no-browser
   504 /Users/me/checkout/.venv/bin/python3 /Users/me/checkout/.venv/bin/minds -vv --format jsonl --log-file /Users/me/.minds-staging/logs/minds-events.jsonl run --host 127.0.0.1 --port 61814 --no-browser

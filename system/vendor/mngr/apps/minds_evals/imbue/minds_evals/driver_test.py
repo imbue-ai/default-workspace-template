@@ -2,6 +2,8 @@ import asyncio
 import json
 import re
 import subprocess
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -28,10 +30,12 @@ from imbue.minds_evals.data_types import ObservedHarnessModels
 from imbue.minds_evals.data_types import PromptEntry
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepPosition
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.data_types import Transcript
 from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerState
@@ -68,7 +72,9 @@ from imbue.minds_evals.driver import build_case_clone_command
 from imbue.minds_evals.driver import build_clone_probe_command
 from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import build_eval_case_commit_command
+from imbue.minds_evals.driver import build_turn_record
 from imbue.minds_evals.driver import build_vendor_mngr_command
+from imbue.minds_evals.driver import conversation_seconds
 from imbue.minds_evals.driver import derive_key_env
 from imbue.minds_evals.driver import derive_user_id
 from imbue.minds_evals.driver import derive_workspace_host_name
@@ -354,6 +360,94 @@ def test_new_agent_reply_texts_reads_atif_agent_steps() -> None:
 
     assert _new_agent_reply_texts(events, 1) == ["new reply"]
     assert _new_agent_reply_texts(events, 6) == []
+
+
+def _turn_usage(output_tokens: int) -> dict[str, int]:
+    """The usage block the workspace stamps on a metered agent message."""
+    return {"input_tokens": 10, "output_tokens": output_tokens, "cache_read_tokens": 0, "cache_write_tokens": 0}
+
+
+def _turn_record(index: int, sent_at: str, replied_at: str) -> TurnRecord:
+    """A turn record with only its times filled in, for the tests that are about the span alone."""
+    return TurnRecord(
+        index=index,
+        entry_index=0,
+        exchange=index - 1,
+        sent_at=sent_at,
+        replied_at=replied_at,
+        reply_seconds=0.0,
+        agent_message_count=1,
+        message_count=0,
+        tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
+        cost_usd=None,
+    )
+
+
+def test_build_turn_record_times_the_turn_and_prices_only_its_own_slice() -> None:
+    events = [
+        {"type": "assistant_message", "text": "an earlier turn", "model": "claude-opus-4-8", "usage": _turn_usage(7)},
+        {"type": "user_message", "content": "our turn"},
+        {"type": "assistant_message", "text": "working on it"},
+        {"type": "assistant_message", "text": "done", "model": "claude-opus-4-8", "usage": _turn_usage(50)},
+    ]
+
+    record = build_turn_record(
+        message_index=2,
+        entry_index=1,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 3, 20, tzinfo=timezone.utc),
+        agent_message_count=2,
+        events=events,
+        baseline_event_count=1,
+    )
+
+    assert record.index == 2
+    assert record.entry_index == 1
+    assert record.sent_at == "2026-09-14T12:00:00+00:00"
+    assert record.replied_at == "2026-09-14T12:03:20+00:00"
+    assert record.reply_seconds == 200.0
+    # The empty-usage message is one of the two the reply was made of, and is not one of the messages
+    # the spend is derived from.
+    assert record.agent_message_count == 2
+    assert record.message_count == 1
+    # The earlier turn's 7 output tokens are before the baseline and stay out of this turn's cost.
+    assert record.tokens.output == 50
+    assert record.cost_usd is not None and record.cost_usd > 0
+
+
+def test_build_turn_record_of_a_turn_nobody_metered_reports_unknown_cost() -> None:
+    record = build_turn_record(
+        message_index=1,
+        entry_index=0,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 0, 12, tzinfo=timezone.utc),
+        agent_message_count=1,
+        events=[{"type": "assistant_message", "text": "done"}],
+        baseline_event_count=0,
+    )
+
+    assert record.reply_seconds == 12.0
+    assert record.agent_message_count == 1
+    assert record.message_count == 0
+    # A turn whose stream reported no usage did not cost nothing -- we do not know what it cost.
+    assert record.cost_usd is None
+
+
+def test_conversation_seconds_spans_the_first_message_to_the_last_reply() -> None:
+    records = [
+        _turn_record(1, "2026-09-14T12:00:00+00:00", "2026-09-14T12:04:00+00:00"),
+        _turn_record(2, "2026-09-14T12:05:00+00:00", "2026-09-14T12:11:30+00:00"),
+    ]
+
+    # The whole conversation, gaps included -- not the sum of the two replies (630s).
+    assert conversation_seconds(records) == 690.0
+
+
+def test_conversation_seconds_is_zero_until_a_turn_has_been_answered() -> None:
+    """A trial that died during preparation, or on its first reply, has no conversation to span."""
+    assert conversation_seconds([]) == 0.0
 
 
 def _git_output(repo_dir: Path, *args: str) -> str:
@@ -1100,6 +1194,73 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
     trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
     assert trajectory["final_metrics"]["total_cached_tokens"] == 11_000
     assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
+
+
+def test_driver_records_each_answered_turns_wall_clock_and_spend(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("Building it now.", usage=_turn_usage(100)),
+            _reply_events("All done.", usage=_turn_usage(50)),
+        ],
+    )
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__turns1",
+        timeout_seconds=1800.0,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    turns = state["turns"]
+    assert [(turn["index"], turn["entry_index"], turn["exchange"]) for turn in turns] == [(1, 0, 0), (2, 1, 0)]
+    # Each turn is priced over its own slice of the stream, so the second one carries its own reply's
+    # tokens rather than the conversation's running total.
+    assert [turn["tokens"]["output"] for turn in turns] == [100, 50]
+    assert [turn["message_count"] for turn in turns] == [1, 1]
+    assert all(turn["cost_usd"] > 0 for turn in turns)
+    assert turns[0]["sent_at"] < turns[0]["replied_at"] <= turns[1]["sent_at"]
+
+    # The trial's elapsed time also holds workspace bring-up, so it bounds the conversation's span.
+    assert state["conversation_seconds"] == conversation_seconds([TurnRecord.model_validate(turn) for turn in turns])
+    assert state["conversation_seconds"] <= state["elapsed_seconds"]
+
+    assert context.metadata is not None
+    assert context.metadata["turns"] == turns
+    assert context.metadata["conversation_seconds"] == state["conversation_seconds"]
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["per_turn"] == turns
+    # A floor on the trial's spend rather than a partition of it: the welcome turn is before the
+    # first record, turn-end work that lands after a record was taken is in no record, and a
+    # worker's spend is never in one.
+    assert sum(turn["tokens"]["output"] for turn in turns) <= usage_artifact["workspace_agent"]["tokens"]["output"]
+
+
+def test_driver_records_no_turn_for_a_message_that_never_drew_a_reply(tmp_path: Path) -> None:
+    """A turn earns a record only once its reply is in, so a trial that timed out waiting accounts
+    for fewer turns than it sent -- the same rule the per-entry records follow."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__turns2",
+        timeout_seconds=0.3,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["timed_out"] is True
+    # The client's message did go out -- the trajectory carries it -- and drew no reply.
+    assert [(step["source"], step["message"]) for step in _box_trajectory(environment)["steps"]] == [
+        ("user", "Build it")
+    ]
+    assert state["turns"] == []
+    # Nothing was ever answered, so there is no conversation to span.
+    assert state["conversation_seconds"] == 0.0
 
 
 def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_trial(tmp_path: Path) -> None:
@@ -2064,9 +2225,26 @@ def test_driver_keeps_exchanging_within_one_goal_entry_until_the_client_is_satis
     # send several; the ported schema key carries the entry count.
     assert state["waits_done"] == 3
     assert state["num_turns"] == 2
+    # The satisfying reply is the last one the client saw, and the goal record points at it.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""},
-        {"index": 1, "kind": "goal", "exchange_count": 2, "outcome": "satisfied", "detail": "It is running."},
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        },
+        {
+            "index": 1,
+            "kind": "goal",
+            "exchange_count": 2,
+            "outcome": "satisfied",
+            "detail": "It is running.",
+            "satisfied_at": state["turns"][-1]["replied_at"],
+            "satisfied_at_turn": 3,
+        },
     ]
     # The client decided each exchange from the conversation alone, and each decision saw the reply
     # to the message before it -- nothing here reaches into the environment.
@@ -2102,6 +2280,8 @@ def test_driver_stops_a_goal_entry_at_its_budget_and_records_it_as_exhausted(tmp
         "exchange_count": 2,
         "outcome": "budget_exhausted",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -2126,6 +2306,8 @@ def test_driver_records_a_degraded_goal_entry_as_a_fallback(tmp_path: Path) -> N
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
     assert state["waits_done"] == 2
 
@@ -2181,7 +2363,15 @@ def test_driver_audits_a_message_that_went_out_but_drew_no_reply_as_sent(tmp_pat
     # The entry the trial died in earns no record, so the records account for one of the two
     # messages sent. Only a finished trial's two views of the conversation agree.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""}
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        }
     ]
     assert _client_messages(environment) == ["Build it", "Where is it?"]
     assert [event["turn"] for event in _decider_audit_events(environment)] == [2]
@@ -2232,6 +2422,8 @@ def test_driver_records_the_clients_own_reason_for_ending_a_goal_entry(tmp_path:
         "exchange_count": 1,
         "outcome": "satisfied",
         "detail": "The agent gave me a working link.",
+        "satisfied_at": state["turns"][-1]["replied_at"],
+        "satisfied_at_turn": 2,
     }
     assert context.metadata is not None
     assert context.metadata["entries"] == state["entries"]
@@ -2295,6 +2487,30 @@ def test_driver_snapshots_the_final_entry_even_when_its_client_was_satisfied_wit
     assert state["entries"][1]["exchange_count"] == 0
     assert state["waits_done"] == 1
     assert any("post_message_1" in command for command in environment.exec_commands)
+
+
+def test_driver_points_a_goal_satisfied_without_speaking_at_the_previous_entrys_reply(
+    tmp_path: Path,
+) -> None:
+    """The client rules on the conversation as it stands, so a goal the opening ask's reply already
+    met is satisfied by a turn that is not one of the goal entry's own exchanges. That shape is the
+    common one in a live run, and it is what the timing class measures from."""
+    _goal_source, environment, _context = _run_goal_driver(
+        tmp_path,
+        trial_name="todo-app__goal12",
+        goal="See it running",
+        max_exchanges=3,
+        actions=[done(TurnOutcome.SATISFIED, "The first reply already answered me.")],
+        replies=("Building it; here is the link.",),
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    goal_record = state["entries"][1]
+    assert goal_record["exchange_count"] == 0
+    # The run's one turn belongs to the entry before it, and that is the reply the client ruled on.
+    assert [turn["entry_index"] for turn in state["turns"]] == [0]
+    assert goal_record["satisfied_at"] == state["turns"][0]["replied_at"]
+    assert goal_record["satisfied_at_turn"] == 1
 
 
 def test_is_snapshot_wanted_takes_the_final_cadences_one_snapshot_after_the_entry_not_per_exchange() -> None:
@@ -2397,6 +2613,8 @@ def test_driver_explains_a_fallback_the_budget_stopped_before_the_client_could_r
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": FALLBACK_ENTRY_DETAIL,
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -2671,6 +2889,38 @@ def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Pat
     # figure here, and the two would be equal.
     assert state["elapsed_seconds"] > 0.0
     assert state["step_elapsed_seconds"] < state["elapsed_seconds"]
+
+
+def test_a_later_steps_turn_records_still_carry_the_earlier_steps(tmp_path: Path) -> None:
+    """The turn records accumulate across steps, the way the entry records do, so the last step's
+    state.json describes the whole case and its `conversation_seconds` is the case's span rather
+    than the step's."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("On it.", usage=_turn_usage(40)),
+            _reply_events("Done.", usage=_turn_usage(60)),
+        ],
+    )
+    _driver, environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__turns3",
+    )
+
+    assert contexts[0].metadata is not None and contexts[1].metadata is not None
+    assert [turn["index"] for turn in contexts[0].metadata["turns"]] == [1]
+    assert [turn["index"] for turn in contexts[1].metadata["turns"]] == [1, 2]
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["step_name"] == "step-2"
+    assert [(turn["index"], turn["entry_index"]) for turn in state["turns"]] == [(1, 0), (2, 1)]
+    # Each step's messages are priced over their own slice even though the records accumulate.
+    assert [turn["tokens"]["output"] for turn in state["turns"]] == [40, 60]
+    # And the span is measured over every record, so it starts at the first step's message.
+    turn_records = [TurnRecord.model_validate(turn) for turn in state["turns"]]
+    assert state["conversation_seconds"] == conversation_seconds(turn_records)
 
 
 def test_a_flat_case_measures_the_step_and_the_trial_over_the_same_span(tmp_path: Path) -> None:

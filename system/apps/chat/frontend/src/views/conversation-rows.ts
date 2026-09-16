@@ -4,8 +4,8 @@
  * Both views render the same way: a single in-order walk of the transcript
  * (buildSections) into turn sections, flattened into the virtualized list's
  * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
- * that has tk steps, an ungrouped assistant message, a stop-hook chip, or a
- * trailing wrap-up reply. Sharing it here means a subagent's "View conversation"
+ * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
+ * node, or a trailing wrap-up reply. Sharing it here means a subagent's "View conversation"
  * gets the real progress view -- step timeline, statuses, summaries -- and the
  * same windowed virtualization as the main chat, with zero rendering drift.
  *
@@ -28,7 +28,7 @@ import {
 import { isHiddenUserMessage } from "./message-classification";
 import { buildSections, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
-import { renderAgentSwitchChip } from "./agent-switch-chip";
+import { renderHandoffNode } from "./handoff-node";
 
 // Per-type fallback row heights, used until a row has been measured (live or
 // offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
@@ -168,13 +168,31 @@ function buildRows(
             render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
-      } else if (item.kind === "switch") {
-        const switchEvent = item.event;
+      } else if (item.kind === "handoff") {
+        // The handoff node as a row of its own: the same timeline node a progress block
+        // draws, in its own thread-less frame. The row's id is the node's key so the
+        // virtualized list can measure it.
+        const node = item.node;
+        const key = `handoff-${node.key}`;
         rows.push({
-          key: switchEvent.event_id,
+          key,
           estimate: ESTIMATED_USER_HEIGHT_PX,
-          anchorEventId: switchEvent.event_id,
-          render: () => renderAgentSwitchChip(switchEvent),
+          anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
+          render: () =>
+            m(
+              "div",
+              {
+                id: key,
+                key,
+                class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
+              },
+              m("div.pv.pv--timeline.relative", [
+                m(
+                  "div.pv-timeline-nodes",
+                  renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
+                ),
+              ]),
+            ),
         });
       }
     }

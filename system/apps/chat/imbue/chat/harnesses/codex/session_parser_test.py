@@ -107,10 +107,10 @@ def test_saved_user_message_keeps_the_live_commit_identity(item_format: bool) ->
         line = _item_user_line("same text") if item_format else _user_line("same text")
         target = line["payload"]["item"] if item_format else line["payload"]
         target["client_id"] = client_id
-        event = parse_lines(line, 0, {})[0]
+        event = parse_lines(line, {})[0]
         assert event["content"] == "same text"
         assert event["event_id"] == codex_user_turn_event_id(client_id, None, "same text")
-        assert parse_lines(line, 999, {})[0] == event
+        assert parse_lines(line, {})[0] == event
         ids.append(event["event_id"])
     assert len(set(ids)) == 2
 
@@ -322,10 +322,10 @@ def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: b
         "type": "response_item",
         "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
     }
-    event = parse_lines(line, 0, {"c1": "exec"})[0]
+    event = parse_lines(line, {"c1": "exec"})[0]
     assert event["tk_stamp"] == "".join(outputs).rstrip()
     assert event["output_chars"] == len(raw)
-    assert parse_line_detail(line, 0)["codex-result-c1"]["output"] == raw
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
 
 @pytest.mark.parametrize(
@@ -343,7 +343,7 @@ def test_unrecognized_output_is_not_unwrapped_into_task_lines(raw: str) -> None:
         "type": "response_item",
         "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
     }
-    event = parse_lines(line, 0, {"c1": "exec"})[0]
+    event = parse_lines(line, {"c1": "exec"})[0]
     assert not event.get("tk_stamp", "").startswith("Created ")
 
 

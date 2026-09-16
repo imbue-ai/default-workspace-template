@@ -7,6 +7,7 @@ from imbue.minds_evals.usage import parse_proxy_usage_log
 from imbue.minds_evals.usage import resolve_workspace_usage
 from imbue.minds_evals.usage import summarize_decider_usage
 from imbue.minds_evals.usage import summarize_proxy_usage
+from imbue.minds_evals.usage import summarize_turn_usage
 from imbue.minds_evals.usage import summarize_workspace_usage
 from imbue.minds_evals.usage import workspace_usage_metadata
 from imbue.mngr_usage.data_types import TokenSnapshot
@@ -174,6 +175,39 @@ def test_summarize_workspace_usage_without_any_usage_reports_unknown_not_zero() 
     assert usage.per_model == ()
     # A trial we have no usage data for did not cost nothing.
     assert usage.cost_usd is None
+
+
+def test_summarize_turn_usage_reads_only_the_events_the_turns_message_provoked() -> None:
+    """The slice starts where the stream stood when the message went out, so an earlier turn's
+    spend -- in either stream vintage -- is not charged to this one."""
+    events = [
+        _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100, cache_read_tokens=5_000),
+        {"type": "user_message", "content": "and now the second ask"},
+        _atif_step_event("claude-opus-4-8", prompt_tokens=2_020, completion_tokens=50, cached_tokens=2_000),
+    ]
+
+    second_turn = summarize_turn_usage(events, 1)
+
+    assert second_turn.message_count == 1
+    assert second_turn.tokens.input == 20
+    assert second_turn.tokens.output == 50
+    assert second_turn.tokens.cache_read == 2_000
+    assert second_turn.cost_usd is not None
+    assert summarize_turn_usage(events, 0).tokens.output == 150
+
+
+def test_summarize_turn_usage_of_an_unmetered_turn_reports_unknown_not_zero() -> None:
+    """A codex turn's reply carries no usage block at all, and a turn we have no figures for did not
+    cost nothing."""
+    events = [
+        _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
+        {"type": "assistant_message", "text": "done, though nobody metered it"},
+    ]
+
+    turn = summarize_turn_usage(events, 1)
+
+    assert turn.message_count == 0
+    assert turn.cost_usd is None
 
 
 def test_workspace_usage_metadata_exposes_the_four_way_split() -> None:
