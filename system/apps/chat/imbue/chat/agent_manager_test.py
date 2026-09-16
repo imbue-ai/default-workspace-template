@@ -1077,7 +1077,13 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
 
 def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
     """A handoff's create adds the chat membership labels after the account args, which the vendored mngr has
-    to accept, and carries no message: the prompt follows through the send path once the model pick has landed."""
+    to accept.
+
+    That the successor's create carries no message -- the prompt follows through the send path once the
+    model pick has landed -- is checked where the create is actually built, against the fake mngr's own
+    argv log (``chat_handoffs_test.py``); asserting it here would only restate that this helper passes
+    no message.
+    """
     argv = _chat_create_argv(
         account_args=("--label", "account=acct-1"),
         extra_labels=("chat_id=agent-123", "chat_seq=2"),
@@ -1085,8 +1091,6 @@ def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
     assert_mngr_argv_valid(argv)
     labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
     assert labels[-3:] == ["account=acct-1", "chat_id=agent-123", "chat_seq=2"]
-    assert "--message" not in argv
-    assert "--message-file" not in argv
 
 
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
