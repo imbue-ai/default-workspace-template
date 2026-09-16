@@ -98,6 +98,14 @@ _CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
 
 _SUMMARIES_DIRNAME: Final[str] = "summaries"
 
+# A summary up to this size travels inside the handoff prompt; a larger one is left on disk
+# for the successor to read first. Measured 2026-09-16 on a docker workspace: pi's inbox
+# append is one shell argument, which Linux caps at 128 KiB of the JSON-encoded message, and
+# Claude Code's tmux paste was mangled or left unsubmitted twice at 384 KB and above, while
+# every send up to 320 KB on every harness landed intact. 64 KB leaves room for the rest of
+# the prompt and the user's message under both.
+INLINE_SUMMARY_MAX_BYTES: Final[int] = 64 * 1024
+
 
 class HandoffCancelledError(RuntimeError):
     """The handoff a runner was working on is no longer the chat's (cancelled, or replaced by a retry)."""
@@ -178,6 +186,20 @@ def summary_path(chat_files_root: Path, chat_id: ChatId, retiring_seq: int) -> P
 def prompt_message_id(handoff_id: str) -> str:
     """The send-time id the handoff prompt is delivered under (contract A4), one per handoff."""
     return f"handoff-prompt-{handoff_id}"
+
+
+@pure
+def summary_section(path: Path, text: str) -> str:
+    """The prompt's summary passage: the text inline when it fits, else the path to read first."""
+    if len(text.encode("utf-8")) <= INLINE_SUMMARY_MAX_BYTES:
+        return (
+            f"Your predecessor's summary, also on disk at {path}:\n\n"
+            f"<predecessor-summary>\n{text.strip()}\n</predecessor-summary>"
+        )
+    return (
+        f"Your predecessor's summary is on disk at {path}. It is too long to carry in this message: "
+        "read that file in full before anything else."
+    )
 
 
 @pure
@@ -569,18 +591,16 @@ class HandoffRunner:
     ) -> str:
         """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message.
 
-        The summary travels inside the prompt, so the successor has its context before its first
-        tool call; the path stays beside it for a re-read and for the file's own readers.
+        The summary travels inside the prompt when it is no larger than ``INLINE_SUMMARY_MAX_BYTES``,
+        so the successor has its context before its first tool call; the path stays beside it for
+        a re-read and for the file's own readers. A larger one is pointed at instead.
         """
         template = string.Template(self._deps.prompt_template_path.read_text())
         retiring = record.agents[-1]
         path = summary_path(self._deps.chat_files_root, record.chat_id, handoff.retiring_seq)
         match outcome:
             case SummaryOutcome.REUSED | SummaryOutcome.WRITTEN:
-                summary = (
-                    f"Your predecessor's summary, also on disk at {path}:\n\n"
-                    f"<predecessor-summary>\n{path.read_text().strip()}\n</predecessor-summary>"
-                )
+                summary = summary_section(path, path.read_text())
             case SummaryOutcome.MISSING:
                 summary = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
             case SummaryOutcome.SKIPPED:
@@ -836,6 +856,7 @@ class HandoffRunner:
             started_at=self._deps.now(),
             opening_message_id=handoff.trigger_message_id if is_message_folded else None,
             opening_message=handoff.trigger_text if is_message_folded else None,
+            is_fresh_start=handoff.is_fresh_start,
         )
         self._deps.update_record(
             chat_id,
@@ -864,6 +885,7 @@ class HandoffRunner:
                         ended_at=None,
                         opening_message_id=successor.opening_message_id,
                         opening_message=successor.opening_message,
+                        is_fresh_start=successor.is_fresh_start,
                     ),
                 )
             ],

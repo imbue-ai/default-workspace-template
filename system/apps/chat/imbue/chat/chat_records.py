@@ -85,6 +85,13 @@ class ChatAgentEntry(FrozenModel):
             "it never appears in the transcript as a turn of its own"
         ),
     )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the handoff that started this agent was a fresh start (the retiring agent had no user turn, so "
+            "no summary was asked for and no prompt delivered); False for a chat's first agent and for a rebind"
+        ),
+    )
 
 
 class ChatTransitionRecord(FrozenModel):

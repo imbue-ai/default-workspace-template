@@ -7,6 +7,10 @@ const state = vi.hoisted(() => {
   return { chat: null as unknown };
 });
 vi.mock("../models/Chats", () => ({ getChatById: () => state.chat ?? undefined }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 
 import m from "mithril";
 import type { AgentSwitchEvent, AssistantMessageEvent, UserMessageEvent } from "../models/Response";
@@ -27,6 +31,7 @@ const SWITCH: AgentSwitchEvent = {
   seq: 1,
   message_id: null,
   message: null,
+  is_fresh_start: false,
 };
 const REQUEST: UserMessageEvent = {
   timestamp: "t1",
@@ -75,7 +80,7 @@ describe("the handoff node's words", () => {
   it("reads as done once the switch has landed, whatever the snapshot says", () => {
     const node: HandoffNode = { key: "u-req", request: REQUEST, events: [WRITE], switch: SWITCH, prompt: null };
     expect(handoffNodeText(node, chatWith(handoffStateFixture()))).toEqual({
-      title: "Handed off from Claude to Codex",
+      title: "Handed off from Claude Code to Codex",
       status: "done",
     });
   });
@@ -92,7 +97,7 @@ describe("the handoff node's words", () => {
     });
     expect(handoffNodeText(open, chatWith(null))).toEqual({ title: "Handoff called off", status: "cancelled" });
     expect(handoffNodeText(open, chatWith(rebindStateFixture()))).toEqual({
-      title: "Restarting Claude on Anthropic 2 (Claude Code)…",
+      title: "Restarting Claude Code on Anthropic 2 (Claude Code)…",
       status: "active",
     });
   });
@@ -139,7 +144,7 @@ describe("the handoff node", () => {
     const done: HandoffNode = { ...open, switch: SWITCH, prompt: PROMPT };
     m.render(ROOT(), renderHandoffNode(done, "agent-a", new Map(), { isLast: true, expansionKey: "k" }));
     expect(ROOT().querySelector('[data-handoff-status="done"]')).not.toBeNull();
-    expect(ROOT().textContent).toContain("Handed off from Claude to Codex");
+    expect(ROOT().textContent).toContain("Handed off from Claude Code to Codex");
     // Collapsed by default; the chevron opens the summary turn: the request chip and the write.
     expect(ROOT().querySelector(".pv-tl-expanded")).toBeNull();
     ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.click();

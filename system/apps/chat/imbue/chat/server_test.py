@@ -39,6 +39,7 @@ from imbue.chat.harnesses.codex.model import get_codex_model_options_path
 from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -854,6 +855,10 @@ def test_get_harnesses_includes_every_harness(client: FlaskClient) -> None:
     catalog = client.get("/api/harnesses").get_json()
     assert "claude" in catalog
     assert "codex" in catalog
+    # Each carries the name the page shows for it, the same one the account labels use.
+    assert {HarnessType(name): entry["label"] for name, entry in catalog.items()} == {
+        harness: HARNESS_LABEL[harness] for harness in HarnessType if harness.value in catalog
+    }
 
 
 def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:

@@ -275,7 +275,6 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
-    message_file: Path | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -336,12 +335,10 @@ def _build_chat_create_command(
         cmd.extend(["--label", label])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
-    # does (a CLI ``--message`` takes precedence over a template's). A handoff prompt is long
-    # enough to travel as a file.
+    # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
+    # to apply first withholds its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
-    if message_file is not None:
-        cmd.extend(["--message-file", str(message_file)])
     return cmd
 
 
@@ -1246,6 +1243,7 @@ class AgentManager:
                     ended_at=None if is_active else entry.ended_at,
                     opening_message_id=entry.opening_message_id,
                     opening_message=entry.opening_message,
+                    is_fresh_start=entry.is_fresh_start,
                 )
             )
         return segments
@@ -1359,6 +1357,21 @@ class AgentManager:
                 return False
             return bool(self._pending_permission_ids_by_agent.get(chat.active_agent_id))
 
+    def get_running_chat_agent_names(self) -> list[str]:
+        """Names of chat agents that currently have a running agent process.
+
+        Excludes workers (``agent_created=true``), the primary services agent
+        (``is_primary=true``), and dead/stopped agent processes.
+        """
+        with self._lock:
+            return [
+                agent.name
+                for agent in self._agents.values()
+                if agent.labels.get("agent_created") != "true"
+                and agent.labels.get("is_primary") != "true"
+                and not is_lifecycle_dead(agent.state)
+            ]
+
     # Chat-level: switches (moving a chat to another harness or account; ``chat_handoffs.py`` and
     # ``chat_rebinds.py`` run the steps).
 
@@ -1431,6 +1444,8 @@ class AgentManager:
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
+        # Resolved twice on purpose: the freshness read walks the retiring agent's transcript,
+        # which must not happen under the lock, so the chat is re-resolved for the write.
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         is_fresh_start = self._is_fresh_start(agent_state)
@@ -1672,8 +1687,11 @@ class AgentManager:
 
         A failed handoff reruns its successor's create on any signed-in account, the stored
         prompt resent verbatim; a failed rebind reruns its restart on an account of the same
-        harness and lane (its agent stays the chat's). Raises ``HandoffError`` when the chat is
-        not in the failed phase, the account is unknown, or it is not one a rebind can move to.
+        harness and lane (its agent stays the chat's). A handoff that failed after its successor
+        was already adopted has only its deliveries left, and reruns them on the account it
+        moved to. Raises ``HandoffError`` when the chat is not in the failed phase, the account
+        is unknown, it is not one a rebind can move to, or it names another account for a
+        handoff whose successor the chat already runs on.
         """
         # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
         self._require_switch_capabilities()
@@ -1701,6 +1719,17 @@ class AgentManager:
                 )
                 self._write_record_locked(record.with_converging(retried_rebind))
             else:
+                # Once the successor is on the record it IS the chat's agent, and only the
+                # deliveries are left: destroying it to create another under the same id would
+                # take the chat's agent away and leave the create step skipped (its guard reads
+                # the record's last entry), so the chat would list nothing at all. Such a retry
+                # can only finish where the conversation already is.
+                is_successor_adopted = record.agents[-1].agent_id == transition.next_agent_id
+                if is_successor_adopted and transition.target_account_id != target.account.id:
+                    raise HandoffError(
+                        f"Chat '{chat_id}' has already moved to its new agent; its switch can only be "
+                        "retried on the account it moved to"
+                    )
                 # A successor an earlier attempt created (a pick that failed leaves one running)
                 # is adopted by a retry on the same account, since the create step finds it
                 # under the pre-minted id; a retry on another account destroys it first and
@@ -1708,7 +1737,6 @@ class AgentManager:
                 # for, so a retry on another harness drops it.
                 if transition.target_account_id != target.account.id and transition.next_agent_id in self._agents:
                     discarded_successor_id = transition.next_agent_id
-                    del self._agents[transition.next_agent_id]
                 retried_handoff = transition.model_copy_update(
                     to_update(transition.field_ref().phase, HandoffPhase.SWITCHING),
                     to_update(transition.field_ref().error, None),
@@ -1737,8 +1765,11 @@ class AgentManager:
         successor once a retry moves the chat to another account, or a seeded chat's first agent
         whose create failed after mngr had provisioned it.
 
-        Logged rather than raised when mngr refuses: a handoff retry's create then meets the id
-        in use and runs the half-made path, which destroys and creates again.
+        Logged rather than raised when mngr refuses: the retry's create then meets the id in
+        use and runs the half-made path, which destroys and creates again. Forgotten either
+        way, and through ``remove_agent``, which also stops the trackers the successor was
+        given when it was noted -- and which the retry's create must not find still tracking
+        the id it is about to mint again.
         """
         try:
             self.destroy_agent_process(successor_id)
@@ -1746,6 +1777,7 @@ class AgentManager:
             _loguru_logger.warning(
                 "Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e
             )
+        self.remove_agent(successor_id)
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
         """Put a running agent on ``pick``: the model bar's own path, for an agent that was just created.
@@ -2086,21 +2118,6 @@ class AgentManager:
         """Push chat-level events (the switch chip) onto the chat's transcript stream."""
         if self._transcript_broadcaster is not None:
             self._transcript_broadcaster(str(chat_id), events)
-
-    def get_running_chat_agent_names(self) -> list[str]:
-        """Names of chat agents that currently have a running agent process.
-
-        Excludes workers (``agent_created=true``), the primary services agent
-        (``is_primary=true``), and dead/stopped agent processes.
-        """
-        with self._lock:
-            return [
-                agent.name
-                for agent in self._agents.values()
-                if agent.labels.get("agent_created") != "true"
-                and agent.labels.get("is_primary") != "true"
-                and not is_lifecycle_dead(agent.state)
-            ]
 
     # Chat-level: the verbs (destroy, stop, rename, create).
 
@@ -2806,7 +2823,7 @@ class AgentManager:
             role_templates,
             project_id,
             account_args,
-            initial_message="" if model_pick is not None else message,
+            initial_message="" if deferred_message else message,
             extra_labels=membership_labels,
         )
 
@@ -2896,11 +2913,14 @@ class AgentManager:
     ) -> None:
         """Run mngr create in the background and always settle the provisional chat.
 
-        This thread is started with ``is_checked=False``, so any exception that escaped here
-        would be silently swallowed -- and the chat's page would wait forever, because the
-        ``provisional_chat_completed`` broadcast never fired. The whole body runs inside a single
-        catch-all so that no matter what the subprocess, its callbacks, or the calls below
-        throw, the provisional chat ends up either an agent or failed with a reason.
+        This thread is started with ``is_checked=False``, so an exception that escaped here would
+        cost the chat's page its answer: it waits for the ``provisional_chat_completed`` broadcast.
+        The create itself runs inside a single catch-all so that no matter what the subprocess or
+        its callbacks throw, the provisional chat ends up either an agent or failed with a reason;
+        the broadcast that says so is made in a ``finally``, so the settling that follows a created
+        agent cannot cost the page its answer either. Once the agent exists the create HAS
+        succeeded, so a settling step that fails is not reported as a failed create -- it is logged,
+        with its traceback, by the thread that runs this.
 
         ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
         pick so the first turn runs on it, then the message the create was told to leave out.
@@ -2971,20 +2991,22 @@ class AgentManager:
         if half_made_agent_id is not None:
             self._discard_successor(chat_id, half_made_agent_id)
 
-        if success:
-            self._ensure_activity_tracking(agent_id)
-            self._ensure_model_tracking(agent_id)
-            self._broadcast_chats_updated()
-            self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
-        else:
-            # The provisional record changed phase with no agent-list broadcast to carry the
-            # change (a success nudges through the broadcast above).
-            self._nudger.nudge()
-            # The pages show what the record holds: the reason and the output behind it.
-            failed = self.get_provisional_chat(chat_id)
-            if failed is not None and failed.error is not None:
-                error = failed.error
-        self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+        try:
+            if success:
+                self._ensure_activity_tracking(agent_id)
+                self._ensure_model_tracking(agent_id)
+                self._broadcast_chats_updated()
+                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
+            else:
+                # The provisional record changed phase with no agent-list broadcast to carry the
+                # change (a success nudges through the broadcast above).
+                self._nudger.nudge()
+                # The pages show what the record holds: the reason and the output behind it.
+                failed = self.get_provisional_chat(chat_id)
+                if failed is not None and failed.error is not None:
+                    error = failed.error
+        finally:
+            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
     def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
         """Put a just-created chat on its pick and hand it the message its create left out.

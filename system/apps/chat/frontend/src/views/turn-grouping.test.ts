@@ -1486,6 +1486,7 @@ function agentSwitch(
   fromHarness = "claude",
   toHarness = "codex",
   message: [string, string] | null = null,
+  isFreshStart = false,
 ): AgentSwitchEvent {
   return {
     timestamp: ts,
@@ -1500,6 +1501,7 @@ function agentSwitch(
     seq: 1,
     message_id: message === null ? null : message[0],
     message: message === null ? null : message[1],
+    is_fresh_start: isFreshStart,
   };
 }
 
@@ -1538,6 +1540,24 @@ describe("agent switches", () => {
     // The new agent's section opens with nothing but its greeting as its reply.
     expect(sections[1].items).toEqual([]);
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t4"]);
+  });
+
+  it("shows no node for a fresh start, which had no handoff to show, and still closes the turn", () => {
+    const events: TranscriptEvent[] = [
+      assistantText("t2", "welcome from claude"),
+      agentSwitch("t3", "sw1", "claude", "pi", null, true),
+      userMsg("t4", "first message to pi"),
+      assistantText("t5", "hello from pi"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual([null, null, "u-t4"]);
+    // The retiring agent's turn reads as it would with no switch: the node is gone, and the greeting
+    // is its reply rather than an item above an empty line.
+    expect(sections[0].items).toEqual([]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["a-t5"]);
   });
 
   it("folds the summary request, the retiring agent's answer, and the switch into one node", () => {

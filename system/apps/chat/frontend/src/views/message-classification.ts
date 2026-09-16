@@ -98,6 +98,10 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
 /** True when the message produces NO row on the user rail -- either fully hidden
  *  (`/welcome`, an is_meta injection) or relocated into an assistant-side block
  *  (skill expansion). The rendering/rows layers use this to skip emitting a row. */
+export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
+  return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
+}
+
 /** The slash command the chat app sends a retiring agent for its handoff summary (the backend's
  *  ``HANDOFF_SUMMARY_COMMAND``); the transcript walk opens the handoff node on it. */
 const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
@@ -106,10 +110,6 @@ const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
 export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean {
   const content = event.content.trim();
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
-}
-
-export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
-  return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
 }
 
 // --- Permission REQUEST (a tool call) ---------------------------------------

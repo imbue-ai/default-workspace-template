@@ -126,6 +126,7 @@ describe("buildConversationRows", () => {
       seq: 1,
       message_id: null,
       message: null,
+      is_fresh_start: false,
     };
     const events: TranscriptEvent[] = [
       userMsg("t1", "hello"),
@@ -138,6 +139,14 @@ describe("buildConversationRows", () => {
 
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
     expect(rows[2].anchorEventId).toBe("sw1");
+
+    // A fresh start had no handoff to show: no row stands between the two agents' turns.
+    const fresh = buildConversationRows(
+      "agent-1",
+      [events[0], events[1], { ...agentSwitch, is_fresh_start: true }, events[3]],
+      true,
+    );
+    expect(fresh.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
   });
 });
 

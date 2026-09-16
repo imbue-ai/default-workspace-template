@@ -1200,6 +1200,47 @@ def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
 
 
+def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agent is up, so the create succeeded; a first message that could not be handed over is the
+    settling step's problem and must not cost the waiting page its answer."""
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        raise OSError("the pane went away")
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    q = broadcaster.register()
+
+    with pytest.raises(OSError):
+        agent_manager._run_creation(
+            ChatId("test-id"),
+            "test-id",
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {},
+            HarnessType.CLAUDE,
+            deferred_message="hello",
+        )
+
+    assert agent_manager.get_agent_by_id("test-id") is not None
+    messages = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        messages.append(json.loads(raw))
+    completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
+    assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
+
+
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
@@ -1495,7 +1536,13 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
 
 def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
     """A handoff's create adds the chat membership labels after the account args, which the vendored mngr has
-    to accept, and carries no message: the prompt follows through the send path once the model pick has landed."""
+    to accept.
+
+    That the successor's create carries no message -- the prompt follows through the send path once the
+    model pick has landed -- is checked where the create is actually built, against the fake mngr's own
+    argv log (``chat_handoffs_test.py``); asserting it here would only restate that this helper passes
+    no message.
+    """
     argv = _chat_create_argv(
         account_args=("--label", "account=acct-1"),
         extra_labels=("chat_id=agent-123", "chat_seq=2"),
@@ -1503,8 +1550,6 @@ def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
     assert_mngr_argv_valid(argv)
     labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
     assert labels[-3:] == ["account=acct-1", "chat_id=agent-123", "chat_seq=2"]
-    assert "--message" not in argv
-    assert "--message-file" not in argv
 
 
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
@@ -3685,6 +3730,7 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert phase is HandoffPhase.SUMMARIZING
         record = _wait_until_settled(store, ChatId(first))
         assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+        assert [entry.is_fresh_start for entry in record.agents] == [False, True]
         assert sent == []
         assert not (tmp_path / "chats" / first / "summaries").exists()
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
@@ -3702,6 +3748,8 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
     second create, and a retry on another account destroys the successor and creates afresh."""
     sent: list[tuple[str, str, str]] = []
     manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
     first = f"agent-{uuid4().hex}"
     seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
     chat_id = ChatId(first)
@@ -3744,6 +3792,74 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
         assert retried is not None and retried.handoff is not None and retried.handoff.model_pick == pick
+        # Discarding it forgot it the way a destroy does, trackers and resident transcript included,
+        # rather than only dropping it from the tracked list.
+        assert evicted == [successor]
+    finally:
+        manager.stop()
+
+
+def test_a_switch_that_failed_after_its_successor_was_adopted_retries_only_where_the_chat_moved(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A delivery refused past the adoption leaves the successor as the chat's own agent, with only the
+    deliveries left to do. A retry naming another account is refused: destroying that agent to create
+    another under the same id would take the chat's agent away and leave the create step skipped (its
+    guard reads the record's last entry), so the chat would list nothing at all."""
+    sent: list[tuple[str, str, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        # The prompt goes out after the successor is on the record; failing it is how a real
+        # refusal past the point of no return lands (a record write, ensure_watcher, a held send).
+        if message_id.startswith("handoff-prompt-"):
+            raise OSError("the successor's pane went away")
+        sent.append((agent_info.id, text, message_id))
+        write_summary_for_request(text)
+        return SendOutcome.OK
+
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+    )
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: _TranscriptWithUserTurn(["e-1", "e-2", "e-3"]),
+            drain_to_composer=lambda agent_info: "queued text",
+            deliver=deliver,
+        )
+    )
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    chat_id = ChatId(first)
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        def is_failed() -> bool:
+            record = store.read(chat_id)
+            return record is not None and record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        successor = record.handoff.next_agent_id
+        assert record.agents[-1].agent_id == successor
+
+        with pytest.raises(HandoffError):
+            manager.retry_handoff(chat_id, _openai_account())
+
+        # Refused before anything was written or destroyed: the chat still runs on its successor.
+        assert "destroy" not in argv_log.read_text()
+        refused = store.read(chat_id)
+        assert refused is not None and refused.handoff is not None
+        assert refused.handoff.phase is HandoffPhase.FAILED
+        assert refused.handoff.next_agent_id == successor
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.active_agent.agent_id == successor
     finally:
         manager.stop()
 

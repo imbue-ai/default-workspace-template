@@ -28,6 +28,7 @@ import {
   isSwitchTarget,
   pendingSwitchTarget,
   setPendingAccount,
+  switchKind,
 } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
@@ -441,11 +442,11 @@ export function ModelBar(): m.Component<{ chatId: string }> {
 
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Pressing any account but the chat's own opens the switch dialog for it (a rebind for one
-   * on the chat's own harness and lane, a handoff otherwise; the dialog says which, takes the
-   * model for a handoff, and offers a new chat instead), or switches a chat with no user turn
-   * yet at once (``beginSwitchTo``); pressing the armed account again, or the account the chat
-   * runs on, takes the choice back. Each row also carries the default toggle: the starred
+   * Pressing any account but the chat's own begins the switch to it (``beginSwitchTo``): the
+   * dialog for a handoff, which takes the model and offers a new chat instead; armed at once for
+   * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
+   * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
+   * choice back. Each row also carries the default toggle: the starred
    * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
    * shortcut, an agent's `layout.py open chat`).
    */
@@ -494,7 +495,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             openProviderChooser({
               onSignedIn: (accountId) => {
                 // Signed in from inside a chat: the new account is what the user switches this
-                // chat to next, so the switch dialog opens on it (and offers a new chat instead).
+                // chat to next, so the switch begins on it.
                 const account = accountForAgent(accountId);
                 if (account !== null) beginSwitchTo(chatId, account);
                 m.redraw();
@@ -709,7 +710,8 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       // While a switch is armed the card describes the target: the account the next send moves
-      // the chat to, and the model picked for it, which opens the dialog again to change.
+      // the chat to and, for a handoff, the model picked for it, which opens the dialog again to
+      // change. A rebind keeps the agent's model, so it has no row to offer.
       const armedRows: m.Children[] = [
         menuRow({
           label: "Provider",
@@ -719,18 +721,22 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           openable: true,
           tooltip: null,
         }),
-        m("div", { class: css.DIVIDER }),
-        menuRow({
-          label: "Model",
-          value: pendingPick?.label ?? "Default model",
-          which: "model",
-          openable: true,
-          tooltip: "Change the model this chat switches to",
-          onOpen: () => {
-            closeCard();
-            if (pending !== null) openSwitchDialog(chatId, pending);
-          },
-        }),
+        ...(pending !== null && switchKind(chat, pending) === "handoff"
+          ? [
+              m("div", { class: css.DIVIDER }),
+              menuRow({
+                label: "Model",
+                value: pendingPick?.label ?? "Default model",
+                which: "model",
+                openable: true,
+                tooltip: "Change the model this chat switches to",
+                onOpen: () => {
+                  closeCard();
+                  openSwitchDialog(chatId, pending);
+                },
+              }),
+            ]
+          : []),
       ];
 
       const card = m(

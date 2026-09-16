@@ -15,7 +15,7 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
+import { getPendingPick, pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
@@ -36,7 +36,7 @@ import {
   whenChatRegistered,
 } from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
-import { harnessLabel } from "./agent-switch-chip";
+import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
@@ -109,14 +109,64 @@ export function raiseFailureNotice(chatId: string, notice: PendingFailureNotice)
 // new chat" moves it to the new chat); the mounted composer clears its own text on its next pass.
 const pendingComposerClears = new Set<string>();
 
-/** Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
- *  switch dialog begins with. The persisted copy goes too, so a reload does not bring it back. */
-export function takeComposerDraft(chatId: string): string {
-  const draft = localStorage.getItem(messageTextKey(chatId)) ?? "";
+/** What a sibling view took out of ``chatId``'s composer to send somewhere else. */
+export interface TakenComposerDraft {
+  /** What the user typed, for putting back if it could not be sent. */
+  text: string;
+  /** What goes on the wire: the text with the attachment references appended. */
+  finalText: string;
+  attachments: readonly ComposerAttachment[];
+}
+
+/**
+ * Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
+ * switch dialog begins with. The attachments travel with the text, so a file dropped in this
+ * composer is not left behind by the move, and in-flight uploads are awaited first so a file
+ * dropped a moment ago still makes it. The persisted copy goes too, so a reload does not bring it
+ * back. Null when an upload failed: the file would leave the message silently and its chip would be
+ * cleared along with the rest, so this refuses and names it instead, as an ordinary send does.
+ */
+export async function takeComposerDraft(chatId: string): Promise<TakenComposerDraft | null> {
+  await waitForComposerUploads(chatId);
+  const failed = getComposerAttachments(chatId).filter((attachment) => attachment.status === "error");
+  if (failed.length > 0) {
+    const names = failed.map((attachment) => attachment.fileName).join(", ");
+    raiseFailureNotice(chatId, {
+      title: failed.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload",
+      detail: `${names} could not be uploaded, so the new chat was not started. Remove the attachment, or try again.`,
+    });
+    return null;
+  }
+  const text = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  const attachments = getComposerAttachments(chatId);
+  const finalText = buildMessageWithAttachments(text, getReadyAttachmentPaths(chatId));
   localStorage.removeItem(messageTextKey(chatId));
+  clearComposerAttachments(chatId);
   pendingComposerClears.add(chatId);
   m.redraw();
-  return draft;
+  return { text, finalText, attachments };
+}
+
+/** Hand a taken draft back to ``chatId``'s composer when what it was taken for did not happen. */
+export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft): void {
+  restoreToComposer(chatId, taken.text, taken.attachments);
+}
+
+/**
+ * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
+ *
+ * Prepending is what lets it run unconditionally: the returned message first and any draft typed
+ * since after it, and neither is lost. The attachments merge rather than overwrite, since anything
+ * attached in the meantime would otherwise go with them.
+ */
+function restoreToComposer(chatId: string, text: string, attachments: readonly ComposerAttachment[]): void {
+  prependToComposer(chatId, text);
+  const existingAttachments = getComposerAttachments(chatId);
+  const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
+  restoreComposerAttachments(chatId, [
+    ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
+    ...existingAttachments,
+  ]);
 }
 
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view. */
@@ -329,12 +379,14 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       const pendingPrepend = pendingComposerPrepends.get(chatId);
+      // The clear before the prepend: a take-then-hand-straight-back (a new chat the shell could
+      // not start) leaves both pending on the same pass, and the restored draft must win.
+      if (pendingComposerClears.delete(chatId)) {
+        messageText = "";
+      }
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
-      }
-      if (pendingComposerClears.delete(chatId)) {
-        messageText = "";
       }
 
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
@@ -711,21 +763,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         text: string,
         attachments: readonly ComposerAttachment[],
       ): void {
-        // Reuses the module-level prepend that Stop's drain and QueuedMessageView already hand
-        // blocks back through: it persists to localStorage (so the message survives a reload or
-        // an unmounted composer) and merges the same way, rather than this path inventing a
-        // second set of rules for the same job. Prepending is what lets it run unconditionally:
-        // put the failed message first and any draft typed during the send after it, and neither
-        // is lost.
-        prependToComposer(forChatId, text);
-        // Merge rather than replace: restoreComposerAttachments overwrites, and anything attached
-        // while the send was in flight would go with it.
-        const existingAttachments = getComposerAttachments(forChatId);
-        const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
-        restoreComposerAttachments(forChatId, [
-          ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
-          ...existingAttachments,
-        ]);
+        // Reuses the module-level hand-back that Stop's drain, QueuedMessageView and the switch
+        // dialog already go through, rather than inventing a second set of rules for the same job.
+        restoreToComposer(forChatId, text, attachments);
         if (currentChatId === forChatId) {
           messageText = localStorage.getItem(messageTextKey(forChatId)) ?? text;
         }
@@ -968,10 +1008,11 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
 
       /**
        * What the armed switch will do, above the composer (spec 5.1): the account the next message
-       * moves the chat to and the model picked for it, with a way back into the dialog and a way
-       * to call the choice off.
+       * moves the chat to and the model picked for it, with a way to call the choice off. A handoff
+       * also offers a way back into the dialog; a rebind was armed without one, and carries no pick
+       * to change.
        */
-      function renderSwitchStrip(target: ProviderAccount): m.Children {
+      function renderSwitchStrip(target: ProviderAccount, isHandoff: boolean): m.Children {
         const pick = chatId ? getPendingPick(chatId) : null;
         const destination = pick === null ? target.label : `${target.label}, ${pick.label}`;
         return m(
@@ -988,18 +1029,20 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               { class: "message-input-switch-strip-text" },
               `Your next message switches this chat to ${destination}`,
             ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                extra: "message-input-switch-change",
-                onclick: () => {
-                  if (chatId) openSwitchDialog(chatId, target);
-                },
-              },
-              "Change",
-            ),
+            isHandoff
+              ? m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    extra: "message-input-switch-change",
+                    onclick: () => {
+                      if (chatId) openSwitchDialog(chatId, target);
+                    },
+                  },
+                  "Change",
+                )
+              : null,
             m(
               Button,
               {
@@ -1078,7 +1121,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
+          switchTarget !== null
+            ? renderSwitchStrip(switchTarget, chat === undefined || switchKind(chat, switchTarget) === "handoff")
+            : null,
           m("input", {
             type: "file",
             multiple: true,

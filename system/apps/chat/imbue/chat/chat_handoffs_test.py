@@ -21,6 +21,7 @@ from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
+from imbue.chat.chat_handoffs import INLINE_SUMMARY_MAX_BYTES
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
@@ -490,12 +491,36 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert (switch["message_id"], switch["message"]) == ("m-trigger", "Now do it in Codex")
     adopted = workspace.record().agents[-1]
     assert (adopted.opening_message_id, adopted.opening_message) == ("m-trigger", "Now do it in Codex")
+    assert adopted.is_fresh_start is False and switch["is_fresh_start"] is False
     assert workspace.delivered[1:] == [
         (successor, prompt, prompt_message_id("h-1")),
         (successor, "and also this", "m-2"),
     ]
     # No pick was made, so the successor keeps its harness's default.
     assert workspace.applied == []
+
+
+def test_a_summary_over_the_inline_limit_is_pointed_at_rather_than_carried(tmp_path: Path) -> None:
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    summary = summary_path(tmp_path / "chats", workspace.chat_id, 1)
+    summary.parent.mkdir(parents=True)
+    body = "# long summary\n" + ("the user wants every detail kept\n" * 4000)
+    assert len(body.encode("utf-8")) > INLINE_SUMMARY_MAX_BYTES
+    summary.write_text(body)
+    stale = last_user_turn_epoch(workspace.events_by_agent[first])
+    assert stale is not None
+    os.utime(summary, (stale + 60.0, stale + 60.0))
+    runner = _runner(workspace)
+
+    runner.run(workspace.chat_id, "h-1")
+
+    prompt = workspace.delivered_prompt()
+    assert f"summary is on disk at {summary}" in prompt
+    assert "read that file in full before anything else" in prompt
+    assert "<predecessor-summary>" not in prompt
+    assert "the user wants every detail kept" not in prompt
+    assert "${" not in prompt
+    assert len(prompt.encode("utf-8")) < INLINE_SUMMARY_MAX_BYTES
 
 
 def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: Path) -> None:
@@ -912,9 +937,12 @@ def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_a
     assert workspace.delivered == [(successor, "Now do it in Codex", "m-trigger")]
     assert not (tmp_path / "chats" / workspace.chat_id / "summaries").exists()
     assert [event["type"] for _chat, events in workspace.broadcasts for event in events] == [AGENT_SWITCH_EVENT_TYPE]
-    # Delivered as a turn of its own, the message is not the chip's to show.
+    # Delivered as a turn of its own, the message is not the chip's to show; the chip says the switch
+    # was a fresh start, and the record keeps that for every later read.
     assert workspace.broadcasts[0][1][0]["message"] is None
+    assert workspace.broadcasts[0][1][0]["is_fresh_start"] is True
     assert finished.agents[-1].opening_message is None
+    assert finished.agents[-1].is_fresh_start is True
 
 
 def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_typed() -> None:

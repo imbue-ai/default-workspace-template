@@ -3,8 +3,9 @@
  * successor a handoff creates, or for a new chat, before either agent exists.
  *
  * Read from ``GET /api/accounts/:id/model-options``, the account-level twin of the per-chat
- * ``/model-options``: a static harness offers its catalog (narrowed to the ids the route names,
- * when it names any), a dynamic one (codex) the options the account's last agent was offered.
+ * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the options the
+ * account's last agent was offered (empty when it has run none). Unlike the per-chat twin, this
+ * route names no model ids of its own -- there is no agent yet whose set could narrow the catalog.
  */
 
 import m from "mithril";
@@ -14,7 +15,6 @@ import { ensureHarnessCatalogs, getHarnessCatalog } from "./HarnessCatalog";
 import { accountForAgent } from "./Providers";
 
 interface AccountModelOptionsResponse {
-  models: string[] | null;
   options?: CatalogModelOption[] | null;
 }
 
@@ -29,6 +29,5 @@ export async function fetchAccountModelOptions(accountId: string): Promise<Catal
   const options = response.options ?? null;
   if (options !== null) return options.filter((option) => option.in_picker);
   const catalog = getHarnessCatalog(accountForAgent(accountId)?.harness);
-  const offered = response.models === null ? null : new Set(response.models);
-  return (catalog?.options ?? []).filter((option) => option.in_picker && (offered === null || offered.has(option.id)));
+  return (catalog?.options ?? []).filter((option) => option.in_picker);
 }
