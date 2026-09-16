@@ -2,7 +2,8 @@
 
 A per-workspace fleet of live Chromium browsers with a single atomic ownership
 model: each browser is controlled by exactly one party at a time (a specific
-agent, identified by its `MNGR_AGENT_ID`, or the human).
+chat, identified by its chat id -- `MINDS_CHAT_ID`, or `MNGR_AGENT_ID` for a
+background agent, which is its own chat -- or the human).
 
 - **Daemon** (`browser-service`): a Flask + flask-sock service (synchronous,
   thread-per-connection) that owns every browser. browser_use, Playwright (async),

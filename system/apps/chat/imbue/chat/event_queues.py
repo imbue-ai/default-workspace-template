@@ -15,7 +15,11 @@ _MAX_QUEUED_EVENTS: Final[int] = 1000
 
 
 class AgentEventQueues:
-    """Thread-safe registry of per-agent SSE delivery queues.
+    """Thread-safe registry of per-chat SSE delivery queues.
+
+    Keyed by chat id rather than agent id, so a page's stream follows its chat through a
+    handoff: the successor's events and the switch chip arrive on the connection the
+    retiring agent's events did.
 
     Delivery is live-only: nothing is buffered for replay, because every event is
     recoverable over the REST ``/events`` endpoint -- the stream is a low-latency hint and
@@ -46,62 +50,62 @@ class AgentEventQueues:
     def is_shutdown(self) -> bool:
         return self._shutdown
 
-    def register(self, agent_id: str) -> queue.Queue[dict[str, Any] | None]:
+    def register(self, chat_id: str) -> queue.Queue[dict[str, Any] | None]:
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=_MAX_QUEUED_EVENTS)
         with self._lock:
             if self._shutdown:
                 event_queue.put_nowait(None)
                 return event_queue
-            self._queues[agent_id].append(event_queue)
+            self._queues[chat_id].append(event_queue)
         return event_queue
 
-    def unregister(self, agent_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+    def unregister(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
         with self._lock:
-            queues = self._queues.get(agent_id)
+            queues = self._queues.get(chat_id)
             if queues is not None:
                 try:
                     queues.remove(event_queue)
                 except ValueError:
                     pass
                 if not queues:
-                    del self._queues[agent_id]
+                    del self._queues[chat_id]
 
-    def broadcast(self, agent_id: str, event: dict[str, Any]) -> None:
-        """Deliver one event to every live consumer for ``agent_id`` (the plugin-hook shape)."""
-        self.broadcast_batch(agent_id, [event])
+    def broadcast(self, chat_id: str, event: dict[str, Any]) -> None:
+        """Deliver one event to every live consumer for ``chat_id`` (the plugin-hook shape)."""
+        self.broadcast_batch(chat_id, [event])
 
-    def broadcast_batch(self, agent_id: str, events: list[dict[str, Any]]) -> None:
-        """Deliver a batch of events, evicting any consumer whose queue overflows."""
+    def broadcast_batch(self, chat_id: str, events: list[dict[str, Any]]) -> None:
+        """Deliver a batch of events to the chat's consumers, evicting any whose queue overflows."""
         with self._lock:
-            queues = list(self._queues.get(agent_id, []))
+            queues = list(self._queues.get(chat_id, []))
             for event_queue in queues:
                 for event in events:
                     try:
                         event_queue.put_nowait(event)
                     except queue.Full:
-                        self._evict_locked(agent_id, event_queue)
+                        self._evict_locked(chat_id, event_queue)
                         break
 
-    def _evict_locked(self, agent_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+    def _evict_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
         """Disconnect one overflowing consumer. Caller must hold ``self._lock``.
 
         Drains the queue and pushes the shutdown sentinel so the handler thread, blocked on
         ``get``, wakes, sees ``None``, and closes its stream -- which triggers the client's
         reconnect-with-snapshot resync.
         """
-        self.unregister(agent_id, event_queue)
+        self.unregister(chat_id, event_queue)
         _drain_queue(event_queue)
         try:
             event_queue.put_nowait(None)
         except queue.Full:
             pass
-        logger.warning("Disconnected an SSE consumer for agent {}: its event queue overflowed", agent_id)
+        logger.warning("Disconnected an SSE consumer for chat {}: its event queue overflowed", chat_id)
 
     def shutdown(self) -> None:
         with self._lock:
             self._shutdown = True
-            for agent_queues in self._queues.values():
-                for event_queue in agent_queues:
+            for chat_queues in self._queues.values():
+                for event_queue in chat_queues:
                     _drain_queue(event_queue)
                     try:
                         event_queue.put_nowait(None)
