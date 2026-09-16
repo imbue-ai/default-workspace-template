@@ -146,6 +146,27 @@ describe("hoverTooltipAttrs", () => {
     expect(hoverTooltipText(button.querySelector("span")!)).toBe("Start");
   });
 
+  it("stays down after a click until the pointer leaves the trigger", () => {
+    vi.useFakeTimers();
+    const button = renderButton("Start");
+    const label = button.querySelector("span")!;
+    hoverTooltip(button);
+    expect(shownTooltipText()).toBe("Start");
+
+    // A click dismisses the bubble, and the pointer is still on the button.
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(shownTooltipText()).toBeNull();
+
+    // Crossing between the button and its own label is movement within the trigger,
+    // not an entry into it -- the bubble must not come back without the pointer leaving.
+    label.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: button }));
+    vi.runAllTimers();
+    expect(shownTooltipText()).toBeNull();
+
+    // Leaving and coming back does bring it back.
+    expect(hoverTooltipText(button)).toBe("Start");
+  });
+
   it("takes the bubble down with an element that leaves the document while it is up", async () => {
     vi.useFakeTimers();
     // Hand-built DOM, as the lightbox and the dock's tab strip build it.

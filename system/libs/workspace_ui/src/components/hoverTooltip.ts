@@ -277,6 +277,14 @@ function onPointerOver(event: Event): void {
     dropTooltip();
     return;
   }
+  // Only an entry into the trigger counts. ``mouseover`` also fires for boundaries
+  // WITHIN one trigger (its icon and its own padding are two elements), and a
+  // dismissal -- a click above all -- clears ``shownFor`` and ``pendingFor``, so
+  // without this a dismissed bubble comes back on a twitch that never left.
+  const from = event instanceof MouseEvent ? event.relatedTarget : null;
+  if (from instanceof Node && target.contains(from)) {
+    return;
+  }
   if (target === shownFor || target === pendingFor) {
     return;
   }
