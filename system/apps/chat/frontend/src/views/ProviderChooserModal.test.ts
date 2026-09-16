@@ -95,12 +95,45 @@ const PI_KEY_LANE = lane({
       signup_url: "",
       shape: "paste",
       is_primary: true,
+      is_reauth_new_chats_only: false,
     },
   ],
   key_providers: [
     { provider_id: "groq", display: "Groq", env_var: "GROQ_API_KEY", hint: "gsk-..." },
     { provider_id: "openrouter", display: "OpenRouter", env_var: "OPENROUTER_API_KEY", hint: "sk-or-..." },
   ],
+});
+
+// The google lane's shape: two browser methods plus a paste, and one key provider. Both halves
+// are generic -- a mixed lane files its non-primary methods under "other ways to sign in", and a
+// single provider makes the key form one field rather than a picker -- so this is here to keep
+// them that way.
+const GOOGLE_LANE = lane({
+  id: "google",
+  provider_name: "Google",
+  harness: "antigravity",
+  methods: [
+    {
+      id: "oauth",
+      label: "Continue with Google",
+      description: "Sign in with your Google account.",
+      signup_url: "",
+      shape: "url_then_code",
+      is_primary: true,
+      is_reauth_new_chats_only: false,
+    },
+    {
+      id: "api_key",
+      label: "Use a Gemini API key",
+      description: "Paste an AI Studio key.",
+      signup_url: "https://aistudio.google.com/apikey",
+      shape: "paste",
+      is_primary: false,
+      // The key is copied into each chat at create, so a re-key reaches new chats only.
+      is_reauth_new_chats_only: true,
+    },
+  ],
+  key_providers: [{ provider_id: "google", display: "Google Gemini", env_var: "GEMINI_API_KEY", hint: "AIza..." }],
 });
 
 beforeEach(() => {
@@ -202,6 +235,74 @@ describe("the provider chooser", () => {
     expect(text).toContain("Anthropic");
     expect(text).toContain("Google");
     expect(text).toContain("API key");
+  });
+
+  it("offers a lane's paste method beside its browser ones", async () => {
+    state.lanes = [GOOGLE_LANE];
+    const root = document.createElement("div");
+    const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    draw();
+
+    (root.querySelector('[data-e2e="lane-google"]') as HTMLElement).click();
+    // The lane spawns a CLI, so it renders a spinner until `startFlow` settles.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // The primary renders inline; the alternates, the paste among them, get their own rows.
+    expect(root.textContent).toContain("Other ways to sign in");
+    expect(root.querySelector('[data-e2e="method-api_key"]')).not.toBeNull();
+
+    (root.querySelector('[data-e2e="method-api_key"]') as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // One provider, so the form is a single field carrying that provider's hint -- no picker.
+    const field = root.querySelector('[data-e2e="api-key-input"]') as HTMLInputElement;
+    expect(field.placeholder).toBe("AIza...");
+    expect(root.textContent).toContain("Saved as GEMINI_API_KEY for this mind.");
+  });
+
+  it("promises a re-key only what a copied credential can deliver", async () => {
+    // agy's key rides each chat's own environment, so a re-key reaches chats started
+    // afterwards and leaves the running ones alone -- which the method says on the screen
+    // before this one. The blanket sentence here contradicted it, to the one person most
+    // likely to read it: whoever's key just stopped working.
+    state.lanes = [GOOGLE_LANE];
+    state.accounts = [
+      {
+        id: "g1",
+        lane: "google",
+        harness: "antigravity",
+        provider: "Google Gemini",
+        harness_label: "Antigravity CLI",
+        seq: 1,
+        name: "",
+        label: "Google Gemini (Antigravity CLI)",
+      },
+    ];
+    const root = document.createElement("div");
+    const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    draw();
+
+    const again = [...root.querySelectorAll("button")].find((button) => button.textContent === "Sign in again");
+    (again as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // A re-auth lands on the lane's primary method, so the paste is one more click in.
+    (root.querySelector('[data-e2e="method-api_key"]') as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    state.flow = {
+      flow_id: "f1",
+      shape: "paste",
+      status: { state: "ok", detail: null, account_id: "g1" },
+    };
+    draw();
+
+    expect(root.textContent).toContain("keep the key they started with");
+    expect(root.textContent).not.toContain("Every chat on this provider can take a turn once more");
   });
 
   it("renders a live flow's spinner", () => {

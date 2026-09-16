@@ -9,6 +9,7 @@ import re
 
 import pytest
 
+from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
@@ -102,7 +103,8 @@ def test_agy_methods_assert_the_menu_before_typing() -> None:
     """agy's keystrokes are a blind script: without a screen assertion, a reordered menu
     silently selects a different login method and nothing fails."""
     for method in LANE_GOOGLE.methods:
-        assert isinstance(method, PtyMethod)
+        if not isinstance(method, PtyMethod):
+            continue
         assert method.expect_before_keys, method.id
         assert method.keys
 
@@ -111,8 +113,29 @@ def test_agy_declares_no_frame_marker() -> None:
     """It renders without Ink's synchronized updates, so the replay sees only the final
     screen. Recorded here so a future frame-marker default cannot silently apply to it."""
     for method in LANE_GOOGLE.methods:
-        assert isinstance(method, PtyMethod)
+        if not isinstance(method, PtyMethod):
+            continue
         assert method.frame_marker is None
+
+
+def test_the_google_lane_can_also_be_signed_in_by_pasting_a_gemini_key() -> None:
+    """Both browser methods need a person at one, so the paste is the only way to sign a
+    workspace in on agy unattended."""
+    method = get_method("google", "api_key")
+    assert isinstance(method, PasteMethod)
+    assert method.sink is PasteSink.ANTIGRAVITY_GEMINI_ENV
+    # The subscription stays primary: someone in the chooser is at a UI already.
+    assert LANE_GOOGLE.methods[0].id == "oauth"
+    # mngr copies this key into each chat's own environment at create, unlike every other
+    # credential, which its harness reads from the account folder at every turn.
+    assert method.is_reauth_new_chats_only
+
+
+def test_the_google_key_provider_names_the_variable_agy_reads() -> None:
+    """The modal shows this name back to the user ("Saved as ... for this mind"), so a
+    mismatch with the variable the sink actually writes is a lie on screen."""
+    (provider,) = LANE_GOOGLE.key_providers
+    assert provider.env_var == GEMINI_API_KEY_ENV_VAR
 
 
 def test_setup_token_is_the_one_method_whose_output_is_the_credential() -> None:

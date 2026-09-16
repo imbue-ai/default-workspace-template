@@ -14,13 +14,20 @@ import pytest
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
+from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.harnesses import auth_flows
 from imbue.chat.harnesses.account_scope import account_credential_path
+from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import read_gemini_api_key
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import PasteSink
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
@@ -606,3 +613,183 @@ def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> No
     service.abort(again.flow_id)
 
     assert token.read_text() == "live-token"
+
+
+# ----- agy's key mode: two files, and neither is any use without the other -------------------
+
+
+def _gemini_settings(account_path: Path) -> dict[str, object]:
+    return json.loads((account_path / ".gemini" / "antigravity-cli" / "settings.json").read_text())
+
+
+def test_a_gemini_key_lands_in_an_env_file_and_turns_on_agys_key_mode(
+    service: AuthFlowService, tmp_path: Path
+) -> None:
+    """agy reads no credential file in this mode: the key is an environment variable, and its
+    own settings say whether to use one. Written apart, either half alone leaves agy unable to
+    run -- the key ignored, or agy exiting before its first turn."""
+    started = service.start("google", "api_key")
+    assert started.shape is FlowShape.PASTE
+
+    status = service.submit_key(started.flow_id, "AIzaSyValid", "google")
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    assert harness_for(account) is HarnessType.ANTIGRAVITY
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+    assert gemini_env_path(account_path).read_text() == f"{GEMINI_API_KEY_ENV_VAR}=AIzaSyValid\n"
+    assert _gemini_settings(account_path)["modelProvider"] == "gemini"
+
+
+def test_the_gemini_key_file_is_not_world_readable(service: AuthFlowService, tmp_path: Path) -> None:
+    """Every agent bound to the account is handed this file's contents, and it holds a raw key."""
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyValid", "google")
+    (account,) = read_index(tmp_path).accounts
+    assert gemini_env_path(tmp_path / ".minds" / "accounts" / account.id).stat().st_mode & 0o077 == 0
+
+
+def test_a_key_account_is_named_apart_from_the_browser_ones(service: AuthFlowService, tmp_path: Path) -> None:
+    """Both sign-ins mint accounts on the same lane, and they run on different models and a
+    different bill, so two rows reading "Google" would be the wrong two rows."""
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyValid", "google")
+    (account,) = read_index(tmp_path).accounts
+    assert account.display == "Google Gemini"
+
+
+def test_a_rejected_gemini_key_rolls_back_both_files(tmp_path: Path) -> None:
+    """The probe needs the files in place to answer, and a live account left in key mode with a
+    key Google refuses is worse than one that was never re-keyed: agy would take the browser
+    fallback at its next turn, which nobody is there to complete."""
+    verdicts = [SignedIn.YES, SignedIn.NO]
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyGood", "google")
+    (account,) = read_index(tmp_path).accounts
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+    accepted_settings = _gemini_settings(account_path)
+
+    again = service.start("google", "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "AIzaSyBad", "google")
+
+    assert status.state is FlowState.FAILED
+    assert read_gemini_api_key(account_path) == "AIzaSyGood"
+    assert _gemini_settings(account_path) == accepted_settings
+
+
+def test_a_re_auth_takes_the_old_key_away_so_the_new_one_is_what_is_judged(tmp_path: Path) -> None:
+    """The key file is the only thing that says this account is on a key rather than on a
+    browser login, so leaving it in place would have the probe answer for the old key -- and
+    would leave agy in key mode with no key if the re-auth went to OAuth instead."""
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyGood", "google")
+    (account,) = read_index(tmp_path).accounts
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+
+    service.start("google", "api_key", account_id=account.id)
+
+    assert not gemini_env_path(account_path).exists()
+    assert not (account_path / ".gemini" / "antigravity-cli" / "settings.json").exists()
+
+
+def test_an_abandoned_key_re_auth_puts_both_files_back(tmp_path: Path) -> None:
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyGood", "google")
+    (account,) = read_index(tmp_path).accounts
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+
+    again = service.start("google", "api_key", account_id=account.id)
+    service.abort(again.flow_id)
+
+    assert read_gemini_api_key(account_path) == "AIzaSyGood"
+    assert _gemini_settings(account_path)["modelProvider"] == "gemini"
+
+
+def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_request(tmp_path: Path) -> None:
+    """A credential the sink refuses to write is a flow failure, which the endpoint answers with
+    the message naming the file. A bare RuntimeError out of the writer is a 500 with nothing in
+    it, which is the one thing that tells the user which file to go and look at."""
+    account_path = tmp_path / "account"
+    settings = account_path / ".gemini" / "antigravity-cli" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"enableTips": tru')
+
+    with pytest.raises(FlowError, match="malformed JSON"):
+        auth_flows._write_paste(
+            PasteSink.ANTIGRAVITY_GEMINI_ENV, account_path, "AIzaSyValid", None, get_lane("google")
+        )
+
+
+@pytest.mark.parametrize(
+    "pasted,message",
+    (
+        ("AIzaSyValid\nGEMINI_PROJECT=someone-elses", "single ASCII token"),
+        ("AIza Sy Valid", "single ASCII token"),
+        ("AIzaSyValid\n", "single ASCII token"),
+        # Copied out of a document rather than from AI Studio. Both would reach the promote
+        # probe's HTTP header, which cannot carry them, and the zero-width space is not
+        # whitespace as far as `str.isspace` is concerned.
+        ("AIzaSy—Valid", "single ASCII token"),
+        ("AIzaSy​Valid", "single ASCII token"),
+        # python-dotenv interpolates an unquoted value, so this key would be read back as
+        # something else -- and as something else again in the agent, whose environment is not
+        # the one it was checked against.
+        ("AIzaSy${HOME}Valid", "single ASCII token"),
+        # mngr quotes an env-file value only when it holds whitespace or quotes, and the agent
+        # launcher sources that file, so these run on every agent start.
+        ("AIzaSy`id`Valid", "single ASCII token"),
+        ("AIzaSy$(id)Valid", "single ASCII token"),
+        ("", "Paste a Gemini API key"),
+    ),
+    ids=(
+        "a second variable",
+        "a space",
+        "a trailing newline",
+        "an em-dash",
+        "a zero-width space",
+        "an interpolation",
+        "a backquoted command",
+        "a substituted command",
+        "nothing",
+    ),
+)
+def test_a_gemini_key_that_would_not_survive_what_carries_it_is_refused(
+    service: AuthFlowService, tmp_path: Path, pasted: str, message: str
+) -> None:
+    """The key is a dotenv value mngr interpolates and folds into an env file the agent launcher
+    sources, and the promote probe sends it as an HTTP header -- so a character any of those three
+    acts on rather than carries is refused at the field. An empty paste gets its own message, or
+    it is answered with one about characters it does not have."""
+    started = service.start("google", "api_key")
+
+    with pytest.raises(FlowError, match=message):
+        service.submit_key(started.flow_id, pasted, "google")
+
+    assert not list((tmp_path / ".minds" / "accounts").glob("*/gemini.env"))
+
+
+def _create_defaults_text() -> str:
+    path = create_defaults_path()
+    return path.read_text() if path.is_file() else ""
+
+
+def test_an_open_key_re_auth_leaves_no_create_default_naming_a_file_that_is_gone(tmp_path: Path) -> None:
+    """A create that names no account reads the workspace's defaults, and `--env-file` on a
+    missing path fails the create outright -- where the credential symlink the other harnesses
+    bind by just dangles. The window lasts as long as the flow."""
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyGood", "google")
+    (account,) = read_index(tmp_path).accounts
+    assert "gemini.env" in _create_defaults_text()
+
+    again = service.start("google", "api_key", account_id=account.id)
+
+    assert "gemini.env" not in _create_defaults_text()
+
+    service.abort(again.flow_id)
+
+    assert "gemini.env" in _create_defaults_text()

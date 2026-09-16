@@ -74,6 +74,8 @@ def list_lanes() -> Response:
                     "signup_url": method.signup_url if isinstance(method, PasteMethod) else "",
                     "shape": flow_shape(method).value,
                     "is_primary": index == 0,
+                    # False on every PTY method: what they write, the harness reads afresh.
+                    "is_reauth_new_chats_only": isinstance(method, PasteMethod) and method.is_reauth_new_chats_only,
                 }
                 for index, method in enumerate(lane.methods)
             ],

@@ -771,7 +771,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           "All set",
           reauthAccountId === null
             ? `Signed in. ${current.provider_name} is ready to use.`
-            : "Signed in again. Every chat on this provider can take a turn once more.",
+            : method?.is_reauth_new_chats_only
+              ? "Signed in again. Chats started from here on use the new key; the ones already running keep the key they started with."
+              : "Signed in again. Every chat on this provider can take a turn once more.",
           m("div", { class: css.STATUS_MARK }, [m.trust(providerMark(current.id, 18)), current.provider_name]),
         );
       } else if (isFailed || error !== null) {

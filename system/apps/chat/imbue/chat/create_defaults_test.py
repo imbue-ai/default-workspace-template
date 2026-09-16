@@ -11,14 +11,19 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.create_defaults import CreateDefaults
+from imbue.chat.create_defaults import ENV_FILE_KEY
 from imbue.chat.create_defaults import ENV_KEY
 from imbue.chat.create_defaults import LABEL_KEY
 from imbue.chat.create_defaults import MANAGED_KEYS
 from imbue.chat.create_defaults import PROVISION_COMMAND_KEY
+from imbue.chat.create_defaults import SETTING_KEY
 from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.create_defaults import managed_create_settings
 from imbue.chat.create_defaults import write_create_defaults
+from imbue.chat.harnesses.antigravity.auth import GEMINI_MODE_SETTING
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.testing import read_create_defaults_type
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -73,6 +78,41 @@ def test_a_linked_harness_binds_by_a_credential_link_over_the_agents_state_dir(
     assert command == (
         f'mkdir -p "$MNGR_AGENT_STATE_DIR"/{parent} && ln -sfn {account / source} "$MNGR_AGENT_STATE_DIR"/{agent_side}'
     )
+
+
+def _agy_key_defaults(tmp_path: Path) -> CreateDefaults:
+    defaults = _defaults(HarnessType.ANTIGRAVITY, tmp_path)
+    write_gemini_api_key(defaults.account_dir, "AIzaSyValid")
+    return defaults
+
+
+def test_an_agy_account_on_a_pasted_key_binds_by_the_env_file_and_the_mode(tmp_path: Path) -> None:
+    """agy in key mode reads no credential file, so a link binds nothing: the key comes in as an
+    env file mngr merges into the agent's own, and the mode as the config override that reaches
+    the per-agent settings.json."""
+    defaults = _agy_key_defaults(tmp_path)
+
+    settings = managed_create_settings(defaults)
+
+    assert settings[TYPE_KEY] == "antigravity"
+    assert settings[ENV_FILE_KEY] == [str(gemini_env_path(defaults.account_dir))]
+    assert settings[SETTING_KEY] == [GEMINI_MODE_SETTING]
+    assert PROVISION_COMMAND_KEY not in settings
+    assert ENV_KEY not in settings
+
+
+def test_switching_away_from_a_key_account_drops_its_keys(tmp_path: Path) -> None:
+    """Every binding key is managed, or one left behind by a previous account binds the new one
+    to a credential it has nothing to do with."""
+    path = tmp_path / "settings.local.toml"
+    write_create_defaults(path, _agy_key_defaults(tmp_path))
+    assert ENV_FILE_KEY in _create_section(path)
+
+    write_create_defaults(path, _defaults(HarnessType.CLAUDE, tmp_path))
+
+    create = _create_section(path)
+    assert ENV_FILE_KEY not in create
+    assert SETTING_KEY not in create
 
 
 def test_the_written_file_round_trips_and_names_its_type(tmp_path: Path) -> None:
@@ -151,7 +191,7 @@ def test_the_path_follows_mngrs_project_config_override(tmp_path: Path, monkeypa
     assert create_defaults_path() == Path(".mngr") / "settings.local.toml"
 
 
-@pytest.mark.parametrize("harness", (HarnessType.CLAUDE, HarnessType.CODEX))
+@pytest.mark.parametrize("harness", (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.ANTIGRAVITY))
 def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: HarnessType
 ) -> None:
@@ -167,7 +207,9 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
     (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + _COMMITTED_SETTINGS.read_text())
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-    defaults = _defaults(harness, tmp_path)
+    # The agy case is the key one: it is the only harness whose keys are `env_file` and
+    # `setting`, and mngr rejects a config key its command does not have.
+    defaults = _agy_key_defaults(tmp_path) if harness is HarnessType.ANTIGRAVITY else _defaults(harness, tmp_path)
     # The local layer is a config file too, so it opts in the same way; the writer keeps the key.
     create_defaults_path().write_text("is_allowed_in_pytest = true\n")
     write_create_defaults(create_defaults_path(), defaults)
@@ -181,6 +223,9 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
     assert list(create["label"]) == expected[LABEL_KEY]
     if harness is HarnessType.CLAUDE:
         assert list(create["env"]) == expected[ENV_KEY]
+    elif harness is HarnessType.ANTIGRAVITY:
+        assert list(create["env_file"]) == expected[ENV_FILE_KEY]
+        assert list(create["setting"]) == expected[SETTING_KEY]
     else:
         assert list(create["extra_provision_command"]) == expected[PROVISION_COMMAND_KEY]
     # The committed file's own create defaults are still there: the local layer only added to them.
