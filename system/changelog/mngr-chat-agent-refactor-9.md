@@ -1,0 +1,1 @@
+Phase 9 of the chat-agent split: the plan (`docs/system/blueprint/chat-agent-split/plan-chat-agent-split.md`) says in sections 4.2 and 6 that account binding is one class per harness registered on `HarnessSpec`, and that the rebind record's sessions field is the harness-neutral `sessions_dir`.
