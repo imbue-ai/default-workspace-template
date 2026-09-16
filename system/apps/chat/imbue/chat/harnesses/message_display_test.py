@@ -10,6 +10,7 @@ from pathlib import Path
 
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 
@@ -57,6 +58,25 @@ def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:
     assert decision is not None
     assert decision.display is DisplayKind.SKILL_EXPANSION
     assert decision.display_label == "deep-research"
+
+
+def test_the_handoff_prompt_is_a_chip_since_the_user_did_not_type_it() -> None:
+    """The successor's first message goes through the send path and lands in its transcript as a user message;
+    the page shows it collapsed rather than as the user's own words."""
+    prompt = 'You are continuing the chat "Chat 1" (chat id agent-abc). It ran on Claude Code until now.\n\nRead it.'
+    decision = classify_user_message(prompt)
+    assert decision is not None
+    assert (decision.display, decision.display_label) == (DisplayKind.CHIP, "Handoff prompt")
+    assert classify_user_message("You are continuing to be helpful, thanks") is None
+
+
+def test_the_handoff_summary_request_is_a_chip_that_names_itself() -> None:
+    decision = classify_user_message(f"{HANDOFF_SUMMARY_COMMAND} data/.apps/chat/chats/agent-abc/summaries/1.md")
+    assert decision is not None
+    assert (decision.display, decision.display_label) == (DisplayKind.CHIP, "Asked for a handoff summary")
+    # Only the command itself: a message that merely mentions it is a human turn.
+    assert classify_user_message(f"what does {HANDOFF_SUMMARY_COMMAND} do?") is None
+    assert classify_user_message(f"{HANDOFF_SUMMARY_COMMAND}-ish") is None
 
 
 def test_seeded_welcome_is_hidden() -> None:

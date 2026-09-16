@@ -12,6 +12,7 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import { isAgentProcessDead } from "./agentLiveness";
+import { handoffPhaseText } from "./handoff-phase";
 import { TerminalFrame } from "./TerminalFrame";
 
 interface AgentTerminalPanelAttrs {
@@ -70,13 +71,36 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       // pattern as the shell's stopped-app placeholder: unmount the iframe while
       // the agent is positively dead; the chats push after a start swaps it back in.
       // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
-      const agent = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId)?.active_agent;
-      if (agent !== undefined && isAgentProcessDead(agent.state)) {
+      const chat = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId);
+      const agent = chat?.active_agent;
+      if (chat !== undefined && agent !== undefined && isAgentProcessDead(agent.state)) {
+        // A switch stops the process on purpose, and the successor (a handoff) or the restarted
+        // agent (a rebind) takes the chat's name: the face reports the phase under that name and
+        // offers no Start, which the backend would refuse while the chat converges. The agent's
+        // own name is the archival one by then.
+        if (chat.handoff !== null) {
+          return m(
+            "div",
+            {
+              class:
+                "agent-terminal-stopped agent-terminal-switching flex h-full w-full flex-col items-center " +
+                "justify-center gap-3 bg-surface",
+            },
+            [
+              m("div", { class: "text-[15px] font-medium text-primary" }, chat.name),
+              m(
+                "div",
+                { class: "text-(length:--font-size-row) text-faint" },
+                handoffPhaseText(chat.handoff, agent.harness),
+              ),
+            ],
+          );
+        }
         return m(
           "div",
           { class: "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
           [
-            m("div", { class: "text-[15px] font-medium text-primary" }, agent.name),
+            m("div", { class: "text-[15px] font-medium text-primary" }, chat.name),
             m(
               "div",
               { class: "text-(length:--font-size-row) text-faint" },

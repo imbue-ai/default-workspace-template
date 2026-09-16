@@ -49,7 +49,7 @@ export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-primary";
 
 export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-secondary`;
 
-const MODAL_ACTIONS_CLASS = "modal-actions flex justify-end gap-2";
+const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
 
 export interface ModalAttrs {
   // Called when the backdrop is dismissed (a primary mousedown on the overlay).

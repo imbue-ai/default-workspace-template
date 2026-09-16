@@ -26,10 +26,21 @@ def test_daemon_url_falls_back_to_localhost(monkeypatch: pytest.MonkeyPatch, tmp
 
 
 def test_agent_headers_requires_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     with pytest.raises(SystemExit) as exc:
         fleet._agent_headers()
     assert exc.value.code == fleet._EXIT_USAGE
+
+
+def test_agent_headers_send_the_chat_id_and_fall_back_to_the_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser is owned by the chat: an agent the chat app created names its chat, and a
+    background agent, which has no chat id, names itself."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-successor")
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-first")
+    assert fleet._agent_headers()["X-Mngr-Agent-Id"] == "agent-first"
+    monkeypatch.delenv("MINDS_CHAT_ID")
+    assert fleet._agent_headers()["X-Mngr-Agent-Id"] == "agent-successor"
 
 
 def test_owner_label_distinguishes_self_other_free_and_pinned() -> None:
@@ -163,7 +174,7 @@ def test_pull_in_pane_skips_silently_when_the_shell_is_unreachable(monkeypatch: 
 
 def test_resolve_active_view_prefers_client_that_messaged_this_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     # Two connected clients on different views; pick the one whose recent messages went to
-    # OUR chat instance (addressed by agent id).
+    # OUR chat instance (addressed by chat id, which is the agent id for an own chat).
     stdout = (
         '[{"is_connected": true, "active_view": "alpha",'
         '  "recent_messages": [{"address": "app:chat?instance=agent-other"}]},'

@@ -16,6 +16,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.find import find_all_agents
 from imbue.mngr.api.find import find_one_agent
@@ -98,7 +99,13 @@ def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
     return Path(value)
 
 
-def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
+@pure
+def agent_state_dir(host_dir: Path, agent_id: str) -> Path:
+    """Where mngr keeps one agent's state under a host dir: ``<host_dir>/agents/<agent_id>``."""
+    return host_dir / "agents" / agent_id
+
+
+def read_claude_config_dir_from_env_file(state_dir: Path) -> Path:
     """Resolve a Claude agent's effective Claude config dir.
 
     In the current layout no agent or host env file sets CLAUDE_CONFIG_DIR
@@ -109,14 +116,14 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
     that somehow carries an explicit pin (e.g. one created from a shell
     with the var exported) is still watched at the dir it actually uses:
 
-    1. Agent's per-agent env file (`<agent_state_dir>/env`).
+    1. Agent's per-agent env file (`<state_dir>/env`).
     2. Host env file (`$MNGR_HOST_DIR/env`).
-    3. Conventional per-agent path (`<agent_state_dir>/plugin/claude/
+    3. Conventional per-agent path (`<state_dir>/plugin/claude/
        anthropic`) if it exists on disk (an isolated mngr_claude agent).
     4. The shared `~/.claude` (claude's default when the var is unset).
     """
     # 1. Per-agent env (an explicitly pinned agent)
-    per_agent = _read_claude_config_dir_from_env(agent_state_dir / "env")
+    per_agent = _read_claude_config_dir_from_env(state_dir / "env")
     if per_agent is not None:
         return per_agent
     # 2. Host env (nothing writes this anymore; kept as an env-chain mirror)
@@ -126,7 +133,7 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
         if host_level is not None:
             return host_level
     # 3. Conventional per-agent path (an isolated mngr_claude agent)
-    conventional = agent_state_dir / "plugin" / "claude" / "anthropic"
+    conventional = state_dir / "plugin" / "claude" / "anthropic"
     if conventional.exists():
         return conventional
     # 4. Claude's own default: the shared ~/.claude
@@ -162,17 +169,17 @@ def discover_agents(
         state = str(agent_details.state.value) if agent_details.state else "unknown"
 
         # Compute agent state dir from the default host dir
-        agent_state_dir = default_host_dir / "agents" / agent_id
+        state_dir = agent_state_dir(default_host_dir, agent_id)
 
         # Get CLAUDE_CONFIG_DIR from the agent's env file
-        claude_config_dir = read_claude_config_dir_from_env_file(agent_state_dir)
+        claude_config_dir = read_claude_config_dir_from_env_file(state_dir)
 
         agents.append(
             AgentInfo(
                 id=agent_id,
                 name=agent_name,
                 state=state,
-                agent_state_dir=agent_state_dir,
+                agent_state_dir=state_dir,
                 claude_config_dir=claude_config_dir,
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),

@@ -62,7 +62,7 @@ def test_a_delivered_send_posts_the_text_with_a_minted_id_and_no_client_fields(
     assert rc == message_chat.EXIT_DELIVERED
     assert slept == []
     [(path, body)] = fake_chat_app.posted
-    assert path == f"/api/agents/{_CHAT_ID}/message"
+    assert path == f"/api/chats/{_CHAT_ID}/message"
     assert body["message"] == "hello there"
     assert len(body["message_id"]) == 32
     assert set(body) == {"message", "message_id"}
