@@ -150,6 +150,31 @@ the agent list has been read from mngr once, like the instances API, so a send
 during the app's first seconds is retried rather than mistaken for an unknown
 chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A chat can also start from a conversation that happened before the workspace
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+`system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
+workspace is ready) takes a title and the turns of the onboarding conversation
+and opens a chat on them: the turns are written as the chat's first segment
+(`data/.apps/chat/chats/<chat-id>/seed.jsonl`, read through the `seed`
+pseudo-harness like any archived segment), the record names the seed as its
+first member, and the chat is listed as a provisional chat in the
+`awaiting_first_send` phase, its transcript on the page with a composer under
+it. The user's first message is what launches the chat's first real agent
+(the provider chooser opens then if nothing is signed in), which joins the
+record as the seed's successor with the `chat_id` and `chat_seq` labels a
+handoff's successor carries. The seed survives a restart of this app because
+the record does; discarding the chat before its first send drops both.
+
+Every chat that starts with no message is greeted: the `welcome` create
+template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
+says by how many times it has run (`system/scripts/welcome_count.py`). Every
+chat also starts with fast mode on, through the `fast` create template, for the
+first `fast_mode_turn_limit` of the user's turns (`GET`/`PUT /api/settings`,
+`chat_settings.py`, stored at `data/.apps/chat/settings.json`; default 5, and 0
+launches chats at standard speed instead). The page turns fast mode off once
+the limit is reached, shows a one-time notice explaining the switch, and lets
+the user change the number in the model picker beside the fast toggle.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per

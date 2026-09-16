@@ -19,6 +19,12 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  ensureChatSettings,
+  getChatSettings,
+  updateChatSettings,
+} from "../models/ChatSettings";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -314,6 +320,45 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             },
           }),
         ]),
+      ]),
+    ]);
+  }
+
+  /** The workspace's fast-mode turn limit: how many of the user's turns a NEW chat runs fast for
+   *  before the chat app switches it to standard speed, 0 for never launching fast. A number
+   *  field under the fast switch, on the same footing (greyed out with it): the limit is what
+   *  the switch's default position comes from. Applied on change and on Enter; an emptied or
+   *  negative field goes back to what the settings hold. */
+  function fastLimitRow(opts: { interactive: boolean; tooltip: string | null }): m.Vnode {
+    const settings = getChatSettings();
+    if (settings === null) void ensureChatSettings().then(() => m.redraw());
+    const limit = settings?.fast_mode_turn_limit ?? DEFAULT_CHAT_SETTINGS.fast_mode_turn_limit;
+    const apply = (raw: string): void => {
+      const current = getChatSettings() ?? DEFAULT_CHAT_SETTINGS;
+      const parsed = Number.parseInt(raw, 10);
+      const next = Number.isNaN(parsed) || parsed < 0 ? current.fast_mode_turn_limit : parsed;
+      if (next !== current.fast_mode_turn_limit) {
+        void updateChatSettings({ ...current, fast_mode_turn_limit: next });
+      }
+    };
+    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+      m("span", { class: css.ROW_LABEL }, "Fast for the first"),
+      m("span", { class: css.ROW_VALUE_STATIC }, [
+        m("input", {
+          type: "number",
+          min: 0,
+          step: 1,
+          class: `${inputClass({ extra: "fast-limit-input w-16 py-1 text-right" })}`,
+          "aria-label": "Fast mode turn limit",
+          "data-card-row": "fast-limit",
+          value: String(limit),
+          disabled: !opts.interactive || settings === null,
+          onchange: (event: Event) => apply((event.target as HTMLInputElement).value),
+          onkeydown: (event: KeyboardEvent) => {
+            if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+          },
+        }),
+        m("span", { class: css.ROW_LABEL }, limit === 1 ? "turn" : "turns"),
       ]),
     ]);
   }
@@ -777,15 +822,18 @@ export function ModelBar(): m.Component<{ chatId: string }> {
               })
             : null,
           pending === null && matched !== null && matched.supports_fast
-            ? fastRow({
-                on: currentFast,
-                interactive,
-                tooltip: readOnlyTooltip,
-                onToggle: () => {
-                  const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
-                },
-              })
+            ? [
+                fastRow({
+                  on: currentFast,
+                  interactive,
+                  tooltip: readOnlyTooltip,
+                  onToggle: () => {
+                    const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
+                    setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                  },
+                }),
+                fastLimitRow({ interactive, tooltip: readOnlyTooltip }),
+              ]
             : null,
           m("div", { class: css.DIVIDER }),
           stopAgentRow(chatId),

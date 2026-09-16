@@ -12,6 +12,7 @@ const HARNESS_LABEL_BY_NAME: Record<string, string> = {
   "pi-coding": "Pi",
   opencode: "OpenCode",
   antigravity: "Antigravity",
+  seed: "Mind",
 };
 
 export function harnessLabel(harness: string): string {

@@ -20,9 +20,15 @@ import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { openProviderChooser } from "../models/Providers";
+import { getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getChatById, isHandoffCancellable, whenChatRegistered } from "../models/Chats";
+import {
+  getChatById,
+  getProvisionalChat,
+  isHandoffCancellable,
+  launchChat,
+  whenChatRegistered,
+} from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { harnessLabel } from "./agent-switch-chip";
 import { handoffComposerPlaceholder } from "./handoff-phase";
@@ -433,6 +439,24 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
+          // A seeded chat awaiting its first send has no agent yet, and this send is what
+          // launches one: on the signed-in account, else on the one the chooser produces. The
+          // message rides the launch as the agent's first, so nothing is sent after it lands.
+          if (getProvisionalChat(chatId)?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+            const accountId = await chooseAccountForFirstSend();
+            if (accountId === null) {
+              // The chooser closed with no sign-in: nothing was launched, and the message is
+              // the user's to keep.
+              dropOutgoing(chatId, outgoingId);
+              restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+              m.redraw();
+              return;
+            }
+            await launchChat(chatId, accountId, finalText);
+            await whenChatRegistered(chatId);
+            refocusAfterSend();
+            return;
+          }
           // A chat still being created has no agent to deliver to yet: the bubble stays
           // "Sending…" until the create lands, and the send goes out then. A create that
           // fails rejects here and the message goes back to the composer like any failed send.
@@ -466,6 +490,20 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         }
 
         refocusAfterSend();
+      }
+
+      /**
+       * The account a seeded chat's first send launches it on: the signed-in one when there is
+       * one, else whatever the provider chooser produces, or null when it is dismissed instead.
+       */
+      function chooseAccountForFirstSend(): Promise<string | null> {
+        const account = getSelectedAccount();
+        if (account !== null) {
+          return Promise.resolve(account.id);
+        }
+        return new Promise((resolve) => {
+          openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });
+        });
       }
 
       /**

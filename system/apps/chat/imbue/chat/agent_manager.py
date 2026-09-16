@@ -24,9 +24,7 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
-from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import harness_for
-from imbue.chat.accounts import release_first_chat
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -66,6 +64,12 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import ChatRecordStore
 from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_records import is_seed_entry
+from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import seed_agent_info
+from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.binding import BindingError
 from imbue.chat.harnesses.binding import create_args as binding_create_args
@@ -186,6 +190,44 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 
 
+# The create templates a chat's launch stacks on ``chat`` (``.mngr/settings.toml``): ``welcome``
+# delivers ``/welcome`` to a chat that starts with nothing to say, and ``fast`` launches the
+# fast-capable harnesses in fast mode while the workspace's turn limit is above zero.
+WELCOME_ROLE_TEMPLATE: Final[str] = "welcome"
+FAST_ROLE_TEMPLATE: Final[str] = "fast"
+
+
+@pure
+def launch_role_templates(message: str, fast_mode_turn_limit: int) -> tuple[str, ...]:
+    """The templates a chat create stacks beyond the caller's, from what it starts with and the workspace's fast-mode limit."""
+    templates: list[str] = []
+    if message == "":
+        templates.append(WELCOME_ROLE_TEMPLATE)
+    if fast_mode_turn_limit > 0:
+        templates.append(FAST_ROLE_TEMPLATE)
+    return tuple(templates)
+
+
+@pure
+def seeded_provisional_chats(record_by_chat_id: Mapping[ChatId, ChatRecord]) -> dict[ChatId, ProvisionalChat]:
+    """The provisional chats a build restores: every seeded chat still waiting for its first message.
+
+    A seeded chat's record exists before any agent does (its seed is its first member), so the
+    records are what survive a restart of this app; the provisional record, which is in memory,
+    is rebuilt from them.
+    """
+    return {
+        chat_id: ProvisionalChat(
+            chat_id=chat_id,
+            name=record.seed_title or "",
+            phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+            is_seeded=True,
+        )
+        for chat_id, record in record_by_chat_id.items()
+        if record.is_seed_only
+    }
+
+
 def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
     """The ``project`` label value a new chat agent should carry.
 
@@ -276,7 +318,7 @@ def _build_chat_create_command(
     for label in extra_labels:
         cmd.extend(["--label", label])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
-    # once the harness signals readiness, exactly as the ``first`` template's ``/welcome``
+    # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
     # does (a CLI ``--message`` takes precedence over a template's). A handoff prompt is long
     # enough to travel as a file.
     if initial_message:
@@ -704,6 +746,8 @@ class AgentManager:
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
     _chat_record_by_id: dict[ChatId, ChatRecord]
+    # The workspace-wide chat settings (the fast-mode turn limit), read on every create.
+    _chat_settings: ChatSettingsStore
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
     _prompt_template_path: Path
@@ -800,6 +844,7 @@ class AgentManager:
         chat_record_store: ChatRecordStore | None = None,
         chat_files_root: Path = DEFAULT_CHAT_RECORDS_ROOT,
         prompt_template_path: Path = DEFAULT_PROMPT_TEMPLATE_PATH,
+        chat_settings: ChatSettingsStore | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -816,7 +861,8 @@ class AgentManager:
         agents; the default holds them in memory only, so a real server passes one backed
         by the chat app's data directory. ``chat_files_root`` is where a handoff's summaries
         and prompts go (beside the records), and ``prompt_template_path`` the reference
-        document the successor's first message is filled in from.
+        document the successor's first message is filled in from. ``chat_settings`` holds the
+        workspace's fast-mode turn limit; the default keeps it in memory only.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -827,9 +873,10 @@ class AgentManager:
         manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
-        manager._provisional_chats = {}
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
         manager._chat_record_by_id = manager._chat_record_store.read_all()
+        manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
+        manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
@@ -1114,12 +1161,18 @@ class AgentManager:
 
         A chat with no record is one segment, its agent's. A record's member that mngr no
         longer knows contributes no segment (the transcript has a gap there, and says so in
-        the log); a record whose active agent is unknown is no chat at all.
+        the log); a record whose active agent is unknown is no chat at all. A seeded chat's
+        seed (``chat_seed.py``) is its first segment, read from the chat's own folder, and its
+        only one while the chat waits for the first message that launches an agent.
         """
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
-        if chat is None or chat.active_agent_id is None:
+        if chat is None:
             return None
+        if chat.active_agent_id is None:
+            if chat.record is None or not chat.record.is_seed_only:
+                return None
+            return [self._seed_segment(chat.record)]
         if chat.record is None:
             agent_info = self.get_agent_info_by_id(chat.active_agent_id)
             if agent_info is None:
@@ -1127,6 +1180,9 @@ class AgentManager:
             return [ChatSegmentInfo(agent=agent_info, seq=1, is_active=True, recorded_event_count=None, ended_at=None)]
         segments: list[ChatSegmentInfo] = []
         for entry in chat.record.agents:
+            if is_seed_entry(entry):
+                segments.append(self._seed_segment(chat.record))
+                continue
             agent_info = self.get_agent_info_by_id(entry.agent_id)
             if agent_info is None:
                 if entry.agent_id == chat.active_agent_id:
@@ -1151,6 +1207,17 @@ class AgentManager:
                 )
             )
         return segments
+
+    def _seed_segment(self, record: ChatRecord) -> ChatSegmentInfo:
+        """The seed segment of a seeded chat, as a pseudo-agent whose files are the chat's own folder."""
+        seed = record.agents[0]
+        return ChatSegmentInfo(
+            agent=seed_agent_info(record.chat_id, self._chat_files_root / record.chat_id),
+            seq=seed.seq,
+            is_active=False,
+            recorded_event_count=seed.final_event_count,
+            ended_at=seed.ended_at,
+        )
 
     def get_chat_ids(self) -> list[ChatId]:
         """Ids of the chats the OOM prioritizer manages: user-facing chats only.
@@ -1632,7 +1699,9 @@ class AgentManager:
         try:
             self.destroy_agent_process(successor_id)
         except AgentDestroyError as e:
-            _loguru_logger.warning("Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e)
+            _loguru_logger.warning(
+                "Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e
+            )
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
         """Put a running agent on ``pick``: the model bar's own path, for an agent that was just created.
@@ -1986,14 +2055,11 @@ class AgentManager:
     def _destroyed_with_chat_locked(self, chat: _ResolvedChat) -> tuple[str, ...]:
         """Every agent a chat's destroy names: its members, plus the successor a handoff is still making
         when mngr already lists it (an untracked pre-minted id names nothing to destroy). Lock held."""
+        member_ids = chat.record.mngr_agent_ids if chat.record is not None else chat.member_agent_ids
         handoff = chat.handoff
-        if (
-            handoff is None
-            or handoff.next_agent_id in chat.member_agent_ids
-            or handoff.next_agent_id not in self._agents
-        ):
-            return chat.member_agent_ids
-        return (*chat.member_agent_ids, handoff.next_agent_id)
+        if handoff is None or handoff.next_agent_id in member_ids or handoff.next_agent_id not in self._agents:
+            return member_ids
+        return (*member_ids, handoff.next_agent_id)
 
     def stop_chat(self, chat_id: ChatId) -> None:
         """Run ``mngr stop`` for a chat's active agent: the reversible counterpart to a destroy.
@@ -2365,10 +2431,56 @@ class AgentManager:
         self._nudger.nudge()
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
+    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
+        """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
+
+        The Mind app's onboarding continues here as the workspace's first chat: the turns become
+        the chat's seed segment on disk, its record names the seed as its first member, and the
+        chat is listed as a provisional chat awaiting the user's first message, with the
+        transcript on its page and a composer under it. That first send picks the account (the
+        chooser opens then) and launches the chat's first agent through ``create_chat``. The
+        seed survives a restart of this app because the record does; the tab is opened through
+        the shell like a labeled chat's, held until a client is connected.
+        """
+        chat_id = ChatId(str(AgentId()))
+        now = datetime.now(timezone.utc)
+        events = seed_events(chat_id, turns, now)
+        with self._lock:
+            display_name = title.strip() or first_free_numbered_name(AUTO_NAME_WORD, self._taken_names_locked())
+            record = ChatRecord(
+                chat_id=chat_id,
+                agents=(
+                    ChatAgentEntry(
+                        seq=1,
+                        agent_id=str(chat_id),
+                        lane="",
+                        account_id="",
+                        harness=HarnessType.SEED,
+                        started_at=now,
+                        ended_at=now,
+                        final_event_count=len(events),
+                    ),
+                ),
+                seed_title=display_name,
+            )
+            write_seed_file(self._chat_files_root / chat_id, events)
+            self._write_record_locked(record)
+            provisional = ProvisionalChat(
+                chat_id=chat_id,
+                name=display_name,
+                phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+                is_seeded=True,
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        self._nudger.nudge()
+        self._auto_open.request_open(chat_id)
+        return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
+
     def discard_provisional_chat(self, chat_id: str) -> bool:
-        """Drop a provisional chat that is not being created: one awaiting an account, or one
-        whose create failed. Returns whether anything was dropped; a create in flight cannot be
-        taken back and is left alone."""
+        """Drop a provisional chat that is not being created: one awaiting an account, one awaiting
+        its first send (its seed goes with it), or one whose create failed. Returns whether
+        anything was dropped; a create in flight cannot be taken back and is left alone."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
@@ -2377,6 +2489,10 @@ class AgentManager:
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
             del self._provisional_chats[parsed]
+            record = self._chat_record_by_id.get(parsed)
+            if record is not None and record.is_seed_only:
+                self._delete_record_locked(parsed)
+        self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._nudger.nudge()
         return True
@@ -2422,10 +2538,11 @@ class AgentManager:
         the chat instead, see ``reserve_chat``).
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
-        create --message`` after the harness signals readiness (the path ``/welcome`` takes).
-        A seeded chat does not claim the workspace's first chat: the ``first`` template and its
-        ``/welcome`` still go to the first plain chat. A reserved chat keeps the message it was
-        minted with, so a launch that names one beside ``chat_id`` is refused like a name.
+        create --message`` after the harness signals readiness. A chat that starts with no
+        message gets ``/welcome`` instead, through the ``welcome`` template. A reserved chat
+        keeps the message it was minted with, so a launch that names one beside ``chat_id`` is
+        refused like a name; the exception is a seeded chat awaiting its first send, whose
+        message is exactly what the launch brings.
 
         ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so
         with a pick the create is silent and the message is delivered afterwards through the
@@ -2442,10 +2559,9 @@ class AgentManager:
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
-        if chat_id and (explicit_name or project_id or message):
+        if chat_id and (explicit_name or project_id):
             raise AgentCreationError(
-                f"Chat {chat_id} keeps the name, project, and first message it was minted with; "
-                "a launch cannot rename, refile, or reseed it"
+                f"Chat {chat_id} keeps the name and project it was minted with; a launch cannot rename or refile it"
             )
 
         # Name resolution and the provisional record's registration happen under one lock
@@ -2457,14 +2573,28 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
+            seed_record: ChatRecord | None = None
             if chat_id:
                 reserved = self._provisional_chats.get(ChatId(chat_id))
                 if reserved is None or reserved.phase is ProvisionalChatPhase.CREATING:
                     raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
+                if reserved.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                    # The seeded chat's first send: the message is the launch's to bring, and the
+                    # agent joins the seed on the record rather than taking the chat's id.
+                    seed_record = self._chat_record_by_id.get(reserved.chat_id)
+                    if seed_record is None or not seed_record.is_seed_only:
+                        raise AgentCreationError(f"Chat {chat_id} has no seed to continue from")
+                    if not message:
+                        raise AgentCreationError(f"Chat {chat_id} is launched by its first message; none was given")
+                elif message:
+                    raise AgentCreationError(
+                        f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
+                    )
+                else:
+                    message = reserved.message
                 launched_chat_id = reserved.chat_id
                 display_name = reserved.name
                 project_id = reserved.project_id
-                message = reserved.message
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 taken_names = self._taken_names_locked()
@@ -2484,9 +2614,28 @@ class AgentManager:
                 account_id=account.id,
                 message=message,
                 phase=ProvisionalChatPhase.CREATING,
+                is_seeded=seed_record is not None,
             )
             self._provisional_chats[launched_chat_id] = provisional
-        agent_id = str(launched_chat_id)
+            fast_mode_turn_limit = self._chat_settings.read().fast_mode_turn_limit
+        # A seeded chat's id is its seed's; its first agent is a member of its own, like a
+        # handoff's successor, and gets a fresh id with the membership labels.
+        agent_id = str(launched_chat_id) if seed_record is None else str(AgentId())
+        record_entry = (
+            None
+            if seed_record is None
+            else ChatAgentEntry(
+                seq=len(seed_record.agents) + 1,
+                agent_id=agent_id,
+                lane=account.lane,
+                account_id=account.id,
+                harness=harness,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        membership_labels = (
+            () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
+        )
 
         # Launching on an account makes it the most recently used one, which is what the
         # next launch picks. Set here rather than by the page so a chat started from the
@@ -2503,22 +2652,7 @@ class AgentManager:
         except AccountError as e:
             _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
-
-        # The workspace's very first chat gets the `first` template, which is what delivers
-        # `/welcome`. Claimed here rather than by the caller, so every path that starts a chat
-        # is covered, and on demand rather than at boot, because a chat needs a provider
-        # account and a fresh workspace has none.
-        #
-        # The claim is one-shot and there is no second chance at it, so a create that goes on
-        # to FAIL must give it back -- otherwise a workspace whose first create died on a bad
-        # credential or an OOM never delivers `/welcome` at all, and nothing in the app can
-        # reset it. Released on every failure path in `_run_creation`.
-        #
-        # A chat seeded with its own first message leaves the claim alone: its prompt is what
-        # the user asked for, and the welcome still greets the first plain chat.
-        is_first_chat = message == "" and claim_first_chat()
-        if is_first_chat:
-            extra_role_templates = (*extra_role_templates, "first")
+        role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode_turn_limit))
 
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.
@@ -2530,10 +2664,11 @@ class AgentManager:
             agent_id,
             primary_labels,
             harness,
-            extra_role_templates,
+            role_templates,
             project_id,
             account_args,
             initial_message="" if model_pick is not None else message,
+            extra_labels=membership_labels,
         )
 
         self._broadcaster.broadcast_provisional_chat_created(provisional)
@@ -2547,6 +2682,9 @@ class AgentManager:
         if project_label:
             labels["project"] = project_label
         labels["account"] = account.id
+        for label in membership_labels:
+            key, _separator, value = label.partition("=")
+            labels[key] = value
         canonical_name = canonical_agent_name(display_name)
         self._launch_creation_thread(
             launched_chat_id,
@@ -2556,7 +2694,7 @@ class AgentManager:
             Path(work_dir),
             labels,
             harness,
-            is_first_chat,
+            record_entry,
             model_pick,
             deferred_message,
         )
@@ -2572,7 +2710,7 @@ class AgentManager:
         work_dir: Path,
         labels: dict[str, str],
         harness: HarnessType,
-        is_first_chat: bool = False,
+        record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
         deferred_message: str = "",
     ) -> None:
@@ -2587,7 +2725,7 @@ class AgentManager:
                 work_dir,
                 labels,
                 harness,
-                is_first_chat,
+                record_entry,
                 model_pick,
                 deferred_message,
             ),
@@ -2613,7 +2751,7 @@ class AgentManager:
         work_dir: Path,
         labels: dict[str, str],
         harness: HarnessType,
-        is_first_chat: bool = False,
+        record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
         deferred_message: str = "",
     ) -> None:
@@ -2627,6 +2765,9 @@ class AgentManager:
 
         ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
         pick so the first turn runs on it, then the message the create was told to leave out.
+        ``record_entry`` is the agent's membership of a seeded chat, appended to the chat's
+        record the moment the create lands, before the agent is tracked, so the agent resolves
+        to its chat from its first listing.
         """
         success = False
         error: str | None = None
@@ -2650,14 +2791,19 @@ class AgentManager:
                 error = str(e)
                 _loguru_logger.opt(exception=e).error("Error creating agent {}", agent_id)
 
-            # The workspace's one `/welcome` claim goes back if this create did not survive;
-            # see `claim_first_chat`. Outside the lock it guards nothing, and it takes the
-            # index lock of its own.
-            if not success and is_first_chat:
-                release_first_chat()
-
             with self._lock:
                 if success:
+                    if record_entry is not None:
+                        record = self._chat_record_by_id.get(chat_id)
+                        if record is None:
+                            raise ChatRecordError(
+                                f"the seeded chat {chat_id} lost its record while its agent was created"
+                            )
+                        self._write_record_locked(
+                            record.model_copy_update(
+                                to_update(record.field_ref().agents, (*record.agents, record_entry))
+                            )
+                        )
                     self._provisional_chats.pop(chat_id, None)
                     self._agents[agent_id] = AgentStateItem(
                         id=agent_id,
@@ -2681,8 +2827,6 @@ class AgentManager:
             success = False
             error = f"Unexpected {type(e).__name__}: {e}"
             _loguru_logger.opt(exception=e).error("Unexpected error creating agent {}", agent_id)
-            if is_first_chat:
-                release_first_chat()
             try:
                 with self._lock:
                     self._mark_creation_failed_locked(chat_id, error)

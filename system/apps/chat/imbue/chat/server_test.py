@@ -53,7 +53,6 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
-from imbue.chat.server import _build_fast_mode_answered_label_command
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -1166,20 +1165,6 @@ def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_p
     assert data["options"] is None
 
 
-def test_fast_mode_answered_label_argv_accepted_by_live_cli() -> None:
-    """The latch endpoint shells `mngr label`; the argv must resolve against the
-    live CLI so a label-command rename fails here rather than at runtime."""
-    argv = _build_fast_mode_answered_label_command("my-agent")
-    assert_mngr_argv_valid(argv)
-    assert "fast_mode_prompt_answered=true" in argv
-
-
-def test_fast_mode_answered_returns_404_for_unknown_agent() -> None:
-    client = create_application(build_test_state()).test_client()
-    response = client.post("/api/chats/agent-doesnotexist/fast-mode-answered")
-    assert response.status_code == 404
-
-
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:
     """An AgentManager whose OOM prioritizer captures its band writes.
 
@@ -2176,6 +2161,70 @@ def test_create_chat_refuses_a_message_beside_a_reserved_id(
     assert "first message" in response.get_json()["detail"]
     reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
     assert reserved_proto is not None and reserved_proto.message == "Teach me about Mind"
+
+
+def _seed_body() -> dict[str, Any]:
+    return {
+        "title": "Getting started",
+        "turns": [
+            {"role": "user", "text": "Wait.. what is honest software?"},
+            {"role": "assistant", "text": "Software that works for you."},
+        ],
+    }
+
+
+def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_transcript(tmp_path: Path) -> None:
+    """The Mind app's onboarding conversation arrives whole: the chat is created (201) as a
+    provisional chat awaiting the user, and its events route reads the seeded turns."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post("/api/chats/seed", json=_seed_body())
+
+    assert response.status_code == 201
+    created = response.get_json()
+    assert created["display_name"] == "Getting started"
+    provisional = agent_manager.get_provisional_chat(created["chat_id"])
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    events = client.get(f"/api/chats/{created['chat_id']}/events").get_json()
+    assert events["total"] == 2
+    assert [(event["type"], event["source"]) for event in events["events"]] == [
+        ("user_message", "seed"),
+        ("assistant_message", "seed"),
+    ]
+    assert events["events"][0]["content"] == "Wait.. what is honest software?"
+
+
+def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
+    response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
+    assert response.status_code == 400
+
+
+def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
+    client = create_application(build_test_state()).test_client()
+    response = client.post("/api/chats/seed", json=_seed_body())
+    assert response.status_code == 503
+
+
+def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
+    assert client.get("/api/settings").get_json() == {
+        "settings": {"fast_mode_turn_limit": 5, "is_fast_mode_notice_shown": False}
+    }
+
+    response = client.put("/api/settings", json={"fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True})
+
+    assert response.status_code == 200
+    assert client.get("/api/settings").get_json() == {
+        "settings": {"fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True}
+    }
+
+
+def test_the_chat_settings_refuse_a_negative_turn_limit(client: FlaskClient) -> None:
+    response = client.put("/api/settings", json={"fast_mode_turn_limit": -1})
+    assert response.status_code == 400
+    assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 5
 
 
 def test_create_chat_relaunches_a_failed_chat_under_its_id(

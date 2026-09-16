@@ -272,6 +272,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
     if (status.account_id !== null && chooserOnSignedIn !== null) {
       const run = chooserOnSignedIn;
       chooserOnSignedIn = null;
+      chooserOnDismissed = null;
       run(status.account_id);
     }
   } else if (status.state === "failed") {
@@ -364,6 +365,9 @@ let chooserAccountId: string | null = null;
 // were adding a provider for later and should not be moved. The caller knows which it is;
 // nothing here can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
+// What to do if the chooser closes with the sign-in hook still armed: the caller that was
+// waiting on a sign-in (a seeded chat's first send) puts its message back.
+let chooserOnDismissed: (() => void) | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -374,6 +378,8 @@ export interface ProviderChooserIntent {
   accountId?: string;
   /** Run once a sign-in succeeds, with the account it produced. */
   onSignedIn?: (accountId: string) => void;
+  /** Run if the chooser closes before any sign-in succeeded. */
+  onDismissed?: () => void;
 }
 
 /** Open the chooser, optionally saying why it was opened. */
@@ -382,6 +388,7 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOpen = true;
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
+  chooserOnDismissed = intent.onDismissed ?? null;
   m.redraw();
 }
 
@@ -397,7 +404,11 @@ export function closeProviderChooser(): void {
   if (!chooserOpen) return;
   chooserOpen = false;
   // Cleared on close as well as on open: a chooser dismissed without signing in must not
-  // leave a callback armed for whoever opens it next.
+  // leave a callback armed for whoever opens it next. A sign-in hook still armed here means no
+  // sign-in ran, which is what the dismissal hook is for.
+  const dismissed = chooserOnSignedIn !== null ? chooserOnDismissed : null;
   chooserOnSignedIn = null;
+  chooserOnDismissed = null;
+  dismissed?.();
   m.redraw();
 }

@@ -147,12 +147,11 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
-# Every other chat gets this default too: the chat app's create passes no launch
-# settings. Only the workspace's first chat launches fast, through the
-# `agent_types.claude.settings_overrides.fastMode=true` setting that
-# `[create_templates.first]` (below) stacks on its create; a running chat then
-# toggles it with `/fast`, which the chat app's harnesses/claude/model.py writes
-# into that agent's own settings file.
+# A chat launches fast through the `agent_types.claude.settings_overrides.fastMode=true`
+# setting that `[create_templates.fast]` (below) stacks on its create while the
+# workspace's fast-mode turn limit is above zero; the chat app turns it off after
+# that many turns, and a running chat toggles it with `/fast`, which the chat
+# app's harnesses/claude/model.py writes into that agent's own settings file.
 #
 # That setting targets `claude` rather than `chat` because a create-time setting
 # (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
@@ -161,7 +160,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
-# This is the canonical explanation; the `first` template and the CLI-contract
+# This is the canonical explanation; the `fast` template and the CLI-contract
 # test point here rather than repeating it.
 #
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
@@ -603,13 +602,13 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
-# creates a separate chat agent on first boot and passes `--message /welcome`
-# to it instead.
+# `/welcome` is NOT set here: the services agent's window 0 sleeps forever
+# (see `[agent_types.main] command`) and never reaches claude. Chats are
+# separate agents the chat app creates on demand; the ones that start with
+# nothing to say get `/welcome` through `[create_templates.welcome]` below.
 #
-# bootstrap is the only extra_window now. It runs first-boot setup (git config,
-# initial chat agent) and then launches
+# bootstrap is the only extra_window now. It runs first-boot setup (git config)
+# and then launches
 # supervisord, which runs every background service (system_interface, web,
 # share-gateway, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
@@ -1667,11 +1666,20 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 
-# First chat: the one agent per workspace that greets the user (/welcome) and
-# opens in fast mode so the first conversation feels responsive. Stacked on top
-# of `chat` (`-t first -t chat --type <harness>`) by the bootstrap and by the
-# flag-gated "New first ..." launchers. The `first=true` label is what scopes
-# the fast-mode grace-period prompt to this agent.
+# Welcome: the greeting a chat that starts with nothing to say gets. The chat app
+# stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
+# a first message -- the New Tab page's plain "New Chat", a rail shortcut -- so
+# `/welcome` runs each time, and the skill (.agents/skills/welcome) varies what it
+# says by how many times it has run in this workspace. A chat that starts with a
+# message (a seeded prompt, the onboarding chat's first send) gets its message
+# instead.
+[create_templates.welcome]
+message = "/welcome"
+
+# Fast: launches the fast-capable harnesses in fast mode so a new conversation
+# feels responsive. The chat app stacks it on every chat while the workspace's
+# fast-mode turn limit (the chat app's settings, `data/.apps/chat/settings.json`)
+# is above zero, and turns fast mode off after that many of the user's turns.
 #
 # The two fast settings are deliberately asymmetric: claude's
 # `settings_overrides` is a SettingsPatchField (deep-merge marker on the
@@ -1681,9 +1689,7 @@ output_style = "Engineering Subordinate"
 # the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
 # inconsistency in either direction. Settings for whichever harness is not
 # resolved are inert, so this template is safe to stack with any --type.
-[create_templates.first]
-message = "/welcome"
-label__extend = ["first=true"]
+[create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',

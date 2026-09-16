@@ -186,6 +186,13 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
   kind: SpecialEventKind;
 }
 
+/** The ``source`` of the events of a seeded chat's seed segment (the backend's ``SEED_SOURCE``):
+ *  the turns the Mind app wrote before the workspace had any agent. */
+export const SEED_SOURCE = "seed";
+
+/** The pseudo-harness a seed segment reads as (the backend's ``HarnessType.SEED``). */
+export const SEED_HARNESS = "seed";
+
 /**
  * The chat moved from one agent to the next (a handoff between harnesses): the chat-level
  * event the backend synthesizes between two agents' segments (`chat_transcript.py`), never

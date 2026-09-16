@@ -6,7 +6,10 @@
  * account, it offers the provider chooser; being created, it shows the composer over an
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
- * back in it where it can be seen. The transcript takes over when creation completes.
+ * back in it where it can be seen. The transcript takes over when creation completes. A
+ * seeded chat (the Mind app's onboarding conversation, continued here) has a transcript from
+ * the start, so it renders as one through its wait for the first send and its create; only a
+ * failed create shows the provisional screen.
  */
 
 import m from "mithril";
@@ -41,7 +44,8 @@ import {
 import type { ProvisionalChat } from "../models/Chats";
 import { areAccountsLoaded, closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
-import { maybePromptForFastMode } from "./fast-mode-prompt";
+import { maybeApplyFastModeLimit } from "./fast-mode-limit";
+import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
@@ -99,12 +103,20 @@ function provisionalRecord(chatId: string): ProvisionalChat | null {
 }
 
 /** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
- *  message typed now is held until it lands), or one whose create failed (the held message is
- *  returned to the composer with the reason, and a send there is refused with it). Only a chat
- *  still waiting for an account has nothing to type into. */
+ *  message typed now is held until it lands), one whose create failed (the held message is
+ *  returned to the composer with the reason, and a send there is refused with it), or a seeded
+ *  chat awaiting its first send (which is what launches it). Only a chat still waiting for an
+ *  account has nothing to type into. */
 function hasComposer(chatId: string): boolean {
   const provisional = provisionalRecord(chatId);
   return provisional === null || provisional.phase !== "awaiting_account";
+}
+
+/** Whether a provisional chat's page is its transcript rather than a provisional screen: a seeded
+ *  chat has one to show from the start, and keeps showing it through its create; a failed create
+ *  shows its reason instead, like any other. */
+export function isSeededTranscriptShown(provisional: ProvisionalChat | null): boolean {
+  return provisional !== null && provisional.is_seeded && provisional.phase !== "failed";
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
@@ -476,6 +488,19 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
   let notFoundRetryInFlight = false;
+  // A seeded chat this page showed as provisional: once the chat list names it (its first agent
+  // landed), the transcript is reloaded so the window covers the new segment and the stream, which
+  // 404'd while the chat had no agent, is connected on the next render.
+  let seededChatAwaitingReload: string | null = null;
+
+  function reloadSeededChatOnceRegistered(): void {
+    const chatId = seededChatAwaitingReload;
+    if (chatId === null || getChatById(chatId) === undefined) {
+      return;
+    }
+    seededChatAwaitingReload = null;
+    loadChat(chatId).finally(() => m.redraw());
+  }
 
   /**
    * Re-load a panel whose first events fetch 404'd, once the backend knows the
@@ -514,10 +539,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
-    // not-found until the agent registers, which retries it (retryAfterChatResolved).
+    // not-found until the agent registers, which retries it (retryAfterChatResolved). A seeded
+    // chat is the exception: its seed segment reads like any transcript, so the page loads it.
     const provisional = provisionalRecord(chatId);
-    if (provisional !== null) {
+    if (provisional !== null && !isSeededTranscriptShown(provisional)) {
       return renderProvisional(chatId, provisional);
+    }
+    if (provisional !== null) {
+      seededChatAwaitingReload = chatId;
     }
 
     ensureChatLoaded(chatId);
@@ -619,16 +648,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const chat = getChatById(chatId);
     const agentIsIdle = chat?.active_agent.activity_state === "IDLE";
 
-    // The first chat starts on fast mode; once it has run its grace period, ask
-    // the user whether to keep it. Checked here because this is where the loaded
-    // transcript and the idle flag meet. Re-running it per render is fine:
-    // raising the prompt is idempotent, and the cheap gates (harness declared no
-    // prompt, not the first chat, already answered, agent mid-reply, fast mode
-    // already off) short-circuit ahead of the one gate that is not cheap -- the
-    // turn count, which walks the held transcript. Which agents owe the prompt
-    // at all is the harness's declaration (the fast_mode_prompt popup on its
-    // catalog), not a harness-name check here.
-    maybePromptForFastMode(chat, events, agentIsIdle);
+    // A new chat starts on fast mode; once it has run the workspace's turn limit,
+    // switch it to standard speed. Checked here because this is where the loaded
+    // transcript and the idle flag meet. Re-running it per render is fine: a chat
+    // is switched once, and the cheap gates (harness declared no limit, already
+    // switched, agent mid-reply, fast mode already off) short-circuit ahead of
+    // the one gate that is not cheap -- the turn count, which walks the held
+    // transcript. Which agents the limit applies to is the harness's declaration
+    // (the fast_mode_limit popup on its catalog), not a harness-name check here.
+    maybeApplyFastModeLimit(chat, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -679,7 +707,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     ]);
   }
 
-  const handleChatsUpdated = (): void => retryAfterChatResolved();
+  const handleChatsUpdated = (): void => {
+    retryAfterChatResolved();
+    reloadSeededChatOnceRegistered();
+  };
 
   const handleMessageSent = (chatId: string): void => {
     if (chatId === currentChatId) {
@@ -843,6 +874,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                   },
                   [
                     m(ModelBar, { chatId }),
+                    m(FastModeNotice, { chatId }),
                     // The terminal back face attaches to the agent's own tmux session, which
                     // a chat still being created does not have: without a name the terminal
                     // dispatch attaches to whatever session it finds, so the flip waits for

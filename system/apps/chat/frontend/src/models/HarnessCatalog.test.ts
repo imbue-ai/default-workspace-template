@@ -27,7 +27,7 @@ const CATALOGS = {
   claude: catalogFixture([
     { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
     { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
-    { trigger: "turn_check", commands: [], action: "fast_mode_prompt" },
+    { trigger: "turn_check", commands: [], action: "fast_mode_limit" },
   ]),
   "pi-coding": catalogFixture([{ trigger: "composer_command", commands: ["/login"], action: "open_auth" }]),
 };
@@ -66,14 +66,14 @@ describe("findComposerPopup", () => {
   });
 });
 
-describe("hasFastModePrompt", () => {
+describe("hasFastModeLimit", () => {
   it("reports the harness's turn_check declaration", async () => {
     const harnessCatalog = await loadHarnessCatalog();
     mockRequest.mockResolvedValue(CATALOGS);
     await harnessCatalog.ensureHarnessCatalogs();
-    expect(harnessCatalog.hasFastModePrompt("claude")).toBe(true);
-    expect(harnessCatalog.hasFastModePrompt("pi-coding")).toBe(false);
-    expect(harnessCatalog.hasFastModePrompt(undefined)).toBe(false);
+    expect(harnessCatalog.hasFastModeLimit("claude")).toBe(true);
+    expect(harnessCatalog.hasFastModeLimit("pi-coding")).toBe(false);
+    expect(harnessCatalog.hasFastModeLimit(undefined)).toBe(false);
   });
 });
 

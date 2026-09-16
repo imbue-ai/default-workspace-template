@@ -48,6 +48,7 @@ from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.config import Config
@@ -89,13 +90,13 @@ from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
 from imbue.chat.models import ChatSegmentInfo
+from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreateChatResponse
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import DestroyAgentResponse
 from imbue.chat.models import DrainToComposerResponse
 from imbue.chat.models import ErrorResponse
-from imbue.chat.models import FastModePromptAnsweredResponse
 from imbue.chat.models import HandoffCancelResponse
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffRetryRequest
@@ -106,6 +107,7 @@ from imbue.chat.models import HeldSendResponse
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import PoweredByResponse
+from imbue.chat.models import SeedChatRequest
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.models import SendMessageResponse
 from imbue.chat.models import SetModelChoiceRequest
@@ -185,10 +187,6 @@ def _refuse_while_converging(chat_id: str) -> Response | None:
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
-
-
-# `mngr label` is a metadata write (data.json merge), fast even on a busy host.
-_LABEL_TIMEOUT_SECONDS = 30.0
 
 
 def _get_event_detail(chat_id: str, event_id: str) -> Response:
@@ -718,38 +716,26 @@ def _get_powered_by_endpoint(chat_id: str) -> Response:
     return json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_text).model_dump())
 
 
-def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
-    """Build the ``mngr label`` argv that latches the fast-mode prompt as answered.
+def _get_settings_endpoint() -> Response:
+    """``GET /api/settings``: the workspace-wide chat settings (the fast-mode turn limit, the notice flag)."""
+    return json_response(ChatSettingsResponse(settings=get_state().chat_settings.read()).model_dump(mode="json"))
 
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess.
+
+def _put_settings_endpoint() -> Response:
+    """``PUT /api/settings``: replace the workspace-wide chat settings whole.
+
+    The body is the settings object; a field left out takes its default, and an out-of-range
+    value (a negative turn limit) answers 400.
     """
-    return ["mngr", "label", agent_name, "-l", "fast_mode_prompt_answered=true"]
-
-
-def _mark_fast_mode_prompt_answered(chat_id: str) -> Response:
-    """Latch the fast-mode prompt as answered for one agent, via an agent label.
-
-    The prompt asks once per agent, ever: any exit from the modal routes here, so
-    the label is the durable record that the question was put to the user. The
-    label reaches the frontend with the next observe relist; the frontend keeps
-    its own in-session mark so the prompt cannot re-fire in the meantime.
-    """
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
-
-    result = run_local_command_modern_version(
-        command=_build_fast_mode_answered_label_command(agent_info.name),
-        cwd=None,
-        is_checked=False,
-        timeout=_LABEL_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        detail = f"Failed to record the fast-mode answer for '{agent_info.name}': {result.stderr.strip()}"
-        return json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
-
-    return json_response(FastModePromptAnsweredResponse(status="ok").model_dump())
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        settings = ChatSettings.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    get_state().chat_settings.write(settings)
+    return json_response(ChatSettingsResponse(settings=settings).model_dump(mode="json"))
 
 
 def _upload_attachment() -> Response:
@@ -1259,6 +1245,29 @@ def _create_chat() -> Response:
     return json_response(response.model_dump(), status_code=201)
 
 
+def _seed_chat() -> Response:
+    """``POST /api/chats/seed``: open a chat on the turns the Mind app had before the workspace existed.
+
+    The body is a :class:`SeedChatRequest`. Answers 201 with the chat's id and name pair; the
+    chat is listed at once as a provisional chat awaiting the user's first message, with the
+    turns as its transcript (``chat_seed.py``). Like every create, 503 until the agent list has
+    been read from mngr once, so the Mind app's seeding retries rather than being refused.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    if not agent_manager.is_agent_list_known():
+        return _agent_list_not_known_response()
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        seed_request = SeedChatRequest.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    created = agent_manager.seed_chat(seed_request.title, seed_request.turns)
+    response = CreateChatResponse(chat_id=created.chat_id, name=created.name, display_name=created.display_name)
+    return json_response(response.model_dump(), status_code=201)
+
+
 def _discover_with_filters() -> list[AgentInfo]:
     """Discover agents using the app-level filter configuration."""
     state = get_state()
@@ -1535,7 +1544,6 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
-    ("fast-mode-answered", _mark_fast_mode_prompt_answered, ("POST",)),
     ("interrupt", _interrupt_agent_endpoint, ("POST",)),
     ("flush-queue", _flush_queue_endpoint, ("POST",)),
     ("shoulder-tap-atomic", _shoulder_tap_atomic_endpoint, ("POST",)),
@@ -1584,6 +1592,11 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
+    application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
+    application.add_url_rule("/api/settings", view_func=_get_settings_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
+    )
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])

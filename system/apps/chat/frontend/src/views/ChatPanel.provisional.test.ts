@@ -75,7 +75,8 @@ vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null 
 vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
 vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => [] }));
-vi.mock("./fast-mode-prompt", () => ({ maybePromptForFastMode: () => undefined }));
+vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
+vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { ChatPanel } from "./ChatPanel";
 
@@ -126,7 +127,14 @@ function mountPanel(): () => unknown {
 }
 
 function awaiting(): void {
-  mocks.proto = { chat_id: AGENT_ID, name: "Chat 1", account_id: "", phase: "awaiting_account", error: null };
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: "",
+    phase: "awaiting_account",
+    error: null,
+    is_seeded: false,
+  };
 }
 
 describe("ChatPanel over a provisional chat", () => {
@@ -212,7 +220,14 @@ describe("ChatPanel over a provisional chat", () => {
     await flushAsync();
     expect(renderedText(render())).toContain("is not waiting to be launched");
 
-    mocks.proto = { chat_id: AGENT_ID, name: "Chat 1", account_id: "acct-1", phase: "creating", error: null };
+    mocks.proto = {
+      chat_id: AGENT_ID,
+      name: "Chat 1",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+    };
     render();
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -220,6 +235,7 @@ describe("ChatPanel over a provisional chat", () => {
       account_id: "acct-1",
       phase: "failed",
       error: "mngr create exited with code 1",
+      is_seeded: false,
     };
     const tree = render();
 
@@ -234,6 +250,7 @@ describe("ChatPanel over a provisional chat", () => {
       account_id: "acct-1",
       phase: "failed",
       error: "mngr create exited with code 1",
+      is_seeded: false,
     };
     const render = mountPanel();
 
