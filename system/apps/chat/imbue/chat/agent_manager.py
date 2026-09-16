@@ -2441,12 +2441,26 @@ class AgentManager:
         chooser opens then) and launches the chat's first agent through ``create_chat``. The
         seed survives a restart of this app because the record does; the tab is opened through
         the shell like a labeled chat's, held until a client is connected.
+
+        ``title`` is the chat's display name, checked like a launch's requested name: one with
+        no usable characters raises ``AgentCreationError`` and one already taken raises
+        ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
+        empty title mints the first free "Chat N".
         """
+        explicit_title = title.strip()
+        if explicit_title and not canonical_agent_name(explicit_title):
+            raise AgentCreationError(f"Chat name '{explicit_title}' contains no usable characters")
         chat_id = ChatId(str(AgentId()))
         now = datetime.now(timezone.utc)
         events = seed_events(chat_id, turns, now)
         with self._lock:
-            display_name = title.strip() or first_free_numbered_name(AUTO_NAME_WORD, self._taken_names_locked())
+            taken_names = self._taken_names_locked()
+            if explicit_title:
+                if is_name_conflict(explicit_title, taken_names):
+                    raise AgentNameConflictError(f"A chat named '{explicit_title}' already exists; pick another name")
+                display_name = explicit_title
+            else:
+                display_name = first_free_numbered_name(AUTO_NAME_WORD, taken_names)
             record = ChatRecord(
                 chat_id=chat_id,
                 agents=(

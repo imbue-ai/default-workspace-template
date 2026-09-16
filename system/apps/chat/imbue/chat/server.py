@@ -1251,7 +1251,9 @@ def _seed_chat() -> Response:
     The body is a :class:`SeedChatRequest`. Answers 201 with the chat's id and name pair; the
     chat is listed at once as a provisional chat awaiting the user's first message, with the
     turns as its transcript (``chat_seed.py``). Like every create, 503 until the agent list has
-    been read from mngr once, so the Mind app's seeding retries rather than being refused.
+    been read from mngr once, so the Mind app's seeding retries rather than being refused; a
+    title with no usable characters answers 400 and one already taken 409, as a launch's
+    requested name would.
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
@@ -1263,7 +1265,12 @@ def _seed_chat() -> Response:
         seed_request = SeedChatRequest.model_validate(body)
     except ValueError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    created = agent_manager.seed_chat(seed_request.title, seed_request.turns)
+    try:
+        created = agent_manager.seed_chat(seed_request.title, seed_request.turns)
+    except AgentNameConflictError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except AgentCreationError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     response = CreateChatResponse(chat_id=created.chat_id, name=created.name, display_name=created.display_name)
     return json_response(response.model_dump(), status_code=201)
 

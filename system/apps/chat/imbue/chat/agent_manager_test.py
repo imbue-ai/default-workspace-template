@@ -544,6 +544,24 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
         manager.stop()
 
 
+def test_seed_chat_checks_its_title_like_a_launch_checks_a_requested_name(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A title the first send's ``mngr create`` could not use is refused here, with nothing seeded."""
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    try:
+        with pytest.raises(AgentCreationError, match="no usable characters"):
+            manager.seed_chat("!!!", _seed_turns())
+        manager.seed_chat("Getting started", _seed_turns())
+        with pytest.raises(AgentNameConflictError, match="already exists"):
+            manager.seed_chat("getting-started", _seed_turns())
+        assert [proto.name for proto in manager.get_provisional_chats()] == ["Getting started"]
+        assert len(store.read_all()) == 1
+    finally:
+        manager.stop()
+
+
 def test_a_seeded_chat_must_be_launched_with_a_message(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
     try:

@@ -2197,6 +2197,12 @@ def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_t
     assert events["events"][0]["content"] == "Wait.. what is honest software?"
 
 
+def test_seeding_a_chat_refuses_a_title_with_no_usable_characters(client: FlaskClient) -> None:
+    response = client.post("/api/chats/seed", json={**_seed_body(), "title": "!!!"})
+    assert response.status_code == 400
+    assert "no usable characters" in response.get_json()["detail"]
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400
