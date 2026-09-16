@@ -304,7 +304,11 @@ stage_one() {
     if [ -e "$from/$rel" ]; then
         (cd "$from" && rsync -aR "$rel" "$STAGE/")
     else
-        echo "build_template.sh: warning: include path not found, skipping: $rel" >&2
+        # Name the root: there are two, so "not found" on its own cannot tell a
+        # path the workspace does not have from a path looked for in the wrong
+        # place, and this warning is the only sign that the manifest will
+        # declare something the snapshot does not carry.
+        echo "build_template.sh: warning: include path not found under $from, skipping: $rel" >&2
     fi
 }
 
