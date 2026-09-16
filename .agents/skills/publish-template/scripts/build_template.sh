@@ -2,7 +2,8 @@
 # Assemble a clean, shareable "template" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-template skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
+# (cwd = worktree repo root); the live mind's /home/user/workspace is never written
+# to -- step 1 reads the opted-in data paths out of it, and that is all. This is
 # v2 of the templates flow (see TEMPLATE_FLOW_VERSION below); the
 # generated manifest records it as `format: v2` in its front-matter and in the
 # sibling template.toml.
@@ -234,7 +235,10 @@ while IFS=' ' read -r marker_sha marker_subject; do
     break
 done < <(git log --first-parent --format='%H %s' HEAD)
 
-# --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----
+# --- 1. stage the selected paths BEFORE the reset ----------------------------
+#
+# --include out of this checkout, --data-include out of the live workspace (see
+# the data_source comment below).
 
 # rsync -R preserves each relative path so it lands at the same location under
 # the stage dir; the reset in step 2 wipes the live paths, so we must capture
