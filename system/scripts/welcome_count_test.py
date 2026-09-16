@@ -36,11 +36,16 @@ def test_a_peek_prints_the_count_without_recording_a_run(
     assert path.read_text() == "4\n"
 
 
-def test_an_unreadable_count_reads_as_none(tmp_path: Path) -> None:
+def test_an_unreadable_count_reads_as_none_and_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     path = tmp_path / "count"
     path.write_text("many")
     assert welcome_count.read_count(path) == 0
+    assert "not a number" in capsys.readouterr().err
+    # An absent file is the expected first run: nothing to warn about.
     assert welcome_count.read_count(tmp_path / "absent") == 0
+    assert capsys.readouterr().err == ""
 
 
 def test_the_default_path_is_under_the_workspaces_machine_state(tmp_path: Path) -> None:

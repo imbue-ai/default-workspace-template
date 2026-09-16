@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -32,10 +33,25 @@ def count_path(environ: Mapping[str, str], cwd: Path) -> Path:
 
 
 def read_count(path: Path) -> int:
-    """The number of earlier runs; an absent or unreadable file reads as none."""
+    """The number of earlier runs; an absent file reads as none, and so does one that cannot be
+    read or does not hold a number, with a warning on stderr (the skill reads only stdout)."""
     try:
-        return int(path.read_text(encoding="utf-8").strip() or "0")
-    except (OSError, ValueError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        print(
+            f"Warning: could not read the welcome count at {path}: {exc}",
+            file=sys.stderr,
+        )
+        return 0
+    try:
+        return int(text.strip() or "0")
+    except ValueError:
+        print(
+            f"Warning: the welcome count at {path} is not a number: {text.strip()!r}",
+            file=sys.stderr,
+        )
         return 0
 
 
