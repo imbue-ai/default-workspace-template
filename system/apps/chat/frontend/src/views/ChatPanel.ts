@@ -28,6 +28,7 @@ import {
   getRenderVersion,
   getTotalEventCount,
   isConversationNotFound,
+  noteLoadedArrivals,
   removeMessageSentListener,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
@@ -506,7 +507,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       return;
     }
     seededChatAwaitingReload = null;
-    loadChat(chatId).finally(() => m.redraw());
+    // The first send rode the agent's create and landed before this page had a stream to see
+    // it arrive on, so the placed snapshot is what stands its "Sending…" bubble down.
+    loadChat(chatId)
+      .then(() => noteLoadedArrivals(chatId))
+      .finally(() => m.redraw());
   }
 
   /**

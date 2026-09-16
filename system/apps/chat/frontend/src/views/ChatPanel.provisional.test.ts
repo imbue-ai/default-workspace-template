@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     fetchEvents: vi.fn(async (_chatId: string) => undefined),
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
+    noteLoadedArrivals: vi.fn(),
   };
 });
 
@@ -55,6 +56,7 @@ vi.mock("../models/Response", () => ({
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
   isConversationNotFound: () => false,
+  noteLoadedArrivals: mocks.noteLoadedArrivals,
 }));
 vi.mock("../models/StreamingMessage", () => ({
   connectToStream: mocks.connectToStream,
@@ -291,6 +293,7 @@ describe("ChatPanel over a seeded chat", () => {
     mocks.fetchEvents.mockClear();
     mocks.loadSnapshotWithStream.mockClear();
     mocks.connectToStream.mockClear();
+    mocks.noteLoadedArrivals.mockClear();
     mocks.chat = undefined;
     mocks.chatsUpdatedListener = null;
   });
@@ -325,6 +328,11 @@ describe("ChatPanel over a seeded chat", () => {
 
     expect(mocks.loadSnapshotWithStream).toHaveBeenCalledTimes(1);
     expect(mocks.loadSnapshotWithStream).toHaveBeenCalledWith(AGENT_ID);
+    // The first send landed before the stream existed: the placed snapshot stands its bubble down.
+    expect(mocks.noteLoadedArrivals).toHaveBeenCalledWith(AGENT_ID);
+    expect(mocks.loadSnapshotWithStream.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.noteLoadedArrivals.mock.invocationCallOrder[0],
+    );
   });
 
   it("shows a failed create's reason over a seeded chat like any other", () => {

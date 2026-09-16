@@ -654,6 +654,15 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
   return changed;
 }
 
+/** The user turns among `events` that stand a page's "Sending…" bubble down: what a user sent.
+ *  Not a successor's handoff prompt (the chat app's own message; the message it folds in is the
+ *  switch marker's to show), and not a seed segment's turns (written before any page existed). */
+function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
+  return events
+    .filter((event) => event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event))
+    .map((event) => event.event_id);
+}
+
 export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(chatId).append(newEvents)) {
     m.redraw();
@@ -663,11 +672,7 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
   // event is harmless. Only the live tail feeds this -- paging/backfill of old
   // history goes through the other append paths and must not drop live bubbles.
-  // A successor's handoff prompt is the chat app's own message, not the real form of
-  // anything the page sent: the message it folds in is the switch marker's to show.
-  const userEventIds = newEvents
-    .filter((event) => event.type === "user_message" && !isHandoffPromptChip(event))
-    .map((event) => event.event_id);
+  const userEventIds = arrivedUserEventIds(newEvents);
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
@@ -679,6 +684,19 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
     event.type === "agent_switch" && event.message_id !== null ? [event.message_id] : [],
   );
   dropOutgoingByMessageId(chatId, carriedMessageIds);
+}
+
+/**
+ * Route the user turns of the chat's loaded window through the optimistic-send layer, for a
+ * message that landed before this page had a stream to see it arrive on: a seeded chat's first
+ * send rides its agent's create, and the reload once the agent lands places it as a snapshot,
+ * not a delta. Deduped by event_id like the live path, so a turn the stream did carry counts once.
+ */
+export function noteLoadedArrivals(chatId: string): void {
+  const userEventIds = arrivedUserEventIds(getEventsForChat(chatId));
+  if (userEventIds.length > 0) {
+    noteBackendArrivals(chatId, userEventIds);
+  }
 }
 
 export function prependEvents(chatId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {

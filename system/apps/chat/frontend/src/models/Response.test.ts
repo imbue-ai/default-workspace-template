@@ -37,6 +37,7 @@ import {
   hasMoreAfter,
   isConversationNotFound,
   isMessageCarriedBySwitch,
+  noteLoadedArrivals,
   type AssistantMessageEvent,
   type ToolCall,
   type TranscriptEvent,
@@ -171,6 +172,28 @@ describe("appendEvents and the optimistic bubbles", () => {
       },
     ]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
+  });
+
+  it("stands bubbles down for the user turns a loaded snapshot holds, but not the seed's, and each once", async () => {
+    // A seeded chat's first send rode its agent's create, so it is in the snapshot the reload
+    // places once the agent lands, never on the stream.
+    const chat = `chat-${Math.random()}`;
+    addOutgoing(chat, "Let's build something");
+    addOutgoing(chat, "and then this");
+    const seedTurn: TranscriptEvent = { ...makeEvent("seed-0"), source: "seed" };
+    mockRequest.mockResolvedValueOnce({
+      events: [seedTurn, makeEvent("first-send")],
+      offset: 0,
+      total: 2,
+    });
+    await fetchEvents(chat);
+
+    noteLoadedArrivals(chat);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and then this"]);
+    // The same window noted again (or its turn arriving on the stream after all) counts once.
+    noteLoadedArrivals(chat);
+    appendEvents(chat, [makeEvent("first-send")]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and then this"]);
   });
 
   it("tells whether a switch marker on the transcript carries a message by its send-time id", () => {
