@@ -353,6 +353,34 @@ describe("the switch dialog", () => {
     ]);
   });
 
+  it("starts a rebind's new chat with no pick on a harness whose model the chat app cannot switch", async () => {
+    // agy's model is changed from the agent's terminal: carrying the chat's model over would be a pick the
+    // new chat could never apply.
+    const google = { id: "acct-google", harness: "antigravity", lane: "google", label: "Google (Antigravity CLI)" };
+    const otherGoogle = { ...google, id: "acct-google-2", label: "Google 2 (Antigravity CLI)" };
+    state.accounts = [google, otherGoogle];
+    state.options = [];
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: {
+        harness: "antigravity",
+        account_id: google.id,
+        model_choice: {
+          identity: { model_id: "gemini-3-pro", effort: null, fast: false },
+          matched: { ...ASTRA, id: "gemini-3-pro", label: "Gemini 3 Pro", efforts: [], supports_fast: false },
+        },
+      },
+    });
+    state.draft = "a fresh start";
+    openSwitchDialog("agent-1", otherGoogle as ProviderAccount);
+    render();
+    await flush();
+    render();
+    expect(ROOT().textContent).toContain("Switch to Google 2 (Antigravity CLI)?");
+    pressButton("Start a new chat");
+    await flush();
+    expect(state.started).toEqual([["acct-google-2", "a fresh start", null]]);
+  });
+
   it("says a rebind keeps its model when the account has none to offer", async () => {
     state.options = [];
     openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);

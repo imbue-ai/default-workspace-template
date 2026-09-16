@@ -440,7 +440,7 @@ As landed in phase 9, which lets a rebind take a model pick (section 6), revisin
 - The dialog opened from Change, for either kind of switch, starts from the pick already armed for that account, so confirming it again does not drop the pick.
 - Armed, the strip names the pick ("Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"), and the chip and the Model row read the pick, else, for a rebind, the model the agent keeps.
 - The failed page names the step for a rebind as for a handoff: "Could not restart Claude Code" or "Could not set the model on Claude Code".
-- The dialog offers no picker for a harness whose model bar is read-only (antigravity, whose model is changed from the agent's terminal), for either kind of switch: a pick armed there could never be applied, and a rebind's retry would rerun it forever.
+- The dialog offers no picker for a harness whose model bar is read-only (antigravity, whose model is changed from the agent's terminal), for either kind of switch, and a new chat started from a rebind's dialog there does not carry the chat's model over: a pick made there could never be applied, and a rebind's retry would rerun it forever.
 
 ### 5.2 Trigger and preconditions
 
