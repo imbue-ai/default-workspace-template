@@ -74,6 +74,17 @@ describe("isAddressUnlisted", () => {
     expect(isAddressUnlisted("app:nowhere?instance=x")).toBe(true);
     expect(isAddressUnlisted("not an address")).toBe(true);
   });
+
+  it("calls nothing unlisted before the first app list arrives", () => {
+    expect(isAddressUnlisted("app:files")).toBe(false);
+    expect(isAddressUnlisted("app:nowhere?instance=x")).toBe(false);
+    expect(isAddressUnlisted("not an address")).toBe(true);
+    applyApps([]);
+    expect(isAddressUnlisted("app:nowhere?instance=x")).toBe(false);
+    applyApps([app("files")]);
+    expect(isAddressUnlisted("app:files")).toBe(false);
+    expect(isAddressUnlisted("app:nowhere?instance=x")).toBe(true);
+  });
 });
 
 describe("the inventory", () => {
