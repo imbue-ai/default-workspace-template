@@ -12,6 +12,7 @@ const state = vi.hoisted(() => {
     events: [] as unknown[],
     accounts: [] as { id: string; harness: string; lane: string; label: string }[],
     options: [] as unknown[],
+    optionsError: null as string | null,
     switches: [] as unknown[][],
     started: [] as unknown[][],
     notices: [] as unknown[],
@@ -64,14 +65,15 @@ vi.mock("./MessageInput", () => ({
   raiseFailureNotice: (_chatId: string, notice: unknown) => state.notices.push(notice),
 }));
 vi.mock("../models/AccountModelOptions", () => ({
-  fetchAccountModelOptions: () => Promise.resolve(state.options),
+  fetchAccountModelOptions: () =>
+    state.optionsError === null ? Promise.resolve(state.options) : Promise.reject(new Error(state.optionsError)),
 }));
 
 import m from "mithril";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { SwitchDialog, beginSwitchTo } from "./SwitchDialog";
+import { SwitchDialog, beginSwitchTo, closeSwitchDialog } from "./SwitchDialog";
 
 const OWN = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
 const CODEX = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
@@ -118,6 +120,7 @@ describe("the switch dialog", () => {
     state.events = [WELCOME, { type: "assistant_message", event_id: "a-1", timestamp: "t1" }, TYPED];
     state.accounts = [OWN, CODEX, OTHER_CLAUDE];
     state.options = [ASTRA];
+    state.optionsError = null;
     state.switches.length = 0;
     state.started.length = 0;
     state.notices.length = 0;
@@ -127,6 +130,8 @@ describe("the switch dialog", () => {
     state.isStartAccepted = true;
     state.isTranscriptLoaded = true;
     setPendingAccount("agent-1", null);
+    // The dialog is module state: a test that leaves it up would render into the next one's root.
+    closeSwitchDialog();
   });
 
   it("switches a chat with no user turn at once, with no dialog and nothing to say", async () => {
@@ -242,6 +247,19 @@ describe("the switch dialog", () => {
         attachments: [{ localId: "a1", fileName: "plan.pdf" }],
       },
     ]);
+  });
+
+  it("says the models could not be loaded rather than that the harness has none", async () => {
+    state.optionsError = "the daemon is not answering";
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    await flush();
+    render();
+    const text = ROOT().textContent ?? "";
+    expect(text).toContain("Could not load Codex's models");
+    expect(text).toContain("the daemon is not answering");
+    // The switch itself needs no model, so the dialog stays usable.
+    expect(text).toContain("Switch this chat");
   });
 
   it("arms a rebind at once, with no dialog and no pick, for an account on the chat's own harness and lane", () => {

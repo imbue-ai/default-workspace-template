@@ -37,6 +37,8 @@ interface OpenDialog {
   target: ProviderAccount;
   /** The successor's pickable models, once fetched; null while loading. */
   options: CatalogModelOption[] | null;
+  /** Why the models could not be fetched, when they could not be; null otherwise. */
+  optionsError: string | null;
   modelId: string;
   effort: string | null;
   fast: boolean;
@@ -87,6 +89,7 @@ export function openSwitchDialog(chatId: string, target: ProviderAccount): void 
     chatId,
     target,
     options: null,
+    optionsError: null,
     modelId: DEFAULT_MODEL_VALUE,
     effort: null,
     fast: false,
@@ -94,12 +97,19 @@ export function openSwitchDialog(chatId: string, target: ProviderAccount): void 
   };
   m.redraw();
   void fetchAccountModelOptions(target.id)
-    .catch((error) => {
-      console.warn(`Failed to load the models of account ${target.id}`, error);
-      return [] as CatalogModelOption[];
-    })
     .then((options) => {
       if (open !== null && open.chatId === chatId && open.target.id === target.id) open.options = options;
+    })
+    .catch((error: unknown) => {
+      console.warn(`Failed to load the models of account ${target.id}`, error);
+      // Said, not swallowed: an empty option list means "this harness offers no pick", which is a
+      // claim about the harness rather than a report that the request failed.
+      if (open !== null && open.chatId === chatId && open.target.id === target.id) {
+        open.options = [];
+        open.optionsError = describeRequestError(error);
+      }
+    })
+    .finally(() => {
       m.redraw();
     });
 }
@@ -143,6 +153,14 @@ function renderPicker(dialog: OpenDialog): m.Children {
       "p",
       { class: "switch-dialog-loading text-(length:--font-size-helper) text-secondary" },
       "Loading models…",
+    );
+  }
+  if (dialog.optionsError !== null) {
+    return m(
+      "p",
+      { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" },
+      `Could not load ${harnessLabel(dialog.target.harness)}'s models (${dialog.optionsError}). ` +
+        "It starts on its default model; you can change it once it is running.",
     );
   }
   if (dialog.options.length === 0) {
