@@ -53,20 +53,25 @@ def test_the_seed_file_reads_back_the_events_it_was_written_with(tmp_path: Path)
     assert not any(candidate.suffix == ".tmp" for candidate in path.parent.iterdir())
 
 
-def test_a_seed_line_that_is_not_an_object_is_skipped_with_a_warning(tmp_path: Path) -> None:
-    """One damaged line, whether it parses to something other than an object or does not parse
-    at all, loses that line and nothing else."""
+def test_a_damaged_seed_line_is_skipped_with_a_warning(tmp_path: Path) -> None:
+    """One damaged line, whether it parses to something other than an object, does not parse at
+    all, or is an object without the event id the loader indexes by, loses that line and nothing
+    else."""
     events = seed_events(_CHAT_ID, _turns(), _CREATED_AT)
     path = write_seed_file(tmp_path, events)
-    path.write_text(json.dumps(events[0]) + "\n[1, 2]\n{not json\n" + json.dumps(events[1]) + "\n")
+    no_id = {key: value for key, value in events[1].items() if key != "event_id"}
+    path.write_text(
+        json.dumps(events[0]) + "\n[1, 2]\n{not json\n" + json.dumps(no_id) + "\n" + json.dumps(events[1]) + "\n"
+    )
     warnings: list[str] = []
     handler_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
     try:
         assert read_seed_events(tmp_path) == events
     finally:
         logger.remove(handler_id)
-    assert len(warnings) == 2
+    assert len(warnings) == 3
     assert "line 2" in warnings[0] and "line 3" in warnings[1] and "not valid JSON" in warnings[1]
+    assert "line 4" in warnings[2] and "no event_id" in warnings[2]
 
 
 def test_a_chat_folder_without_a_seed_file_reads_as_no_events(tmp_path: Path) -> None:
