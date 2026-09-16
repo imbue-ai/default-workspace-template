@@ -50,9 +50,10 @@ def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> Non
     assert build_account_binding(HarnessType.PI_CODING).account_env(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
 
 
-def test_a_harness_with_no_scoping_raises_rather_than_binding_nothing(tmp_path: Path) -> None:
+def test_a_harness_no_account_runs_has_no_binding_to_build() -> None:
+    """No lane signs in to opencode, so there is nothing to scope, create, or rebind it with: asking raises."""
     with pytest.raises(BindingError):
-        build_account_binding(HarnessType.OPENCODE).account_env(tmp_path)
+        build_account_binding(HarnessType.OPENCODE)
 
 
 def test_credential_paths_match_what_mngr_provisions(tmp_path: Path) -> None:
@@ -281,8 +282,3 @@ def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
         _link_binding(harness).rebind_agent(tmp_path / "account", state)
         assert dest.is_symlink() and os.readlink(dest) == str(source)
     assert not dest.with_name(f"{dest.name}.rebind-tmp").exists()
-
-
-def test_a_harness_with_no_binding_cannot_be_rebound(tmp_path: Path) -> None:
-    with pytest.raises(BindingError):
-        build_account_binding(HarnessType.OPENCODE).rebind_agent(tmp_path / "account", tmp_path / "state")
