@@ -1699,7 +1699,7 @@ class AgentManager:
         self.remove_agent(successor_id)
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
-        """Put a running agent on ``pick``: the model bar's own path, for an agent that was just created.
+        """Put a running agent on ``pick``: the model bar's own path, for an agent that has just come up.
 
         The pick is validated against the agent's option set, fetched fresh for a harness whose
         set is per agent (codex reads it off its daemon) and read from the catalog otherwise,
