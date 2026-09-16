@@ -61,7 +61,7 @@ and syncs the directory alongside the runtime dir -- no extra CLI flag.
 
 Launch lifecycle commands:
 
-    mngr create <NAME> -t <TEMPLATE>
+    mngr create <NAME> -t <TEMPLATE> [--from :<WORK_FOLDER>] [-S ...model=<MODEL>]
     mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=merge
     mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=merge
                 (when frontmatter declares it)
@@ -74,6 +74,13 @@ rsync copy directory *contents* into the destination. The local source is
 agent destination stays repo-relative so mngr resolves it against the worker's
 workdir. The ``--uncommitted-changes=merge`` flag is required (see
 ``.agents/shared/references/lead-proxy.md``).
+
+``--work-folder`` runs the worker in place inside an existing folder instead of a
+fresh worktree of the lead's HEAD. It is meant for templates whose transfer mode
+is ``none`` (``shared_folder_worker``), where several workers share one folder.
+In that mode the lead's own uncommitted changes are irrelevant to the worker, so
+the clean-tree check is skipped. ``--model`` overrides the Claude model for this
+one worker through mngr's settings override.
 
 Why ``mngr message`` *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
@@ -420,6 +427,42 @@ def _worktree_is_clean(runner: Runner) -> bool:
     return not (getattr(result, "stdout", "") or "").strip()
 
 
+def _mngr_create_argv(
+    name: str,
+    template: str,
+    work_folder: Path | None,
+    model: str | None,
+) -> list[str]:
+    """The ``mngr create`` argv for one worker.
+
+    ``work_folder`` becomes ``--from :<absolute path>`` so the worker runs in that
+    folder regardless of the lead's cwd; ``model`` becomes a per-agent settings
+    override of the Claude model.
+    """
+    argv = [
+        "mngr",
+        "create",
+        name,
+        "-t",
+        template,
+        # Marks this as an agent-created (worker) agent so the OOM
+        # agent-tagging hook puts it in the worker-agent band -- shed
+        # before user-created agents (but after every agent's
+        # subprocesses) under memory pressure.
+        "--label",
+        "agent_created=true",
+    ]
+    folder_args = (
+        [] if work_folder is None else ["--from", f":{work_folder.resolve()}"]
+    )
+    model_args = (
+        []
+        if model is None
+        else ["-S", f"agent_types.claude.settings_overrides.model={model}"]
+    )
+    return argv + folder_args + model_args
+
+
 def launch(
     name: str,
     template: str,
@@ -427,6 +470,8 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
+    work_folder: Path | None = None,
+    model: str | None = None,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -448,9 +493,18 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``work_folder`` (must already exist) runs the worker in place in that folder,
+    and skips the clean-tree check; ``model`` overrides the worker's Claude model.
     """
     runner = runner or Runner()
 
+    if work_folder is not None and not work_folder.is_dir():
+        print(
+            f"create_worker: --work-folder is not a directory: {work_folder}",
+            file=sys.stderr,
+        )
+        return 2
     if not runtime_dir.is_dir():
         print(
             f"create_worker: --runtime-dir is not a directory: {runtime_dir}",
@@ -496,8 +550,9 @@ def launch(
     # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
     # stash: stashed work silently drops out of multi-agent coordination and
-    # gets lost.
-    if not _worktree_is_clean(runner):
+    # gets lost. A worker given a work folder runs in that folder, not on the
+    # lead's HEAD, so the lead's tree is irrelevant and the check is skipped.
+    if work_folder is None and not _worktree_is_clean(runner):
         print(
             f"create_worker: refusing to launch {name}: the working tree has "
             "uncommitted changes. The worker is created from your committed "
@@ -518,19 +573,9 @@ def launch(
 
     try:
         runner.run(
-            [
-                "mngr",
-                "create",
-                name,
-                "-t",
-                template,
-                # Marks this as an agent-created (worker) agent so the OOM
-                # agent-tagging hook puts it in the worker-agent band -- shed
-                # before user-created agents (but after every agent's
-                # subprocesses) under memory pressure.
-                "--label",
-                "agent_created=true",
-            ],
+            _mngr_create_argv(
+                name=name, template=template, work_folder=work_folder, model=model
+            ),
             check=True,
         )
     except subprocess.CalledProcessError as exc:
@@ -951,6 +996,8 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
+        work_folder=args.work_folder,
+        model=args.model,
     )
 
 
@@ -1027,6 +1074,20 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--work-folder",
+        type=Path,
+        default=None,
+        help="Existing folder the worker runs in place (mngr --from :PATH), "
+        "instead of a new worktree of your HEAD. Use with a template whose "
+        "transfer is none, e.g. 'shared_folder_worker'. Skips the clean-tree check.",
+    )
+    launch_parser.add_argument(
+        "--model",
+        default=None,
+        help="Claude model for this worker (e.g. 'opus', 'sonnet'), passed as a "
+        "per-agent settings override. Defaults to the template's model.",
     )
 
     await_parser = subparsers.add_parser(
