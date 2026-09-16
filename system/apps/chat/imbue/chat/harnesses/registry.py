@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Final
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.account_binding import AccountBinding
+from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
+from imbue.chat.harnesses.antigravity.account_binding import AntigravityAccountBinding
 from imbue.chat.harnesses.antigravity.activity import AntigravityActivityTracker
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_STATE_RELATIVE_PATH
@@ -30,6 +33,7 @@ from imbue.chat.harnesses.antigravity.session import AntigravityHarnessSession
 from imbue.chat.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.chat.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
+from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -38,6 +42,7 @@ from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
+from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
@@ -53,6 +58,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
+from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -305,6 +311,10 @@ class HarnessSpec(FrozenModel):
     # to deliver blind. Declared here rather than imported from a harness module, so the
     # endpoints stay harness-neutral.
     cancel_chord: str = "M-q"
+    # How the harness's agents are bound to a signed-in account (the scope, the create's arguments,
+    # the rebind's edit, the sessions a rebind carries along). None for a harness no account can run:
+    # no lane signs in to it, so nothing binds one.
+    binding_class: type[AccountBinding] | None = None
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -314,6 +324,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
+        binding_class=ClaudeAccountBinding,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -346,6 +357,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
         process_started_marker_filename=CodexActivityTracker.marker_filename,
+        binding_class=CodexAccountBinding,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -378,6 +390,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
+        binding_class=PiAccountBinding,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
@@ -427,6 +440,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=AntigravitySessionWatcher,
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
+        binding_class=AntigravityAccountBinding,
         # Display-only model bar: agy's `/model` is an interactive TUI picker with no
         # scriptable one-shot form, so the bar reflects and never drives. The session subclass
         # exists only to absorb catalog staleness -- see its switch_options.
@@ -484,6 +498,14 @@ def build_shoulder_tap(agent_info: AgentInfo) -> AtomicShoulderTap | None:
     harness registers none (its session taps through a live connection instead)."""
     tap_class = get_harness_spec(agent_info.harness).shoulder_tap_class
     return tap_class.build(agent_info) if tap_class is not None else None
+
+
+def build_account_binding(harness: HarnessType) -> AccountBinding:
+    """Build the account binding for ``harness``. Raises ``BindingError`` for a harness no account can be bound to."""
+    binding_class = get_harness_spec(harness).binding_class
+    if binding_class is None:
+        raise BindingError(f"{harness} has no account binding")
+    return binding_class()
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:

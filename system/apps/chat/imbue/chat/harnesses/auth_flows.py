@@ -42,9 +42,6 @@ import pexpect
 from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
-from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
@@ -70,6 +67,7 @@ from imbue.chat.harnesses.pty_auth import extract_wrapped_value
 from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -278,7 +276,7 @@ class AuthFlowService:
                     raise FlowError(f"that account signs in through {existing.lane}, not {lane.id}")
                 account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
-            seed_account(lane.harness, account_path, self._work_dir)
+            build_account_binding(lane.harness).seed_account(account_path, self._work_dir)
 
             session = _new_session(lane, method, account_id, minted)
             self._session = session
@@ -350,7 +348,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **account_env(session.lane.harness, account_path)}
+        env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
         binary = _binary_for(session.lane)
         session.process = self._spawner(
             binary, list(method.argv), method.scrape_timeout_s, env=env, columns=method.pty_columns
@@ -513,7 +511,7 @@ class AuthFlowService:
                 write_claude_env(path, managed_env)
                 return existing
             account_id, path = accounts.mint_account_dir(self._home)
-            seed_account(lane.harness, path, self._work_dir)
+            build_account_binding(lane.harness).seed_account(path, self._work_dir)
             write_claude_env(path, managed_env)
             return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
 
@@ -885,7 +883,7 @@ def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple
     before re-driving its sign-in -- see `_clear_for_reauth`.
     """
     paths = [account_path / "settings.json"] if harness is HarnessType.CLAUDE else []
-    linked = account_credential_path(harness, account_path)
+    linked = build_account_binding(harness).account_credential_path(account_path)
     if linked is not None:
         paths.append(linked)
     if harness is HarnessType.CLAUDE:

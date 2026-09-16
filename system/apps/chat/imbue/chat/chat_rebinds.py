@@ -36,11 +36,8 @@ from imbue.chat.chat_handoffs import mngr_failure_reason
 from imbue.chat.chat_records import ChatRebindRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
-from imbue.chat.harnesses.binding import BindingError
-from imbue.chat.harnesses.binding import rebind_agent
-from imbue.chat.harnesses.claude.session_files import claude_session_ids
-from imbue.chat.harnesses.claude.session_files import move_claude_sessions
-from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.account_binding import BindingError
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStateItem
@@ -277,9 +274,14 @@ class RebindRunner:
             logger.info("Rebind of chat {}: stopping agent {}", chat_id, rebind.agent_id)
             self._deps.stop_agent(agent_info)
         target_dir = self._deps.account_dir(account.id)
-        if agent_state.harness is HarnessType.CLAUDE:
-            self._move_claude_sessions(chat_id, rebind_id, rebind, agent_info, target_dir)
-        rebind_agent(agent_state.harness, target_dir, agent_info.agent_state_dir)
+        binding = build_account_binding(agent_state.harness)
+        binding.move_sessions(
+            agent_info,
+            None if rebind.sessions_dir is None else Path(rebind.sessions_dir),
+            target_dir,
+            lambda sessions_dir: self._record_sessions_dir(chat_id, rebind_id, sessions_dir),
+        )
+        binding.rebind_agent(target_dir, agent_info.agent_state_dir)
         # The watcher captured the binding it was built against; evicted only once the new one
         # is on disk, so a read that rebuilt it meanwhile is dropped too and the next read
         # follows the new binding.
@@ -292,36 +294,11 @@ class RebindRunner:
         )
         return True
 
-    def _move_claude_sessions(
-        self, chat_id: ChatId, rebind_id: str, rebind: ChatRebindRecord, agent_info: AgentInfo, target_dir: Path
-    ) -> None:
-        """Carry the agent's session files to the new account's tree, tracking where they are on the record.
-
-        The files are looked for under the dir the record names (the one the agent ran under
-        before, read off the env file before the env line first changes) and under the env
-        file's current dir: a resume can find the env rewritten before the move ran, and a retry
-        on another account finds the files under the account the failed attempt moved them to.
-        The record then names the target, so the next attempt looks there.
-        """
-        recorded = rebind.claude_sessions_config_dir
-        if recorded is None:
-            recorded = str(agent_info.claude_config_dir)
-            self._record_claude_sessions_dir(chat_id, rebind_id, recorded)
-        session_ids = claude_session_ids(agent_info.agent_state_dir, rebind.agent_id)
-        for source_dir in dict.fromkeys((Path(recorded), agent_info.claude_config_dir)):
-            moved = move_claude_sessions(session_ids, source_dir, target_dir)
-            if moved:
-                logger.info("Rebind of chat {}: moved {} session file(s) to {}", chat_id, len(moved), target_dir)
-        if Path(recorded) != target_dir:
-            self._record_claude_sessions_dir(chat_id, rebind_id, str(target_dir))
-
-    def _record_claude_sessions_dir(self, chat_id: ChatId, rebind_id: str, config_dir: str) -> None:
+    def _record_sessions_dir(self, chat_id: ChatId, rebind_id: str, sessions_dir: Path) -> None:
         self._update_rebind(
             chat_id,
             rebind_id,
-            lambda current: current.model_copy_update(
-                to_update(current.field_ref().claude_sessions_config_dir, config_dir)
-            ),
+            lambda current: current.model_copy_update(to_update(current.field_ref().sessions_dir, str(sessions_dir))),
         )
 
     def _relabel(self, chat_id: ChatId, rebind: ChatRebindRecord, account_id: str) -> None:

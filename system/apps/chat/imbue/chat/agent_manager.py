@@ -67,9 +67,8 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import ChatRecordStore
 from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
-from imbue.chat.harnesses.binding import BindingError
-from imbue.chat.harnesses.binding import create_args as binding_create_args
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
@@ -89,6 +88,7 @@ from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -266,7 +266,7 @@ def _build_chat_create_command(
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
-    # The account this chat runs on, if any. These come from ``binding.create_args`` and have
+    # The account this chat runs on, if any. These come from the harness binding's ``create_args`` and have
     # to ride the create rather than follow it: ``mngr create`` provisions, starts, waits for
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
@@ -291,7 +291,11 @@ def _account_binding_args(harness: HarnessType, account_id: str, state_dir: Path
     recorded as a label: it is how the UI shows which account a chat runs on, and how a
     re-auth knows which chats it just revived.
     """
-    return [*binding_create_args(harness, account_dir(account_id), state_dir), "--label", f"account={account_id}"]
+    return [
+        *build_account_binding(harness).create_args(account_dir(account_id), state_dir),
+        "--label",
+        f"account={account_id}",
+    ]
 
 
 def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:

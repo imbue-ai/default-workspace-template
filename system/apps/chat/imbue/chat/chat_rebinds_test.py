@@ -428,9 +428,7 @@ def test_a_resume_after_the_env_was_rewritten_still_finds_the_sessions_where_the
     # A last process that died after recording the old dir and rewriting the env, before moving.
     workspace.store.write(
         record.with_converging(
-            record.rebind.model_copy_update(
-                to_update(record.rebind.field_ref().claude_sessions_config_dir, str(old_dir))
-            )
+            record.rebind.model_copy_update(to_update(record.rebind.field_ref().sessions_dir, str(old_dir)))
         )
     )
     (tmp_path / "agents" / agent_id / "env").write_text(
@@ -458,7 +456,7 @@ def test_a_retry_on_a_third_account_moves_the_sessions_on_from_where_the_failed_
     _runner(workspace).run(workspace.chat_id, "rebind-1")
     failed = workspace.record()
     assert failed is not None and failed.rebind is not None and failed.rebind.phase is HandoffPhase.FAILED
-    assert failed.rebind.claude_sessions_config_dir == str(workspace.account_dir(_NEW_ACCOUNT.id))
+    assert failed.rebind.sessions_dir == str(workspace.account_dir(_NEW_ACCOUNT.id))
 
     # The retry on a third account of the same lane, as the manager rewrites the entry.
     (workspace.fail_dir / "fail-start").unlink()

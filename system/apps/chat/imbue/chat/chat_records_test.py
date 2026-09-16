@@ -157,6 +157,36 @@ def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> 
     assert store.read(ChatId(first)) is not None
 
 
+def test_a_rebind_written_under_the_claude_named_sessions_field_reads_and_is_rewritten_harness_neutral(
+    tmp_path: Path,
+) -> None:
+    """A rebind a chat app from before the binding refactor left unfinished names its sessions dir
+    ``claude_sessions_config_dir``; the resumed rebind must still find the files, and its next write
+    uses the new name."""
+    store = FileChatRecordStore(root=tmp_path / "chats")
+    agent_id = _agent_id()
+    store.write(
+        ChatRecord(
+            chat_id=ChatId(agent_id),
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False),),
+            rebind=make_chat_rebind_record(agent_id=agent_id),
+        )
+    )
+    record_path = tmp_path / "chats" / agent_id / "record.json"
+    older = json.loads(record_path.read_text())
+    older["rebind"].pop("sessions_dir")
+    older["rebind"]["claude_sessions_config_dir"] = "/home/user/.minds/accounts/acct-anthropic"
+    record_path.write_text(json.dumps(older))
+
+    read_back = store.read(ChatId(agent_id))
+    assert read_back is not None and read_back.rebind is not None
+    assert read_back.rebind.sessions_dir == "/home/user/.minds/accounts/acct-anthropic"
+    store.write(read_back)
+    rewritten = json.loads(record_path.read_text())["rebind"]
+    assert rewritten["sessions_dir"] == "/home/user/.minds/accounts/acct-anthropic"
+    assert "claude_sessions_config_dir" not in rewritten
+
+
 def test_a_file_store_refuses_a_record_from_a_newer_build(tmp_path: Path) -> None:
     store = FileChatRecordStore(root=tmp_path / "chats")
     first = _agent_id()

@@ -1,0 +1,5 @@
+Phase 9 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`).
+
+- Each harness now has one account-binding class (`harnesses/<harness>/account_binding.py`), registered on `HarnessSpec` as `binding_class` like the watcher, tracker, and resolver classes. It owns everything that differs per harness when an agent is bound to an account: the scoping variable, the account files seeded at sign-in, the `mngr create` arguments, the workspace's create defaults, the rebind's edit, and the move of session files during a rebind. Claude's binding is the env-file line plus the session move; codex, pi, and antigravity share a credential-link base whose session move does nothing. `harnesses/account_scope.py` is gone, `harnesses/binding.py` keeps only the account resolution and the rebind set, and the rebind runner no longer checks which harness it is rebinding. Behavior is unchanged.
+
+- The rebind record's `claude_sessions_config_dir` is now the harness-neutral `sessions_dir`. A record written under the old name still reads.
