@@ -118,6 +118,25 @@ def test_a_history_without_markers_exits_nonzero_for_the_callers_fallback(
     assert _resolve(repo, "--origin").returncode == 1
 
 
+def test_an_unreadable_repo_is_not_reported_as_a_history_without_markers(
+    tmp_path: Path,
+) -> None:
+    """The callers answer exit 1 with the first-parent root.
+
+    That is the right answer for a repo git read fine and found no marker in,
+    and a wrong base for one git could not read at all, so the two may not
+    share a status.
+    """
+    not_a_repo = tmp_path / "loose"
+    not_a_repo.mkdir()
+
+    completed = _resolve(not_a_repo)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert _resolve(not_a_repo, "--origin").returncode == 2
+
+
 def test_the_origin_is_this_workspaces_own_marker_not_an_ancestors(
     tmp_path: Path,
 ) -> None:

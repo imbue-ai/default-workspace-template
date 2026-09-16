@@ -25,7 +25,9 @@ Usage (cwd = the repo, or pass ``--repo``):
     uv run .agents/shared/scripts/resolve_template_base.py [--repo DIR] [--origin]
 
 Prints the resolved sha on stdout and exits 0; exits 1 with a message on
-stderr when HEAD's first-parent history has no marker.
+stderr when HEAD's first-parent history has no marker, and 2 when git could
+not read that history at all. Only the 1 means "this repo has no marker", so
+only the 1 may be answered with a caller's own fallback.
 
 To apply either rule to a log read some other way (such as over SSH), run
 ``git`` with :data:`FIRST_PARENT_LOG_ARGS` and pass its lines to
@@ -102,11 +104,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     # the caller is an agent reading this script's stderr.
     log = subprocess.run(
         ["git", "-C", str(args.repo), *FIRST_PARENT_LOG_ARGS],
-        check=True,
+        check=False,
         stdout=subprocess.PIPE,
         text=True,
-    ).stdout
-    lines = log.splitlines()
+    )
+    if log.returncode != 0:
+        # Its own status, never the no-marker 1: the callers answer that one by
+        # falling back to the first-parent root, which is a wrong base here
+        # rather than a missing one.
+        print(
+            f"resolve_template_base.py: git could not read HEAD's first-parent "
+            f"history in {args.repo} (exit {log.returncode}, see above)",
+            file=sys.stderr,
+        )
+        return 2
+    lines = log.stdout.splitlines()
     if args.origin:
         resolved = find_workspace_origin(lines)
         missing = "no 'Initial workspace commit' on HEAD's first-parent history"
