@@ -107,10 +107,6 @@ export function closeSwitchDialog(): void {
   m.redraw();
 }
 
-export function isSwitchDialogOpen(chatId: string): boolean {
-  return open !== null && open.chatId === chatId;
-}
-
 /** The chosen option, or null for the default. */
 function chosenOption(dialog: OpenDialog): CatalogModelOption | null {
   return (dialog.options ?? []).find((option) => option.id === dialog.modelId) ?? null;

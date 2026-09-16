@@ -60,7 +60,7 @@ import m from "mithril";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { SwitchDialog, beginSwitchTo, isSwitchDialogOpen } from "./SwitchDialog";
+import { SwitchDialog, beginSwitchTo } from "./SwitchDialog";
 
 const OWN = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
 const CODEX = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
@@ -120,7 +120,8 @@ describe("the switch dialog", () => {
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     await flush();
     expect(state.switches).toEqual([["agent-1", "acct-openai", "", "m-1"]]);
-    expect(isSwitchDialogOpen("agent-1")).toBe(false);
+    render();
+    expect(ROOT().textContent).toBe("");
     expect(getPendingAccountId("agent-1")).toBeNull();
   });
 
@@ -165,7 +166,8 @@ describe("the switch dialog", () => {
       label: "GPT-6 Astra · High",
     });
     expect(state.switches).toEqual([]);
-    expect(isSwitchDialogOpen("agent-1")).toBe(false);
+    render();
+    expect(ROOT().textContent).toBe("");
   });
 
   it("starts a new chat on the target with the draft and the pick, leaving this chat alone", async () => {
@@ -190,13 +192,13 @@ describe("the switch dialog", () => {
     ]);
     expect(getPendingAccountId("agent-1")).toBeNull();
     expect(state.switches).toEqual([]);
-    expect(isSwitchDialogOpen("agent-1")).toBe(false);
+    render();
+    expect(ROOT().textContent).toBe("");
   });
 
   it("arms a rebind at once, with no dialog and no pick, for an account on the chat's own harness and lane", () => {
     beginSwitchTo("agent-1", OTHER_CLAUDE as ProviderAccount);
     render();
-    expect(isSwitchDialogOpen("agent-1")).toBe(false);
     expect(ROOT().textContent).toBe("");
     // Armed rather than run: the agent keeps its conversation, and the next send restarts it, so
     // a turn in progress is not cut short by the press.
