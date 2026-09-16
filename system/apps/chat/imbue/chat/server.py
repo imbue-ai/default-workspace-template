@@ -1220,8 +1220,8 @@ def _run_create_chat() -> CreatedChat | Response:
         create_request = CreateChatRequest.model_validate(request_fields)
         return agent_manager.create_chat(
             create_request.name,
-            # The `first` create template belongs to the workspace's own first run, not to
-            # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
+            # A client asks for no templates: the manager adds `welcome` and `fast` itself,
+            # from the message and the workspace's fast-mode limit (``launch_role_templates``).
             extra_role_templates=(),
             project_id=project_id,
             account_id=create_request.account_id,
