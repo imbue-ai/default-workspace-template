@@ -17,8 +17,6 @@
  * if it does not, add it there rather than here.
  */
 
-import { menuCardClass } from "@imbue/workspace-ui/src/components/menu";
-
 /** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
  *  fixed width and padding -- the panel carries the width and pads its own regions. */
 export const MODAL =
@@ -39,7 +37,7 @@ export const PANEL = "flex w-[460px] max-w-[90vw] flex-col";
 
 /** The body's shared part. Its ceiling comes from `panelBody`, because how much room a screen
  *  deserves is a fact about that screen. */
-const BODY = "overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
+const BODY = "overflow-y-auto overscroll-contain px-4 pb-3 pt-1";
 
 /** Each screen's body ceiling. Height is the axis that still varies: a confirmation is a
  *  sentence, a method list is a column of rows, and the lane list is the tallest thing the
@@ -59,7 +57,7 @@ export function panelBody(screen: "status" | "menu" | "form" | "chooser"): strin
   }[screen];
 }
 
-export const HEADER = "flex items-center gap-1.5 px-6 pb-4 pt-5";
+export const HEADER = "flex items-center gap-1.5 px-4 pb-3 pt-3";
 export const TITLE = "m-0 type-heading text-primary";
 
 export const ROW_STACK = "flex flex-col gap-2";
@@ -124,7 +122,7 @@ export const STEP_NUM =
 export const FIELD_ROW = "flex items-center gap-2";
 
 /** One right-aligned action under the body. */
-export const FOOTER = "px-6 pb-5 pt-4";
+export const FOOTER = "px-4 pb-3 pt-3";
 export const FOOTER_ROW = "flex justify-end";
 
 /** Secondary prose under a field or step. */
@@ -136,21 +134,21 @@ export const RAW_VALUE =
   "mt-2 select-all break-all rounded-md border border-default bg-sidebar p-2 font-mono " +
   "type-helper leading-snug text-primary";
 
-/** The device flow's one-time code: the one place a value is meant to be read aloud off the
- *  screen and typed somewhere else, so it is set far above any type role. */
+/** The device flow's one-time code. Label weight in mono with a little tracking: legible
+ *  enough to read aloud and retype, and level with the copy button beside it. */
 export const CODE =
-  "flex-1 rounded-md bg-sidebar p-3 text-center font-mono text-[22px] tracking-[0.12em] " + "text-primary select-all";
+  "flex-1 rounded-md bg-sidebar p-2 text-center font-mono type-label tracking-[0.12em] text-primary select-all";
 
 /** verifying / success / error, one shape for all three.
  *
- *  The verdict is the whole screen, so it is sized like one: a bigger disc, a heading at full
- *  strength rather than a step back, and a detail line in the body colour. */
+ *  The verdict reads as a label over its detail line rather than as a second title: the modal
+ *  header already names the screen, so the verdict only has to state the outcome. */
 export const STATUS = "flex flex-col items-center px-2 py-8 text-center";
-const STATUS_DISC = "mb-4 flex h-16 w-16 items-center justify-center rounded-full";
+const STATUS_DISC = "mb-3 flex h-12 w-12 items-center justify-center rounded-full";
 export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent`;
 export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-light text-accent`;
 export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-danger-surface text-danger`;
-export const STATUS_TITLE = "type-heading-lg text-primary";
+export const STATUS_TITLE = "type-label text-primary";
 export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-secondary";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-faint";
@@ -160,35 +158,5 @@ export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-hel
 export const ACCOUNT_ROW =
   "flex w-full items-center gap-2 rounded-lg border border-default bg-surface p-3 text-left shadow-raised";
 
-// --- The API-key screen's provider dropdown ------------------------------------------------
-
-/** The field-shaped trigger. Sized and framed like the key input beside it (see
- *  `inputClass`), since the two read as one form. */
-export const PICKER_TRIGGER =
-  "flex w-full items-center justify-between gap-2 rounded-md border border-default bg-surface " +
-  "px-3 py-2 text-left type-body transition-[border-color] duration-(--dur-base) " +
-  "hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 " +
-  "focus-visible:outline-accent cursor-pointer";
-export const PICKER_TRIGGER_VALUE = "flex min-w-0 items-baseline gap-2";
-export const PICKER_TRIGGER_NAME = "truncate text-primary";
-export const PICKER_TRIGGER_ENV = "shrink-0 font-mono type-helper text-faint";
-export const PICKER_TRIGGER_EMPTY = "text-faint";
-export const PICKER_CARET = "shrink-0 text-faint transition-transform";
-export const PICKER_CARET_OPEN = "rotate-180";
-
-/** Swallows the outside click that closes the menu, so it never reaches the modal beneath.
- *  Both live inside the overlay's stacking context, so the dropdown layer only has to clear
- *  the panel; the menu paints over its own backdrop by DOM order. */
-export const PICKER_BACKDROP = "fixed inset-0 z-(--z-dropdown) cursor-default";
-/** Pinned under the trigger, wearing the shared floating-menu chrome. The panel is
- *  overflow-hidden, so an in-panel popover would be clipped -- hence the portal. */
-export const PICKER_MENU = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
-/** The shared menu row shape (menuRowClass), minus its hover: the active row keeps its steady
- *  accent fill, so only the idle variant hovers. */
-export const PICKER_OPTION =
-  "flex h-8 w-full cursor-pointer items-center justify-between gap-3 px-3 text-left " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
-export const PICKER_OPTION_IDLE = "hover:bg-fill-hover";
-export const PICKER_OPTION_ACTIVE = "bg-accent-light";
-export const PICKER_OPTION_NAME = "truncate type-body";
-export const PICKER_OPTION_NAME_ACTIVE = "truncate type-body text-accent";
+// The API-key screen's provider picker is the workspace's `Dropdown` (components/dropdown):
+// its trigger, sheet, list and rows are the dropdown's own.

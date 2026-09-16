@@ -40,7 +40,8 @@ import { TemplateDetailModal } from "./TemplateDetailModal";
 import { TemplateCard, TemplateShelves } from "./TemplateShelves";
 import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
-import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { Menu, MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
@@ -272,10 +273,6 @@ export interface NewTabLauncherAttrs {
   onOpenRow: (row: LauncherRow) => void;
 }
 
-// Marks a section's filter toggle, so the menu's outside-press listener leaves the toggle's
-// own press to the click that follows it.
-const FILTER_TOGGLE_ATTR = "data-launcher-filter-toggle";
-
 const ROW_CLASS =
   "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
   "text-(length:--font-size-row) hover:bg-fill-hover ";
@@ -285,8 +282,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     "in-project": new Set(),
     "on-machine": new Set(),
   };
-  let openFilterFor: LauncherSectionKey | null = null;
-  let menuElement: HTMLElement | null = null;
+  // One filter menu per section, made on first use. The shared menu handles its own sheet,
+  // Escape and placement; only one is ever open.
+  const filterMenus = new Map<LauncherSectionKey, Menu>();
   let query = "";
   let startShownCount = START_PAGE_SIZE;
   let detailTemplate: CatalogTemplate | null = null;
@@ -295,22 +293,14 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // click empties the query).
   let isScrollToTemplatesPending = false;
 
-  const closeFilterMenu = (): void => {
-    openFilterFor = null;
-    m.redraw();
-  };
-
-  const onDocumentPointerDown = (event: Event): void => {
-    if (!(event.target instanceof Node)) return closeFilterMenu();
-    if (menuElement !== null && menuElement.contains(event.target)) return;
-    // A press on a toggle is the click that follows: it closes, or moves, the menu itself.
-    if (event.target instanceof Element && event.target.closest(`[${FILTER_TOGGLE_ATTR}]`) !== null) return;
-    closeFilterMenu();
-  };
-
-  const onDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape") closeFilterMenu();
-  };
+  function filterMenuFor(key: LauncherSectionKey): Menu {
+    let menu = filterMenus.get(key);
+    if (menu === undefined) {
+      menu = createMenu({ placement: "below", align: "end", minWidth: 170, extraClass: "new-tab-launcher-filter" });
+      filterMenus.set(key, menu);
+    }
+    return menu;
+  }
 
   function isSearching(): boolean {
     return query.trim() !== "";
@@ -380,80 +370,35 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   // ---------- the tables ----------
 
-  function filterMenuRow(section: LauncherSection, app: { name: string; displayName: string }): m.Vnode {
-    const hidden = hiddenAppsBySection[section.key];
-    const isShown = !hidden.has(app.name);
-    return m(
-      "label",
-      {
-        key: app.name,
-        class: menuRowClass({ extra: "text-(length:--font-size-row) text-primary" }),
-      },
-      [
-        m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
-          m("input", {
-            type: "checkbox",
-            checked: isShown,
-            onchange: () => {
-              if (hidden.has(app.name)) {
-                hidden.delete(app.name);
-              } else {
-                hidden.add(app.name);
-              }
-            },
-            class:
-              "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (isShown ? "border-accent bg-accent" : "border-default bg-surface"),
-          }),
-          isShown
-            ? m(
-                "span",
-                { class: "pointer-events-none relative text-white" },
-                m.trust(icon("check", { size: 11, strokeWidth: 3 })),
-              )
-            : null,
-        ]),
-        m("span", { class: "text-faint flex w-5 shrink-0 items-center justify-center" }, m.trust(appGlyph(app.name))),
-        app.displayName,
-      ],
-    );
-  }
-
-  function filterMenu(section: LauncherSection, actionTiles: readonly LaunchTile[]): m.Vnode {
+  /** The section's filter: a check per app, and a reset under them. A check toggles without
+   *  closing, so several can be changed in one visit. */
+  function filterMenuRows(section: LauncherSection, actionTiles: readonly LaunchTile[]): MenuRow[] {
     const hidden = hiddenAppsBySection[section.key];
     const isPristine = hidden.size === 0;
-    return m(
-      "div",
-      {
-        class: menuCardClass("absolute top-full right-0 mt-1 min-w-[170px]"),
-        oncreate: (vnode: m.VnodeDOM) => {
-          menuElement = vnode.dom as HTMLElement;
-          document.addEventListener("pointerdown", onDocumentPointerDown);
-          document.addEventListener("keydown", onDocumentKeyDown);
-        },
-        onremove: () => {
-          menuElement = null;
-          document.removeEventListener("pointerdown", onDocumentPointerDown);
-          document.removeEventListener("keydown", onDocumentKeyDown);
-        },
+    const rows: MenuRow[] = appsInSection(section.rows, actionTiles).map((app) => ({
+      kind: "check",
+      key: app.name,
+      label: app.displayName,
+      icon: { markup: appGlyph(app.name) },
+      isChecked: !hidden.has(app.name),
+      onToggle: () => {
+        if (hidden.has(app.name)) {
+          hidden.delete(app.name);
+        } else {
+          hidden.add(app.name);
+        }
       },
-      [
-        appsInSection(section.rows, actionTiles).map((app) => filterMenuRow(section, app)),
-        m("div", { class: menuDividerClass() }),
-        m(
-          "button",
-          {
-            type: "button",
-            disabled: isPristine,
-            class:
-              "flex h-8 w-full items-center px-3 text-left text-(length:--font-size-row) " +
-              (isPristine ? "text-faint cursor-default" : "text-secondary cursor-pointer hover:bg-fill-hover"),
-            onclick: () => hidden.clear(),
-          },
-          "Reset filters",
-        ),
-      ],
-    );
+    }));
+    rows.push({ kind: "divider" });
+    rows.push({
+      kind: "action",
+      label: "Reset filters",
+      tone: "quiet",
+      isDisabled: isPristine,
+      keepsOpen: true,
+      onSelect: () => hidden.clear(),
+    });
+    return rows;
   }
 
   function memberRow(row: LauncherRow, nowMs: number, onOpen: (row: LauncherRow) => void): m.Vnode {
@@ -530,17 +475,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           "button",
           {
             type: "button",
-            "aria-expanded": openFilterFor === section.key ? "true" : "false",
-            [FILTER_TOGGLE_ATTR]: "",
             class: buttonClass("ghost", { icon: true, xs: true }),
-            onclick: () => {
-              openFilterFor = openFilterFor === section.key ? null : section.key;
-            },
+            ...filterMenuFor(section.key).triggerAttrs(),
             ...hoverTooltipAttrs("Filter by app"),
           },
           m.trust(launcherIcon("filter", GLYPH_SIZE)),
         ),
-        openFilterFor === section.key ? filterMenu(section, actionTiles) : null,
+        filterMenuFor(section.key).view(filterMenuRows(section, actionTiles)),
       ]),
       visibleActions.map((tile) => actionRow(tile, attrs)),
       visible.length === 0 && visibleActions.length === 0
@@ -813,6 +754,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   }
 
   return {
+    onremove() {
+      // A filter menu still open when the launcher goes would keep its Escape listener.
+      for (const menu of filterMenus.values()) menu.dispose();
+    },
     view(vnode) {
       const attrs = vnode.attrs;
       const nowMs = attrs.nowMs ?? Date.now();

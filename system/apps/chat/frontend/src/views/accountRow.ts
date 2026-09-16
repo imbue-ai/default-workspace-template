@@ -15,8 +15,9 @@
 import m from "mithril";
 import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import * as css from "./modelCardStyles";
+import * as css from "./modelProviderMenuStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
 
 /** Which row, if any, is showing its controls in a non-resting state. Both are per-flyout. */
@@ -163,24 +164,27 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         },
       },
       [
-        m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
-        m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
+        m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
+        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
       ],
     ),
     // Siblings of the row button rather than children -- buttons cannot nest -- each pinned
     // to its own offset from the right edge so none of the three ever displaces another.
     isCurrent
-      ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+      ? m("span", { class: css.SUBMENU_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
       : null,
     m(
       "button",
       {
         type: "button",
-        class: opts.isDefault ? css.ROW_STAR_PINNED : css.ROW_STAR,
+        class: opts.isDefault ? css.rowStarPinnedClass(isCurrent) : css.ROW_STAR,
         "aria-label": opts.isDefault
           ? `Stop opening new chats on ${row.provider} by default`
           : `Open new chats on ${row.provider} by default`,
         "aria-pressed": opts.isDefault ? "true" : "false",
+        // The short visible form of the aria-label above it: a label on the control says which
+        // of three same-sized glyphs this one is, which nothing else in the row does.
+        ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           // Same shape as the rename: a failure is reloaded over rather than left on screen as
@@ -196,7 +200,9 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
             });
         },
       },
-      m.trust(icon("star", { size: 13, filled: opts.isDefault })),
+      // Outlined even when it is the default -- `ROW_STAR_PINNED` fills it in CSS, which keeps
+      // the stroke that `filled` would drop and with it the size the glyph reads at.
+      m.trust(icon("star", { size: 13 })),
     ),
     m(
       "button",
@@ -204,6 +210,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_TRASH,
         "aria-label": `Sign out of ${row.provider}`,
+        ...hoverTooltipAttrs("Delete", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           state.confirmingRemoval = row.id;
@@ -217,6 +224,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_PENCIL,
         "aria-label": `Rename ${row.provider}`,
+        ...hoverTooltipAttrs("Rename", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           beginRename(state, row);
