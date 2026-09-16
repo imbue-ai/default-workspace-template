@@ -3156,6 +3156,7 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert phase is HandoffPhase.SUMMARIZING
         record = _wait_until_settled(store, ChatId(first))
         assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+        assert [entry.is_fresh_start for entry in record.agents] == [False, True]
         assert sent == []
         assert not (tmp_path / "chats" / first / "summaries").exists()
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]

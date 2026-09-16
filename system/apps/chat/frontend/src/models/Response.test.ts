@@ -168,6 +168,7 @@ describe("appendEvents and the optimistic bubbles", () => {
         seq: 1,
         message_id: "m-trigger",
         message: "Carry on",
+        is_fresh_start: false,
       },
     ]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
@@ -189,6 +190,7 @@ describe("appendEvents and the optimistic bubbles", () => {
         seq: 1,
         message_id: "m-trigger",
         message: "Carry on",
+        is_fresh_start: false,
       },
     ]);
     expect(isMessageCarriedBySwitch(chat, "m-trigger")).toBe(true);

@@ -108,23 +108,28 @@ phase, and the retry offers the accounts of the same harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
 may be rebound on; a same-lane target on any other harness is a handoff.
 
-The page drives both from the composer's provider menu: pressing any account
-but the chat's own opens the switch dialog ("Switch to Codex?", one line for a
-rebind), which for a handoff also takes the model the successor runs on.
-"Switch this chat" arms the switch: a strip above the composer says what the
-next message does, the model bar reads as the target, and the send button
-reads "Switch and send" and carries the switch out with the typed message as
-the first the chat sends after it, with no second confirmation. "Start a new
-chat" opens a chat on that account and model instead, with the draft moved
-over. A chat that has had no user turn skips the dialog: it switches at once,
-with no summary and no handoff prompt, since there is nothing to hand over.
+The page drives both from the composer's provider menu: pressing an account on
+another harness opens the switch dialog ("Switch to Codex?"), which takes the
+model the successor runs on. "Switch this chat" arms the switch: a strip above
+the composer says what the next message does, the model bar reads as the
+target, and the send button reads "Switch and send" and carries the switch out
+with the typed message as the first the chat sends after it, with no second
+confirmation. "Start a new chat" opens a chat on that account and model
+instead, with the draft moved over. Pressing an account on the chat's own
+harness and lane (a rebind) asks nothing: the agent keeps its conversation and
+its model, so the press arms the switch at once and the next message carries
+it out, with the strip offering Cancel but no Change. A chat that has had no
+user turn skips the dialog too: it switches at once, with no summary and no
+handoff prompt, since there is nothing to hand over. Only a switch that will
+write a summary asks.
 While the chat converges the held messages render from the snapshot's
 `handoff.held_sends` (the message the user switched with stands down once the
 `agent_switch` marker carrying it is on the transcript, where it renders as the
 successor's opening bubble), one handoff node in the transcript shows the switch's
 progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
-once the switch has landed), the activity strip and the placeholder say
+once the switch has landed; a fresh start, which asked for no summary and sent
+no prompt, leaves no node once it has landed), the activity strip and the placeholder say
 what is happening, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account

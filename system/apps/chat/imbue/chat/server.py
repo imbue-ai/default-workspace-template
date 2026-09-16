@@ -254,6 +254,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
                 ended_at=segment.ended_at,
                 opening_message_id=segment.opening_message_id,
                 opening_message=segment.opening_message,
+                is_fresh_start=segment.is_fresh_start,
             )
             for segment in segments
         ),

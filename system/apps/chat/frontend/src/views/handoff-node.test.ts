@@ -27,6 +27,7 @@ const SWITCH: AgentSwitchEvent = {
   seq: 1,
   message_id: null,
   message: null,
+  is_fresh_start: false,
 };
 const REQUEST: UserMessageEvent = {
   timestamp: "t1",

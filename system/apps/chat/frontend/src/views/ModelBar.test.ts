@@ -438,6 +438,19 @@ describe("the combo card", () => {
     setPendingAccount("a1", null);
   });
 
+  it("offers no Model row while a rebind is armed: the agent keeps its model", () => {
+    const other = { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" };
+    providerState.accounts = [ACCOUNT, other];
+    setPendingAccount("a1", "acct-2");
+    render();
+    expect(ROOT().textContent).toContain("next");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
+    expect(document.querySelector('[data-card-row="model"]')).toBeNull();
+    expect(reopened).toEqual([]);
+    setPendingAccount("a1", null);
+  });
+
   it("stars the default account and pins another on a press of its star", () => {
     providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity" }];
     providerState.defaultId = "acct-1";

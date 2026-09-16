@@ -1,12 +1,13 @@
 /**
- * The dialog a provider choice opens (spec 5.1): "Switch to Codex?" with the model the successor
- * should run on, "Switch this chat" as the thing it is for, and "Start a new chat" for leaving
- * this chat alone. One dialog per page, opened by the provider menu and by the composer's
- * "Change" link, so both open the same one.
+ * The dialog a handoff opens (spec 5.1): "Switch to Codex?" with the model the successor should
+ * run on, "Switch this chat" as the thing it is for, and "Start a new chat" for leaving this chat
+ * alone. One dialog per page, opened by the provider menu and by the composer's "Change" link, so
+ * both open the same one.
  *
  * "Switch this chat" applies nothing yet: it arms the pending switch (``PendingLane``), which the
- * composer's next send carries out. A chat that has had no user turn skips the dialog entirely
- * (``beginSwitchTo``): there is no context to hand over, so the switch runs at once.
+ * composer's next send carries out. Only a switch that will write a summary asks (``beginSwitchTo``):
+ * a chat that has had no user turn has no context to hand over and switches at once, and a rebind
+ * keeps the agent and its conversation, so it is armed at once instead.
  */
 
 import m from "mithril";
@@ -45,14 +46,21 @@ interface OpenDialog {
 let open: OpenDialog | null = null;
 
 /**
- * Switch ``chatId`` to ``target``, or ask first. A chat with no user turn yet has nothing to
- * hand over, so it switches at once with no summary and no dialog; the draft, if any, stays in
- * the composer and goes out normally once the chat runs on the new account. Any other chat gets
- * the dialog.
+ * Switch ``chatId`` to ``target``, arm the switch, or ask first. A chat with no user turn yet has
+ * nothing to hand over, so it switches at once with no summary and no dialog; the draft, if any,
+ * stays in the composer and goes out normally once the chat runs on the new account. A rebind is
+ * armed at once with no dialog: the next send carries it out, so a turn in progress is not cut
+ * short by the press. A handoff with context gets the dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
   if (!hasUserTurn(getEventsForChat(chatId))) {
     void switchFreshChat(chatId, target);
+    return;
+  }
+  const chat = getChatById(chatId);
+  if (chat !== undefined && switchKind(chat, target) === "rebind") {
+    setPendingSwitch(chatId, target.id, null);
+    m.redraw();
     return;
   }
   openSwitchDialog(chatId, target);
@@ -71,21 +79,18 @@ async function switchFreshChat(chatId: string, target: ProviderAccount): Promise
   m.redraw();
 }
 
-/** Open the dialog for ``chatId`` moving to ``target``; a handoff's picker loads the target's models. */
+/** Open the dialog for ``chatId`` handing off to ``target``; the picker loads the target's models. */
 export function openSwitchDialog(chatId: string, target: ProviderAccount): void {
-  const chat = getChatById(chatId);
-  const isHandoff = chat === undefined || switchKind(chat, target) === "handoff";
   open = {
     chatId,
     target,
-    options: isHandoff ? null : [],
+    options: null,
     modelId: DEFAULT_MODEL_VALUE,
     effort: null,
     fast: false,
     isBusy: false,
   };
   m.redraw();
-  if (!isHandoff) return;
   void fetchAccountModelOptions(target.id)
     .catch((error) => {
       console.warn(`Failed to load the models of account ${target.id}`, error);
@@ -223,20 +228,16 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
       const current = open;
       if (current === null || current.chatId !== vnode.attrs.chatId) return null;
       const chat: ChatSnapshot | undefined = getChatById(current.chatId);
-      const kind = chat === undefined ? "handoff" : switchKind(chat, current.target);
       const from = harnessLabel(chat?.active_agent.harness ?? "");
       const target = current.target;
-      const isRebind = kind === "rebind";
       return m(
         dialog,
         {
-          title: isRebind ? `Switch to ${target.label}?` : `Switch to ${harnessLabel(target.harness)}?`,
-          body: isRebind
-            ? [`${from} restarts on ${target.label} and keeps this conversation.`]
-            : [
-                `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
-                  "starting with your next message.",
-              ],
+          title: `Switch to ${harnessLabel(target.harness)}?`,
+          body: [
+            `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
+              "starting with your next message.",
+          ],
           dismissLabel: "Cancel",
           isDismissable: !current.isBusy,
           onDismiss: closeSwitchDialog,
@@ -250,18 +251,16 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
             },
             {
               label: "Switch this chat",
-              tooltip: isRebind
-                ? `Your next message restarts ${from} on ${target.label}`
-                : `Your next message moves this chat to ${target.label}`,
+              tooltip: `Your next message moves this chat to ${target.label}`,
               isDisabled: current.isBusy,
               run: () => {
-                setPendingSwitch(current.chatId, target.id, isRebind ? null : pickOf(current));
+                setPendingSwitch(current.chatId, target.id, pickOf(current));
                 closeSwitchDialog();
               },
             },
           ],
         },
-        isRebind ? null : renderPicker(current),
+        renderPicker(current),
       );
     },
   };

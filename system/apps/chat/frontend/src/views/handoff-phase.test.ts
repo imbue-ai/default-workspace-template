@@ -118,6 +118,7 @@ describe("the held-send bubbles", () => {
         seq: 1,
         message_id: "trigger-1",
         message: "Carry on in Codex",
+        is_fresh_start: false,
       },
     ]);
     expect(renderHeldSends(chat).map((bubble) => bubble.key)).toEqual(["held-m-2"]);

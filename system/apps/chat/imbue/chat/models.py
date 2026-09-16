@@ -500,6 +500,9 @@ class ChatSegmentInfo(FrozenModel):
         description="The send-time id of the message the user switched to this agent with, if folded into its prompt",
     )
     opening_message: str | None = Field(default=None, description="That message's text, for the switch marker")
+    is_fresh_start: bool = Field(
+        default=False, description="Whether the handoff that started this agent asked for no summary (a fresh start)"
+    )
 
 
 class ChatListResponse(FrozenModel):

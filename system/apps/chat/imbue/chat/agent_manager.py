@@ -1148,6 +1148,7 @@ class AgentManager:
                     ended_at=None if is_active else entry.ended_at,
                     opening_message_id=entry.opening_message_id,
                     opening_message=entry.opening_message,
+                    is_fresh_start=entry.is_fresh_start,
                 )
             )
         return segments

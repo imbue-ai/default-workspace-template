@@ -206,6 +206,10 @@ export interface AgentSwitchEvent extends BaseTranscriptEvent {
   // message arrived as a turn of its own (a fresh start) or there was none.
   message_id: string | null;
   message: string | null;
+  // Whether the switch was a fresh start: the retiring agent had no user turn, so no summary was
+  // asked for and no handoff prompt delivered. There was no handoff to show, so the page shows no
+  // node for it.
+  is_fresh_start: boolean;
 }
 
 /**

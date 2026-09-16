@@ -193,14 +193,14 @@ describe("the switch dialog", () => {
     expect(isSwitchDialogOpen("agent-1")).toBe(false);
   });
 
-  it("asks in one line for an account on the chat's own harness and lane, and takes no pick", () => {
+  it("arms a rebind at once, with no dialog and no pick, for an account on the chat's own harness and lane", () => {
     beginSwitchTo("agent-1", OTHER_CLAUDE as ProviderAccount);
     render();
-    expect(ROOT().textContent).toContain("Switch to Anthropic 2 (Claude Code)?");
-    expect(ROOT().textContent).toContain("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation.");
-    expect(ROOT().querySelector("select")).toBeNull();
-    expect(ROOT().textContent).not.toContain("Loading models");
-    pressButton("Switch this chat");
+    expect(isSwitchDialogOpen("agent-1")).toBe(false);
+    expect(ROOT().textContent).toBe("");
+    // Armed rather than run: the agent keeps its conversation, and the next send restarts it, so
+    // a turn in progress is not cut short by the press.
+    expect(state.switches).toEqual([]);
     expect(getPendingAccountId("agent-1")).toBe("acct-anthropic-2");
     expect(getPendingPick("agent-1")).toBeNull();
   });

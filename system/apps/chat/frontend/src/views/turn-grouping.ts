@@ -120,8 +120,8 @@ export interface StepNode {
  *  the switch has not landed: a handoff still running, one that failed, or one called off. */
 export interface HandoffNode {
   key: string;
-  /** The summary request that opened the node; null for a node the switch alone made (a fresh
-   *  start asked for no summary). */
+  /** The summary request that opened the node; null for a node the switch alone made: the
+   *  loaded window starts after the request, or a fresh start asked for no summary. */
   request: UserMessageEvent | null;
   /** The retiring agent's turn after the request: what expanding the node shows. */
   events: AssistantMessageEvent[];
@@ -130,6 +130,11 @@ export interface HandoffNode {
   /** The prompt the successor was started with (the chip carrying the summary and the user's message),
    *  once it has reached the successor's segment: shown inside the node rather than as a chip of its own. */
   prompt: UserMessageEvent | null;
+}
+
+/** Whether the node's switch was a fresh start, which had no handoff to show. */
+export function isFreshStartNode(node: HandoffNode): boolean {
+  return node.switch !== null && node.switch.is_fresh_start;
 }
 
 /** One item on a section's timeline, in transcript order. */
@@ -153,7 +158,7 @@ export type TimelineItem =
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
-   *  summary, at the switch itself). */
+   *  request in the window, at the switch itself, when its prompt reached it). */
   | { kind: "handoff"; node: HandoffNode };
 
 /** A turn: the user message, its timeline, and the wrap-up reply below it. */
@@ -790,6 +795,10 @@ function finalizeSection(
   // treated specially below: prose it just spoke is in-flight narration, not a
   // closing remark, since the step has not closed.
   const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
+
+  // A fresh start asked for no summary and delivered no prompt: there was no handoff to show, so
+  // its node comes off the timeline rather than standing as an empty line.
+  section.entries = section.entries.filter((entry) => entry.kind !== "handoff" || !isFreshStartNode(entry.node));
 
   // 1. Ejection: prose spoken inside a step at the end of a stint (so it is NOT
   //    narration, which is prose *followed* by more work in the same stint). It

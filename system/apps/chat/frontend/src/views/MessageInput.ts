@@ -15,7 +15,7 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
+import { getPendingPick, pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
@@ -904,10 +904,11 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
 
       /**
        * What the armed switch will do, above the composer (spec 5.1): the account the next message
-       * moves the chat to and the model picked for it, with a way back into the dialog and a way
-       * to call the choice off.
+       * moves the chat to and the model picked for it, with a way to call the choice off. A handoff
+       * also offers a way back into the dialog; a rebind was armed without one, and carries no pick
+       * to change.
        */
-      function renderSwitchStrip(target: ProviderAccount): m.Children {
+      function renderSwitchStrip(target: ProviderAccount, isHandoff: boolean): m.Children {
         const pick = chatId ? getPendingPick(chatId) : null;
         const destination = pick === null ? target.label : `${target.label}, ${pick.label}`;
         return m(
@@ -924,18 +925,20 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               { class: "message-input-switch-strip-text" },
               `Your next message switches this chat to ${destination}`,
             ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                extra: "message-input-switch-change",
-                onclick: () => {
-                  if (chatId) openSwitchDialog(chatId, target);
-                },
-              },
-              "Change",
-            ),
+            isHandoff
+              ? m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    extra: "message-input-switch-change",
+                    onclick: () => {
+                      if (chatId) openSwitchDialog(chatId, target);
+                    },
+                  },
+                  "Change",
+                )
+              : null,
             m(
               Button,
               {
@@ -1014,7 +1017,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
+          switchTarget !== null
+            ? renderSwitchStrip(switchTarget, chat === undefined || switchKind(chat, switchTarget) === "handoff")
+            : null,
           m("input", {
             type: "file",
             multiple: true,

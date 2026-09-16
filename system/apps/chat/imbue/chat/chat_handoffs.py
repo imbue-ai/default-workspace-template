@@ -832,6 +832,7 @@ class HandoffRunner:
             started_at=self._deps.now(),
             opening_message_id=handoff.trigger_message_id if is_message_folded else None,
             opening_message=handoff.trigger_text if is_message_folded else None,
+            is_fresh_start=handoff.is_fresh_start,
         )
         self._deps.update_record(
             chat_id,
@@ -860,6 +861,7 @@ class HandoffRunner:
                         ended_at=None,
                         opening_message_id=successor.opening_message_id,
                         opening_message=successor.opening_message,
+                        is_fresh_start=successor.is_fresh_start,
                     ),
                 )
             ],

@@ -490,6 +490,7 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert (switch["message_id"], switch["message"]) == ("m-trigger", "Now do it in Codex")
     adopted = workspace.record().agents[-1]
     assert (adopted.opening_message_id, adopted.opening_message) == ("m-trigger", "Now do it in Codex")
+    assert adopted.is_fresh_start is False and switch["is_fresh_start"] is False
     assert workspace.delivered[1:] == [
         (successor, prompt, prompt_message_id("h-1")),
         (successor, "and also this", "m-2"),
@@ -858,9 +859,12 @@ def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_a
     assert workspace.delivered == [(successor, "Now do it in Codex", "m-trigger")]
     assert not (tmp_path / "chats" / workspace.chat_id / "summaries").exists()
     assert [event["type"] for _chat, events in workspace.broadcasts for event in events] == [AGENT_SWITCH_EVENT_TYPE]
-    # Delivered as a turn of its own, the message is not the chip's to show.
+    # Delivered as a turn of its own, the message is not the chip's to show; the chip says the switch
+    # was a fresh start, and the record keeps that for every later read.
     assert workspace.broadcasts[0][1][0]["message"] is None
+    assert workspace.broadcasts[0][1][0]["is_fresh_start"] is True
     assert finished.agents[-1].opening_message is None
+    assert finished.agents[-1].is_fresh_start is True
 
 
 def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_typed() -> None:

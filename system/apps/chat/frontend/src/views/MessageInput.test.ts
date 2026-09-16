@@ -45,9 +45,11 @@ const mocks = vi.hoisted(() => {
     handoff: unknown;
     target: { id: string; harness: string; label: string } | null;
     pick: { identity: { model_id: string; effort: string | null; fast: boolean }; label: string } | null;
+    kind: "handoff" | "rebind";
   } = {
     handoff: null,
     target: null,
+    kind: "handoff",
     pick: null,
   };
   return {
@@ -80,6 +82,7 @@ vi.mock("../models/PendingLane", () => ({
   pendingSwitchTarget: () => mocks.switching.target,
   getPendingPick: () => mocks.switching.pick,
   setPendingAccount: mocks.setPendingAccount,
+  switchKind: () => mocks.switching.kind,
 }));
 vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
 vi.mock("../models/ComposerAttachments", () => ({
@@ -685,6 +688,7 @@ describe("MessageInput switching harness", () => {
     mocks.switching.handoff = null;
     mocks.switching.target = null;
     mocks.switching.pick = null;
+    mocks.switching.kind = "handoff";
     localStorage.clear();
   });
 
@@ -692,6 +696,7 @@ describe("MessageInput switching harness", () => {
     mocks.switching.handoff = null;
     mocks.switching.target = null;
     mocks.switching.pick = null;
+    mocks.switching.kind = "handoff";
   });
 
   function typeDraft(component: m.Component<{ chatId: string | null }>, chatId: string, text: string): unknown {
@@ -770,6 +775,17 @@ describe("MessageInput switching harness", () => {
     const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
     press(findByClass(rendered, "message-input-switch-change"));
     expect(mocks.openSwitchDialog).toHaveBeenCalledWith("agent-1", TARGET);
+    press(findByClass(rendered, "message-input-switch-cancel"));
+    expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
+  });
+
+  it("offers no way back into a dialog for an armed rebind, which was armed without one", () => {
+    mocks.switching.target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.kind = "rebind";
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    const strip = findByClass(rendered, "message-input-switch-strip");
+    expect(renderedText(strip)).toContain("switches this chat to Anthropic 2 (Claude Code)");
+    expect(findByClass(rendered, "message-input-switch-change")).toBeUndefined();
     press(findByClass(rendered, "message-input-switch-cancel"));
     expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
   });

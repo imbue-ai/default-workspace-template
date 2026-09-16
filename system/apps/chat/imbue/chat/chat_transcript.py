@@ -60,6 +60,10 @@ class TranscriptSegment(FrozenModel):
     opening_message: str | None = Field(
         default=None, description="That message's text, which the switch marker before this segment carries"
     )
+    is_fresh_start: bool = Field(
+        default=False,
+        description="Whether the switch to this segment was a fresh start: no summary asked for, no prompt delivered",
+    )
 
 
 class _EventPosition(FrozenModel):
@@ -82,7 +86,8 @@ def agent_switch_event(chat_id: ChatId, retiring: TranscriptSegment, successor: 
 
     It carries the message the user switched with, when the handoff folded that message into
     the successor's prompt: the page shows it as the successor's opening turn, since no event of
-    the successor's own holds it.
+    the successor's own holds it. It also says whether the switch was a fresh start, which asked
+    for no summary and delivered no prompt.
     """
     return {
         "type": AGENT_SWITCH_EVENT_TYPE,
@@ -97,6 +102,7 @@ def agent_switch_event(chat_id: ChatId, retiring: TranscriptSegment, successor: 
         "seq": retiring.seq,
         "message_id": successor.opening_message_id,
         "message": successor.opening_message,
+        "is_fresh_start": successor.is_fresh_start,
     }
 
 
