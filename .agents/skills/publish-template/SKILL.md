@@ -1401,8 +1401,12 @@ What it does, in order (see the script for the exact commands):
    template base) and does not descend from the workspace's `Initial workspace
    commit`; exits 5 with a clear message otherwise, before touching the
    worktree (see §5).
-2. Stages the selected paths out of the worker's checkout into a scratch dir
-   (preserving relative paths) BEFORE resetting.
+2. Stages the selected paths into a scratch dir (preserving relative paths)
+   BEFORE resetting. The `--include` paths come out of the worker's checkout;
+   the `--data-include` paths come out of the live `/home/user/workspace`,
+   which is the only place they exist -- the checkout is a fresh git worktree
+   and `data/` is gitignored, so nothing under it is there to copy. It is a
+   read; nothing is written to the live workspace.
 3. Resets the worktree to the clean base with
    `git read-tree -u --reset <BASE_REF>` then `git clean -fdxq` -- this drops
    tracked-but-not-in-base files AND gitignored cruft (secrets, runtime state,
