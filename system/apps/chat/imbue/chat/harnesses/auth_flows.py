@@ -276,7 +276,8 @@ class AuthFlowService:
                     raise FlowError(f"that account signs in through {existing.lane}, not {lane.id}")
                 account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
-            build_account_binding(lane.harness).seed_account(account_path, self._work_dir)
+            binding = build_account_binding(lane.harness)
+            binding.seed_account(account_path, self._work_dir)
 
             session = _new_session(lane, method, account_id, minted)
             self._session = session
@@ -287,9 +288,7 @@ class AuthFlowService:
             # already there and reported as a success. Nothing changed, and the UI says
             # "signed in again".
             if not minted:
-                session.cleared_credentials = _read_credentials(
-                    build_account_binding(lane.harness).credential_paths(account_path)
-                )
+                session.cleared_credentials = _read_credentials(binding.credential_paths(account_path))
                 # Parked on DISK before anything is unlinked, so the only copy is never
                 # process memory alone. A stop, a snapshot or an OOM kill in this window used
                 # to destroy a working credential with no trace: the row still pointed at a
