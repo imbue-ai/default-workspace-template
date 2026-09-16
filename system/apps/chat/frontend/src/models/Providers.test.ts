@@ -11,7 +11,17 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
-import { areAccountsLoaded, getAccounts, getFlow, loadAccountsWithRetry, startFlow } from "./Providers";
+import {
+  areAccountsLoaded,
+  closeProviderChooser,
+  getAccounts,
+  getFlow,
+  isProviderChooserOpen,
+  loadAccountsWithRetry,
+  openProviderChooser,
+  startFlow,
+  submitKey,
+} from "./Providers";
 
 const ACCOUNTS_BODY = {
   accounts: [{ id: "acct-1", lane: "claude", harness: "claude", provider: "Anthropic", name: "" }],
@@ -100,5 +110,55 @@ describe("startFlow", () => {
     arrive({ flow_id: "flow-api-key", shape: "paste", url: null, code: null });
     await started;
     expect(getFlow()?.flow_id).toBe("flow-api-key");
+  });
+});
+
+describe("the provider chooser's hooks", () => {
+  // A seeded chat's first send waits on the chooser: the sign-in hook launches it, the
+  // dismissal hook puts the message back. Which one runs decides whether the message is sent
+  // once, twice, or lost.
+  beforeEach(() => {
+    mockRequest.mockReset();
+  });
+
+  afterEach(() => {
+    closeProviderChooser();
+  });
+
+  it("runs the dismissal hook once when it closes with the sign-in hook still armed", () => {
+    const onSignedIn = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onSignedIn, onDismissed });
+    expect(isProviderChooserOpen()).toBe(true);
+
+    closeProviderChooser();
+
+    expect(onDismissed).toHaveBeenCalledTimes(1);
+    expect(onSignedIn).not.toHaveBeenCalled();
+    // A second close of a closed chooser, and a chooser opened without hooks, run nothing.
+    closeProviderChooser();
+    openProviderChooser();
+    closeProviderChooser();
+    expect(onDismissed).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the sign-in hook when a sign-in lands, and the close that follows runs no dismissal", async () => {
+    const onSignedIn = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onSignedIn, onDismissed });
+    // A paste flow: nothing polls, the submitted key settles it.
+    mockRequest.mockResolvedValueOnce({ flow_id: "flow-api-key", shape: "paste", url: null, code: null });
+    await startFlow("anthropic", "api_key");
+    mockRequest
+      .mockResolvedValueOnce({ state: "ok", detail: null, account_id: "acct-1" })
+      .mockResolvedValueOnce(ACCOUNTS_BODY);
+
+    await submitKey("sk-test", null);
+
+    expect(onSignedIn).toHaveBeenCalledWith("acct-1");
+    expect(onDismissed).not.toHaveBeenCalled();
+    closeProviderChooser();
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(onSignedIn).toHaveBeenCalledTimes(1);
   });
 });
