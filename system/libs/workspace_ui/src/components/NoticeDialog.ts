@@ -82,7 +82,7 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
                   // Quiet destructive on purpose: danger text without a fill, so it is styled
                   // apart from the primary action rather than being the easy button to reach.
                   variant: action.isDestructive ? "ghost-destructive" : action.isSecondary ? "secondary" : "primary",
-                  ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
+                  ...hoverTooltipAttrs(action.tooltip ?? null),
                   // aria-disabled, not disabled: a disabled button suppresses the hover/focus
                   // events the tooltip above needs, and the explanation matters most exactly
                   // while the button is greyed. Clicks are gated here instead.

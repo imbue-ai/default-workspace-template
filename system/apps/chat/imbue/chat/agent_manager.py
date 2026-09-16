@@ -41,6 +41,7 @@ from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
+from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.chat_handoffs import CreationOutputTail
 from imbue.chat.chat_handoffs import DEFAULT_PROMPT_TEMPLATE_PATH
 from imbue.chat.chat_handoffs import HandoffCancelledError
@@ -814,6 +815,8 @@ class AgentManager:
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
+    # Runs periodic context compaction checks (mngr autocompact run) for active chats.
+    _autocompactor: ChatAutoCompactor
     # Tells the shell that the chat app's instance list changed (contracts.md section 5):
     # every broadcast of the agent list is a change of that list or of a status in it, so the
     # nudge rides ``_broadcast_chats_updated``. ``SilentNudger`` until ``main`` installs the
@@ -858,6 +861,7 @@ class AgentManager:
         chat_files_root: Path = DEFAULT_CHAT_RECORDS_ROOT,
         prompt_template_path: Path = DEFAULT_PROMPT_TEMPLATE_PATH,
         chat_settings: ChatSettingsStore | None = None,
+        autocompactor: ChatAutoCompactor | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -935,6 +939,14 @@ class AgentManager:
                 manager._active_agent_id_of_chat(chat_id)
             ),
         )
+        manager._autocompactor = (
+            autocompactor
+            if autocompactor is not None
+            else ChatAutoCompactor.build(
+                list_running_chat_agent_names=manager.get_running_chat_agent_names,
+                mngr_binary=mngr_binary,
+            )
+        )
         return manager
 
     def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
@@ -958,14 +970,15 @@ class AgentManager:
     def start(self) -> None:
         """Start the observe subprocess and perform initial agent discovery.
 
-        Also seeds and starts the OOM prioritizer. Seeding happens before the
-        sweep so the first pass ranks chats against their real message history
+        Also seeds and starts the OOM prioritizer and autocompactor. Seeding happens
+        before the sweep so the first pass ranks chats against their real message history
         rather than treating a restart as "nothing has ever been messaged".
         """
         self._initial_discover()
         self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
+        self._autocompactor.start()
         self._start_session_sweep()
         self._start_observe()
         self._resume_handoffs()
@@ -978,6 +991,7 @@ class AgentManager:
         """Stop the observe subprocess, the session sweep, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
+        self._autocompactor.stop()
         self._auto_open.stop()
 
         self._session_sweep_stop.set()
@@ -2067,6 +2081,21 @@ class AgentManager:
         """Push chat-level events (the switch chip) onto the chat's transcript stream."""
         if self._transcript_broadcaster is not None:
             self._transcript_broadcaster(str(chat_id), events)
+
+    def get_running_chat_agent_names(self) -> list[str]:
+        """Names of chat agents that currently have a running agent process.
+
+        Excludes workers (``agent_created=true``), the primary services agent
+        (``is_primary=true``), and dead/stopped agent processes.
+        """
+        with self._lock:
+            return [
+                agent.name
+                for agent in self._agents.values()
+                if agent.labels.get("agent_created") != "true"
+                and agent.labels.get("is_primary") != "true"
+                and not is_lifecycle_dead(agent.state)
+            ]
 
     # Chat-level: the verbs (destroy, stop, rename, create).
 
