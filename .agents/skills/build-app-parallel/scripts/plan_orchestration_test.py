@@ -310,3 +310,16 @@ def test_cli_write_task_before_dependencies_report_fails(
     )
     assert "missing" in capsys.readouterr().err
     assert not plan_orchestration.node_task_path(run_dir, 2).exists()
+
+
+def test_cli_reports_missing_run_files_with_exit_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run folder with no plan yet is a clear error, not a traceback."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 2
+    assert "missing" in capsys.readouterr().err
+    assert plan_orchestration.main(["ready", "--run-dir", str(run_dir)]) == 2
+    assert "plan.json" in capsys.readouterr().err
