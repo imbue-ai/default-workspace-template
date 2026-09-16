@@ -1,6 +1,7 @@
 /**
  * The page of a chat whose switch failed (spec 5.10, 6): the reason the agent could not be
- * started, over the composer, with a retry and a way to start a new chat instead. A failed
+ * started or put on the model picked for it, over the composer, with a retry and a way to start a
+ * new chat instead. A failed
  * handoff retries on any signed-in account; a failed rebind retries on an account of the same
  * harness and lane, since its agent stays the chat's. The chat has no running agent
  * meanwhile; the composer keeps working, since the chat app holds what is typed for the retry.
@@ -46,12 +47,14 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
       const accounts = retryableAccounts(chat, handoff);
       const failedTargetId = handoff.target_account_id;
       const selectedId = chosenAccountId ?? failedTargetId;
+      // A handoff names the harness it moves to; a rebind's agent keeps its harness.
+      const harness = harnessLabel(handoff.kind === "rebind" ? chat.active_agent.harness : handoff.target_harness);
       const title =
-        handoff.kind === "rebind"
-          ? `Could not restart ${harnessLabel(chat.active_agent.harness)}`
-          : handoff.failed_step === "model"
-            ? `Could not set the model on ${harnessLabel(handoff.target_harness)}`
-            : `Could not start ${harnessLabel(handoff.target_harness)}`;
+        handoff.failed_step === "model"
+          ? `Could not set the model on ${harness}`
+          : handoff.kind === "rebind"
+            ? `Could not restart ${harness}`
+            : `Could not start ${harness}`;
 
       async function retry(): Promise<void> {
         if (isRetrying) return;

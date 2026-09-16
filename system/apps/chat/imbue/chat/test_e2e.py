@@ -920,8 +920,8 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Page) -> None:
     """The rebind through the browser: a second account on the chat's own lane is a switch too, armed at once
-    with no dialog, and the chat comes back on the same agent with its transcript, now read from the new
-    account's folder."""
+    with no dialog; the strip's Change opens the dialog, where a model is picked for the agent; and the chat
+    comes back on the same agent, on that model, with its transcript now read from the new account's folder."""
     with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
         page.goto(server.shell_url)
         _open_fixture_chat(page)
@@ -931,10 +931,21 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         _open_provider_menu(chat)
         chat.locator('[data-model-popover="flyout"] button', has_text="Anthropic 2").first.click()
         # A rebind keeps the agent and its conversation, so nothing asks: the press arms the switch at
-        # once, and the strip offers no dialog to change it from.
+        # once. The strip's Change opens the dialog, whose picker starts from the model the agent keeps.
         expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
         expect(chat.locator(".modal-card")).to_have_count(0)
-        expect(chat.locator(".message-input-switch-change")).to_have_count(0)
+        chat.locator(".message-input-switch-change").click()
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Anthropic 2 (Claude Code)?")
+        model = dialog.locator("select.switch-dialog-model")
+        expect(model).to_have_value("")
+        expect(model.locator("option").first).to_have_text("Keep the current model")
+        model.select_option("haiku")
+        dialog.locator("select.switch-dialog-effort").select_option("high")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"
+        )
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
         switch_button = chat.locator(".message-input-send-button--switch")
@@ -962,6 +973,13 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         messenger = manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
+        # The pick reached the agent through the model bar's own commands before the message did.
+        assert messenger.sent[-4:] == [
+            (FIXTURE_AGENT_ID, "/model haiku"),
+            (FIXTURE_AGENT_ID, "/effort high"),
+            (FIXTURE_AGENT_ID, "/fast off"),
+            (FIXTURE_AGENT_ID, "Carry on on the other account"),
+        ]
         # The page keeps the transcript, no handoff node remains (the agent did not change), the held
         # bubble is gone, and the provider row names the new account with the choice spent.
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")

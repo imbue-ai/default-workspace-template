@@ -626,10 +626,14 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
 
-      // The account the next send switches the chat to, and the model picked for it: while a
+      // The account the next send switches the chat to, and the model it runs on there: while a
       // switch is armed the bar reads as the target, since that is what the next message runs on.
+      // With nothing picked, a rebind keeps the agent's model and a handoff's successor starts on
+      // its harness's default, which the bar has no name for.
       const pending = pendingSwitchTarget(chatId);
       const pendingPick = getPendingPick(chatId);
+      const isPendingRebind = pending !== null && switchKind(chat, pending) === "rebind";
+      const pendingModelLabel = pendingPick?.label ?? (isPendingRebind ? (matched?.label ?? null) : null);
 
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
@@ -661,7 +665,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
         },
         pending !== null
           ? [
-              m("span", pendingPick?.label ?? pending.harness_label),
+              m("span", pendingModelLabel ?? pending.harness_label),
               m(
                 "span",
                 {
@@ -700,8 +704,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       // While a switch is armed the card describes the target: the account the next send moves
-      // the chat to and, for a handoff, the model picked for it, which opens the dialog again to
-      // change. A rebind keeps the agent's model, so it has no row to offer.
+      // the chat to and the model it runs on there, whose row opens the dialog again to change it.
       const armedRows: m.Children[] = [
         menuRow({
           label: "Provider",
@@ -711,12 +714,12 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           openable: true,
           tooltip: null,
         }),
-        ...(pending !== null && switchKind(chat, pending) === "handoff"
+        ...(pending !== null
           ? [
               m("div", { class: css.DIVIDER }),
               menuRow({
                 label: "Model",
-                value: pendingPick?.label ?? "Default model",
+                value: pendingModelLabel ?? (isPendingRebind ? "Current model" : "Default model"),
                 which: "model",
                 openable: true,
                 tooltip: "Change the model this chat switches to",

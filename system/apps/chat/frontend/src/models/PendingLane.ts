@@ -11,7 +11,7 @@ import type { ModelIdentity } from "./ModelSettings";
 import { accountForAgent } from "./Providers";
 import type { ProviderAccount } from "./Providers";
 
-/** The model the successor of a handoff runs on, as picked in the switch dialog: the identity the
+/** The model the chat runs on after the switch, as picked in the switch dialog: the identity the
  *  switch request carries, and the label the strip and the model bar show for it. */
 export interface PendingPick {
   identity: ModelIdentity;
@@ -42,7 +42,8 @@ export function getPendingAccountId(chatId: string): string | null {
   return pendingAccountIdByChat.get(chatId) ?? null;
 }
 
-/** The model picked for the pending switch, or null for the target harness's default (and for a rebind). */
+/** The model picked for the pending switch, or null for none: a handoff's successor then starts on its
+ *  harness's default, and a rebind keeps the agent's own model. */
 export function getPendingPick(chatId: string): PendingPick | null {
   return pendingPickByChat.get(chatId) ?? null;
 }

@@ -77,7 +77,7 @@ import m from "mithril";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { SwitchDialog, beginSwitchTo, closeSwitchDialog } from "./SwitchDialog";
+import { SwitchDialog, beginSwitchTo, closeSwitchDialog, openSwitchDialog } from "./SwitchDialog";
 
 const OWN = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
 const CODEX = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
@@ -109,6 +109,15 @@ function render(): void {
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+/** Choose an option of one of the dialog's selects, as a user would. */
+function choose(selectClass: string, value: string): void {
+  const select = ROOT().querySelector<HTMLSelectElement>(`select.${selectClass}`);
+  if (select === null) throw new Error(`no ${selectClass} picker`);
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  render();
 }
 
 function pressButton(label: string): void {
@@ -275,6 +284,83 @@ describe("the switch dialog", () => {
     expect(state.switches).toEqual([]);
     expect(getPendingAccountId("agent-1")).toBe("acct-anthropic-2");
     expect(getPendingPick("agent-1")).toBeNull();
+  });
+
+  it("offers a rebind the model it keeps by default, arms another picked there, and shows that pick on reopening", async () => {
+    // What the strip's "Change" opens for a rebind, which the provider menu armed without asking.
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toContain("Switch to Anthropic 2 (Claude Code)?");
+    expect(ROOT().textContent).toContain(
+      "Claude Code restarts on Anthropic 2 (Claude Code) and keeps this conversation, starting with your next message.",
+    );
+    await flush();
+    render();
+    const model = ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-model");
+    expect([...(model?.options ?? [])].map((option) => option.textContent)).toEqual([
+      "Keep the current model",
+      "GPT-6 Astra",
+    ]);
+    pressButton("Switch this chat");
+    expect(getPendingAccountId("agent-1")).toBe("acct-anthropic-2");
+    expect(getPendingPick("agent-1")).toBeNull();
+
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    choose("switch-dialog-model", "gpt-6-astra");
+    choose("switch-dialog-effort", "high");
+    pressButton("Switch this chat");
+    expect(getPendingPick("agent-1")).toEqual({
+      identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
+      label: "GPT-6 Astra · High",
+    });
+
+    // Reopened, the dialog starts from what is armed, so confirming it again does not drop the pick.
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    expect(ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-model")?.value).toBe("gpt-6-astra");
+    expect(ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-effort")?.value).toBe("high");
+    pressButton("Switch this chat");
+    expect(getPendingPick("agent-1")?.identity).toEqual({ model_id: "gpt-6-astra", effort: "high", fast: false });
+    expect(state.switches).toEqual([]);
+  });
+
+  it("starts a rebind's new chat on the model this chat runs on when nothing new is picked", async () => {
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: {
+        harness: "claude",
+        account_id: OWN.id,
+        model_choice: {
+          identity: { model_id: "claude-opus-5", effort: "high", fast: false },
+          matched: { ...ASTRA, id: "opus[1m]", label: "Opus 5" },
+        },
+      },
+    });
+    state.draft = "a fresh start";
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    pressButton("Start a new chat");
+    await flush();
+    // The live identity carries the raw id claude reports; a new chat is started on the catalog id it matched.
+    expect(state.started).toEqual([
+      ["acct-anthropic-2", "a fresh start", { model_id: "opus[1m]", effort: "high", fast: false }],
+    ]);
+  });
+
+  it("says a rebind keeps its model when the account has none to offer", async () => {
+    state.options = [];
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    expect(ROOT().querySelector("select")).toBeNull();
+    expect(ROOT().textContent).toContain("Claude Code keeps its current model; you can change it once it is running.");
   });
 
   it("offers only the default when the target has no models to offer", async () => {
