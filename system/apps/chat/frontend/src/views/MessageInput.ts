@@ -453,7 +453,17 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               return;
             }
             await launchChat(chatId, accountId, finalText);
-            await whenChatRegistered(chatId);
+            try {
+              await whenChatRegistered(chatId);
+            } catch (err) {
+              // The create failed after the launch took the message: the chat keeps it as its
+              // first message and the page's "Try again" delivers it, so it does not go back to
+              // the composer (a copy there would be sent twice). The page shows the reason.
+              console.error(`The seeded chat ${chatId} could not be started: ${describeRequestError(err)}`);
+              dropOutgoing(chatId, outgoingId);
+              m.redraw();
+              return;
+            }
             refocusAfterSend();
             return;
           }
