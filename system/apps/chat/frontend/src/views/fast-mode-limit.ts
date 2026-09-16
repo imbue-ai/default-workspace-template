@@ -31,7 +31,7 @@ import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification
 const switchedChatIds = new Set<string>();
 
 function switchedStorageKey(chatId: string): string {
-  return `chat.fastModeLimitApplied.${chatId}`;
+  return `fast-mode-limit-applied:${chatId}`;
 }
 
 function rememberSwitched(chatId: string): void {

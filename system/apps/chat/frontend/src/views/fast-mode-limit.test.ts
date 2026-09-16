@@ -160,13 +160,13 @@ describe("maybeApplyFastModeLimit", () => {
     maybeApplyFastModeLimit(chat, conversation(3), true);
     expect(setFastModeMock).toHaveBeenCalledTimes(1);
     // A reload forgets the page's memory but not the browser's.
-    expect(localStorage.getItem("chat.fastModeLimitApplied.agent-3")).toBe("1");
+    expect(localStorage.getItem("fast-mode-limit-applied:agent-3")).toBe("1");
     resetFastModeLimitForTests();
-    localStorage.setItem("chat.fastModeLimitApplied.agent-3", "1");
+    localStorage.setItem("fast-mode-limit-applied:agent-3", "1");
     expect(wasFastModeLimitApplied("agent-3")).toBe(true);
     maybeApplyFastModeLimit(chat, conversation(9), true);
     expect(setFastModeMock).toHaveBeenCalledTimes(1);
-    localStorage.removeItem("chat.fastModeLimitApplied.agent-3");
+    localStorage.removeItem("fast-mode-limit-applied:agent-3");
   });
 
   it("raises no notice once the workspace has seen it", () => {
