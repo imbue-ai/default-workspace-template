@@ -369,11 +369,11 @@ run's own evidence (fix commits kept or reverted, or a clean run, plus
 architecture-gate verdicts); a side-picked conflict must carry the
 discarded-side accounting. A report missing any of this -- including one that
 openly discloses skipping a gate outside the rule -- goes back to the worker
-via the Step 4 cycle (say what is missing, consume
-the report into `data/.tasks/update-self/reports/consumed/`, re-arm). Do not
-run the apply over the gap. A deviation stands only when the worker is gone
-and the gap cannot be closed from here, and then the results message states
-it plainly as a caveat.
+via the Step 4 cycle (say what is missing, consume the report into
+`data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
+over the gap. A deviation stands only when the worker is gone and the gap
+cannot be closed from here, and then the results message states it plainly
+as a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
