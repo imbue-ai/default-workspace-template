@@ -120,6 +120,7 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -1310,21 +1311,18 @@ class AgentManager:
         lane and that harness can be rebound, else a handoff (spec 5.2).
 
         Returns which it was, the phase the chat is in once draining is done, and the queued
-        text draining returned for the composer. ``model_pick`` is the model the successor of a
-        handoff runs on; a rebind keeps its agent's settings and refuses one. Raises
-        ``ChatConvergingError`` for a chat already converging and ``HandoffError`` for a chat
-        with no active agent, an unknown account, or the chat's own account.
+        text draining returned for the composer. ``model_pick`` is the model the chat runs on
+        once the switch lands, applied before ``message``: a handoff's successor, which starts on
+        its harness's default without one, or a rebind's restarted agent, which keeps its own
+        model without one. Raises ``ChatConvergingError`` for a chat already converging and
+        ``HandoffError`` for a chat with no active agent, an unknown account, or the chat's own
+        account.
         """
         target = _resolve_switch_target(account_id)
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         if is_rebind_target(agent_state, target):
-            if model_pick is not None:
-                raise HandoffError(
-                    f"Chat '{chat_id}' keeps its model settings when it changes account in place; "
-                    "pick the model from the model bar afterwards"
-                )
-            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin)
+            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin, model_pick)
             return TransitionKind.REBIND, phase, returned_block
         phase, returned_block = self.begin_handoff(chat_id, account_id, message, message_id, origin, model_pick)
         return TransitionKind.HANDOFF, phase, returned_block
@@ -1383,15 +1381,22 @@ class AgentManager:
         return HandoffPhase.SUMMARIZING, returned_block
 
     def begin_rebind(
-        self, chat_id: ChatId, account_id: str, message: str, message_id: str, origin: HeldSendOrigin
+        self,
+        chat_id: ChatId,
+        account_id: str,
+        message: str,
+        message_id: str,
+        origin: HeldSendOrigin,
+        model_pick: ModelPick | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat's agent to ``account_id`` in place (spec 6): write the rebind, drain the agent,
         and restart it on its own thread.
 
         Returns the phase the chat is in once draining is done and the queued text draining
-        returned for the composer. Raises ``ChatConvergingError`` and ``HandoffError`` as
-        ``begin_handoff`` does, plus ``HandoffError`` when the account is not one the agent can be
-        rebound to (another harness or lane, or a harness that cannot be).
+        returned for the composer. ``model_pick`` is the model the agent runs on once it is back,
+        applied before ``message``; without one it keeps its own. Raises ``ChatConvergingError``
+        and ``HandoffError`` as ``begin_handoff`` does, plus ``HandoffError`` when the account is
+        not one the agent can be rebound to (another harness or lane, or a harness that cannot be).
         """
         runner = self._rebind_runner()
         target = _resolve_switch_target(account_id)
@@ -1403,7 +1408,9 @@ class AgentManager:
                     f"Chat '{chat_id}' cannot change to account {target.account.id} in place; "
                     "it is on another harness or lane"
                 )
-            rebind = self._open_rebind_locked(chat_id, agent_state, target, message, message_id, origin, now)
+            rebind = self._open_rebind_locked(
+                chat_id, agent_state, target, message, message_id, origin, now, model_pick
+            )
         self._broadcast_chats_updated()
         # Launching on an account makes it the most recently used one, as a create does; a
         # convenience, so a store that refuses is logged rather than failing the switch.
@@ -1503,6 +1510,7 @@ class AgentManager:
         message_id: str,
         origin: HeldSendOrigin,
         now: datetime,
+        model_pick: ModelPick | None,
     ) -> ChatRebindRecord:
         """Write the chat's rebind entry in the draining phase, with the trigger message as its first held
         send; a chat that is still its one agent gets its record here. Lock held."""
@@ -1523,6 +1531,7 @@ class AgentManager:
             trigger_message_id=message_id,
             trigger_text=message,
             held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+            model_pick=model_pick,
         )
         self._write_record_locked(record.with_converging(rebind))
         return rebind
@@ -1596,7 +1605,8 @@ class AgentManager:
 
         A failed handoff reruns its successor's create on any signed-in account, the stored
         prompt resent verbatim; a failed rebind reruns its restart on an account of the same
-        harness and lane (its agent stays the chat's). A handoff that failed after its successor
+        harness and lane (its agent stays the chat's), or only its model pick when the restart
+        already landed on that account. A handoff that failed after its successor
         was already adopted has only its deliveries left, and reruns them on the account it
         moved to. Raises ``HandoffError`` when the chat is not in the failed phase, the account
         is unknown, it is not one a rebind can move to, or it names another account for a
@@ -1619,9 +1629,11 @@ class AgentManager:
                         f"Chat '{chat_id}' can only retry its switch on an account of the same harness and lane; "
                         "start a new chat to move it elsewhere"
                     )
+                # The pick survives: a rebind retry stays on the same harness and lane, whose models it named.
                 retried_rebind = transition.model_copy_update(
                     to_update(transition.field_ref().phase, HandoffPhase.RESTARTING),
                     to_update(transition.field_ref().error, None),
+                    to_update(transition.field_ref().failed_step, None),
                     to_update(transition.field_ref().target_lane, target.account.lane),
                     to_update(transition.field_ref().target_account_id, target.account.id),
                     to_update(transition.field_ref().target_label, target.label),
@@ -1691,8 +1703,9 @@ class AgentManager:
 
         The pick is validated against the agent's option set, fetched fresh for a harness whose
         set is per agent (codex reads it off its daemon) and read from the catalog otherwise,
-        then every axis is applied at once. Raises ``ModelApplyError`` with the reason the user
-        sees.
+        then every axis is applied at once. Raises ``ModelPickRejectedError`` for a pick outside
+        that set and ``ModelApplyError`` when the harness refused the switch, each with the reason
+        the user sees.
         """
         resolver = build_resolver(agent_info)
         session = self.get_or_create_session(agent_info)
@@ -1703,7 +1716,7 @@ class AgentManager:
         try:
             validate_model_pick(options, pick.model_id, pick.effort, pick.fast)
         except InvalidModelPickError as e:
-            raise ModelApplyError(str(e)) from e
+            raise ModelPickRejectedError(str(e)) from e
         identity = ModelIdentity(model_id=pick.model_id, effort=pick.effort, fast=pick.fast)
         result = resolver.switch(
             identity,
@@ -1787,11 +1800,14 @@ class AgentManager:
             resolve_account=resolve_account,
             account_dir=account_dir,
             deliver=capabilities.deliver,
+            apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             stop_agent=self.stop_agent_process,
             evict_watcher=self._evict_watcher,
             note_agent_relabeled=self._note_agent_relabeled,
             note_agent_alive=self.note_agent_alive,
+            monotonic=time.monotonic,
+            sleep=self._pause,
         )
         return RebindRunner.build(deps)
 

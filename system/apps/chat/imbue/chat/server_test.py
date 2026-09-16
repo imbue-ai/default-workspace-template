@@ -2979,15 +2979,6 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
-    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
-    second, _ = mint_account_dir()
-    commit_account(second, "anthropic", "Anthropic")
-    with_pick = client.post(
-        f"/api/chats/{first}/handoff",
-        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
-    )
-    assert with_pick.status_code == 400
-    assert "keeps its model settings" in with_pick.get_json()["detail"]
 
 
 def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:
@@ -3076,6 +3067,8 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
 
 
 def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path: Path, signed_in_account: str) -> None:
+    """The rebind through the route, with a model picked for it: the pick reaches the agent once it is back on the
+    new account, ahead of the message the user switched with."""
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
@@ -3090,7 +3083,13 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     commit_account(second, "anthropic", "Anthropic")
 
     switched = client.post(
-        f"/api/chats/{first}/handoff", json={"account_id": second, "message": "Carry on here", "message_id": "m-1"}
+        f"/api/chats/{first}/handoff",
+        json={
+            "account_id": second,
+            "message": "Carry on here",
+            "message_id": "m-1",
+            "model": {"model_id": "sonnet[1m]", "effort": "medium", "fast": False},
+        },
     )
     assert switched.status_code == 202
     assert switched.get_json() == {
@@ -3113,6 +3112,12 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     messenger = manager._messenger
     assert isinstance(messenger, RecordingMngrMessenger)
     wait_for(lambda: (first, "Carry on here") in messenger.sent, timeout=5.0)
+    assert messenger.sent == [
+        (first, "/model sonnet[1m]"),
+        (first, "/effort medium"),
+        (first, "/fast off"),
+        (first, "Carry on here"),
+    ]
     # The chat still reads its transcript, now from the new account's folder.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 
