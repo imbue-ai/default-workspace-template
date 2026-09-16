@@ -18,6 +18,25 @@ async function loadWithSettings(): Promise<typeof import("./ChatSettings")> {
   return chatSettings;
 }
 
+describe("ensureChatSettings", () => {
+  it("warns about a failed load, answers the defaults, and asks again on the next call", async () => {
+    vi.resetModules();
+    mockRequest.mockReset();
+    const chatSettings = await import("./ChatSettings");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockRequest.mockRejectedValueOnce(new Error("503"));
+
+    expect(await chatSettings.ensureChatSettings()).toEqual(chatSettings.DEFAULT_CHAT_SETTINGS);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(chatSettings.getChatSettings()).toBeNull();
+    mockRequest.mockResolvedValueOnce({ settings: STORED });
+    expect(await chatSettings.ensureChatSettings()).toEqual(STORED);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+});
+
 describe("updateChatSettings", () => {
   it("shows the new settings at once and keeps what the backend answers", async () => {
     const chatSettings = await loadWithSettings();

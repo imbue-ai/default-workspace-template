@@ -26,7 +26,10 @@ export function getChatSettings(): ChatSettings | null {
   return settings;
 }
 
-/** Load the settings once; later calls share the first load. */
+/**
+ * Load the settings once; later calls share the first load. A load that fails is warned about
+ * and resolves with the defaults, leaving nothing loaded so a later call asks again.
+ */
 export function ensureChatSettings(): Promise<ChatSettings> {
   if (settings !== null) return Promise.resolve(settings);
   if (loading === null) {
@@ -35,6 +38,10 @@ export function ensureChatSettings(): Promise<ChatSettings> {
       .then((response) => {
         settings = response.settings;
         return settings;
+      })
+      .catch((error: unknown) => {
+        console.warn("Failed to load the chat settings", error);
+        return DEFAULT_CHAT_SETTINGS;
       })
       .finally(() => {
         loading = null;
