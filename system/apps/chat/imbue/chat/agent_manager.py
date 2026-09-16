@@ -1705,17 +1705,22 @@ class AgentManager:
         set is per agent (codex reads it off its daemon) and read from the catalog otherwise,
         then every axis is applied at once. Raises ``ModelPickRejectedError`` for a pick outside
         that set and ``ModelApplyError`` when the harness refused the switch, each with the reason
-        the user sees.
+        the user sees. A per-agent set that could not be fetched is checked against the last set
+        the agent was offered instead, and a pick outside that one is a ``ModelApplyError``: an
+        agent just restarted on another account has not answered for its new set yet.
         """
         resolver = build_resolver(agent_info)
         session = self.get_or_create_session(agent_info)
         dynamic_options = resolver.list_offered_options()
         if dynamic_options:
             session.note_offered_options(dynamic_options)
+        is_checked_against_last_offered = dynamic_options is not None and len(dynamic_options) == 0
         options = dynamic_options if dynamic_options else session.switch_options()
         try:
             validate_model_pick(options, pick.model_id, pick.effort, pick.fast)
         except InvalidModelPickError as e:
+            if is_checked_against_last_offered:
+                raise ModelApplyError(str(e)) from e
             raise ModelPickRejectedError(str(e)) from e
         identity = ModelIdentity(model_id=pick.model_id, effort=pick.effort, fast=pick.fast)
         result = resolver.switch(
