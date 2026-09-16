@@ -122,7 +122,12 @@ def write_seed_file(chat_dir: Path, events: list[dict[str, Any]]) -> Path:
 
 
 def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
-    """The seed segment's events, in file order; an absent file is an empty segment."""
+    """The seed segment's events, in file order; an absent file is an empty segment.
+
+    A line that is not a JSON object is skipped with a warning rather than failing the whole
+    segment: the file is written whole, so a damaged line is outside interference, and the
+    rest of the conversation still reads.
+    """
     path = chat_dir / SEED_FILENAME
     if not path.is_file():
         return []
@@ -130,7 +135,11 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
     for line_number, line in enumerate(path.read_text().splitlines(), start=1):
         if not line.strip():
             continue
-        parsed = json.loads(line)
+        try:
+            parsed = json.loads(line)
+        except ValueError as e:
+            logger.warning("Skipping line {} of the seed file {}: not valid JSON: {}", line_number, path, e)
+            continue
         if not isinstance(parsed, dict):
             logger.warning(
                 "Skipping line {} of the seed file {}: an event is an object, not {}",
