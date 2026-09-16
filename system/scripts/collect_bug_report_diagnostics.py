@@ -14,16 +14,18 @@ supervisord and agents run under tmux, so the two halves come from different
 places and neither sees the other's failures. A harness that keeps a structured
 log database rather than a text log (codex's app-server) contributes it too,
 rendered to text as ``agent-logs/<agent-name>/<db>.log``. Under --transcript it
-holds one ``chats/<agent-name>-<harness>.jsonl`` per selected agent
-conversation, newest first. With BOTH flags each running agent also contributes
-an ``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
-into its pane, so its scrollback needs the chats consent as well as the logs
-one. The workspace logs, the harness logs, the log databases and the chats are
-each scanned and released or withheld on their own. Anything requested that is
-not in the archive whole -- a class withheld by the secret scan, or one the size
-budget could not fit -- is a plain-words line in the archive's own
-``collection-notes.txt`` member, so the archive explains itself; a content type
-that was not requested appears in neither the members nor the notes.
+holds one ``chats/<agent-name>-<harness>.jsonl`` per selected chat, newest
+first -- one member per conversation the user held, which is one member per
+agent only until a chat is handed to another harness. With BOTH flags each
+running agent also contributes an ``agent-logs/<agent-name>/pane.txt``: a TUI
+harness renders the conversation into its pane, so its scrollback needs the
+chats consent as well as the logs one. The workspace logs, the harness logs,
+the log databases and the chats are each scanned and released or withheld on
+their own. Anything requested that is not in the archive whole -- a class
+withheld by the secret scan, or one the size budget could not fit -- is a
+plain-words line in the archive's own ``collection-notes.txt`` member, so the
+archive explains itself; a content type that was not requested appears in
+neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
@@ -48,6 +50,7 @@ import zipfile
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import NamedTuple
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
@@ -543,15 +546,17 @@ def select_agent_log_files(agent_id: str) -> list[str]:
     return recent
 
 
-def capture_pane(address: str, timeout: float) -> str | None:
+def capture_pane(target: str, timeout: float) -> str | None:
     """One agent's tmux scrollback, or None when it could not be captured.
+
+    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``.
 
     ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
     report asks a workspace what happened, it does not boot anything to find
     out. An agent that is stopped therefore contributes no pane, which is
     correct -- its pane no longer exists.
     """
-    captured = run_mngr(["capture", address, "--full", "--no-start"], timeout)
+    captured = run_mngr(["capture", target, "--full", "--no-start"], timeout)
     if captured is None or not captured.strip():
         return None
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
@@ -571,9 +576,9 @@ def collect_agent_log_db_members(
     """
     members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for name, _address, agent_id in list_agents(timeout):
-        agent_dir_member = safe_member_component(name)
-        for path in select_agent_log_dbs(agent_id):
+    for agent in list_agents(timeout):
+        agent_dir_member = safe_member_component(agent.name)
+        for path in select_agent_log_dbs(agent.agent_id):
             # Rendered to text under a ``.log`` member name: the db is packed for
             # a reader, not for a sqlite client.
             member = unique_member_name(
@@ -614,9 +619,9 @@ def collect_agent_log_members(
     log_members: list[tuple[str, str, float]] = []
     pane_members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for name, address, agent_id in list_agents(timeout):
-        agent_dir_member = safe_member_component(name)
-        for path in select_agent_log_files(agent_id):
+    for agent in list_agents(timeout):
+        agent_dir_member = safe_member_component(agent.name)
+        for path in select_agent_log_files(agent.agent_id):
             member = unique_member_name(
                 "{}/{}/{}".format(
                     AGENT_LOG_MEMBER_DIR,
@@ -630,7 +635,7 @@ def collect_agent_log_members(
             )
         if not is_pane_included:
             continue
-        pane = capture_pane(address, timeout)
+        pane = capture_pane(agent.target, timeout)
         if pane is not None:
             member = unique_member_name(
                 "{}/{}/{}".format(
@@ -711,8 +716,26 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     return proc.stdout
 
 
+class ListedAgent(NamedTuple):
+    """One agent as mngr lists it, with the chat it is a segment of.
+
+    A user's chat outlives the agent running it: handing it to another harness
+    archives the current agent and creates a successor, and each agent of the
+    chat carries ``chat_id`` (the id of the chat's first agent) and ``chat_seq``
+    (its position in the chat, counting from 1). An agent that is a chat unto
+    itself carries neither, which is every agent in a workspace whose chat app
+    predates handoffs.
+    """
+
+    name: str
+    agent_id: str
+    target: str
+    chat_id: str
+    chat_seq: int
+
+
 @lru_cache(maxsize=1)
-def _query_agents(timeout: float) -> tuple[tuple[str, str, str], ...]:
+def _query_agents(timeout: float) -> tuple[ListedAgent, ...]:
     """Ask mngr which agents exist, at most once per run.
 
     Cached because it is the collector's most expensive call (see the fan-out
@@ -733,13 +756,19 @@ def _query_agents(timeout: float) -> tuple[tuple[str, str, str], ...]:
     the inner mngr's own, and asking the cloud providers baked into the
     settings only makes mngr probe backends that cannot answer from inside a
     container -- that probing, not the listing, is what used to cost the
-    collection most of its budget. The returned ``name@host.provider`` address
-    pins each later ``mngr event`` the same way, so it skips the fan-out too.
+    collection most of its budget. The returned ``id@host-id.provider`` target
+    pins each later ``mngr event`` and ``mngr capture`` the same way, so they
+    skip the fan-out too (a bare id is only pinned when mngr's discovery event
+    stream already knows it, and a provider-scoped listing never writes that
+    stream). It is built from ids alone: the host's recorded name, which the
+    outer provider stamps, never enters it.
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
     the json path fails outright on that where the template still answers from
-    local state.
+    local state. A label the agent does not carry renders empty rather than
+    failing the listing, so the chat columns cost nothing in a workspace whose
+    agents have none.
     """
     listed = run_mngr(
         [
@@ -747,26 +776,40 @@ def _query_agents(timeout: float) -> tuple[tuple[str, str, str], ...]:
             "--provider",
             "local",
             "--format",
-            "{name}|{name}@{host.name}.{host.provider_name}|{id}",
+            "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
         ],
         timeout,
     )
     if listed is None:
         return ()
-    agents: list[tuple[str, str, str]] = []
+    agents: list[ListedAgent] = []
     for line in listed.splitlines():
         parts = line.split("|")
-        if len(parts) != 3:
+        if len(parts) != 5:
             continue
-        name, address, agent_id = (p.strip() for p in parts)
-        if not name or not address or not agent_id:
+        name, agent_id, target, chat_id, chat_seq = (p.strip() for p in parts)
+        if not name or not agent_id or not target:
             continue
-        agents.append((name, address, agent_id))
+        agents.append(
+            ListedAgent(name, agent_id, target, chat_id, parse_chat_seq(chat_seq))
+        )
     return tuple(agents)
 
 
-def list_agents(timeout: float) -> list[tuple[str, str, str]]:
-    """Every agent, as ``(name, pinned address, id)`` -- chat, worker, or the services agent.
+def parse_chat_seq(raw: str) -> int:
+    """One agent's position in its chat; 1 when the label is absent or unreadable.
+
+    An agent with no position is the whole of its own chat, which is the first
+    segment either way.
+    """
+    try:
+        return int(raw)
+    except ValueError:
+        return 1
+
+
+def list_agents(timeout: float) -> list[ListedAgent]:
+    """Every agent mngr reports -- chat segment, worker, or the services agent.
 
     The id is what names an agent's state directory, so it is asked for here
     rather than derived: mngr owns the mapping from an agent to its own files.
@@ -777,56 +820,85 @@ def list_agents(timeout: float) -> list[tuple[str, str, str]]:
     return list(_query_agents(timeout))
 
 
-def fetch_transcript(address: str, timeout: float) -> str | None:
+def group_into_chats(agents: Sequence[ListedAgent]) -> list[list[ListedAgent]]:
+    """The agents grouped into the chats they are segments of, each oldest segment first.
+
+    An agent carrying no ``chat_id`` is a chat of its own, so a workspace whose
+    chat app predates handoffs groups into exactly the agents it lists. Chats
+    keep the order mngr listed their first segment in; what ranks them is the
+    conversation, which is not known until the segments have been read.
+    """
+    segments_by_chat: dict[str, list[ListedAgent]] = {}
+    for agent in agents:
+        segments_by_chat.setdefault(agent.chat_id or agent.agent_id, []).append(agent)
+    return [
+        sorted(segments, key=lambda segment: segment.chat_seq)
+        for segments in segments_by_chat.values()
+    ]
+
+
+def fetch_transcript(target: str, timeout: float) -> str | None:
     """One agent's conversation as raw JSONL, or None when it has none.
 
-    ``address`` is the pinned ``name@host.provider`` form from ``list_agents``,
+    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
     so resolving it never fans out to the unreachable cloud providers.
 
-    The harness is NOT derived from the agent's type: an agent of type ``chat``
-    writes its events under ``claude/``, so the two do not map onto each other.
-    Instead mngr is asked for every source and filtered on the source each event
-    carries, which keeps the set of harnesses mngr's business rather than a list
-    kept here.
-
-    ``logs/`` is excluded deliberately: everything under it is the converter's
-    own stdout -- it records *that* it converted, not what was said -- so
-    including it would attach a log of conversions in place of the conversation.
+    ``mngr transcript`` rather than ``mngr event``: it writes the stream's ATIF
+    records verbatim, where the event reader overwrites each record's ``source``
+    -- which in ATIF names who spoke -- with the path the stream was read from,
+    losing the speaker of every line it attaches. It also finds the stream
+    itself, so the harness stays mngr's business rather than a list kept here
+    (an agent of type ``chat`` writes its events under ``claude/``), and the
+    converter's own stdout under ``logs/`` is already not what it reads.
     """
-    events = run_mngr(
-        [
-            "event",
-            address,
-            "--include",
-            'source.endsWith("common_transcript")',
-            "--exclude",
-            'source.startsWith("logs/")',
-            "--format",
-            "jsonl",
-        ],
-        timeout,
-    )
+    events = run_mngr(["transcript", target, "--format", "jsonl"], timeout)
     if events is None or not events.strip():
         return None
     return events
 
 
+def read_chat(
+    segments: Sequence[ListedAgent], timeout: float
+) -> tuple[str, str] | None:
+    """One chat's whole conversation and the harness it is running on, or None when it has none.
+
+    The segments arrive oldest first, so the conversation reads in the order it
+    was held, across whatever harnesses it passed through. Each segment keeps
+    its own stream header, which is what says where one harness took over. The
+    harness returned is the newest segment's: it is what the chat is on now.
+    """
+    conversation = []
+    harness = ""
+    for segment in segments:
+        events = fetch_transcript(segment.target, timeout)
+        if events is None:
+            continue
+        if not events.endswith("\n"):
+            events += "\n"
+        conversation.append(events)
+        harness = transcript_source(events)
+    if not conversation:
+        return None
+    return "".join(conversation), harness
+
+
 def transcript_source(events: str) -> str:
     """The harness that wrote these events (``claude``, ``codex``, ...).
 
-    Taken from the events' own ``source`` field rather than the agent's type,
-    which does not name it: a ``chat`` agent's events live under ``claude/``.
+    Taken from the records' own ``emitter`` (``claude/common_transcript``),
+    which every ATIF record carries, rather than the agent's type, which does
+    not name it: a ``chat`` agent's events live under ``claude/``.
     """
     for line in events.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            source = json.loads(line).get("source")
+            emitter = json.loads(line).get("emitter")
         except ValueError:
             continue
-        if isinstance(source, str) and "/" in source:
-            return source.split("/", 1)[0]
+        if isinstance(emitter, str) and "/" in emitter:
+            return emitter.split("/", 1)[0]
     return "chat"
 
 
@@ -859,20 +931,30 @@ def newest_event_time(events: str) -> float:
 def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     """The conversations to attach, as ``(member name, content, last-written epoch)``.
 
-    Every agent's transcript is a candidate -- chat, background worker, or
-    otherwise. A bug is rarely about exactly one conversation, so every one
-    written to inside the recency window rides along, newest first -- and never
-    fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
+    One member per CHAT, not per agent: handing a chat to another harness
+    retires one agent and starts another, so a conversation the user held in
+    one place is spread over several agents' streams. Attaching them separately
+    would leave a reader stitching a conversation back together, and would let
+    the selection below rank the halves against each other -- dropping the
+    beginning of the very conversation whose end it kept.
+
+    Every chat is a candidate -- the user's own, a background worker's, or the
+    services agent's. A bug is rarely about exactly one conversation, so every
+    chat written to inside the recency window rides along, newest first -- and
+    never fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
     workspace holds fewer), so a report filed from a quiet workspace still
     carries its recent history rather than nothing.
     """
     fetched = []
     used_names: set[str] = set()
-    for name, address, _agent_id in list_agents(timeout):
-        events = fetch_transcript(address, timeout)
-        if events is None:
+    for segments in group_into_chats(list_agents(timeout)):
+        chat = read_chat(segments, timeout)
+        if chat is None:
             continue
-        member = transcript_member_name(name, transcript_source(events), used_names)
+        events, harness = chat
+        # Named for the segment the chat is live on: the name the user sees in
+        # the app, where the archived segments carry their retirement in theirs.
+        member = transcript_member_name(segments[-1].name, harness, used_names)
         fetched.append((member, events, newest_event_time(events)))
     if not fetched:
         return []
