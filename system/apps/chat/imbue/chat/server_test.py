@@ -102,8 +102,10 @@ def signed_in_account() -> str:
 
 
 @pytest.fixture
-def app(config: Config, signed_in_account: str) -> Flask:
-    state = build_test_state(config=config)
+def app(config: Config, signed_in_account: str, tmp_path: Path) -> Flask:
+    # A create writes the chat's fast mode under this root; the default is this package's own data/.
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    state = build_test_state(config=config, agent_manager=manager)
     state.agent_manager.note_agent_list_known()
     return create_application(state)
 

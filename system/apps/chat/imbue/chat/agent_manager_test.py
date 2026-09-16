@@ -1786,7 +1786,7 @@ def test_create_chat_registers_the_pre_observe_state_under_the_name_pair(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_files_root=tmp_path / "chats")
     try:
         created = manager.create_chat("My planning chat")
         assert created.name == "My-planning-chat"
