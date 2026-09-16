@@ -16,8 +16,8 @@
  * That being the only mechanism that works everywhere in the workspace, it is
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
  * focus too, no fade, centered under the trigger with a 6px gap, flipped above
- * on bottom overflow, clamped to the viewport, dropped on leave / blur /
- * click / scroll / resize. The centered-below placement is the default
+ * on bottom overflow, clamped to the viewport, dropped when its own trigger is
+ * left or blurred and on any click / scroll / resize. The centered-below placement is the default
  * everywhere and callers should not opt out of it lightly -- one placement is
  * what keeps every tooltip in the workspace reading as the same tooltip.
  *
@@ -248,11 +248,12 @@ function watchShownTrigger(target: Element): void {
     }
   });
   shownObserver.disconnect();
-  shownObserver.observe(target.ownerDocument.body, {
-    childList: true,
-    subtree: true,
-    attributeFilter: [TOOLTIP_ATTR],
-  });
+  // The text is watched on the trigger itself; only the leaves-the-document
+  // check needs the whole tree, and that is childList alone -- watching every
+  // element's attributes would put a record on every unrelated DOM write while
+  // a bubble happens to be up.
+  shownObserver.observe(target, { attributeFilter: [TOOLTIP_ATTR] });
+  shownObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 /** The trigger an event happened inside, or null when it happened outside every
@@ -318,6 +319,17 @@ function onFocusIn(event: Event): void {
   }
 }
 
+// Only the tooltip's OWN trigger losing focus drops it, as with the pointer:
+// ``focusout`` bubbles to the document, so an unrelated focus move (a rename
+// editor opening, a dialog taking focus) would otherwise take down a bubble the
+// pointer is still resting on.
+function onFocusOut(event: Event): void {
+  const target = triggerOf(event.target);
+  if (target !== null && (target === shownFor || target === pendingFor)) {
+    dropTooltip();
+  }
+}
+
 function wireListeners(): void {
   // Views are also built without a browser (the chat app walks vnodes in plain
   // node tests, where `document` is a stub and there is no `window` at all),
@@ -333,7 +345,9 @@ function wireListeners(): void {
   document.addEventListener("mouseover", onPointerOver);
   document.addEventListener("mouseout", onPointerOut);
   document.addEventListener("focusin", onFocusIn);
-  document.addEventListener("focusout", dropTooltip);
+  document.addEventListener("focusout", onFocusOut);
+  // Any click, wherever it lands: a press is the user acting rather than
+  // reading, and the thing they pressed may well move what is underneath.
   document.addEventListener("click", dropTooltip, true);
   // Any scroll (capture, so nested scrollers count), resize or window blur
   // slides the trigger out from under a shown bubble, so drop it.

@@ -197,6 +197,25 @@ describe("hoverTooltipAttrs", () => {
     expect(shownTooltipText()).toBeNull();
   });
 
+  it("keeps a bubble up when focus moves somewhere else entirely", () => {
+    vi.useFakeTimers();
+    const elsewhere = document.createElement("input");
+    document.body.appendChild(elsewhere);
+    const button = renderButton("Start");
+    hoverTooltip(button);
+    expect(shownTooltipText()).toBe("Start");
+
+    // A rename editor opening, or a dialog taking focus, is not the pointer
+    // leaving the thing it is resting on. ``focusout`` bubbles to the document,
+    // so the tooltip has to tell its own trigger's blur from anyone else's.
+    elsewhere.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(shownTooltipText()).toBe("Start");
+
+    button.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(shownTooltipText()).toBeNull();
+    elsewhere.remove();
+  });
+
   it("stops offering a tooltip an imperative caller takes back", () => {
     vi.useFakeTimers();
     const button = document.createElement("button");
