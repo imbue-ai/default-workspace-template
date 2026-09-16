@@ -210,8 +210,9 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate`, and
-  for no other (an empty list runs no suite at all): root
+- **Suites, lint, ratchets** for each project in `projects_to_validate` plus
+  that of any file you edited yourself in the branch, and for no other (with
+  neither, no suite runs at all): root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
   and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
   or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
