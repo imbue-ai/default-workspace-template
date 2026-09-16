@@ -29,10 +29,10 @@ class ClaudeAccountBinding(AccountBinding):
     def account_env(self, account_dir: Path) -> dict[str, str]:
         return {_CONFIG_DIR_ENV_VAR: str(account_dir)}
 
-    def account_credential_path(self, account_dir: Path) -> None:
-        # Its credential is the `env` block of the account's settings.json plus whatever the CLI
-        # writes beside it, and it binds by environment rather than by symlink.
-        return None
+    def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
+        # The `env` block of settings.json that a pasted credential is written to, and what
+        # `claude auth login` / `setup-token` write themselves.
+        return (account_dir / "settings.json", account_dir / ".credentials.json")
 
     def seed_account(self, account_dir: Path, work_dir: Path) -> None:
         super().seed_account(account_dir, work_dir)

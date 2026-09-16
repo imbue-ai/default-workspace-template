@@ -23,6 +23,7 @@ from imbue.chat.harnesses.binding import REBIND_VERIFIED_HARNESSES
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
 
@@ -228,6 +229,24 @@ def test_claude_is_bound_by_an_export_that_children_inherit(tmp_path: Path) -> N
 
     assert args == ["--env", f"CLAUDE_CONFIG_DIR={account}"]
     assert build_account_binding(HarnessType.CLAUDE).account_env(account) == {"CLAUDE_CONFIG_DIR": str(account)}
+
+
+def test_every_lane_runs_on_a_harness_that_registers_an_account_binding(tmp_path: Path) -> None:
+    """An account on a lane whose harness registers no binding could be signed in to but never run a chat."""
+    for lane in LANES:
+        assert build_account_binding(lane.harness).account_env(tmp_path), lane.id
+
+
+def test_a_re_auth_clears_every_file_that_says_the_account_is_signed_in(tmp_path: Path) -> None:
+    """claude's pasted credential and the store its own sign-in writes; one linked file for the others."""
+    assert build_account_binding(HarnessType.CLAUDE).credential_paths(tmp_path) == (
+        tmp_path / "settings.json",
+        tmp_path / ".credentials.json",
+    )
+    for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
+        assert build_account_binding(harness).credential_paths(tmp_path) == (
+            _link_binding(harness).account_credential_path(tmp_path),
+        )
 
 
 def test_every_scoped_harness_can_be_rebound_and_the_unscoped_one_cannot() -> None:

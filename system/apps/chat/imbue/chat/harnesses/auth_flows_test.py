@@ -569,10 +569,9 @@ def _agy_account(tmp_path: Path, service: AuthFlowService) -> tuple[str, Path]:
     started = service.start("google", "oauth")
     service.submit_code(started.flow_id, "4/0Aexample")
     (account,) = read_index(tmp_path).accounts
-    token = build_account_binding(HarnessType.ANTIGRAVITY).account_credential_path(
+    (token,) = build_account_binding(HarnessType.ANTIGRAVITY).credential_paths(
         tmp_path / ".minds" / "accounts" / account.id
     )
-    assert token is not None
     token.parent.mkdir(parents=True, exist_ok=True)
     token.write_text("live-token")
     return account.id, token

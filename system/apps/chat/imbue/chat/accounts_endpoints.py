@@ -29,6 +29,7 @@ from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import PickerMode
+from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.models import ErrorResponse
@@ -138,7 +139,7 @@ def account_model_options(account_id: str) -> Response:
     catalog (``models`` null). A harness whose set is per agent (codex) has no catalog to offer,
     so the answer is the set an existing agent of this account was last offered, read off its
     sidecar, and ``options`` is empty when the account has run no agent yet: the dialog then
-    offers only the default.
+    offers only the default. A harness whose model the chat app cannot switch offers nothing.
     """
     try:
         account = accounts.resolve_account(account_id)
@@ -147,6 +148,8 @@ def account_model_options(account_id: str) -> Response:
     harness = accounts.harness_for(account)
     if harness is None:
         return _error_response(f"Account {account_id} is on a lane this build does not have", status_code=404)
+    if get_catalog(harness).switch_mode is SwitchMode.READ_ONLY:
+        return _json_response(ModelOptionsResponse(models=None, options=()).model_dump())
     manager = get_state().agent_manager
     persisted: tuple[ModelOption, ...] | None = None
     for agent in manager.get_agents():
