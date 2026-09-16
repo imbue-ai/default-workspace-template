@@ -1180,7 +1180,8 @@ class AgentManager:
         longer knows contributes no segment (the transcript has a gap there, and says so in
         the log); a record whose active agent is unknown is no chat at all. A seeded chat's
         seed (``chat_seed.py``) is its first segment, read from the chat's own folder, and its
-        only one while the chat waits for the first message that launches an agent.
+        only one while the chat waits for the first message that launches an agent, and while
+        that agent, on the record from before its create (``create_chat``), is not listed yet.
         """
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
@@ -1189,6 +1190,13 @@ class AgentManager:
         if chat.active_agent_id is None:
             if chat.record is None or not chat.record.is_seed_only:
                 return None
+            return [self._seed_segment(chat.record)]
+        if (
+            chat.record is not None
+            and chat.record.is_seeded
+            and chat.record.mngr_agent_ids == (chat.active_agent_id,)
+            and self.get_agent_info_by_id(chat.active_agent_id) is None
+        ):
             return [self._seed_segment(chat.record)]
         if chat.record is None:
             agent_info = self.get_agent_info_by_id(chat.active_agent_id)
@@ -1891,6 +1899,37 @@ class AgentManager:
         """Drop a record from the store and from what the manager resolves by: the chat is its one agent again. Lock held."""
         self._chat_record_store.delete(chat_id)
         self._chat_record_by_id.pop(chat_id, None)
+
+    def _name_seeded_member_locked(
+        self, seed_record: ChatRecord, account: Account, harness: HarnessType
+    ) -> ChatAgentEntry:
+        """Mint a seeded chat's first agent and name it on the record ahead of its ``mngr create``. Lock held.
+
+        Named before the create, as a handoff names its successor: the observe stream lists an
+        agent as soon as mngr provisions it, well before the create returns, and an agent no
+        record names would be listed as a chat of its own until then.
+        """
+        entry = ChatAgentEntry(
+            seq=len(seed_record.agents) + 1,
+            agent_id=str(AgentId()),
+            lane=account.lane,
+            account_id=account.id,
+            harness=harness,
+            started_at=datetime.now(timezone.utc),
+        )
+        self._write_record_locked(
+            seed_record.model_copy_update(to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)))
+        )
+        return entry
+
+    def _withdraw_seeded_member_locked(self, chat_id: ChatId, record_entry: ChatAgentEntry) -> None:
+        """Take a seeded chat's agent back off its record when its create failed: the chat is seed-only
+        again, as a retry and a discard expect to find it. Lock held."""
+        record = self._chat_record_by_id.get(chat_id)
+        if record is None or record.entry_for(record_entry.agent_id) is None:
+            return
+        remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
+        self._write_record_locked(record.model_copy_update(to_update(record.field_ref().agents, remaining)))
 
     def _require_transition_locked(self, record: ChatRecord | None, chat_id: ChatId, transition_id: str) -> ChatRecord:
         """The record still carrying the switch ``transition_id`` names; raises the switch's own cancelled error otherwise."""
@@ -2640,6 +2679,13 @@ class AgentManager:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
 
+            # A seeded chat's id is its seed's; its first agent is a member of its own, like a
+            # handoff's successor, with a fresh id and the membership labels. It goes on the
+            # record before the provisional record changes phase, so a record that cannot be
+            # written refuses the launch and leaves the chat as it was.
+            record_entry = (
+                None if seed_record is None else self._name_seeded_member_locked(seed_record, account, harness)
+            )
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,
                 name=display_name,
@@ -2651,21 +2697,7 @@ class AgentManager:
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode_turn_limit = self._chat_settings.read().fast_mode_turn_limit
-        # A seeded chat's id is its seed's; its first agent is a member of its own, like a
-        # handoff's successor, and gets a fresh id with the membership labels.
-        agent_id = str(launched_chat_id) if seed_record is None else str(AgentId())
-        record_entry = (
-            None
-            if seed_record is None
-            else ChatAgentEntry(
-                seq=len(seed_record.agents) + 1,
-                agent_id=agent_id,
-                lane=account.lane,
-                account_id=account.id,
-                harness=harness,
-                started_at=datetime.now(timezone.utc),
-            )
-        )
+        agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
             () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
         )
@@ -2798,9 +2830,9 @@ class AgentManager:
 
         ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
         pick so the first turn runs on it, then the message the create was told to leave out.
-        ``record_entry`` is the agent's membership of a seeded chat, appended to the chat's
-        record the moment the create lands, before the agent is tracked, so the agent resolves
-        to its chat from its first listing.
+        ``record_entry`` is the agent's membership of a seeded chat, on the record since before
+        the create (``create_chat``); a create that fails takes it back off, so the chat is
+        seed-only again for the page's retry or its discard.
         """
         success = False
         error: str | None = None
@@ -2826,17 +2858,6 @@ class AgentManager:
 
             with self._lock:
                 if success:
-                    if record_entry is not None:
-                        record = self._chat_record_by_id.get(chat_id)
-                        if record is None:
-                            raise ChatRecordError(
-                                f"the seeded chat {chat_id} lost its record while its agent was created"
-                            )
-                        self._write_record_locked(
-                            record.model_copy_update(
-                                to_update(record.field_ref().agents, (*record.agents, record_entry))
-                            )
-                        )
                     self._provisional_chats.pop(chat_id, None)
                     self._agents[agent_id] = AgentStateItem(
                         id=agent_id,
@@ -2848,6 +2869,8 @@ class AgentManager:
                     )
                 else:
                     self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
+                    if record_entry is not None:
+                        self._withdraw_seeded_member_locked(chat_id, record_entry)
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
             # constructing AgentStateItem, so if pydantic validation (or
@@ -2863,6 +2886,8 @@ class AgentManager:
             try:
                 with self._lock:
                     self._mark_creation_failed_locked(chat_id, error)
+                    if record_entry is not None:
+                        self._withdraw_seeded_member_locked(chat_id, record_entry)
             except (OSError, RuntimeError) as cleanup_exc:
                 _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
 
