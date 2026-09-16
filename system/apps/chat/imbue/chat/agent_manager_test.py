@@ -68,7 +68,9 @@ from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -2573,6 +2575,30 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
+
+
+def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """A codex agent restarted on another account answers for its options only once its daemon is up; until then
+    the pick is checked against the set the agent was offered before, which may lack a model the new account has.
+    That is a refusal worth trying again, while a pick outside a set that is known is rejected for good."""
+    _seed_agent(agent_manager, "agent-codex", harness=HarnessType.CODEX)
+    write_codex_model_options(
+        get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-codex")),
+        (_codex_model_entry("gpt-5.5", "high"),),
+    )
+    codex_info = agent_manager.get_agent_info_by_id("agent-codex")
+    assert codex_info is not None
+    with pytest.raises(ModelApplyError) as refused:
+        agent_manager.apply_model_pick(codex_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
+    assert not isinstance(refused.value, ModelPickRejectedError)
+
+    _seed_agent(agent_manager, "agent-claude")
+    claude_info = agent_manager.get_agent_info_by_id("agent-claude")
+    assert claude_info is not None
+    with pytest.raises(ModelPickRejectedError):
+        agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
 
 
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
