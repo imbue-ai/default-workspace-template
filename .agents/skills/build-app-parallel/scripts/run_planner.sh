@@ -83,6 +83,11 @@ env -u MNGR_AGENT_STATE_DIR -u MNGR_AGENT_ID -u MNGR_AGENT_NAME -u MAIN_CLAUDE_S
     <"$prompt_file" >"$body_file" 2>>"$LOG_FILE" || planner_status=$?
 
 if [ "$planner_status" -ne 0 ]; then
+    # claude -p reports some failures (budget, auth, API errors) on stdout.
+    {
+        printf '\n--- planner stdout (exit %s) ---\n' "$planner_status"
+        cat "$body_file"
+    } >>"$LOG_FILE"
     echo "run_planner: the planner exited ${planner_status}; see ${LOG_FILE}" >&2
     exit 1
 fi

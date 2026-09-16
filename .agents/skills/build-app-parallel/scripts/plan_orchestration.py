@@ -280,8 +280,15 @@ def render_node_task(
     )
 
 
+def _read_run_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise PlanError(f"missing {path}") from None
+
+
 def _read_plan_json(run_dir: Path) -> dict[str, object]:
-    return json.loads((run_dir / PLAN_JSON_FILE_NAME).read_text(encoding="utf-8"))
+    return json.loads(_read_run_file(run_dir / PLAN_JSON_FILE_NAME))
 
 
 def _parse_node_index_list(text: str) -> list[int]:
@@ -298,7 +305,7 @@ def _parse_node_index_list(text: str) -> list[int]:
 
 
 def _run_parse(run_dir: Path) -> int:
-    plan = parse_plan((run_dir / PLAN_MARKDOWN_FILE_NAME).read_text(encoding="utf-8"))
+    plan = parse_plan(_read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME))
     plan_json_path = run_dir / PLAN_JSON_FILE_NAME
     plan_json_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     print(f"plan_orchestration: wrote {len(plan['nodes'])} nodes to {plan_json_path}")

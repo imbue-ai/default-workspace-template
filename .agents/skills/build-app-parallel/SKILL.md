@@ -1,0 +1,284 @@
+---
+name: build-app-parallel
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you run the two reviews with the user (the throwaway mock, then the working site) and take the confirmed app live. For changing or removing an existing app use update-app."
+metadata:
+  author: imbue
+---
+
+# Building an app in parallel
+
+You orchestrate. You do not build the app yourself:
+
+- **A planner** reads `build-app` and the workspace and writes a plan: a small
+  graph of nodes, each one piece of the build, with what each depends on.
+- **Workers** build the nodes, several at once, all inside one git checkout made
+  for this build (the build folder). Each follows
+  `references/worker-node.md` and reports back.
+- **You** clarify the request, run the planner, launch workers as their
+  dependencies finish, hold the two conversations with the user, merge the
+  result, and hand the app to hardening.
+
+`.agents/skills/build-app/SKILL.md` is the reference for how an app is built
+here. The planner and the workers read it; do not follow its steps yourself. Its
+Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`) are yours, and
+are restated below.
+
+`scripts/plan_orchestration.py` does the bookkeeping with a single right answer:
+checking the plan, listing which nodes can start, and writing each worker's task.
+Run it with bare `python3`.
+
+## Conventions
+
+Pick the app's kebab-case name `$APP` up front (the rules are in `build-app`'s
+pre-flight: DNS-safe, not starting with `host-` or `agent-`, not already in
+`system/supervisord.conf`). Workers may refine the display name, but `$APP`
+names everything below.
+
+| Thing | Value |
+|---|---|
+| Run folder (plan, tasks, reports) | `data/.tasks/build-app-parallel/$APP/` (call it `$RUN`) |
+| Build folder | `$HOME/worktrees/build-app-parallel-$APP` (call it `$BUILD`) |
+| Build branch | `build-app-parallel/$APP` |
+| Worker for node N | `$APP-node-N` |
+| Progress record | `$RUN/progress.txt`, two lines: `done: <indices>` and `running: <indices>` |
+
+Keep `$RUN/progress.txt` current after every launch, report and conversation. It
+is how you resume if your context is compacted mid-build.
+
+## Progress timeline
+
+Show the user stages, not nodes. Create these steps up front, in order, and
+close each when its stage ends:
+
+1. "Understand what you want"
+2. "Plan the build"
+3. "Build a first version to show you"
+4. "Show you the first version"
+5. "Build the working app"
+6. "Show you the working app"
+7. "Take the app live and start the thorough checks"
+
+Workers keep running in the background across stage boundaries (a node that
+does not need the mock review runs while the user looks at the mock). That is
+expected; the stage reflects what the user is waiting on.
+
+## Step 1: Clarify (business terms only)
+
+Ask only the questions that genuinely block: a fork that is both genuinely
+uncertain and expensive to reverse. Most apps have none. Default to the simplest
+conventional choice and to a single user, and state each default in one line.
+Phrase any real blocker as its user-visible consequence ("should everyone see the
+same list?"), never a technical term. Do not propose a plan or ask for approval:
+the user never sees the plan, and the mock is their first checkpoint.
+
+If `fetch-process-show` sent you here with a confirmed `sample.json`, note its
+path; the mock must render it.
+
+## Step 2: Plan
+
+Write the brief the way you would brief a colleague picking this up: what the
+user wants, every default you stated, the app name `$APP`, and the path of any
+handed-off sample. Give context, not a plan; working out the plan is the
+planner's job.
+
+```bash
+mkdir -p "$RUN"
+cat > "$RUN/brief.md" <<'BRIEF'
+<the brief>
+BRIEF
+```
+
+Tell the user in one line that you are planning the build, then run the planner
+as a background task (`run_in_background: true`); it takes a few minutes:
+
+```bash
+.agents/skills/build-app-parallel/scripts/run_planner.sh "$RUN"
+```
+
+When it exits 0, check the plan:
+
+```bash
+python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py parse --run-dir "$RUN"
+```
+
+If `parse` exits 2, the message names what is wrong. Move `plan.md` aside to
+`plan.rejected-1.md`, append one line to the brief quoting the problem ("Your
+previous plan was rejected: <message>"), and run the planner once more. If the
+second plan is also rejected, or the planner itself fails twice, stop and tell
+the user the build could not be planned, pointing at `$RUN/planner.log`. Do not
+fall back to building the app yourself without asking.
+
+Read `plan.json` yourself before starting. You will need each node's subtask to
+know what its report should contain and which nodes build what the user reviews.
+
+## Step 3: Set up the build folder
+
+The workers start from your last commit, so commit any pending changes in the
+main checkout first (commit, never stash). Then:
+
+```bash
+git worktree add -b "build-app-parallel/$APP" "$BUILD" HEAD
+(cd "$BUILD" && uv sync --all-packages)
+```
+
+Copy anything under `data/` the build needs (such as a handed-off `sample.json`)
+into `$BUILD` at the same relative path; `data/` is not part of the checkout.
+
+**Known mngr bug:** if `mngr create` fails partway (for example on a Claude Code
+version mismatch), its cleanup runs `git worktree remove --force` on the folder
+it was given, which deletes `$BUILD` with every worker's uncommitted work. Until
+that is fixed, commit the build folder whenever no worker is running (Step 4),
+and if `$BUILD` disappears: run `git worktree prune`, recreate it with
+`git worktree add "$BUILD" "build-app-parallel/$APP"`, run the sync again, tell
+the user the build lost its most recent work, and relaunch the nodes that were
+running.
+
+## Step 4: Run the plan
+
+Repeat until every node is done.
+
+1. **Find what can start.**
+
+   ```bash
+   python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py ready \
+       --run-dir "$RUN" --done <done indices> --running <running indices>
+   ```
+
+   It prints comma-separated node indices. It never starts more than 5 workers at
+   once, and interactive nodes take no worker slot.
+
+2. **Launch each worker node it printed.** Look up the node's `model` in
+   `$RUN/plan.json`, then:
+
+   ```bash
+   python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py write-task \
+       --run-dir "$RUN" --node N
+   uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+       --name "$APP-node-N" \
+       --template shared_folder_worker \
+       --work-folder "$BUILD" \
+       --model <model> \
+       --runtime-dir "$RUN/nodes/N/" \
+       --task-file "$RUN/nodes/N/task.md"
+   ```
+
+   Then start its report poll as a background task:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py await \
+       --name "$APP-node-N" --task-file "$RUN/nodes/N/task.md" --timeout 60m
+   ```
+
+   Add N to `running` in `$RUN/progress.txt`.
+
+3. **Start each interactive node it printed** with Step 5. Add it to `running`.
+
+4. **Handle each report as its poll finishes.** Follow
+   `.agents/shared/references/lead-proxy.md` for reading the report, diagnosing
+   a timeout, and a worker stopped for memory (exit 75). The reports dir is
+   `$RUN/nodes/N/reports/`.
+   - **`done`:** leave the report where it is -- later nodes' task files quote
+     it. Move N from `running` to `done`. If a later interactive node reviews
+     what this node built, keep the worker running so it can apply the user's
+     changes. Otherwise destroy it:
+     `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
+     Destroying a worker leaves `$BUILD` intact.
+   - **`stuck`:** stop launching new nodes, let running workers finish, and
+     follow `.agents/skills/launch-task/references/worker-failure.md`: tell the
+     user what the node could not do, in plain terms, and ask how to proceed. Do
+     not retry silently.
+
+5. **Commit when no worker is running:**
+
+   ```bash
+   git -C "$BUILD" add -A
+   git -C "$BUILD" commit -m "build-app-parallel $APP: nodes <done indices>"
+   ```
+
+   Workers never commit, so this is the only history the build has.
+
+## Step 5: The two conversations
+
+A plan has two interactive nodes: the mock, then the working site. For each,
+the node's subtask says what to show and ask, and its access list names the
+node that built what is shown. That node's report names the app, its package
+folder and anything the preview needs.
+
+1. **Serve a preview from the build folder.** The app is not live yet, so show
+   a throwaway instance wrapped in a labeled preview tab, with its own scratch
+   data folder:
+
+   ```bash
+   python3 .agents/shared/scripts/serve_isolated_instance.py up \
+       --name "$APP-preview" --cwd "$BUILD" \
+       --port-env <PACKAGE_UPPER>_PORT \
+       --env <PACKAGE_UPPER>_DATA_DIR="$RUN/preview-data" \
+       --service-name "$APP-preview-app" \
+       --preview-service-name "$APP-preview" \
+       --preview-title "<App name> (preview)" \
+       -- uv run "$APP"
+   python3 system/scripts/layout.py open "$APP-preview"
+   ```
+
+2. **Ask the node's question** in business terms, and loop until the user
+   **explicitly confirms**. For each change they ask for:
+   1. Move the builder's last report into `$RUN/nodes/K/reports/consumed/` (per
+      `lead-proxy.md`), so its revised report can land in its place.
+   2. Send the change to the builder, in the user's voice:
+      `mngr message "$APP-node-K" -m "<the change>"`, and re-arm its poll.
+   3. When its new report lands, run
+      `python3 system/scripts/layout.py refresh "$APP-preview"` and show the user
+      the change visibly applied.
+
+   Nodes that do not depend on this conversation keep running meanwhile. If the
+   user's answer changes something a running or finished node built against,
+   message that node's worker with the change too, or tell the user it will be
+   picked up in the next stage.
+
+3. **Record the answer as this node's report**, so the nodes after it read it:
+   write `$RUN/nodes/N/reports/report.md` with what the user confirmed and every
+   change they asked for. Move N to `done`.
+
+4. **Tear down the preview:**
+   `python3 .agents/shared/scripts/serve_isolated_instance.py down --name "$APP-preview"`.
+
+For the working-site conversation, use the same signals as `build-app` Step 5:
+change requests are cheap iterations that reset the clock, cosmetic tweaks mean
+the core is settled (ask "seems like we've got the core thing settled -- good to
+lock it in?"), and only an explicit confirmation ends it.
+
+## Step 6: Take the app live and hand off
+
+After the working-site conversation is confirmed and every node is done:
+
+1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, then
+   commit the build folder (Step 4, item 5).
+2. **Merge into main** from the main checkout:
+   `git merge --no-ff "build-app-parallel/$APP"`. The plan keeps workers out of
+   each other's files, so a conflict here means main changed during the build --
+   usually another app added to `system/supervisord.conf` or the root
+   `pyproject.toml`. Keep both sides, and never hand-resolve by dropping either
+   app's entry.
+3. **Start it for real:**
+   `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
+   then `supervisorctl status "$APP"`. Verify it with
+   `.agents/skills/build-app/references/verify.md`, and open the tab with
+   `python3 system/scripts/layout.py open "$APP"`.
+4. **Remove the build folder.** List it first (`git -C "$BUILD" status --porcelain`
+   must be empty, since everything was committed and merged), then
+   `git worktree remove "$BUILD"`.
+5. **Hand off to hardening** exactly as `build-app` Step 5 does: invoke the
+   `crystallize-creation` skill with `type=app`, the slug `$APP`, and a task body
+   naming the lib path, the app name, the URL segment, and what the app does.
+   That single hardening pass is the only thorough test-and-review run the app
+   gets; no worker ran one.
+
+## When things go wrong
+
+- **The planner or plan fails twice:** Step 2.
+- **A worker reports `stuck`, or its poll times out and the worker is dead:**
+  Step 4, item 4.
+- **`$BUILD` disappears:** the mngr bug in Step 3.
+- **Two workers edited the same file** (a report says so, or the preview shows
+  one piece overwriting another): stop launching, tell the user, and have the
+  worker that owns the file redo its part once the other is done.
