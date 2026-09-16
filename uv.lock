@@ -957,13 +957,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "imbue-common", extra = ["testing"] },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-antigravity" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
     { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
-    { name = "import-linter" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
     { name = "pyright" },
@@ -992,13 +992,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "imbue-common", extras = ["testing"], editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
     { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
     { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
-    { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.31" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "pyright", specifier = ">=1.1" },
@@ -1627,6 +1627,13 @@ dependencies = [
     { name = "traceback-with-variables" },
 ]
 
+[package.optional-dependencies]
+testing = [
+    { name = "import-linter" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
@@ -1635,14 +1642,17 @@ requires-dist = [
     { name = "cowsay-python", specifier = ">=1.0.2" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "import-linter", marker = "extra == 'testing'", specifier = ">=2.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
+    { name = "inline-snapshot", marker = "extra == 'testing'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
     { name = "sentry-sdk", specifier = ">=2.63.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "testing"]
 
 [[package]]
 name = "imbue-mngr"
