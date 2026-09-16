@@ -667,7 +667,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         // A switch the transcript does not show yet (draining, or restarting in place) gets its
         // node here; once the summary request is on the stream the rows carry it. Spread rather
         // than a hole: the list is keyed.
-        ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, getChatById(chatId)?.handoff ?? null))].filter(
+        ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
           (node) => node !== null,
         ),
         ...renderQueuedMessages(chatId),
