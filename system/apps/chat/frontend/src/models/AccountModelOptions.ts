@@ -19,7 +19,7 @@ interface AccountModelOptionsResponse {
   options?: CatalogModelOption[] | null;
 }
 
-/** The pickable options for a new agent on ``accountId``, in catalog order; empty when nothing is known, and
+/** The pickable options for an agent on ``accountId``, in catalog order; empty when nothing is known, and
  *  for a harness whose model the chat app cannot switch (agy's is changed from the agent's terminal). */
 export async function fetchAccountModelOptions(accountId: string): Promise<CatalogModelOption[]> {
   await ensureHarnessCatalogs();
