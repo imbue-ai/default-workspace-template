@@ -439,6 +439,22 @@ describe("the combo card", () => {
       label: "Google (Antigravity CLI)",
     };
     providerState.accounts = [ACCOUNT, google];
+    // The current agent's model offers both rows, so their absence below is the armed switch
+    // hiding them rather than this model having none to show.
+    const choosy = {
+      ...OPUS,
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
+      supports_fast: true,
+    };
+    catalogState.catalog = catalogOf({ options: [choosy] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: choosy,
+      pending: null,
+    };
     setPendingSwitch("a1", "acct-2", {
       identity: { model_id: "gemini", effort: "high", fast: false },
       label: "Gemini · High",
@@ -454,10 +470,10 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Gemini · High");
     // The current agent's effort and fast rows are not the target's: they are not offered.
     expect(document.querySelector('[data-card-row="effort"]')).toBeNull();
+    expect(document.querySelector('[data-model-popover="card"]')?.textContent).not.toContain("Fast Mode");
     click('[data-card-row="model"]');
     expect(reopened).toEqual(["acct-2"]);
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
-    setPendingAccount("a1", null);
   });
 
   it("offers no Model row while a rebind is armed: the agent keeps its model", () => {
@@ -470,7 +486,6 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
     expect(document.querySelector('[data-card-row="model"]')).toBeNull();
     expect(reopened).toEqual([]);
-    setPendingAccount("a1", null);
   });
 
   it("stars the default account and pins another on a press of its star", () => {
