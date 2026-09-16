@@ -2,7 +2,7 @@
 
 - `system/scripts/welcome_count.py` counts how many times the welcome skill has run (`data/.state/welcome/count`) so the skill can vary its greeting; `message_chat.py`'s JSON post helper is public (`post_json`) so the seed script shares it.
 
-- `.mngr/settings.toml`: the `first` create template, stacked once per workspace, is replaced by `welcome` (sends `/welcome` to every chat that starts with no message) and `fast` (the fast-mode settings, stacked on every chat while the workspace's fast-mode turn limit is above zero).
+- `.mngr/settings.toml`: the `first` create template, stacked once per workspace, is replaced by `welcome` (sends `/welcome` to every chat that starts with no message) and `fast` (the fast-mode settings, stacked on a chat whose fast mode -- off, auto or on, a new chat's being the workspace's default -- calls for it).
 
 - Carries the phase 7 and 8 changes of the chat-agent split (`mngr/chat-agent-refactor-8`) into this branch.
 
