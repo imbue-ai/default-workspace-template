@@ -426,13 +426,37 @@ def _seed_turns() -> tuple[SeedTurn, ...]:
     )
 
 
+def _seed_files_root(tmp_path: Path) -> Path:
+    """Where a seeded test's manager keeps its chats' seed files."""
+    return tmp_path / "chats"
+
+
+def _seed_manager(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    store: InMemoryChatRecordStore | None = None,
+    mngr_binary: str | None = None,
+    auto_open: AutoOpenReactor | None = None,
+) -> tuple[AgentManager, InMemoryChatRecordStore]:
+    """A manager for the seeded-chat tests: over ``store`` (a fresh one when None), its seed files
+    under ``tmp_path``, and the manager's own ``mngr`` unless a recording one is given."""
+    store = store if store is not None else InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary if mngr_binary is not None else "mngr",
+        auto_open=auto_open,
+        chat_record_store=store,
+        chat_files_root=_seed_files_root(tmp_path),
+    )
+    return manager, store
+
+
 def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seeded_turns(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The Mind app's conversation becomes the chat's first segment: the record names the seed
     as its only member, the seed file holds the turns, and the chat is listed awaiting the user."""
-    store = InMemoryChatRecordStore()
-    manager = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    manager, store = _seed_manager(broadcaster, tmp_path)
     q = broadcaster.register()
     try:
         created = manager.seed_chat("Getting started", _seed_turns())
@@ -447,7 +471,7 @@ def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seede
         assert record is not None
         assert record.is_seed_only and record.seed_title == "Getting started"
         assert record.agents[0].final_event_count == 3
-        events = read_seed_events(tmp_path / "chats" / chat_id)
+        events = read_seed_events(_seed_files_root(tmp_path) / chat_id)
         assert [event["type"] for event in events] == ["user_message", "assistant_message", "assistant_message"]
         assert events[0]["event_id"] == seed_event_id(chat_id, 0)
         # The seed reads back as the chat's one (ended) segment.
@@ -469,10 +493,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    store = InMemoryChatRecordStore()
-    manager = AgentManager.build(
-        broadcaster, mngr_binary=mngr_binary, chat_record_store=store, chat_files_root=tmp_path / "chats"
-    )
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
     try:
         seeded = manager.seed_chat("Getting started", _seed_turns())
         launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
@@ -507,10 +528,7 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    store = InMemoryChatRecordStore()
-    manager = AgentManager.build(
-        broadcaster, mngr_binary=mngr_binary, chat_record_store=store, chat_files_root=tmp_path / "chats"
-    )
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
     (signed_in,) = read_index().accounts
     try:
         seeded = manager.seed_chat("Getting started", _seed_turns())
@@ -548,8 +566,7 @@ def test_seed_chat_checks_its_title_like_a_launch_checks_a_requested_name(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """A title the first send's ``mngr create`` could not use is refused here, with nothing seeded."""
-    store = InMemoryChatRecordStore()
-    manager = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    manager, store = _seed_manager(broadcaster, tmp_path)
     try:
         with pytest.raises(AgentCreationError, match="no usable characters"):
             manager.seed_chat("!!!", _seed_turns())
@@ -563,7 +580,7 @@ def test_seed_chat_checks_its_title_like_a_launch_checks_a_requested_name(
 
 
 def test_a_seeded_chat_must_be_launched_with_a_message(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    manager, _store = _seed_manager(broadcaster, tmp_path)
     try:
         seeded = manager.seed_chat("", _seed_turns())
         with pytest.raises(AgentCreationError, match="first message"):
@@ -576,8 +593,7 @@ def test_a_seeded_chat_must_be_launched_with_a_message(broadcaster: WebSocketBro
 
 
 def test_discarding_a_seeded_chat_drops_its_record_with_it(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    store = InMemoryChatRecordStore()
-    manager = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    manager, store = _seed_manager(broadcaster, tmp_path)
     try:
         seeded = manager.seed_chat("", _seed_turns())
         assert manager.discard_provisional_chat(seeded.chat_id) is True
@@ -592,17 +608,14 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The seed's record is on disk, so a restart of this app lists the chat again, awaiting the user."""
-    store = InMemoryChatRecordStore()
-    first = AgentManager.build(broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats")
+    first, store = _seed_manager(broadcaster, tmp_path)
     try:
         seeded = first.seed_chat("Getting started", _seed_turns())
     finally:
         first.stop()
 
     reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=RecordingShell(client_ids=[]))
-    second = AgentManager.build(
-        broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats", auto_open=reactor
-    )
+    second, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=reactor)
     try:
         restored = second.get_provisional_chat(seeded.chat_id)
         assert restored is not None
@@ -617,9 +630,7 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     delivered_ledger = AutoOpenLedger(path=None)
     delivered_ledger.mark_delivered(ChatId(seeded.chat_id))
     delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=RecordingShell(client_ids=[]))
-    third = AgentManager.build(
-        broadcaster, chat_record_store=store, chat_files_root=tmp_path / "chats", auto_open=delivered_reactor
-    )
+    third, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=delivered_reactor)
     try:
         assert third.get_provisional_chat(seeded.chat_id) is not None
         assert delivered_reactor.pending_chat_ids() == set()
