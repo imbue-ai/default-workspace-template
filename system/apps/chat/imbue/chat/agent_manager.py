@@ -2578,14 +2578,24 @@ class AgentManager:
                 reserved = self._provisional_chats.get(ChatId(chat_id))
                 if reserved is None or reserved.phase is ProvisionalChatPhase.CREATING:
                     raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
-                if reserved.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
-                    # The seeded chat's first send: the message is the launch's to bring, and the
-                    # agent joins the seed on the record rather than taking the chat's id.
+                if reserved.is_seeded:
+                    # A seeded chat's agent joins the seed on the record rather than taking the
+                    # chat's id, whether this is its first send (the message is the launch's to
+                    # bring) or a retry after a failed one (the message is the send it kept).
                     seed_record = self._chat_record_by_id.get(reserved.chat_id)
                     if seed_record is None or not seed_record.is_seed_only:
                         raise AgentCreationError(f"Chat {chat_id} has no seed to continue from")
-                    if not message:
-                        raise AgentCreationError(f"Chat {chat_id} is launched by its first message; none was given")
+                    if reserved.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                        if not message:
+                            raise AgentCreationError(
+                                f"Chat {chat_id} is launched by its first message; none was given"
+                            )
+                    elif message:
+                        raise AgentCreationError(
+                            f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
+                        )
+                    else:
+                        message = reserved.message
                 elif message:
                     raise AgentCreationError(
                         f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"

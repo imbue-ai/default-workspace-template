@@ -498,6 +498,52 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     assert "Let's" in argv_line and "/welcome" not in argv_line
 
 
+def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Try again" on a seeded chat whose first launch failed: the retry keeps the
+    first send it was launched with and, like the first launch, gives the agent a fresh id and a
+    place on the record after the seed, so the chat resolves to it once the create lands."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, chat_record_store=store, chat_files_root=tmp_path / "chats"
+    )
+    (signed_in,) = read_index().accounts
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        # The first launch failed: what _run_creation leaves behind when mngr create exits non-zero.
+        with manager._lock:
+            awaiting = manager._provisional_chats[chat_id]
+            manager._provisional_chats[chat_id] = awaiting.model_copy_update(
+                to_update(awaiting.field_ref().account_id, signed_in.id),
+                to_update(awaiting.field_ref().message, "Let's build something"),
+                to_update(awaiting.field_ref().phase, ProvisionalChatPhase.FAILED),
+                to_update(awaiting.field_ref().error, "mngr create exited with code 3"),
+            )
+
+        with pytest.raises(AgentCreationError, match="keeps the first message"):
+            manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id, message="Something else")
+        relaunched = manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id)
+        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+
+        assert relaunched.chat_id == seeded.chat_id
+        record = store.read(chat_id)
+        assert record is not None
+        seed, agent = record.agents
+        assert agent.seq == 2 and agent.agent_id != seeded.chat_id and agent.ended_at is None
+        active = manager.get_active_agent_info(chat_id)
+        assert active is not None and active.id == agent.agent_id
+        (argv_line,) = argv_log.read_text().splitlines()
+        assert f"chat_id={seeded.chat_id}" in argv_line.split() and "chat_seq=2" in argv_line.split()
+        assert "Let's" in argv_line and "Something else" not in argv_line
+    finally:
+        manager.stop()
+
+
 def test_a_seeded_chat_must_be_launched_with_a_message(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
     try:
