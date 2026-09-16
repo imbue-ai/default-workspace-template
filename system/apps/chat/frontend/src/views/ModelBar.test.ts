@@ -476,16 +476,27 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
   });
 
-  it("offers no Model row while a rebind is armed: the agent keeps its model", () => {
+  it("reads an armed rebind as the agent's own model, with a Model row that opens the dialog to pick another", () => {
     const other = { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" };
     providerState.accounts = [ACCOUNT, other];
     setPendingAccount("a1", "acct-2");
     render();
+    // Nothing picked: the agent keeps its model, so that is what the next message runs on.
+    expect(ROOT().textContent).toContain("Opus");
     expect(ROOT().textContent).toContain("next");
     click(".model-selector-trigger");
     expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
-    expect(document.querySelector('[data-card-row="model"]')).toBeNull();
-    expect(reopened).toEqual([]);
+    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Opus");
+    click('[data-card-row="model"]');
+    expect(reopened).toEqual(["acct-2"]);
+
+    setPendingSwitch("a1", "acct-2", {
+      identity: { model_id: "haiku", effort: "low", fast: false },
+      label: "Haiku 4.5 · Low",
+    });
+    render();
+    expect(ROOT().textContent).toContain("Haiku 4.5 · Low");
+    expect(ROOT().textContent).not.toContain("Opus");
   });
 
   it("stars the default account and pins another on a press of its star", () => {
