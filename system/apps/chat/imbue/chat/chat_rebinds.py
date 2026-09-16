@@ -359,18 +359,24 @@ class RebindRunner:
         Raises the last ``ModelApplyError`` once it has, and a ``ModelPickRejectedError`` at once.
         """
         deadline = self._deps.monotonic() + self._deps.model_pick_budget_seconds
-        while True:
-            try:
-                self._deps.apply_model(agent_info, pick)
-                return
-            except ModelPickRejectedError:
-                raise
-            except ModelApplyError as e:
-                if self._deps.monotonic() >= deadline:
-                    raise
-                logger.debug("Rebind of chat {}: the model pick did not land yet, trying again: {}", chat_id, e)
+        refusal = self._refusal_of_model_pick(agent_info, pick)
+        while refusal is not None and self._deps.monotonic() < deadline:
+            logger.debug("Rebind of chat {}: the model pick did not land yet, trying again: {}", chat_id, refusal)
             self._deps.sleep(self._deps.model_pick_retry_interval_seconds)
             self._current(chat_id, rebind_id)
+            refusal = self._refusal_of_model_pick(agent_info, pick)
+        if refusal is not None:
+            raise refusal
+
+    def _refusal_of_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> ModelApplyError | None:
+        """Apply ``pick`` once: the harness's refusal of the switch, or None once it landed. A rejected pick raises."""
+        try:
+            self._deps.apply_model(agent_info, pick)
+        except ModelPickRejectedError:
+            raise
+        except ModelApplyError as e:
+            return e
+        return None
 
     def _record_sessions_dir(self, chat_id: ChatId, rebind_id: str, sessions_dir: Path) -> None:
         self._update_rebind(
