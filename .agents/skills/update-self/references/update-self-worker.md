@@ -218,9 +218,10 @@ in your report.
   own -- one the workspace created, or a built-in one it has modified (a file
   of it in `local_only`) -- against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
-  `update-app`), never the live store. A built-in service that arrived clean
-  is not booted here: the apply pre-flights the merged shell and chat app
-  itself before anything live restarts. This runs on the host's global
+  `update-app`), never the live store. A service that arrived exactly as
+  upstream shipped it is not booted here: upstream tested it, and for the
+  shell and the chat app the apply pre-flights the merged copy itself before
+  anything live restarts. This runs on the host's global
   toolchain, so it does not exercise a global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
