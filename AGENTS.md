@@ -18,12 +18,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 
 # Continuing a chat that moved to you
 
-- When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, you are continuing a chat that ran on another agent before you (the chat app moved it to your harness). The user sees one unbroken conversation and does not know or care that the agent changed.
-- Your first message carries the summary your predecessor wrote, and names the file it is kept in, or says there is none. Read it before anything else.
-- If there is no summary, or it leaves you unsure, gather context yourself: list the chat's earlier agents with `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` and read their transcripts with `mngr transcript <agent-id>` or the find-transcripts skill.
-- Check `tk steps` for open steps; continue the ones that still apply and close the rest with a one-line summary.
-- Never message, start, or otherwise touch a predecessor. It is archived and kept only for its transcript.
-- Do not tell the user about any of this by default. The switch is automated and nothing they need to think about; mention it only if they ask.
+- When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, this chat ran on another agent before you, and your first message says what to do. If it does not, `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` lists your predecessors and `mngr transcript <agent-id>` reads their transcripts. Never touch a predecessor, and do not mention the switch to the user unless they ask.
 
 # Task management (CRITICAL — read this before doing real work)
 
