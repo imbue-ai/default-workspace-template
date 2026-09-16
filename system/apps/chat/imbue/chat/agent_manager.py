@@ -48,6 +48,8 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import cancel_refused_detail
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_records import ChatAgentEntry
@@ -101,6 +103,7 @@ from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -481,11 +484,21 @@ def _resolve_handoff_target(account_id: str) -> _HandoffTarget:
 def _handoff_state_of(record: ChatRecord | None) -> HandoffState | None:
     if record is None or record.handoff is None:
         return None
+    handoff = record.handoff
+    # The confirming message leads the list for as long as the handoff lasts: summarizing folds
+    # it into the successor's prompt and takes it off the held list, but the page keeps showing
+    # it until the successor's first turn appears.
+    others = handoff.held_sends_after_trigger()
     return HandoffState(
-        phase=record.handoff.phase,
-        target_lane=record.handoff.target_lane,
-        target_account_id=record.handoff.target_account_id,
-        error=record.handoff.error,
+        phase=handoff.phase,
+        target_lane=handoff.target_lane,
+        target_account_id=handoff.target_account_id,
+        target_harness=handoff.target_harness,
+        held_sends=(
+            HeldSendSnapshot(message_id=handoff.trigger_message_id, text=handoff.trigger_text),
+            *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others),
+        ),
+        error=handoff.error,
     )
 
 
@@ -1188,7 +1201,7 @@ class AgentManager:
         runner = self._handoff_runner()
         converging = self.get_handoff_state(chat_id)
         if converging is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({converging.phase.value})")
+            raise ChatConvergingError(converging_detail(converging.phase, converging.target_harness))
         target = _resolve_handoff_target(account_id)
         now = datetime.now(timezone.utc)
         with self._lock:
@@ -1220,7 +1233,7 @@ class AgentManager:
         if chat is None or agent_state is None:
             raise HandoffError(f"Chat '{chat_id}' has no active agent to move")
         if chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({chat.handoff.phase.value})")
+            raise ChatConvergingError(converging_detail(chat.handoff.phase, chat.handoff.target_harness))
         if is_primary_agent(agent_state):
             raise HandoffError("The workspace's services agent is not a chat")
         if agent_state.labels.get("account") == target.account.id:
@@ -1261,6 +1274,7 @@ class AgentManager:
             chat_title=agent_state.labels.get("display_name") or agent_state.name,
             project_label=agent_state.labels.get("project", ""),
             trigger_message_id=message_id,
+            trigger_text=message,
             held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
         )
         self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, handoff)))
@@ -1299,9 +1313,8 @@ class AgentManager:
             if record is None or handoff is None:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
             if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
-                raise ChatConvergingError(f"Chat '{chat_id}' can no longer go back ({handoff.phase.value})")
-            trigger = handoff.held_send_for(handoff.trigger_message_id)
-            others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
+                raise ChatConvergingError(cancel_refused_detail(handoff.target_harness))
+            others = handoff.held_sends_after_trigger()
             if len(record.agents) == 1:
                 self._chat_record_store.delete(chat_id)
                 self._chat_record_by_id.pop(chat_id, None)
@@ -1317,7 +1330,7 @@ class AgentManager:
                 name=f"handoff-cancel-{str(chat_id)[:14]}",
                 is_checked=False,
             )
-        return trigger.text if trigger is not None else ""
+        return handoff.trigger_text
 
     def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
         """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""
@@ -1620,7 +1633,7 @@ class AgentManager:
             chat = self._resolve_chat_locked(chat_id)
             agent_state = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
         if chat is not None and chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is moving to another agent ({chat.handoff.phase.value})")
+            raise ChatConvergingError(converging_detail(chat.handoff.phase, chat.handoff.target_harness))
         if agent_state is None:
             raise AgentStopError(f"Chat '{chat_id}' has no agent to stop")
         self._run_mngr_stop(agent_state.name)
@@ -1798,7 +1811,7 @@ class AgentManager:
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
         if chat is not None and chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_ref}' is moving to another agent ({chat.handoff.phase.value})")
+            raise ChatConvergingError(converging_detail(chat.handoff.phase, chat.handoff.target_harness))
         if agent_state is None:
             if provisional is not None and provisional.name != display_name:
                 raise AgentRenameError(

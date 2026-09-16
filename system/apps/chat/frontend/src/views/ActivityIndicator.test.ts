@@ -9,11 +9,15 @@ import {
   wakeUpSpinnerDeadline,
 } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
+import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
-const agentState: { activity_state: string | null } = { activity_state: null };
-vi.mock("../models/Chats", () => ({ getChatById: () => ({ active_agent: agentState }) }));
+const agentState: { activity_state: string | null; harness: string } = { activity_state: null, harness: "claude" };
+const handoffState: { handoff: unknown } = { handoff: null };
+vi.mock("../models/Chats", () => ({
+  getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
+}));
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
@@ -272,6 +276,19 @@ describe("ActivityIndicator — what the strip actually renders", () => {
       resolutions: [{ requestId: "req-1", resolution: "granted" }],
     });
   };
+
+  it("reports the switch, not the old agent's turn, while the chat moves to another harness", () => {
+    agentState.activity_state = "THINKING";
+    handoffState.handoff = handoffStateFixture({ phase: "summarizing" });
+    const strip = render();
+    expect(labelTextOf(strip)).toBe("Claude is writing a summary…");
+    expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("HANDOFF_summarizing");
+    // The failed phase has its own notice over the composer; the strip goes back to the agent.
+    handoffState.handoff = handoffStateFixture({ phase: "failed" });
+    agentState.activity_state = "IDLE";
+    expect(render()).toBeNull();
+    handoffState.handoff = null;
+  });
 
   it("renders nothing for an idle agent with no verdict in flight", () => {
     agentState.activity_state = "IDLE";

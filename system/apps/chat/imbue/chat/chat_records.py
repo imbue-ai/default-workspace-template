@@ -101,6 +101,12 @@ class ChatHandoffRecord(FrozenModel):
     trigger_message_id: str = Field(
         description="The id of the message that confirmed the handoff, the successor's first"
     )
+    trigger_text: str = Field(
+        description=(
+            "The confirming message's text, kept here once summarizing folds it into the prompt and takes it off "
+            "the held list, so the page can keep showing it until the successor's first turn appears"
+        )
+    )
     held_sends: tuple[HeldSend, ...] = Field(
         default=(), description="The sends received while converging, in order; delivered to the successor"
     )
@@ -117,6 +123,10 @@ class ChatHandoffRecord(FrozenModel):
 
     def held_send_for(self, message_id: str) -> HeldSend | None:
         return next((held for held in self.held_sends if held.message_id == message_id), None)
+
+    def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
+        """The held sends other than the confirming message, in order."""
+        return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
 
 
 class ChatRecord(FrozenModel):

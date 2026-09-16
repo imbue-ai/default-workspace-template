@@ -231,6 +231,7 @@ def make_chat_handoff_record(
         chat_name="Chat-1",
         chat_title="Chat 1",
         trigger_message_id=trigger.message_id,
+        trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
     )
 
@@ -282,6 +283,21 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
+
+
+class SummaryWritingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose agent "writes" the handoff summary it is asked for at once.
+
+    The runner's summarizing phase waits for the file the request names; with this messenger it
+    appears on the send, so a fake switch reaches its create in a poll rather than after the idle
+    grace period.
+    """
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        write_summary_for_request(message)
+        return super().send_to_agent(agent_id, message, known_locations)
 
 
 class RecordingShell(MutableModel):
@@ -535,7 +551,8 @@ def close_ws(ws: simple_websocket.Client) -> None:
 
 # The fixture chat's agent id and name, and the project every workspace starts with unless a
 # test asks for none (what a migrated workspace has, and where a fresh browser lands).
-FIXTURE_AGENT_ID: Final[str] = "agent-test-123"
+# A real mngr id shape (32 hex), so the send path can type it as an AgentId.
+FIXTURE_AGENT_ID: Final[str] = "agent-0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e"
 FIXTURE_AGENT_NAME: Final[str] = "test-agent"
 FIXTURE_CHAT_ADDRESS: Final[str] = f"app:chat?instance={FIXTURE_AGENT_ID}"
 STARTER_PROJECT_NAME: Final[str] = "Project 1"
@@ -620,6 +637,9 @@ class RunningWorkspace(FrozenModel):
     session_file: Path = Field(description="The fixture chat's session file, appended to for streaming tests")
     state_dir: Path = Field(description="The shell's state directory")
     chat_state: ChatAppState = Field(description="The chat app's state, for the manager behind its routes")
+    account_ids: tuple[str, ...] = Field(
+        description="The signed-in accounts, the fixture chat's own first, then the additional ones in order"
+    )
     stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when offered")
     stub_url: str | None = Field(description="The stub app's loopback URL, when offered")
 
@@ -674,6 +694,8 @@ def running_workspace(
     stub_instances: Sequence[str] = (),
     project_names: Sequence[str] = (STARTER_PROJECT_NAME,),
     is_account_signed_in: bool = True,
+    additional_accounts: Sequence[tuple[str, str]] = (),
+    messenger: MngrMessenger | None = None,
 ) -> Iterator[RunningWorkspace]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -681,9 +703,11 @@ def running_workspace(
     a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
     runs; the shell reads a registry holding the chat row at the chat's own URL and, when
     ``is_stub_app_offered``, a stub app whose ``stub_instances`` are seeded as records. With
-    ``is_account_signed_in`` (the default) a signed-in account exists, so a create starts at
-    once; without one a create mints a chat that waits for an account, and its page offers
-    the provider chooser. ``project_names``
+    ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
+    is bound to, so a create starts at once; without one a create mints a chat that waits for
+    an account, and its page offers the provider chooser. ``additional_accounts`` sign further
+    accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
+    messenger the manager sends through. ``project_names``
     are created through the shell's API before anything connects, so a client's first view is
     the first of them (or Everything when there are none).
     """
@@ -761,15 +785,31 @@ def running_workspace(
     ):
         # A signed-in account is what a new chat launches on at once; without one the chat's
         # ``new`` mints a chat that waits for an account (its page shows the provider chooser).
+        account_ids: list[str] = []
         if is_account_signed_in:
             account_id, _ = mint_account_dir()
             commit_account(account_id, "anthropic", "Anthropic")
+            account_ids.append(account_id)
+        for lane_id, display in additional_accounts:
+            extra_account_id, _ = mint_account_dir()
+            commit_account(extra_account_id, lane_id, display)
+            account_ids.append(extra_account_id)
 
-        manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+        manager = AgentManager.build(
+            WebSocketBroadcaster(),
+            messenger=messenger if messenger is not None else RecordingMngrMessenger(),
+            chat_files_root=tmp_path / "chats",
+            # The successor's prompt template is cwd-relative in production (the repo root); the
+            # suite runs from the chat package, so it is named outright.
+            prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        )
+        # The agents carry the signed-in account's label, as a chat the app created would, so the
+        # page's provider row names it.
+        agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
         with manager._lock:
             for info in agents:
                 manager._agents[info.id] = AgentStateItem(
-                    id=info.id, name=info.name, state="RUNNING", labels={}, work_dir=str(tmp_path / "work")
+                    id=info.id, name=info.name, state="RUNNING", labels=agent_labels, work_dir=str(tmp_path / "work")
                 )
         for info in agents:
             manager._ensure_activity_tracking(info.id)
@@ -822,6 +862,7 @@ def running_workspace(
                         session_file=session_file,
                         state_dir=state_dir,
                         chat_state=chat_state,
+                        account_ids=tuple(account_ids),
                         stub_source=stub_source,
                         stub_url=stub_url,
                     )

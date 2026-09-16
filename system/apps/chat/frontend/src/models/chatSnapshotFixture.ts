@@ -1,6 +1,6 @@
 /** A whole chat snapshot for tests, as the chat app pushes one, with every field overridable. */
 
-import type { ActiveAgent, ChatSnapshot } from "./Chats";
+import type { ActiveAgent, ChatSnapshot, HandoffState } from "./Chats";
 
 export function chatSnapshotFixture(
   chatId: string,
@@ -29,5 +29,19 @@ export function chatSnapshotFixture(
       shoulder_tap_available: false,
       ...agentOverrides,
     },
+  };
+}
+
+/** A chat's in-progress switch to another harness (the backend's ``HandoffState``), for tests:
+ *  a claude chat moving to a codex account, with the confirming message held. */
+export function handoffStateFixture(overrides: Partial<HandoffState> = {}): HandoffState {
+  return {
+    phase: "summarizing",
+    target_lane: "openai",
+    target_account_id: "acct-openai",
+    target_harness: "codex",
+    held_sends: [{ message_id: "trigger-1", text: "Carry on in Codex" }],
+    error: null,
+    ...overrides,
   };
 }

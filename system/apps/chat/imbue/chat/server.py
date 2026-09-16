@@ -47,6 +47,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.config import Config
@@ -98,6 +99,7 @@ from imbue.chat.models import HandoffCancelResponse
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffRetryRequest
 from imbue.chat.models import HandoffRetryResponse
+from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendResponse
 from imbue.chat.models import InterruptAgentResponse
@@ -162,9 +164,9 @@ def _agent_list_not_known_response() -> Response:
     return json_response(failure.model_dump(), status_code=503)
 
 
-def _converging_response(chat_id: str, phase: str) -> Response:
+def _converging_response(handoff: HandoffState) -> Response:
     return json_response(
-        {"detail": f"Chat '{chat_id}' is moving to another agent ({phase}); try again once it has", "phase": phase},
+        {"detail": converging_detail(handoff.phase, handoff.target_harness), "phase": handoff.phase.value},
         status_code=409,
     )
 
@@ -177,7 +179,7 @@ def _refuse_while_converging(chat_id: str) -> Response | None:
     handoff = get_state().agent_manager.get_handoff_state(parsed)
     if handoff is None:
         return None
-    return _converging_response(chat_id, handoff.phase.value)
+    return _converging_response(handoff)
 
 
 # Default number of events for tail-first loading

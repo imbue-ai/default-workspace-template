@@ -324,12 +324,27 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
+class HeldSendSnapshot(FrozenModel):
+    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
+
+    message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
+    text: str = Field(description="The message, verbatim")
+
+
 class HandoffState(FrozenModel):
     """The in-progress handoff a chat snapshot carries while the chat is converging."""
 
     phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
+    target_harness: HarnessType = Field(description="The harness the chat is moving to, for the page's phase text")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        default=(),
+        description=(
+            "The messages held for the successor, the confirming message first, so a page (a reloaded one too) "
+            "keeps showing them until they land in the successor's transcript"
+        ),
+    )
     error: str | None = Field(default=None, description="Why the successor could not be started, in the failed phase")
 
 

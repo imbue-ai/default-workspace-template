@@ -241,6 +241,7 @@ The auto-name word stays per lane or harness until phase 7, when it becomes a la
 - The re-auth restart (`restart_agents_on_account`) is filtered to active agents so a stopped archived agent is never revived by a sign-in.
   The filter is load-bearing, not defensive: since the workspace's create defaults landed, every agent bound to an account carries the `account` label (workers, automations, and the minds app's chats included, not only chats this app created), and an archived agent keeps the label it was created with.
 - Every verb but destroy answers 409 with the handoff phase while the chat is converging.
+  The answer's `detail` names the harness the chat is moving to and the phase in plain words ("This chat is switching to Codex and is summarizing; wait for the switch to finish, then try again."), since the shell's tab menu and the chat page both show it to the user as is; nothing greys those controls out first.
 
 ### 4.5 Addressing a chat from inside the workspace
 
@@ -297,7 +298,8 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
   "status": "working",
   "labels": {"...": "..."},
   "agent_ids": ["agent-...", "agent-..."],
-  "handoff": {"phase": "summarizing", "target_lane": "openai", "target_account_id": "..."},
+  "handoff": {"phase": "summarizing", "target_lane": "openai", "target_account_id": "...", "target_harness": "codex",
+              "held_sends": [{"message_id": "...", "text": "the confirming message"}], "error": null},
   "active_agent": {
     "agent_id": "agent-...",
     "name": "Chat-2",
@@ -313,9 +315,10 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
 ```
 
 - `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
-  It carries no `lane`: the lane is the account's, and nothing renders it before phase 5, which adds it if the provider row needs it.
+  It carries no `lane`: the lane is the account's, and phase 5 needed none, since whether a pending account means a switch is decided by harness (two lanes can share one) against the accounts the page already holds.
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4).
+  While set it carries the phase, the target lane, account, and harness, the messages held for the successor (the confirming message first, so a reloaded page keeps showing them until they land in the successor's transcript; the record keeps the confirming text as `trigger_text` once summarizing folds it into the prompt), and the failed phase's `error`.
 - The Flask state holder currently named `ChatState` is renamed (to `ChatAppState`) so the name is free for chat-level state.
 
 Routes move to `/api/chats/<chat_id>/...` and `/api/chats/create`, with every `/api/agents/...` route kept as an alias that resolves the path parameter as a chat id, until phase 7 drops the aliases.
@@ -361,6 +364,24 @@ The auto-open reactor fires for an agent that appears carrying an `auto_open` or
   The message shows as a placeholder whose text follows the backend's phase ("Wrapping up with Claude...", "Starting Codex...") rather than a bare "Sending...", because the transitions are long enough that the user should see what is happening.
 - Cancel remains available on the page until the old agent is stopped (section 5.6).
 - The transcript shows the switch chip once the new agent is active.
+
+As landed in phase 5:
+
+- Pressing an account on another harness in the provider menu sets the pending lane and closes the menu; the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing the row again, or the account the chat runs on, takes the choice back.
+  An account on the chat's own harness keeps the "Launch a new chat?" prompt until phase 6 makes it a rebind; a sign-in from the menu's "+ Add a provider" follows the same rule by harness.
+  The pending lane is spent once the chat runs on that account, or on a new agent at all (a failed switch retried on another account lands there); a cancelled switch keeps it.
+- The send button becomes a text pill reading "Switch and send" while a lane is pending; it appears, like the plain send button, only once there is something to send.
+  Enter does the same as the button.
+- The confirm is the workspace's notice dialog: "Switch to Codex?", then "Claude wraps up what it is doing and stops." and "The conversation continues on OpenAI (Codex), starting with your message."
+  Cancel keeps the pending lane; Switch and send posts the handoff with the attachment-expanded text, a send-time `message_id`, and the client fields, and puts the `returned_block` back in the composer.
+- The typed message is painted as the page's own not-yet-real bubble carrying its `message_id`, which stands down the moment the snapshot lists the send under `handoff.held_sends`; from then on the held messages render from the snapshot with the phase as their caption ("Wrapping up with Claude...", "Claude is writing a summary...", "Starting Codex...", "Could not start Codex").
+  When the switch ends they come back as the page's bubbles until their turns arrive in the successor's transcript; a cancelled switch's confirming message goes back to the composer instead.
+  Every send while converging carries its `message_id` too and is shown the same way.
+- The activity strip shows the phase instead of the retiring agent's turn; the composer's placeholder says a message typed now is delivered once the new harness is ready.
+- The Stop button is replaced by "Cancel switch" while the switch can still be called off (draining and summarizing) and hidden afterwards; a cancel puts the returned confirming message back in the composer.
+- The failed page (5.10) is a notice over the composer: "Could not start Codex", mngr's reason, a picker of every signed-in account defaulting to the failed target, and "Try again"; a refused retry shows its reason under the picker.
+- The controls a converging chat refuses (the Stop agent row, the shoulder tap, the model picker, and the shell's stop, start, and rename) stay live and show the 409's detail through their existing alerts and notices (4.4).
+- An optimistic model pick made for the old agent is forgotten when the chat's active agent changes, so the bar shows the new harness's own choice (5.12).
 
 ### 5.2 Trigger and preconditions
 
@@ -586,8 +607,11 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 5: the handoff, UI
 
-- The pending lane on the provider row, "Switch and send", the two-line confirm, the phased placeholder text, the switch chip, the failed page with retry on another lane, the model bar reset, and the 409 handling for stop, start, and rename while converging (5.1).
-- Exit check: the two-account e2e drives the whole flow through the browser, including cancel during summarizing and a retry on a third lane after a forced failure.
+- The user's side of the handoff as section 5.1 records it: the pending lane on the provider menu (cross-harness accounts only; same-harness accounts keep the new-chat prompt until phase 6), "Switch and send" with the two-line confirm, the held messages rendered from the snapshot with the phase as their caption, the activity strip's phase text, "Cancel switch" in place of Stop, the failed page with a retry on any signed-in account, and the model bar following the new agent with any optimistic pick forgotten.
+- The wire (4.6): `handoff` gained `target_harness` and `held_sends`; the record gained `trigger_text`.
+  The 409 every refused verb answers names the target harness and the phase in plain words (4.4), and the refused controls show it as is rather than being greyed out first.
+- Tests: vitest for the pending lane, the composer's switch, cancel, and placeholder, the held bubbles and their bookkeeping across the switch's end, the activity strip, the failed notice, and the active-agent listener; and three Playwright release tests in `test_e2e.py` that drive the whole flow through the browser against the recording `mngr` (the switch, a cancel during summarizing, and a forced create failure retried on a third account).
+- Exit check, as met: the browser flow runs deterministically against the recording `mngr` in the e2e suite; the two-account release test (`test_handoff_release.py`) stays API-driven until CI has an OpenRouter key.
 
 ### Phase 6: rebind
 
@@ -622,7 +646,8 @@ Where the minds repo is touched, the paired branch is named.
 - Per-harness session resumption under a swapped credential for the rebind (phase 6).
 - Settled for phase 2 (4.5): the report is written into the lead's checkout, `lead_work_dir` when the launcher stamped it and the repo's main worktree otherwise; the id-addressed `mngr rsync` delivery is gone.
 - Settled for phase 4 (section 7): the `AGENTS.md` section and the summary skill's content rules, as landed.
-- Enabling the two-account e2e in CI: it needs an OpenRouter key beside the Anthropic one in the CI secrets (phase 5).
+- Enabling the two-account e2e in CI: it needs an OpenRouter key beside the Anthropic one in the CI secrets.
+  Phase 5's browser exit check runs against the recording `mngr` instead; the real two-account test stays API-driven until the key exists.
 
 ## 11. Documents this plan revises
 

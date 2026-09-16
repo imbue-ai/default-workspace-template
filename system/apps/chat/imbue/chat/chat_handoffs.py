@@ -100,6 +100,32 @@ class HandoffStepError(RuntimeError):
 
 
 @pure
+def converging_detail(phase: HandoffPhase, target_harness: HarnessType) -> str:
+    """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
+
+    Names the harness and the phase in plain words rather than the chat's id: the shell's tab
+    menu and the chat page both put this text in front of the user.
+    """
+    label = HARNESS_LABEL[target_harness]
+    match phase:
+        case HandoffPhase.DRAINING | HandoffPhase.SUMMARIZING | HandoffPhase.SWITCHING:
+            return f"This chat is switching to {label} and is {phase.value}; wait for the switch to finish, then try again."
+        case HandoffPhase.FAILED:
+            return f"This chat's switch to {label} failed; retry the switch from the chat before anything else."
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def cancel_refused_detail(target_harness: HarnessType) -> str:
+    """What a cancel refused past the point of no return tells the user (the 409's ``detail``, shown as is)."""
+    return (
+        f"This chat's switch to {HARNESS_LABEL[target_harness]} can no longer be called off: "
+        "the previous agent is already being replaced."
+    )
+
+
+@pure
 def archived_agent_name(seq: int, chat_name: str, agent_id: str) -> str:
     """The archival mngr name (spec 4.3): sorts archived agents together, orders them, stays unique."""
     return f"archived-{seq}-{chat_name}-{agent_id}"
@@ -379,8 +405,7 @@ class HandoffRunner:
         outcome = self._summary_outcome(chat_id, handoff_id, record, handoff)
         # The prompt is built once, here, and resent verbatim by every retry (spec 5.8); the
         # trigger message rides inside it, so it leaves the held list.
-        trigger = handoff.held_send_for(handoff.trigger_message_id)
-        prompt = self._render_prompt(record, handoff, outcome, trigger.text if trigger is not None else "")
+        prompt = self._render_prompt(record, handoff, outcome, handoff.trigger_text)
         self._update_handoff(
             chat_id,
             handoff_id,
@@ -388,10 +413,7 @@ class HandoffRunner:
                 to_update(current.field_ref().phase, HandoffPhase.SWITCHING),
                 to_update(current.field_ref().summary_outcome, outcome),
                 to_update(current.field_ref().prompt, prompt),
-                to_update(
-                    current.field_ref().held_sends,
-                    tuple(held for held in current.held_sends if held.message_id != current.trigger_message_id),
-                ),
+                to_update(current.field_ref().held_sends, current.held_sends_after_trigger()),
             ),
         )
 

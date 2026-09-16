@@ -40,13 +40,30 @@ export interface ActiveAgent {
 
 export type HandoffPhase = "draining" | "summarizing" | "switching" | "failed";
 
+/** One message the chat app holds for the new agent while the chat switches (the backend's
+ *  ``HeldSendSnapshot``). Rendered from the snapshot until it lands in the new agent's transcript. */
+export interface HeldSend {
+  // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
+  message_id: string;
+  text: string;
+}
+
 /** The in-progress handoff a chat carries while it converges on a new agent. */
 export interface HandoffState {
   phase: HandoffPhase;
   target_lane: string;
   target_account_id: string;
+  // The harness the chat is moving to, for the phase text.
+  target_harness: string;
+  // The messages held for the new agent, the confirming one first.
+  held_sends: HeldSend[];
   // Why the new agent could not be started, in the failed phase; null otherwise.
   error: string | null;
+}
+
+/** Whether the switch can still be called off: only until the old agent is stopped (spec 5.6). */
+export function isHandoffCancellable(handoff: HandoffState): boolean {
+  return handoff.phase === "draining" || handoff.phase === "summarizing";
 }
 
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
@@ -108,6 +125,11 @@ export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
  * state (it just appeared, or its state was untracked).
  */
 export type ChatActivityListener = (chatId: string, previous: string | null, current: string | null) => void;
+/**
+ * Notified when a chat runs on a different agent than in the previous ``chats_updated`` snapshot
+ * (a handoff completed). Per-agent state a view holds (an optimistic model pick) is stale then.
+ */
+export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
 let chats: ChatSnapshot[] = [];
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
@@ -121,6 +143,7 @@ let replayedProvisionalIds: Set<string> | null = null;
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
+let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
@@ -188,6 +211,7 @@ function handleEvent(event: WsEvent): void {
       // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
+      const previousAgentIdById = new Map(chats.map((c) => [c.chat_id, c.active_agent.agent_id]));
       chats = event.chats;
       // A provisional chat the list now names is an agent, whatever order the pushes came in.
       const registeredIds = new Set(chats.map((c) => c.chat_id));
@@ -213,6 +237,12 @@ function handleEvent(event: WsEvent): void {
         if (previous !== current) {
           for (const listener of chatActivityListeners) {
             listener(chat.chat_id, previous, current);
+          }
+        }
+        const previousAgentId = previousAgentIdById.get(chat.chat_id);
+        if (previousAgentId !== undefined && previousAgentId !== chat.active_agent.agent_id) {
+          for (const listener of chatActiveAgentListeners) {
+            listener(chat.chat_id, previousAgentId, chat.active_agent.agent_id);
           }
         }
       }
@@ -332,6 +362,14 @@ export function addChatActivityListener(listener: ChatActivityListener): void {
 
 export function removeChatActivityListener(listener: ChatActivityListener): void {
   chatActivityListeners = chatActivityListeners.filter((l) => l !== listener);
+}
+
+export function addActiveAgentChangedListener(listener: ChatActiveAgentListener): void {
+  chatActiveAgentListeners.push(listener);
+}
+
+export function removeActiveAgentChangedListener(listener: ChatActiveAgentListener): void {
+  chatActiveAgentListeners = chatActiveAgentListeners.filter((l) => l !== listener);
 }
 
 /** The terminal app's origin, where the chat's terminal back face is served from: derived
