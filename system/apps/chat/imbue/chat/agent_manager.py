@@ -209,6 +209,19 @@ def launch_role_templates(message: str, fast_mode_turn_limit: int) -> tuple[str,
 
 
 @pure
+def explicit_chat_name(requested_name: str) -> str:
+    """The name a caller asked a new chat to carry, stripped; empty for none.
+
+    Raises ``AgentCreationError`` for a name with no usable characters, one ``mngr create``
+    could not take as the agent's name.
+    """
+    explicit_name = requested_name.strip()
+    if explicit_name and not canonical_agent_name(explicit_name):
+        raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
+    return explicit_name
+
+
+@pure
 def seeded_provisional_chats(record_by_chat_id: Mapping[ChatId, ChatRecord]) -> dict[ChatId, ProvisionalChat]:
     """The provisional chats a build restores: every seeded chat still waiting for its first message.
 
@@ -2410,6 +2423,16 @@ class AgentManager:
                 taken.append(provisional.name)
         return taken
 
+    def _mint_display_name_locked(self, explicit_name: str) -> str:
+        """The display name a new chat gets: ``explicit_name`` when it is free, else the first free
+        "Chat N". Raises ``AgentNameConflictError`` for a name already in use. Lock held."""
+        taken_names = self._taken_names_locked()
+        if not explicit_name:
+            return first_free_numbered_name(AUTO_NAME_WORD, taken_names)
+        if is_name_conflict(explicit_name, taken_names):
+            raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
+        return explicit_name
+
     def reserve_chat(self, project_id: str = "", message: str = "") -> CreatedChat:
         """Mint a chat with nothing to launch it on yet.
 
@@ -2422,7 +2445,7 @@ class AgentManager:
         """
         chat_id = ChatId(str(AgentId()))
         with self._lock:
-            display_name = first_free_numbered_name(AUTO_NAME_WORD, self._taken_names_locked())
+            display_name = self._mint_display_name_locked("")
             provisional = ProvisionalChat(
                 chat_id=chat_id,
                 name=display_name,
@@ -2451,20 +2474,12 @@ class AgentManager:
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
         empty title mints the first free "Chat N".
         """
-        explicit_title = title.strip()
-        if explicit_title and not canonical_agent_name(explicit_title):
-            raise AgentCreationError(f"Chat name '{explicit_title}' contains no usable characters")
+        explicit_title = explicit_chat_name(title)
         chat_id = ChatId(str(AgentId()))
         now = datetime.now(timezone.utc)
         events = seed_events(chat_id, turns, now)
         with self._lock:
-            taken_names = self._taken_names_locked()
-            if explicit_title:
-                if is_name_conflict(explicit_title, taken_names):
-                    raise AgentNameConflictError(f"A chat named '{explicit_title}' already exists; pick another name")
-                display_name = explicit_title
-            else:
-                display_name = first_free_numbered_name(AUTO_NAME_WORD, taken_names)
+            display_name = self._mint_display_name_locked(explicit_title)
             record = ChatRecord(
                 chat_id=chat_id,
                 agents=(
@@ -2574,9 +2589,7 @@ class AgentManager:
         harness = harness_for(account)
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
-        explicit_name = requested_name.strip()
-        if explicit_name and not canonical_agent_name(explicit_name):
-            raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
+        explicit_name = explicit_chat_name(requested_name)
         if chat_id and (explicit_name or project_id):
             raise AgentCreationError(
                 f"Chat {chat_id} keeps the name and project it was minted with; a launch cannot rename or refile it"
@@ -2625,15 +2638,7 @@ class AgentManager:
                 project_id = reserved.project_id
             else:
                 launched_chat_id = ChatId(str(AgentId()))
-                taken_names = self._taken_names_locked()
-                if explicit_name:
-                    if is_name_conflict(explicit_name, taken_names):
-                        raise AgentNameConflictError(
-                            f"A chat named '{explicit_name}' already exists; pick another name"
-                        )
-                    display_name = explicit_name
-                else:
-                    display_name = first_free_numbered_name(AUTO_NAME_WORD, taken_names)
+                display_name = self._mint_display_name_locked(explicit_name)
 
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,
