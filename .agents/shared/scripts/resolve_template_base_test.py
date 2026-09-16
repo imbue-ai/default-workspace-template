@@ -168,7 +168,8 @@ def test_find_template_base_takes_the_newest_marker() -> None:
         "ddd4444\teee5555 up06666\tupdate-self: merge upstream template (minds-v0.3.6)",
         "eee5555\tfff6666\tInitial workspace commit",
     ]
-    # update-self's origin-line walk takes the OLDEST marker instead.
+    # `--origin` takes the newest `Initial workspace commit` instead, ignoring
+    # the merges entirely: where the mind started, not the base it is on now.
     assert resolve_template_base.find_template_base(log) == "up09999"
 
 
