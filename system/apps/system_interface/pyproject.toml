@@ -27,13 +27,11 @@ license-files = [
 dev = [
     "playwright>=1.40",
     "pytest-playwright>=0.4",
-    # Test infrastructure used by imbue.imbue_common.conftest_hooks
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",
     "coverage",
     "inline-snapshot>=0.13",
-    "resource-guards",
     # The live mngr CLI, for the contract test that pins the not-built placeholder's repair
     # command to the CLI it names (test_chat_system.py, the one module that may import the
     # chat package's command builder beside it).
@@ -68,13 +66,13 @@ artifacts = [
 [tool.hatch.build.targets.wheel]
 packages = ["imbue"]
 
-# Shared pytest settings (markers, filterwarnings, coverage report config)
-# are centralized in:
-#   libs/imbue_common/imbue/imbue_common/conftest_hooks.py
-# The settings below remain here because they are read from pyproject.toml
-# before any hooks run: addopts, coverage.run, inline-snapshot, timeout_func_only.
 [tool.pytest.ini_options]
 timeout_func_only = true
+markers = [
+    "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
+    "release: marks tests as being required for release (but not for merging PRs)",
+    "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
+]
 junit_family = "xunit1"
 testpaths = ["."]
 addopts = [
@@ -84,8 +82,6 @@ addopts = [
   "--durations=20",
   "--timeout=10",
   "--timeout-method=signal",
-  "--slow-tests-to-file",
-  "--coverage-to-file",
 ]
 
 [tool.coverage.run]

@@ -111,7 +111,6 @@ imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3
 imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3f54ac995873b4fcc6f4f722fc21c61", subdirectory = "libs/mngr_pi_coding" }
 imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3f54ac995873b4fcc6f4f722fc21c61", subdirectory = "libs/mngr_opencode" }
 imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3f54ac995873b4fcc6f4f722fc21c61", subdirectory = "libs/mngr_antigravity" }
-resource-guards = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3f54ac995873b4fcc6f4f722fc21c61", subdirectory = "libs/resource_guards" }
 concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "2ffdce11c3f54ac995873b4fcc6f4f722fc21c61", subdirectory = "libs/concurrency_group" }
 
 [tool.pytest.ini_options]
@@ -149,12 +148,11 @@ norecursedirs = [
     "{arch}",
 ]
 timeout_func_only = true
-# The sub-projects register these through imbue_common's conftest hooks; the
-# root-level tests (system/*.py, system/scripts/, .agents/) have no conftest,
-# so the same markers are declared here for them.
+# Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "release: marks tests as being required for release (but not for merging PRs)",
+    "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 addopts = [
     "--timeout=10",
