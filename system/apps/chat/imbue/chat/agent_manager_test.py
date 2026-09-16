@@ -2610,7 +2610,7 @@ def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for
     agy_info = agent_manager.get_agent_info_by_id("agent-agy")
     assert agy_info is not None
     with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
-        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3-pro"))
+        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.7-flash-high"))
 
 
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
