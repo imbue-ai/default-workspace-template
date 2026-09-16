@@ -1,11 +1,13 @@
 """Shared non-fixture test utilities for the slices package."""
 
+import base64
 import json
 import shlex
 import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from typing import Final
 from uuid import uuid4
 
 from pydantic import Field
@@ -14,8 +16,14 @@ from pydantic import SecretStr
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds_admin.slices.cutover_types import CutoverStage
 from imbue.minds_admin.slices.cutover_types import CutoverWorkspaceState
+from imbue.minds_admin.slices.cutover_types import HarvestedFile
 from imbue.minds_admin.slices.cutover_types import HarvestedKeys
+from imbue.minds_admin.slices.cutover_types import HarvestedLatchkeyState
+from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.cutover_types import SavedProductArtifact
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_DIR
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_SUPERVISOR_CONF_DIR
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_TMPFS_DIR
 from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolver
 
 
@@ -134,6 +142,71 @@ def make_harvested_keys() -> HarvestedKeys:
         ),
         container_host_public_key="ssh-ed25519 AAAAC container\n",
         container_authorized_keys="ssh-ed25519 AAAAOWNER owner\n",
+    )
+
+
+# The container sshd port the fixture tunnel drop-in dials (matches the
+# ``22/tcp`` HostPort of the cutover scripts test's inspect fixture).
+HARVESTED_TUNNEL_CONTAINER_PORT: Final[int] = 2222
+
+
+def make_harvested_file(path: str, content: bytes, mode: str) -> HarvestedFile:
+    return HarvestedFile(path=path, mode=mode, content_base64=SecretStr(base64.b64encode(content).decode("ascii")))
+
+
+def make_harvested_latchkey_state(plan: LatchkeyReplayPlan) -> HarvestedLatchkeyState:
+    """The latchkey state harvested off one gen-1 workspace VM, in one of the three shapes the replay handles.
+
+    The credential store and the encryption key deliberately end without a
+    newline (a cat-based harvest would have appended one).
+    """
+    if plan == LatchkeyReplayPlan.ABSENT:
+        return HarvestedLatchkeyState(is_present=False, disk_files=(), supervisor_confs=(), tmpfs_files=())
+    disk_files = (
+        make_harvested_file(f"{VM_LATCHKEY_DIR}/credentials.json.enc", b'{"enc":"c2VjcmV0"}', "0600"),
+        make_harvested_file(f"{VM_LATCHKEY_DIR}/config.json", b'{"hideBuiltinServices": true}\n', "0600"),
+        make_harvested_file(f"{VM_LATCHKEY_DIR}/permissions.json", b'{"rules": []}\n', "0600"),
+        make_harvested_file(f"{VM_LATCHKEY_DIR}/data-format-version", b"2\n", "0644"),
+        make_harvested_file(
+            f"{VM_LATCHKEY_DIR}/container_tunnel_key", b"-----BEGIN OPENSSH PRIVATE KEY-----\nt\n", "0600"
+        ),
+        make_harvested_file(
+            f"{VM_LATCHKEY_DIR}/container_tunnel_key.pub", b"ssh-ed25519 AAAATUNNEL root@vm\n", "0644"
+        ),
+        make_harvested_file(f"{VM_LATCHKEY_DIR}/gateway_run.sh", b"#!/bin/sh\nexec latchkey gateway\n", "0700"),
+        make_harvested_file(
+            f"{VM_LATCHKEY_DIR}/extensions/desktop_gateway_proxy.mjs", b"export default {};\n", "0600"
+        ),
+    )
+    tunnel_command = (
+        "command=/usr/bin/ssh -N -T -o StrictHostKeyChecking=no -i /root/.latchkey/container_tunnel_key "
+        f"-p {HARVESTED_TUNNEL_CONTAINER_PORT} -R 127.0.0.1:1989:127.0.0.1:1989 root@127.0.0.1\n"
+    )
+    supervisor_confs = (
+        make_harvested_file(
+            f"{VM_LATCHKEY_SUPERVISOR_CONF_DIR}/latchkey-gateway.conf",
+            b"[program:latchkey-gateway]\ncommand=/bin/sh /root/.latchkey/gateway_run.sh\n",
+            "0600",
+        ),
+        make_harvested_file(
+            f"{VM_LATCHKEY_SUPERVISOR_CONF_DIR}/latchkey-tunnel.conf",
+            b"[program:latchkey-tunnel]\n" + tunnel_command.encode("utf-8"),
+            "0600",
+        ),
+    )
+    desktop_pair = (
+        make_harvested_file(f"{VM_LATCHKEY_TMPFS_DIR}/desktop_gateway_password", b"desktop-password", "0600"),
+        make_harvested_file(f"{VM_LATCHKEY_TMPFS_DIR}/desktop_permissions_override", b"desktop-jwt", "0600"),
+    )
+    machine_pair = (
+        make_harvested_file(
+            f"{VM_LATCHKEY_TMPFS_DIR}/gateway_encryption_key", b"machine-key-0123456789abcdef0123456789ab", "0600"
+        ),
+        make_harvested_file(f"{VM_LATCHKEY_TMPFS_DIR}/gateway_listen_password", b"machine-password", "0600"),
+    )
+    tmpfs_files = (*machine_pair, *desktop_pair) if plan == LatchkeyReplayPlan.FULL else desktop_pair
+    return HarvestedLatchkeyState(
+        is_present=True, disk_files=disk_files, supervisor_confs=supervisor_confs, tmpfs_files=tmpfs_files
     )
 
 

@@ -32,7 +32,7 @@ Shared base: `libs/mngr_vps/`. Interfaces: `libs/mngr/imbue/mngr/interfaces/{pro
 | 10 | Vultr/OVH `mngr stop --stop-host` and `mngr start` aren't implemented; release tests named for them are misleading | medium | Lifecycle |
 | 11 | Vultr `build_provider_instance` silently swallows missing-creds `ValueError`; OVH never raises `ProviderUnavailableError` | high | Errors |
 | 12 | OVH `mngr destroy` cancels at billing-cycle end, not immediately — VPS keeps running until expiration | medium | Lifecycle |
-| 13 | Docker provider `-p :22` binds `0.0.0.0:<random>:22` on host's LAN | medium (security) | Networking |
+| 13 | ~~Docker provider `-p :22` binds `0.0.0.0:<random>:22` on host's LAN~~ (resolved: local daemons bind `127.0.0.1`; `ssh_bind_address` overrides) | resolved | Networking |
 | 14 | `auto_shutdown_seconds` wired through to cloud API is not pinned by any test | medium | Tests |
 | 15 | GCP lowercases mngr-provider label — mixed-case provider names silently collide | medium | Discovery |
 | 16 | Container-shape knobs (`--cpu`/`--memory`/`--gpu`) are Modal-only; no cross-provider "~2 vCPU/4GB" alias | medium | Create UX |
@@ -83,7 +83,7 @@ What each provider actually does for each verb, with concrete code locations.
 | vultr | Base path; Vultr contributes only `VultrVpsClient.create_instance` HTTP POST. Cloud-init `shutdown -P` wired but doesn't stop hourly billing. | `mngr_vultr/client.py` (`create_instance`); `backend.py` (`build_provider_instance`) |
 | ovh | Overrides `_provision_vps`: pending-orders reconcile → recycle-pool claim → order-and-wait → IAM tagging → SSH-key bootstrap → `apply_host_setup_on_outer(is_qemu_purge_enabled=True)`. | `mngr_ovh/backend.py` (`_provision_vps`); ordering, recycle, bootstrap modules |
 | lima | Direct on `BaseProviderInstance`. Generate `lima.yaml`; btrfs additional disk if exposed; `limactl_start_new`; wait cloud-init; SSH; install shutdown script; activity watcher. Cleanup-on-fail deletes VM + orphaned disk. | `mngr_lima/instance.py` (`create_host`) |
-| docker | Direct on `BaseProviderInstance`. Build per-host image; `docker run -p :22` (binds **all interfaces**); SSH setup via `docker exec`. | `mngr/providers/docker/instance.py` (`create_host`) |
+| docker | Direct on `BaseProviderInstance`. Build per-host image; `docker run -p 127.0.0.1::22` for a local daemon, `-p :22` (all interfaces) for a remote one, `ssh_bind_address` overrides; SSH setup via `docker exec`. | `mngr/providers/docker/instance.py` (`create_host`) |
 | ssh | `raise NotImplementedError`. | `mngr/providers/ssh/instance.py` (`create_host`) |
 
 ### `mngr stop my-agent` (no flag)
@@ -331,7 +331,7 @@ Ordered by impact × ease.
 ### Networking and security defaults
 
 12. **Build firewall integration for Vultr/OVH**, or document loudly that VPS is internet-reachable as soon as it boots.
-13. **Bind Docker provider `-p :22` to `127.0.0.1::22`** by default.
+13. ~~**Bind Docker provider `-p :22` to `127.0.0.1::22`** by default.~~ Done: local daemons bind loopback, remote daemons keep all interfaces, `ssh_bind_address` overrides.
 14. **Warn at provider load when two GCP-targeted provider names lowercase-fold to the same string.**
 
 ### Discovery and visibility

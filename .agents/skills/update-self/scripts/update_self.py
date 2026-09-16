@@ -113,7 +113,7 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Minds app, bootstrap and the system interface read),
+verdict and record the Mind app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``, and
 ``update_apply`` (the apply and recover orchestration). All of it is covered
@@ -364,13 +364,13 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, agent_id: str) -> bool:
+def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
     result = subprocess.run(
         [
             sys.executable,
             "system/scripts/layout.py",
             "open",
-            f"app:chat?instance={agent_id}",
+            f"app:chat?instance={chat_id}",
         ],
         cwd=repo_root,
         capture_output=True,
@@ -384,7 +384,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.agent_id),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -398,8 +398,8 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
             sys.executable,
             str(Path(__file__).resolve()),
             "surface-chat-tab",
-            "--agent-id",
-            args.agent_id,
+            "--chat-id",
+            args.chat_id,
             "--repo-root",
             str(repo_root),
             "--wait",
@@ -714,9 +714,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parents=[common],
     )
     surface_parser.add_argument(
-        "--agent-id",
+        "--chat-id",
         required=True,
-        help="This run's chat agent id ($MNGR_AGENT_ID); a chat is addressed by it.",
+        help="This run's chat id ($MINDS_CHAT_ID, or $MNGR_AGENT_ID for an agent that is its own chat).",
     )
     surface_parser.add_argument(
         "--wait",
@@ -814,7 +814,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Minds app (data/.state/update-apply/run.json).",
+        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -849,7 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Minds app's modal.",
+        help="One plain-language line for the Mind app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",

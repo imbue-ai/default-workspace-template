@@ -51,7 +51,12 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(0))
+    """The one that remains is `call_binding`, the boundary with plugin-supplied behaviour.
+
+    Its docstring says why nothing narrower will do. Every other site catches the
+    `BindingFailedError` it raises.
+    """
+    rc.check_broad_exception_catch(_DIR, snapshot(1))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -63,7 +68,7 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(1))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(0))
 
 
 # --- Import style ---
@@ -154,7 +159,7 @@ def test_prevent_num_prefix() -> None:
 # `coverage report`, which applies only the default exclusions, and the pragma
 # has to sit on the case line itself to exclude the arm.
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(1))
+    rc.check_trailing_comments(_DIR, snapshot(0))
 
 
 def test_prevent_init_docstrings() -> None:

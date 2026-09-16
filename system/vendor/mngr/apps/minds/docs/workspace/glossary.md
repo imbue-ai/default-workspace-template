@@ -43,7 +43,8 @@ Key concepts in the minds system:
   Its `workspace_display_name` label holds the workspace's human-readable name (the normalized slug is the host's name).
   Hidden from the UI agent list and protected against direct destroy.
 
-- **chat agent**: a user-facing mngr agent created on demand in a workspace, one per chat tab.
+- **chat**: a user-facing conversation in a workspace, one per chat tab: a sequence of agent transcripts run by one agent at a time (the template's `docs/system/blueprint/chat-agent-split/`). Its id is its first agent's id, and every agent the chat app creates for it carries that id as `MINDS_CHAT_ID`. Today every chat runs on exactly one agent.
+- **chat agent**: the mngr agent a chat currently runs on, created on demand in a workspace by the chat app; the phrase names the agent, never the chat.
   Created with `--transfer none`, so it shares the primary agent's work_dir, and bound on its create to one signed-in provider account under `~/.minds/accounts/` (an `--env CLAUDE_CONFIG_DIR=<account dir>` for claude). A create that names no account gets the workspace's default one from `.mngr/settings.local.toml`, which the workspace's chat app writes; with no account signed in the create is refused, since `~/.claude` holds no credential.
   Bootstrap seeds the first one on initial container boot; the count grows and shrinks with the user's workload, and is not capped.
 
@@ -74,7 +75,7 @@ Key concepts in the minds system:
 
 - **bootstrap**: `uv run bootstrap`, the process that runs first-boot setup inside each agent container and then execs `supervisord -n` to launch the apps and background services.
 
-- **supervisord**: the process-control system running inside each agent container that supervises the apps and background services, each declared as a `[program:*]` section in `supervisord.conf` (logs under `/var/log/supervisor`).
+- **supervisord**: the process-control system running inside each agent container that supervises the apps and background services, each declared as a `[program:*]` section in `supervisord.conf` -- or, where a template splits them out, in its own file pulled in by that config's `[include]` glob (logs under `/var/log/supervisor`).
   Replaces the old custom service manager that watched `services.toml` and ran services in tmux windows.
 
 - **app watcher**: a background service that monitors `data/.state/apps.toml` and writes service events to `events/services/events.jsonl` so the desktop client can discover an agent's apps.
@@ -111,3 +112,7 @@ Key concepts in the minds system:
   After adoption, host-key trust flows only through the user's synced workspace records; the connector is trusted exactly once, at lease handoff. The pins are bound to an address and port, and the machine changes ports on every restore (driven by this client, an operator, a rollback, or another device), so the client remembers the endpoints it last pinned and moves the pins to the connector's current endpoints before every connection, with no network round trip.
   Idempotent and marker-driven; a served key that matches neither the pins nor an in-flight rotation is refused, never re-trusted.
   See `libs/mngr_imbue_cloud/README.md` ("Adoption and key rotation") and [the lost-device runbook](../deploy/reference/lost-device-runbook.md).
+
+- **stop kind**: why a remote (imbue_cloud) machine's current stop happened, recorded by the connector beside its lifecycle status and cleared by every start (`specs/workspace-stop-kinds.md`).
+  `owner` (the user's own stop, from any device) and `idle` (an operator stop to free capacity) are the owner's to end with Start; `maintenance` (an operator hold, such as the gen-2 migration) and `suspension` (the account suspend fan-out) are not -- a held machine offers no Start control (a `maintenance` hold is named "Maintenance" by its badge; a `suspension` reads as plain "Stopped"), and the connector refuses owner starts of it.
+  A kind this build does not recognize is treated as a hold (shown but not actionable).

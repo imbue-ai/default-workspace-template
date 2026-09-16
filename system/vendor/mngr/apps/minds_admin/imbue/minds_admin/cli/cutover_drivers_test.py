@@ -1,13 +1,18 @@
 import base64
+import io
 import os
+import tarfile
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from botocore.exceptions import ClientError
+from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -24,9 +29,12 @@ from imbue.minds_admin.cli.cutover_drivers import _migrate_workspace
 from imbue.minds_admin.cli.cutover_drivers import _remove_box_transfer_dirs
 from imbue.minds_admin.cli.cutover_drivers import _render_migrate_reserve_script
 from imbue.minds_admin.cli.cutover_drivers import _repave_box
+from imbue.minds_admin.cli.cutover_drivers import _replay_latchkey_disk_state
 from imbue.minds_admin.cli.cutover_drivers import _rollback_workspace
 from imbue.minds_admin.cli.cutover_drivers import _run_on_box_checked
+from imbue.minds_admin.cli.cutover_drivers import _run_on_vm_checked
 from imbue.minds_admin.cli.cutover_drivers import _s3_multipart_copy
+from imbue.minds_admin.cli.cutover_drivers import _start_latchkey_gateway
 from imbue.minds_admin.cli.cutover_drivers import _target_capacity_error_or_none
 from imbue.minds_admin.cli.cutover_drivers import box_transfer_dir
 from imbue.minds_admin.cli.cutover_drivers import build_preflight_report
@@ -34,12 +42,15 @@ from imbue.minds_admin.cli.cutover_drivers import build_saved_product_artifact
 from imbue.minds_admin.cli.cutover_drivers import is_artifact_resave_due
 from imbue.minds_admin.cli.cutover_drivers import is_parked_row_shape
 from imbue.minds_admin.cli.cutover_drivers import minimal_mngr_context
+from imbue.minds_admin.cli.cutover_drivers import parked_sweep_rows
 from imbue.minds_admin.cli.cutover_drivers import partition_migration_rows
+from imbue.minds_admin.cli.cutover_drivers import probe_workspace_health
 from imbue.minds_admin.cli.cutover_drivers import render_preflight_table
 from imbue.minds_admin.cli.cutover_drivers import render_stage_table
 from imbue.minds_admin.cli.cutover_drivers import repave_dry_run_detail
 from imbue.minds_admin.cli.cutover_drivers import repave_pre_reinstall_server_fields
 from imbue.minds_admin.cli.cutover_drivers import repave_scope_refusal_or_none
+from imbue.minds_admin.cli.cutover_drivers import require_connector_stop_kinds
 from imbue.minds_admin.cli.cutover_drivers import require_named_servers_selected
 from imbue.minds_admin.cli.cutover_drivers import rollback_would_clobber_newer_artifact
 from imbue.minds_admin.cli.cutover_drivers import s3_copy_part_ranges
@@ -54,16 +65,24 @@ from imbue.minds_admin.slices.cutover_types import BoxPreflight
 from imbue.minds_admin.slices.cutover_types import CutoverBoxStage
 from imbue.minds_admin.slices.cutover_types import CutoverError
 from imbue.minds_admin.slices.cutover_types import CutoverStage
+from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.cutover_types import RowVerdict
 from imbue.minds_admin.slices.cutover_types import StageReport
 from imbue.minds_admin.slices.cutover_types import WorkspaceOutcome
 from imbue.minds_admin.slices.cutover_types import WorkspacePreflight
 from imbue.minds_admin.slices.testing import make_cutover_workspace_state
 from imbue.minds_admin.slices.testing import make_harvested_keys
+from imbue.minds_admin.slices.testing import make_harvested_latchkey_state
 from imbue.minds_admin.slices.testing import make_saved_product_artifact
 from imbue.minds_admin.slices.testing import make_test_management_identities
+from imbue.mngr.interfaces.data_types import CommandResult
+from imbue.mngr.interfaces.host import OuterHostInterface
+from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
+from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
+from imbue.mngr_imbue_cloud.errors import WorkspaceHasNoStopError
+from imbue.mngr_imbue_cloud.errors import WorkspaceStopKindRouteUnavailableError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
@@ -80,6 +99,10 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SLICE_SERVICE
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_VM_SSH_PORT_PLACEHOLDER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.testing import assert_valid_bash
 from imbue.mngr_imbue_cloud.slices.mock_slice_vm_client_test import MockSliceVmClient
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
+from imbue.mngr_latchkey.remote.errors import RemoteGatewayError
+from imbue.mngr_latchkey.remote.mock_outer_host_test import StubOuter
+from imbue.mngr_latchkey.remote.mock_outer_host_test import stub_outer
 
 _TEST_SSH_CA = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKECAFAKECAFAKECAFAKECAFAKECAFAKECAFAKE minds-dev-ssh-ca"
 _TEST_POOL_PUBLIC_KEY = "ssh-ed25519 AAAAPOOL pool"
@@ -240,6 +263,20 @@ def test_run_on_box_checked_raises_with_stderr_on_failure() -> None:
         _run_on_box_checked(client, "false", timeout=1.0, label="probe")
     ok = _client(answers_by_label={"probe": [(0, "fine", "")]})
     assert _run_on_box_checked(ok, "true", timeout=1.0, label="probe") == "fine"
+
+
+def test_run_on_vm_checked_keeps_secret_stdout_out_of_the_failure_message() -> None:
+    # A harvest prints key material on stdout; the failure message (persisted
+    # as the record's last_error and printed in the report) must not carry it.
+    failed_with_secret = CommandResult(stdout="-----BEGIN OPENSSH PRIVATE KEY-----", stderr="", success=False)
+    with pytest.raises(CutoverError, match=r"VM command 'vm-keys' failed: $"):
+        _run_on_vm_checked(
+            stub_outer(failed_with_secret), "harvest", timeout=1.0, label="vm-keys", is_stdout_secret=True
+        )
+    with pytest.raises(CutoverError, match="PRIVATE KEY"):
+        _run_on_vm_checked(stub_outer(failed_with_secret), "harvest", timeout=1.0, label="vm-keys")
+    ok = stub_outer(CommandResult(stdout="fine", stderr="", success=True))
+    assert _run_on_vm_checked(ok, "true", timeout=1.0, label="probe", is_stdout_secret=True) == "fine"
 
 
 def test_remove_box_transfer_dirs_is_best_effort_and_never_raises() -> None:
@@ -671,6 +708,43 @@ def test_partition_migration_rows_splits_candidates_from_unmigratable_rows() -> 
     assert foreign.detail is not None and "already on gen-2" in foreign.detail
 
 
+def test_box_sweep_reselects_the_rows_it_parked_onto_the_same_target(tmp_path: Path) -> None:
+    # The park step clears a row's box link, so a --source-server-id sweep's row
+    # listing no longer contains a row an earlier run parked; the state record's
+    # origin is what still ties it to the swept box. Only records headed for
+    # this invocation's target are re-selected: one onto another target is
+    # another invocation's work (reported), and terminal records are ordinary
+    # gen-1 rows again (found by the listing, or gone).
+    state_store = CutoverStateStore(root=tmp_path / "cutover")
+    state_store.ensure_layout()
+    source, target, other_target, other_source = (str(uuid4()) for _ in range(4))
+    parked_here = make_cutover_workspace_state(str(uuid4()), source, target_server_id=target)
+    parked_here_failed = make_cutover_workspace_state(str(uuid4()), source, target_server_id=target)
+    parked_elsewhere = make_cutover_workspace_state(str(uuid4()), source, target_server_id=other_target)
+    parked_off_another_box = make_cutover_workspace_state(str(uuid4()), other_source, target_server_id=target)
+    finished = make_cutover_workspace_state(str(uuid4()), source, target_server_id=target)
+    rolled_back = make_cutover_workspace_state(str(uuid4()), source, target_server_id=target)
+    for state, stage in (
+        (parked_here, CutoverStage.PARKED),
+        (parked_here_failed, CutoverStage.FAILED),
+        (parked_elsewhere, CutoverStage.STOPPED),
+        (parked_off_another_box, CutoverStage.PARKED),
+        (finished, CutoverStage.RESTORED),
+        (rolled_back, CutoverStage.ROLLED_BACK),
+    ):
+        state_store.write_workspace(state.model_copy_update(to_update(state.field_ref().stage, stage)))
+
+    parked = parked_sweep_rows(state_store.list_workspaces(), source_server_id=source, target_server_id=target)
+
+    assert set(parked.resumable_row_ids) == {parked_here.host_db_id, parked_here_failed.host_db_id}
+    assert parked.retargeted_row_ids_by_target == {other_target: (parked_elsewhere.host_db_id,)}
+    # A sweep of a box nothing was parked off selects nothing extra.
+    untouched = parked_sweep_rows(
+        state_store.list_workspaces(), source_server_id=str(uuid4()), target_server_id=target
+    )
+    assert untouched.resumable_row_ids == () and untouched.retargeted_row_ids_by_target == {}
+
+
 def test_failed_remigration_leaves_a_terminal_record_untouched(tmp_path: Path) -> None:
     # A re-migration of a ROLLED_BACK workspace that dies before writing its
     # own state (here: the target capacity check refuses an unsized box) must
@@ -811,3 +885,201 @@ def test_render_migrate_reserve_script_refuses_missing_sizing_or_saved_artifact(
             ssh_ca_public_key=_TEST_SSH_CA,
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
         )
+
+
+class OrderedStubOuter(StubOuter):
+    """A stub VM that also records commands and file writes in one interleaved event log, answering by command substring."""
+
+    result_by_substring: dict[str, CommandResult] = Field(
+        default_factory=dict, description="The result for any command containing the key (first match wins)"
+    )
+    events: list[str] = Field(default_factory=list, description="``run:<command>`` and ``write:<path>`` in order")
+
+    def execute_idempotent_command(
+        self,
+        command: str,
+        user: str | None = None,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        self.events.append(f"run:{command}")
+        for substring, result in self.result_by_substring.items():
+            if substring in command:
+                return result
+        return super().execute_idempotent_command(command, user, cwd, env, timeout_seconds)
+
+    def write_file(self, path: Path, content: bytes, mode: str | None = None, is_atomic: bool = False) -> None:
+        self.events.append(f"write:{path}")
+        super().write_file(path, content, mode, is_atomic)
+
+
+def _ordered_outer(**kwargs: Any) -> tuple[OuterHostInterface, OrderedStubOuter]:
+    stub = OrderedStubOuter(**kwargs)
+    return cast(OuterHostInterface, stub), stub
+
+
+def _tar_member_names_and_contents(tar_bytes: bytes) -> dict[str, bytes]:
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as archive:
+        contents: dict[str, bytes] = {}
+        for member in archive.getmembers():
+            extracted = archive.extractfile(member) if member.isreg() else None
+            contents[member.name] = extracted.read() if extracted is not None else b""
+        return contents
+
+
+def test_replay_latchkey_disk_state_installs_then_ships_the_files_as_one_tar() -> None:
+    outer, stub = _ordered_outer()
+    full = make_harvested_latchkey_state(LatchkeyReplayPlan.FULL)
+
+    _replay_latchkey_disk_state(outer, full)
+
+    runs = [event for event in stub.events if event.startswith("run:")]
+    # The root-home check comes first, then the software install, then one
+    # upload and one extract -- and nothing touches the tmpfs secrets.
+    assert runs[0] == 'run:echo "$HOME"'
+    assert "npm install -g latchkey@" in runs[1]
+    assert runs[2] == (
+        "run:tar -xpf /root/.mngr-cutover-latchkey.tar -C /; _status=$?; "
+        "rm -f /root/.mngr-cutover-latchkey.tar; exit $_status"
+    )
+    assert len(runs) == 3
+    assert [w.path for w in stub.written] == ["/root/.mngr-cutover-latchkey.tar"]
+    assert stub.written[0].mode == "0600"
+    shipped = _tar_member_names_and_contents(stub.written[0].content)
+    disk_group = full.disk_replay_files
+    assert set(shipped) == {
+        "root/.latchkey",
+        "root/.latchkey/extensions",
+        *(h.path.lstrip("/") for h in disk_group),
+    }
+    for harvested in disk_group:
+        assert shipped[harvested.path.lstrip("/")] == harvested.content
+    # The upload lands before the extract.
+    assert stub.events.index("write:/root/.mngr-cutover-latchkey.tar") < stub.events.index(runs[2])
+
+
+def test_replay_latchkey_disk_state_refuses_a_target_whose_root_home_is_elsewhere() -> None:
+    outer, stub = _ordered_outer(home="/home/admin")
+    with pytest.raises(CutoverError, match="/home/admin/.latchkey, not /root/.latchkey"):
+        _replay_latchkey_disk_state(outer, make_harvested_latchkey_state(LatchkeyReplayPlan.FULL))
+    # Nothing was installed or written: the check is the first thing that runs.
+    assert stub.written == []
+    assert [event for event in stub.events if event.startswith("run:")] == ['run:echo "$HOME"']
+
+
+def test_start_latchkey_gateway_checks_the_ram_backed_dir_before_any_tmpfs_write_then_restarts_both_programs() -> None:
+    outer, stub = _ordered_outer()
+    full = make_harvested_latchkey_state(LatchkeyReplayPlan.FULL)
+
+    _start_latchkey_gateway(outer, full)
+
+    tar_path = "/run/mngr-latchkey/.mngr-cutover-latchkey.tar"
+    ram_check_idx = next(idx for idx, event in enumerate(stub.events) if "stat -f -c %T" in event)
+    tar_write_idx = stub.events.index(f"write:{tar_path}")
+    extract_idx = stub.events.index(f"run:tar -xpf {tar_path} -C /; _status=$?; rm -f {tar_path}; exit $_status")
+    # The RAM-backed check precedes the only write, which lands inside the
+    # tmpfs dir itself and is extracted in place; no secret ever rides a
+    # command line.
+    assert ram_check_idx < tar_write_idx < extract_idx
+    assert [w.path for w in stub.written] == [tar_path]
+    assert stub.written[0].mode == "0600"
+    shipped = _tar_member_names_and_contents(stub.written[0].content)
+    assert shipped == {h.path.lstrip("/"): h.content for h in full.tmpfs_files}
+    assert len(shipped) == 4
+    assert all("machine-key" not in event for event in stub.events if event.startswith("run:"))
+    reloads = [event for event in stub.events if "supervisorctl reread" in event]
+    assert reloads == [
+        "run:supervisorctl reread && supervisorctl update && "
+        "(supervisorctl restart latchkey-gateway || supervisorctl start latchkey-gateway)",
+        "run:supervisorctl reread && supervisorctl update && "
+        "(supervisorctl restart latchkey-tunnel || supervisorctl start latchkey-tunnel)",
+    ]
+    assert stub.events.index(reloads[0]) > extract_idx
+
+
+def test_start_latchkey_gateway_never_writes_a_secret_when_the_dir_is_not_ram_backed() -> None:
+    outer, stub = _ordered_outer(
+        result_by_substring={
+            "stat -f -c %T": CommandResult(stdout="", stderr="is on a ext4 filesystem, not RAM-backed", success=False)
+        }
+    )
+    with pytest.raises(RemoteGatewayError, match="RAM-backed secrets directory"):
+        _start_latchkey_gateway(outer, make_harvested_latchkey_state(LatchkeyReplayPlan.FULL))
+    assert stub.written == []
+
+
+def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed() -> None:
+    healthy_container = {
+        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
+        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
+    }
+    vm_findings = {
+        "supervisorctl status latchkey-gateway latchkey-tunnel": CommandResult(
+            stdout="latchkey-gateway RUNNING pid 1\nlatchkey-tunnel BACKOFF Exited too quickly\n",
+            stderr="",
+            success=False,
+        ),
+        "/dev/tcp/127.0.0.1/1989": CommandResult(stdout="", stderr="Connection refused", success=False),
+    }
+    outer, stub = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
+    # The in-container supervisorctl status answers through the stub's default
+    # (an empty success), which parses as no programs at all.
+    warnings = probe_workspace_health(outer, "mngr-ws", is_latchkey_gateway_expected=True)
+    assert warnings == [
+        "latchkey program not running on the VM: latchkey-tunnel BACKOFF",
+        "the latchkey gateway is not accepting connections on the VM loopback",
+    ]
+    outer_without, stub_without = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
+    assert probe_workspace_health(outer_without, "mngr-ws", is_latchkey_gateway_expected=False) == []
+    assert not any("latchkey" in event for event in stub_without.events)
+    assert any("supervisorctl status latchkey-gateway" in event for event in stub.events)
+    healthy_vm = {
+        "supervisorctl status latchkey-gateway latchkey-tunnel": CommandResult(
+            stdout="latchkey-gateway RUNNING pid 1\nlatchkey-tunnel RUNNING pid 2\n", stderr="", success=True
+        ),
+        "/dev/tcp/127.0.0.1/1989": CommandResult(stdout="", stderr="", success=True),
+    }
+    outer_healthy, stub_healthy = _ordered_outer(result_by_substring={**healthy_container, **healthy_vm})
+    assert probe_workspace_health(outer_healthy, "mngr-ws", is_latchkey_gateway_expected=True) == []
+    assert any("/dev/tcp/127.0.0.1/1989" in event for event in stub_healthy.events)
+
+
+class _StopKindProbeClient(ImbueCloudConnectorClient):
+    """A connector client whose stop-kind route answers with one canned outcome (the client's typed errors)."""
+
+    canned_error: ImbueCloudConnectorError | None = None
+    probed_row_ids: list[str] = Field(default_factory=list)
+
+    def admin_set_workspace_stop_kind(
+        self, admin_api_key: SecretStr, host_db_id: str, kind: WorkspaceStopKind
+    ) -> dict[str, Any]:
+        self.probed_row_ids.append(host_db_id)
+        if self.canned_error is not None:
+            raise self.canned_error
+        return {"host_db_id": host_db_id, "status": "stopped", "stop_kind": kind.value}
+
+
+def _stop_kind_probe_client(canned_error: ImbueCloudConnectorError | None = None) -> _StopKindProbeClient:
+    return _StopKindProbeClient(base_url=AnyUrl("https://example.invalid"), canned_error=canned_error)
+
+
+def test_require_connector_stop_kinds_reads_the_kind_routes_answer() -> None:
+    row_id = str(uuid4())
+    # A connector with the route refuses to describe a running row: proof it carries stop kinds.
+    with_kinds = _stop_kind_probe_client(WorkspaceHasNoStopError("Workspace is running and has no stop to describe"))
+    require_connector_stop_kinds(with_kinds, SecretStr("k"), row_id)
+    assert with_kinds.probed_row_ids == [row_id]
+    # An older connector has no such route.
+    without_kinds = _stop_kind_probe_client(
+        WorkspaceStopKindRouteUnavailableError("This connector does not serve workspace stop kinds yet")
+    )
+    with pytest.raises(CutoverError, match="migration 042"):
+        require_connector_stop_kinds(without_kinds, SecretStr("k"), row_id)
+    # Any other refusal is somebody else's problem.
+    unreachable = _stop_kind_probe_client(ImbueCloudConnectorError("Connector error 503: down"))
+    with pytest.raises(ImbueCloudConnectorError):
+        require_connector_stop_kinds(unreachable, SecretStr("k"), row_id)
+    # A success is the route existing too: the owner stopped the row between the
+    # migrate's observation and the probe, and it now carries the migrate's hold.
+    require_connector_stop_kinds(_stop_kind_probe_client(), SecretStr("k"), row_id)

@@ -52,6 +52,7 @@ from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.ssh_certs import ManagementSshCredentials
 from imbue.remote_service_connector.ssh_certs import SshCertificateBundleMissingError
 from imbue.remote_service_connector.ssh_certs import management_credentials_for_generation
+from imbue.remote_service_connector.web_template_channel import channel_web_template_ref
 
 logger = logging.getLogger(__name__)
 
@@ -1839,6 +1840,9 @@ _KNOWN_WORKSPACE_HOST_DIRS: Final = ("/home/user/.mngr", "/mngr")
 # shape, pushed into the connector's Modal secret by ``minds-admin env deploy`` from
 # the tier's ``deploy.toml`` ``[web_workspaces]`` block. The repo value is the
 # canonical ``host/org/repo`` key the pool bake stamps into row attributes.
+# The ref is the deploy-time FALLBACK: the release feed's ``<channel>-web.json``
+# names the live pin (see ``web_template_channel``), and this value serves
+# only where no feed can (dev envs and staging, or a feed outage).
 _WEB_TEMPLATE_REPO_ENV_VAR: Final = "MINDS_WEB_TEMPLATE_REPO"
 _WEB_TEMPLATE_REF_ENV_VAR: Final = "MINDS_WEB_TEMPLATE_REF"
 _WEB_SHAPE_CPUS_ENV_VAR: Final = "MINDS_WEB_SHAPE_CPUS"
@@ -1864,6 +1868,14 @@ class ClaimHostRequest(BaseModel):
     region: str | None = Field(
         default=None,
         description="Hard region requirement (lease-region label). Unset means region-agnostic.",
+    )
+    channel: str | None = Field(
+        default=None,
+        description=(
+            "The release channel whose web pin (``<channel>-web.json`` on the tier's update feed) "
+            "selects the template tag to lease: the web user's own choice from the chrome's Settings. "
+            "Unset or unknown means stable."
+        ),
     )
 
     _validate_host_name = field_validator("host_name")(_validate_host_name)
@@ -1895,16 +1907,19 @@ class ClaimHostResponse(BaseModel):
     )
 
 
-def _web_claim_pinned_attributes() -> dict[str, Any] | None:
-    """The lease-attribute filter for web creates, from the tier's pinned config.
+def _web_claim_pinned_attributes(channel: str | None) -> dict[str, Any] | None:
+    """The lease-attribute filter for web creates: the channel's published pin over the tier's config.
 
-    Returns None when the tier has no pinned template (web creation disabled).
-    The shape pins are optional: when unset, the filter leaves them
-    unconstrained (JSONB containment only matches fields present in the
-    filter), so a tier with one uniform slice size does not have to restate it.
+    The template tag is the release feed's pin for ``channel`` when the tier
+    has a feed and the channel file is readable, else the deploy-time
+    ``MINDS_WEB_TEMPLATE_REF``. Returns None when neither names a tag (web
+    creation disabled). The shape pins are optional: when unset, the filter
+    leaves them unconstrained (JSONB containment only matches fields present
+    in the filter), so a tier with one uniform slice size does not have to
+    restate it.
     """
     template_repo = os.environ.get(_WEB_TEMPLATE_REPO_ENV_VAR, "").strip()
-    template_ref = os.environ.get(_WEB_TEMPLATE_REF_ENV_VAR, "").strip()
+    template_ref = channel_web_template_ref(channel) or os.environ.get(_WEB_TEMPLATE_REF_ENV_VAR, "").strip()
     if not template_repo or not template_ref:
         return None
     attributes: dict[str, Any] = {"repo_url": template_repo, "repo_branch_or_tag": template_ref}
@@ -2096,11 +2111,11 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
     """Create a web-reachable workspace in one synchronous call.
 
     The browser-driven create primitive: lease a pool host matching the
-    tier's pinned template + shape (fast path only -- no rebuild), adopt the
-    pre-baked workspace over SSH with the pool key (host_name rewrite,
-    display-name label, connector URL in the host env), then bring sharing up
-    (share record + materials injection) so the workspace is reachable from
-    the web the moment this returns.
+    caller's channel pin (or the tier's deploy-time one) + shape (fast path
+    only -- no rebuild), adopt the pre-baked workspace over SSH with the pool
+    key (host_name rewrite, display-name label, connector URL in the host
+    env), then bring sharing up (share record + materials injection) so the
+    workspace is reachable from the web the moment this returns.
 
     A failure after the lease releases it (slice teardown) before the error
     propagates, so a retry starts clean. Refused with 503 when the tier has
@@ -2112,7 +2127,7 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
         auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
-        pinned_attributes = _web_claim_pinned_attributes()
+        pinned_attributes = _web_claim_pinned_attributes(body.channel)
         if pinned_attributes is None:
             raise HTTPException(
                 status_code=503,

@@ -16,12 +16,33 @@ from imbue.minds_evals.data_types import HarnessConfigRecord
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import UsageSource
 from imbue.minds_evals.testing import atif_document
+from imbue.minds_evals.testing import codex_code_mode_trajectory_document
 from imbue.minds_evals.trajectory import build_hand_built_trajectory
 from imbue.minds_evals.usage import summarize_workspace_usage
 
 # The argument each tool carries its payload under, so a step reads the way the real document does.
-# `bash` is pi-coding's name for the shell claude calls `Bash`.
-PAYLOAD_KEYS = {"Bash": "command", "bash": "command", "Read": "file_path", "Agent": "prompt"}
+# `bash` is pi-coding's name for the shell claude calls `Bash`. codex runs in code mode, where every
+# call is the unified `exec` tool and the invocation is a whole JavaScript program under `_raw`;
+# with code mode off the same shell is `shell_command`, under `command`, or `exec_command`, under `cmd`.
+PAYLOAD_KEYS = {
+    "Bash": "command",
+    "bash": "command",
+    "shell_command": "command",
+    "exec_command": "cmd",
+    "exec": "_raw",
+    "Read": "file_path",
+    "Agent": "prompt",
+}
+
+
+def _payload(tool: str, command: str) -> str:
+    """What the named tool carries in its payload argument for the given invocation: the invocation
+    itself, except on codex's `exec`, which wraps it in the code-mode program that runs it."""
+    if tool != "exec":
+        return command
+    return 'const r = tools.shell_command({{"command":{},"workdir":"/home/user/workspace"}});\n'.format(
+        json.dumps(command)
+    )
 
 
 def _step(
@@ -43,7 +64,11 @@ def _step(
             "arguments": {"skill": skill},
         }
     elif command:
-        call = {"tool_call_id": call_id, "function_name": tool, "arguments": {PAYLOAD_KEYS[tool]: command}}
+        call = {
+            "tool_call_id": call_id,
+            "function_name": tool,
+            "arguments": {PAYLOAD_KEYS[tool]: _payload(tool, command)},
+        }
     else:
         # Neither is a message-only inference: the agent spoke and called nothing.
         call = None
@@ -460,6 +485,32 @@ def test_pis_lowercase_shell_output_is_read_as_testimony_about_the_harness(
     assert "No module named 'playwright'" in report
 
 
+def test_codexs_shell_output_is_read_as_testimony_about_the_harness(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # What codex's shell prints is the same evidence the other harnesses' output is, and it is the
+    # only way in on a codex trajectory: mngr's codex converter records every tool result with
+    # `is_error` false, a failed code-mode program included, so the errored-result path never fires.
+    steps = [
+        _step(
+            index,
+            command="uv run pytest",
+            observation="ModuleNotFoundError: No module named 'playwright'",
+            tool=tool,
+        )
+        for index, tool in enumerate(("shell_command", "exec_command", "exec"), 1)
+    ]
+
+    report, counts = harness_report_renderer.render_harness_report(steps, "LEAD AGENT")
+
+    assert counts == {"missing_module": 3}
+    assert "No module named 'playwright'" in report
+    # The report says what each step invoked next to what it printed, so the judge and a human
+    # reading it after the fact can tell which command produced the failure.
+    assert "uv run pytest" in report
+    assert "RAN exec: " in report
+
+
 def test_the_harness_is_the_one_the_captured_document_names(harness_report_renderer: ModuleType) -> None:
     workspace_document = atif_document()
 
@@ -651,3 +702,44 @@ def test_the_harness_record_is_written_in_the_shape_the_reward_composition_reads
     # a tmp_path that hides a disagreement: a record written where the reader does not look reads as
     # a claude trial, so every pi trial would be charged for the dimension just taken away from it.
     assert harness_report_renderer.HARNESS_PATH == finalize.HARNESS_PATH
+
+
+def test_a_live_codex_trial_counts_the_failure_its_shell_printed(harness_report_renderer: ModuleType) -> None:
+    # A captured codex trial whose program failed on a missing Python module. The result carries
+    # `is_error` false, like every codex result, so the count comes from reading `exec`'s output.
+    steps = codex_code_mode_trajectory_document()["steps"]
+
+    report, counts = harness_report_renderer.render_harness_report(steps, "LEAD AGENT")
+
+    assert counts == {"missing_module": 1}
+    assert "No module named 'tomlkit'" in report
+
+
+@pytest.mark.parametrize("tool", ["wait", "write_stdin"])
+def test_a_failure_collected_after_its_command_yielded_is_counted(
+    harness_report_renderer: ModuleType, tool: str
+) -> None:
+    # A code-mode program still running at its yield hands the rest of its output back on the `wait`
+    # call that collects it, and an `exec_command` still running with code mode off on `write_stdin`,
+    # so a command that fails after the yield fails there.
+    steps = [
+        {
+            "step_id": 1,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": tool, "arguments": {}}],
+            "observation": {
+                "results": [
+                    {
+                        "source_call_id": "c1",
+                        "content": "Script failed\nOutput:\nModuleNotFoundError: No module named 'tomlkit'\n",
+                        "extra": {"is_error": False, "tool_name": tool},
+                    }
+                ]
+            },
+        }
+    ]
+
+    _report, counts = harness_report_renderer.render_harness_report(steps, "LEAD AGENT")
+
+    assert counts == {"missing_module": 1}

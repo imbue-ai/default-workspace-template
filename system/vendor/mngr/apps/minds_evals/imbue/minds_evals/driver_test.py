@@ -2,6 +2,8 @@ import asyncio
 import json
 import re
 import subprocess
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -28,10 +30,12 @@ from imbue.minds_evals.data_types import ObservedHarnessModels
 from imbue.minds_evals.data_types import PromptEntry
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepPosition
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.data_types import Transcript
 from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerState
@@ -68,7 +72,9 @@ from imbue.minds_evals.driver import build_case_clone_command
 from imbue.minds_evals.driver import build_clone_probe_command
 from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import build_eval_case_commit_command
+from imbue.minds_evals.driver import build_turn_record
 from imbue.minds_evals.driver import build_vendor_mngr_command
+from imbue.minds_evals.driver import conversation_seconds
 from imbue.minds_evals.driver import derive_key_env
 from imbue.minds_evals.driver import derive_user_id
 from imbue.minds_evals.driver import derive_workspace_host_name
@@ -354,6 +360,94 @@ def test_new_agent_reply_texts_reads_atif_agent_steps() -> None:
 
     assert _new_agent_reply_texts(events, 1) == ["new reply"]
     assert _new_agent_reply_texts(events, 6) == []
+
+
+def _turn_usage(output_tokens: int) -> dict[str, int]:
+    """The usage block the workspace stamps on a metered agent message."""
+    return {"input_tokens": 10, "output_tokens": output_tokens, "cache_read_tokens": 0, "cache_write_tokens": 0}
+
+
+def _turn_record(index: int, sent_at: str, replied_at: str) -> TurnRecord:
+    """A turn record with only its times filled in, for the tests that are about the span alone."""
+    return TurnRecord(
+        index=index,
+        entry_index=0,
+        exchange=index - 1,
+        sent_at=sent_at,
+        replied_at=replied_at,
+        reply_seconds=0.0,
+        agent_message_count=1,
+        message_count=0,
+        tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
+        cost_usd=None,
+    )
+
+
+def test_build_turn_record_times_the_turn_and_prices_only_its_own_slice() -> None:
+    events = [
+        {"type": "assistant_message", "text": "an earlier turn", "model": "claude-opus-4-8", "usage": _turn_usage(7)},
+        {"type": "user_message", "content": "our turn"},
+        {"type": "assistant_message", "text": "working on it"},
+        {"type": "assistant_message", "text": "done", "model": "claude-opus-4-8", "usage": _turn_usage(50)},
+    ]
+
+    record = build_turn_record(
+        message_index=2,
+        entry_index=1,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 3, 20, tzinfo=timezone.utc),
+        agent_message_count=2,
+        events=events,
+        baseline_event_count=1,
+    )
+
+    assert record.index == 2
+    assert record.entry_index == 1
+    assert record.sent_at == "2026-09-14T12:00:00+00:00"
+    assert record.replied_at == "2026-09-14T12:03:20+00:00"
+    assert record.reply_seconds == 200.0
+    # The empty-usage message is one of the two the reply was made of, and is not one of the messages
+    # the spend is derived from.
+    assert record.agent_message_count == 2
+    assert record.message_count == 1
+    # The earlier turn's 7 output tokens are before the baseline and stay out of this turn's cost.
+    assert record.tokens.output == 50
+    assert record.cost_usd is not None and record.cost_usd > 0
+
+
+def test_build_turn_record_of_a_turn_nobody_metered_reports_unknown_cost() -> None:
+    record = build_turn_record(
+        message_index=1,
+        entry_index=0,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 0, 12, tzinfo=timezone.utc),
+        agent_message_count=1,
+        events=[{"type": "assistant_message", "text": "done"}],
+        baseline_event_count=0,
+    )
+
+    assert record.reply_seconds == 12.0
+    assert record.agent_message_count == 1
+    assert record.message_count == 0
+    # A turn whose stream reported no usage did not cost nothing -- we do not know what it cost.
+    assert record.cost_usd is None
+
+
+def test_conversation_seconds_spans_the_first_message_to_the_last_reply() -> None:
+    records = [
+        _turn_record(1, "2026-09-14T12:00:00+00:00", "2026-09-14T12:04:00+00:00"),
+        _turn_record(2, "2026-09-14T12:05:00+00:00", "2026-09-14T12:11:30+00:00"),
+    ]
+
+    # The whole conversation, gaps included -- not the sum of the two replies (630s).
+    assert conversation_seconds(records) == 690.0
+
+
+def test_conversation_seconds_is_zero_until_a_turn_has_been_answered() -> None:
+    """A trial that died during preparation, or on its first reply, has no conversation to span."""
+    assert conversation_seconds([]) == 0.0
 
 
 def _git_output(repo_dir: Path, *args: str) -> str:
@@ -653,6 +747,9 @@ def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
 
 # The key the driver signs the workspace in with, supplied the way harbor supplies it.
 _TRIAL_API_KEY: Final[str] = "sk-eval-test"
+# The openai lane's own key, kept distinct from the one above so a test on that lane can tell which
+# variable the derivation read.
+_OPENAI_TRIAL_API_KEY: Final[str] = "sk-eval-test-openai"
 
 
 def _driver_kwargs(
@@ -738,6 +835,7 @@ def _run_driver(
     user_id_prefix: str = "",
     snapshot_mode: str = "per-turn",
     harness_kwargs: dict[str, Any] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     driver = (
         _make_driver(
@@ -747,6 +845,7 @@ def _run_driver(
             snapshot_mode=snapshot_mode,
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
         )
         if scripted_sources is None
         else _make_scripted_driver(
@@ -757,6 +856,7 @@ def _run_driver(
             snapshot_mode=snapshot_mode,
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
         )
     )
     environment = MockBoxEnvironment(
@@ -1096,6 +1196,73 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
     assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
 
 
+def test_driver_records_each_answered_turns_wall_clock_and_spend(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("Building it now.", usage=_turn_usage(100)),
+            _reply_events("All done.", usage=_turn_usage(50)),
+        ],
+    )
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__turns1",
+        timeout_seconds=1800.0,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    turns = state["turns"]
+    assert [(turn["index"], turn["entry_index"], turn["exchange"]) for turn in turns] == [(1, 0, 0), (2, 1, 0)]
+    # Each turn is priced over its own slice of the stream, so the second one carries its own reply's
+    # tokens rather than the conversation's running total.
+    assert [turn["tokens"]["output"] for turn in turns] == [100, 50]
+    assert [turn["message_count"] for turn in turns] == [1, 1]
+    assert all(turn["cost_usd"] > 0 for turn in turns)
+    assert turns[0]["sent_at"] < turns[0]["replied_at"] <= turns[1]["sent_at"]
+
+    # The trial's elapsed time also holds workspace bring-up, so it bounds the conversation's span.
+    assert state["conversation_seconds"] == conversation_seconds([TurnRecord.model_validate(turn) for turn in turns])
+    assert state["conversation_seconds"] <= state["elapsed_seconds"]
+
+    assert context.metadata is not None
+    assert context.metadata["turns"] == turns
+    assert context.metadata["conversation_seconds"] == state["conversation_seconds"]
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["per_turn"] == turns
+    # A floor on the trial's spend rather than a partition of it: the welcome turn is before the
+    # first record, turn-end work that lands after a record was taken is in no record, and a
+    # worker's spend is never in one.
+    assert sum(turn["tokens"]["output"] for turn in turns) <= usage_artifact["workspace_agent"]["tokens"]["output"]
+
+
+def test_driver_records_no_turn_for_a_message_that_never_drew_a_reply(tmp_path: Path) -> None:
+    """A turn earns a record only once its reply is in, so a trial that timed out waiting accounts
+    for fewer turns than it sent -- the same rule the per-entry records follow."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__turns2",
+        timeout_seconds=0.3,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["timed_out"] is True
+    # The client's message did go out -- the trajectory carries it -- and drew no reply.
+    assert [(step["source"], step["message"]) for step in _box_trajectory(environment)["steps"]] == [
+        ("user", "Build it")
+    ]
+    assert state["turns"] == []
+    # Nothing was ever answered, so there is no conversation to span.
+    assert state["conversation_seconds"] == 0.0
+
+
 def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_trial(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
@@ -1347,7 +1514,7 @@ def _worker_rules(capture_output: str, listing_json: str = worker_listing_json("
         ScriptedExecRule(
             "MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(worker_listing_output(listing_json)))]
         ),
-        ScriptedExecRule("mngr transcript {}".format(WORKER_NAME), [ok_result(mngr_exec_json(capture_output))]),
+        ScriptedExecRule("mngr transcript {}".format(WORKER_AGENT_ID), [ok_result(mngr_exec_json(capture_output))]),
         *_setup_rules(),
     ]
 
@@ -1359,7 +1526,7 @@ def test_driver_embeds_a_launched_worker_under_its_launching_call(tmp_path: Path
         _one_turn_conversation(),
         trial_name="todo-app__worker1",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=worker_trial_downloads(),
     )
 
@@ -1408,7 +1575,7 @@ def test_driver_builds_a_listed_workers_trajectory_from_its_stream_as_its_own_ty
         trial_name="todo-app__worker2",
         timeout_seconds=1800.0,
         rules=_worker_rules(
-            worker_capture_output("1", "0", "", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
+            worker_capture_output("1", "0", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
         ),
         downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
     )
@@ -1435,7 +1602,7 @@ def test_driver_rebuilds_an_invalid_worker_document_from_its_stream_and_keeps_th
         _one_turn_conversation(),
         trial_name="todo-app__worker3",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=downloads,
     )
 
@@ -2058,9 +2225,26 @@ def test_driver_keeps_exchanging_within_one_goal_entry_until_the_client_is_satis
     # send several; the ported schema key carries the entry count.
     assert state["waits_done"] == 3
     assert state["num_turns"] == 2
+    # The satisfying reply is the last one the client saw, and the goal record points at it.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""},
-        {"index": 1, "kind": "goal", "exchange_count": 2, "outcome": "satisfied", "detail": "It is running."},
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        },
+        {
+            "index": 1,
+            "kind": "goal",
+            "exchange_count": 2,
+            "outcome": "satisfied",
+            "detail": "It is running.",
+            "satisfied_at": state["turns"][-1]["replied_at"],
+            "satisfied_at_turn": 3,
+        },
     ]
     # The client decided each exchange from the conversation alone, and each decision saw the reply
     # to the message before it -- nothing here reaches into the environment.
@@ -2096,6 +2280,8 @@ def test_driver_stops_a_goal_entry_at_its_budget_and_records_it_as_exhausted(tmp
         "exchange_count": 2,
         "outcome": "budget_exhausted",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -2120,6 +2306,8 @@ def test_driver_records_a_degraded_goal_entry_as_a_fallback(tmp_path: Path) -> N
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
     assert state["waits_done"] == 2
 
@@ -2175,7 +2363,15 @@ def test_driver_audits_a_message_that_went_out_but_drew_no_reply_as_sent(tmp_pat
     # The entry the trial died in earns no record, so the records account for one of the two
     # messages sent. Only a finished trial's two views of the conversation agree.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""}
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        }
     ]
     assert _client_messages(environment) == ["Build it", "Where is it?"]
     assert [event["turn"] for event in _decider_audit_events(environment)] == [2]
@@ -2226,6 +2422,8 @@ def test_driver_records_the_clients_own_reason_for_ending_a_goal_entry(tmp_path:
         "exchange_count": 1,
         "outcome": "satisfied",
         "detail": "The agent gave me a working link.",
+        "satisfied_at": state["turns"][-1]["replied_at"],
+        "satisfied_at_turn": 2,
     }
     assert context.metadata is not None
     assert context.metadata["entries"] == state["entries"]
@@ -2289,6 +2487,30 @@ def test_driver_snapshots_the_final_entry_even_when_its_client_was_satisfied_wit
     assert state["entries"][1]["exchange_count"] == 0
     assert state["waits_done"] == 1
     assert any("post_message_1" in command for command in environment.exec_commands)
+
+
+def test_driver_points_a_goal_satisfied_without_speaking_at_the_previous_entrys_reply(
+    tmp_path: Path,
+) -> None:
+    """The client rules on the conversation as it stands, so a goal the opening ask's reply already
+    met is satisfied by a turn that is not one of the goal entry's own exchanges. That shape is the
+    common one in a live run, and it is what the timing class measures from."""
+    _goal_source, environment, _context = _run_goal_driver(
+        tmp_path,
+        trial_name="todo-app__goal12",
+        goal="See it running",
+        max_exchanges=3,
+        actions=[done(TurnOutcome.SATISFIED, "The first reply already answered me.")],
+        replies=("Building it; here is the link.",),
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    goal_record = state["entries"][1]
+    assert goal_record["exchange_count"] == 0
+    # The run's one turn belongs to the entry before it, and that is the reply the client ruled on.
+    assert [turn["entry_index"] for turn in state["turns"]] == [0]
+    assert goal_record["satisfied_at"] == state["turns"][0]["replied_at"]
+    assert goal_record["satisfied_at_turn"] == 1
 
 
 def test_is_snapshot_wanted_takes_the_final_cadences_one_snapshot_after_the_entry_not_per_exchange() -> None:
@@ -2391,6 +2613,8 @@ def test_driver_explains_a_fallback_the_budget_stopped_before_the_client_could_r
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": FALLBACK_ENTRY_DETAIL,
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -2665,6 +2889,38 @@ def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Pat
     # figure here, and the two would be equal.
     assert state["elapsed_seconds"] > 0.0
     assert state["step_elapsed_seconds"] < state["elapsed_seconds"]
+
+
+def test_a_later_steps_turn_records_still_carry_the_earlier_steps(tmp_path: Path) -> None:
+    """The turn records accumulate across steps, the way the entry records do, so the last step's
+    state.json describes the whole case and its `conversation_seconds` is the case's span rather
+    than the step's."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("On it.", usage=_turn_usage(40)),
+            _reply_events("Done.", usage=_turn_usage(60)),
+        ],
+    )
+    _driver, environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__turns3",
+    )
+
+    assert contexts[0].metadata is not None and contexts[1].metadata is not None
+    assert [turn["index"] for turn in contexts[0].metadata["turns"]] == [1]
+    assert [turn["index"] for turn in contexts[1].metadata["turns"]] == [1, 2]
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["step_name"] == "step-2"
+    assert [(turn["index"], turn["entry_index"]) for turn in state["turns"]] == [(1, 0), (2, 1)]
+    # Each step's messages are priced over their own slice even though the records accumulate.
+    assert [turn["tokens"]["output"] for turn in state["turns"]] == [40, 60]
+    # And the span is measured over every record, so it starts at the first step's message.
+    turn_records = [TurnRecord.model_validate(turn) for turn in state["turns"]]
+    assert state["conversation_seconds"] == conversation_seconds(turn_records)
 
 
 def test_a_flat_case_measures_the_step_and_the_trial_over_the_same_span(tmp_path: Path) -> None:
@@ -3402,6 +3658,23 @@ def test_parse_harness_config_defaults_to_the_lane_and_credentials_every_run_use
     assert not harness_config.is_switch_requested
 
 
+def test_parse_harness_config_reads_the_openai_lane_the_workspace_runs_codex_on() -> None:
+    """The lane is named on the command line the way the workspace's accounts API spells it, and it
+    needs no key_provider: it serves one provider, whose key variable it derives on its own."""
+    harness_config = parse_harness_config(
+        lane="openai", key_provider="", key_env="", model="gpt-5.5", effort="medium", fast=""
+    )
+
+    assert harness_config == HarnessConfig(
+        lane=HarnessLane.OPENAI,
+        key_provider="",
+        key_env="OPENAI_API_KEY",
+        model="gpt-5.5",
+        effort="medium",
+        is_fast=False,
+    )
+
+
 def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_command_line() -> None:
     # harbor JSON-parses every `--ak key=value`, so `fast=false` reaches the driver as a bool and
     # never as the string the CLI syntax suggests.
@@ -3431,6 +3704,8 @@ def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_com
         ({"effort": "medium"}, "needs a model"),
         ({"fast": False}, "needs a model"),
         ({"lane": "openrouter", "key_provider": "anthropic"}, "belongs to the api-key lane"),
+        # A lane serving one provider has no use for the field, and the openai lane is one of them.
+        ({"lane": "openai", "key_provider": "openai"}, "belongs to the api-key lane"),
         ({"lane": "api-key"}, "needs a key_provider"),
         ({"lane": "gemini"}, "is not a provider lane"),
         ({"lane": "opencode-go"}, "has no default key variable"),
@@ -3451,6 +3726,7 @@ def test_parse_harness_config_refuses_a_config_the_workspace_could_never_honour(
     ("lane", "key_provider", "expected_key_env"),
     [
         (HarnessLane.ANTHROPIC, "", "ANTHROPIC_API_KEY"),
+        (HarnessLane.OPENAI, "", "OPENAI_API_KEY"),
         (HarnessLane.OPENROUTER, "", "OPENROUTER_API_KEY"),
         (HarnessLane.API_KEY, "openai", "OPENAI_API_KEY"),
         (HarnessLane.API_KEY, "openrouter", "OPENROUTER_API_KEY"),
@@ -3627,63 +3903,83 @@ def test_observed_harness_models_attributes_nothing_when_the_first_turn_is_not_i
     assert observed_harness_models(steps, first_client_message) is None
 
 
-def _harness_config(model: str) -> HarnessConfig:
-    """A config that asks for the given catalog id, or for no switch at all when it is empty. Effort
-    comes with the model because the parser refuses one without the other."""
+def _harness_config(model: str, lane: str = "anthropic") -> HarnessConfig:
+    """A config on the given lane that asks for the given catalog id, or for no switch at all when it
+    is empty. Effort comes with the model because the parser refuses one without the other."""
     return parse_harness_config(
-        lane="", key_provider="", key_env="", model=model, effort="medium" if model else "", fast=""
+        lane=lane, key_provider="", key_env="", model=model, effort="medium" if model else "", fast=""
     )
 
 
 @pytest.mark.parametrize(
-    ("model", "observed_models", "expected"),
+    ("lane", "model", "observed_models", "expected"),
     [
         # A claude catalog id reports as a model name carrying a release date, which is not part of
         # the id.
-        ("haiku", ("claude-haiku-4-5-20251001",), True),
-        ("opus[1m]", ("claude-opus-5-20260401",), True),
-        ("haiku", ("claude-opus-5-20260401",), False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), True),
+        ("anthropic", "opus[1m]", ("claude-opus-5-20260401",), True),
+        ("anthropic", "haiku", ("claude-opus-5-20260401",), False),
         # pi tags a model with the provider whose key serves it and reports the model alone.
-        ("anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), True),
+        ("openrouter", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), True),
         # Two models after turn 1 is a trial that did not stay on the one it asked for.
-        ("haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), False),
         # A trial whose transcript was never captured observed nothing, which is silence rather
         # than evidence of a wrong model.
-        ("haiku", (), None),
+        ("anthropic", "haiku", (), None),
         # A claude-shaped id the naming table does not carry cannot be translated into a reported
         # name, and an untranslatable id is silence too: the model that answered may well be it.
-        ("claude-mythos-5", ("claude-mythos-5",), None),
+        ("anthropic", "claude-mythos-5", ("claude-mythos-5",), None),
+        # The two inputs that say the rule is picked by lane rather than guessed from the id's
+        # shape. A provider tag is untranslatable on claude's lane, which reads ids through the
+        # table alone, and a table alias is untranslatable on a pi lane, which reads them by
+        # dropping a first segment that is not there.
+        ("anthropic", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), None),
+        ("openrouter", "haiku", ("claude-haiku-4-5-20251001",), None),
         # A gateway tag keeps the vendor it routes to: pi reports everything after the first segment.
-        ("openrouter/some-vendor/some-model", ("some-vendor/some-model",), True),
-        ("openrouter/some-vendor/some-model", ("some-model",), False),
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-vendor/some-model",), True),
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-model",), False),
+        # codex reports back the very id it was switched to, so its catalog ids need no table and
+        # nothing about them is ever untranslatable.
+        ("openai", "gpt-5.5", ("gpt-5.5",), True),
+        ("openai", "gpt-5.5", ("gpt-5.2",), False),
+        ("openai", "gpt-5.5", (), None),
+        # Nothing decorates a codex name, so the match is exact: an id that merely starts with the
+        # requested one is a different model out of the same catalog, which is the confusion worth
+        # catching.
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), False),
+        ("openai", "gpt-5.5-mini", ("gpt-5.5-mini",), True),
         # A config that requested no switch has nothing to confirm.
-        ("", ("claude-opus-4-8",), None),
+        ("anthropic", "", ("claude-opus-4-8",), None),
     ],
 )
 def test_is_model_confirmed_reads_the_harnesss_own_naming(
-    model: str, observed_models: tuple[str, ...], expected: bool | None
+    lane: str, model: str, observed_models: tuple[str, ...], expected: bool | None
 ) -> None:
-    assert is_model_confirmed(_harness_config(model), observed_models) is expected
+    assert is_model_confirmed(_harness_config(model, lane), observed_models) is expected
 
 
 @pytest.mark.parametrize(
-    ("metered_models", "welcome_model", "expected"),
+    ("lane", "model", "metered_models", "welcome_model", "expected"),
     [
         # The proxy cannot tell which turn served which request, so the requested model has to be there
         # and every other model has to be the one that answered the greeting.
-        (("claude-haiku-4-5-20251001", "claude-opus-4-8"), "claude-opus-4-8", True),
-        (("claude-haiku-4-5-20251001",), "claude-opus-4-8", True),
-        (("claude-haiku-4-5-20251001", "claude-sonnet-5"), "claude-opus-4-8", False),
-        (("claude-opus-4-8",), "claude-opus-4-8", False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-sonnet-5"), "claude-opus-4-8", False),
+        ("anthropic", "haiku", ("claude-opus-4-8",), "claude-opus-4-8", False),
         # A greeting whose model is unknown leaves a second model unattributable, which is not the
         # same claim as a trial that switched away.
-        (("claude-haiku-4-5-20251001", "claude-opus-4-8"), "", None),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "", None),
+        # Both confirmations name a metered or observed model through one lane-aware predicate, so
+        # codex's exact match holds here too, wherever a proxy comes to meter that lane.
+        ("openai", "gpt-5.5", ("gpt-5.5", "gpt-5.2"), "gpt-5.2", True),
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), "gpt-5.2", False),
     ],
 )
 def test_is_proxy_model_confirmed_reads_the_account_the_proxy_metered(
-    metered_models: tuple[str, ...], welcome_model: str, expected: bool | None
+    lane: str, model: str, metered_models: tuple[str, ...], welcome_model: str, expected: bool | None
 ) -> None:
-    assert is_proxy_model_confirmed(_harness_config("haiku"), metered_models, welcome_model) is expected
+    assert is_proxy_model_confirmed(_harness_config(model, lane), metered_models, welcome_model) is expected
 
 
 def _arm_block(environment: MockBoxEnvironment) -> dict[str, Any]:
@@ -3696,12 +3992,34 @@ def _harness_config_block(environment: MockBoxEnvironment) -> dict[str, Any]:
     return _arm_block(environment)["harness_config"]
 
 
-def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, str]:
+def _switched_transcript_downloads(
+    conversation_model_name: str,
+    welcome_model_name: str = "claude-opus-4-8",
+    is_metrics_written: bool = True,
+    agent_name: str = "",
+) -> dict[str, str]:
     """A captured transcript whose greeting ran on the workspace's default and whose one client turn
     was answered on another model -- the shape every switched trial has, since the create template
-    delivers the greeting before any switch can be applied."""
+    delivers the greeting before any switch can be applied.
+
+    An emitter that stamps no model on a step, or no token metrics, leaves the key out rather than
+    writing an empty one, so an empty name and `is_metrics_written=False` produce a step without it.
+
+    `agent_name` is the harness the document says wrote it, which is what decides whether the
+    claude-shaped `harness_quality` criteria are scored against the trial; empty keeps the one the
+    shared document carries.
+    """
+    welcome_model = {"model_name": welcome_model_name} if welcome_model_name else {}
+    answer_model = {"model_name": conversation_model_name} if conversation_model_name else {}
+    metrics: dict[str, Any] = (
+        {"metrics": {"prompt_tokens": 1_200, "completion_tokens": 40, "cached_tokens": 1_000}}
+        if is_metrics_written
+        else {}
+    )
+    base_document = atif_document()
     document = {
-        **atif_document(),
+        **base_document,
+        "agent": {**base_document["agent"], "name": agent_name or base_document["agent"]["name"]},
         "steps": [
             {"step_id": 1, "timestamp": "2026-09-01T00:00:00Z", "source": "system", "message": "<welcome skill>"},
             {
@@ -3709,7 +4027,7 @@ def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, st
                 "timestamp": "2026-09-01T00:00:01Z",
                 "source": "agent",
                 "message": "Hi! What shall we build?",
-                "model_name": "claude-opus-4-8",
+                **welcome_model,
             },
             {"step_id": 3, "timestamp": "2026-09-01T00:00:02Z", "source": "user", "message": "Build it"},
             {
@@ -3717,8 +4035,8 @@ def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, st
                 "timestamp": "2026-09-01T00:00:05Z",
                 "source": "agent",
                 "message": "Building it now.",
-                "model_name": conversation_model_name,
-                "metrics": {"prompt_tokens": 1_200, "completion_tokens": 40, "cached_tokens": 1_000},
+                **answer_model,
+                **metrics,
             },
         ],
         "subagent_trajectories": None,
@@ -3978,6 +4296,92 @@ def test_a_pi_lane_config_is_confirmed_against_the_name_pi_reports_its_model_und
     assert context.metadata["test_state"] == "finished"
 
 
+def _codex_transcript_downloads() -> dict[str, str]:
+    """A captured transcript in the shape mngr's codex emitter writes: a document naming codex as the
+    harness that wrote it, whose agent steps carry neither the model that answered them nor token
+    metrics.
+
+    The steps are otherwise the shape every switched trial has, so a reading that goes empty here
+    goes empty because the emitter says nothing, not because the trial's turns are missing.
+    """
+    return _switched_transcript_downloads("", welcome_model_name="", is_metrics_written=False, agent_name="codex")
+
+
+def _codex_turn_events() -> list[dict]:
+    """One turn's events in the shape the workspace's chat app reports a codex turn: the model it ran
+    on is named, and the token count beside it is null, where a claude turn carries a usage block.
+
+    The model is named for fidelity with that feed rather than because the accounting reads it: a
+    turn reporting no usage is skipped before its model is looked at, so this event and one naming
+    no model at all sum to the same empty account.
+    """
+    events = _reply_events("Building it now.")
+    return [*events[:-1], {**events[-1], "model": "gpt-5.5", "usage": None}]
+
+
+def test_the_openai_lane_runs_a_trial_on_codex_and_reads_its_harness_back(tmp_path: Path) -> None:
+    """The openai lane takes a pasted key like the other single-provider lanes, so the accounts flow
+    drives it unchanged, and the workspace answers `codex` for the harness the account runs.
+
+    The observed half stays empty because mngr's codex transcript emitter writes no per-step model,
+    which leaves the confirmation None -- silence about the model, never evidence of a wrong one.
+    The trial's spend is silence too, for its own reason: the workspace names the model a codex turn
+    ran on but reports no token count for it, and a turn that reports none is skipped rather than
+    priced at zero.
+    """
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_codex_turn_events()])
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__armcodex",
+        timeout_seconds=1800.0,
+        extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "OPENAI_API_KEY": _OPENAI_TRIAL_API_KEY},
+        downloadable_content_by_source=_codex_transcript_downloads(),
+        harness_kwargs={"lane": "openai", "model": "gpt-5.5", "effort": "medium"},
+    )
+
+    start_command = next(
+        command
+        for command in environment.exec_commands
+        if "/api/accounts" in command and "/flow/" not in command and "lane_id" in command
+    )
+    assert '"lane_id": "openai"' in start_command
+    # A lane that serves one provider is sent no key_provider; the workspace refuses the field there.
+    submit_command = next(command for command in environment.exec_commands if "/api/accounts/flow/" in command)
+    assert "key_provider" not in submit_command
+    # The key the lane derives, not the one every trial needs for the decider and the judges: the two
+    # are distinct here so that a derivation falling back to ANTHROPIC_API_KEY fails this test.
+    assert '"api_key": "{}"'.format(_OPENAI_TRIAL_API_KEY) in submit_command
+
+    (switch_command,) = conversation.model_choice_commands
+    assert '"model_id": "gpt-5.5"' in switch_command
+    assert _harness_config_block(environment) == {
+        "lane": "openai",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "codex",
+        "model": "gpt-5.5",
+        "effort": "medium",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_APPLIED,
+        "observed_models": [],
+        "welcome_model": "",
+        "is_model_confirmed": None,
+    }
+    # Unknown rather than free: a cost of zero would average into an arm comparison as if the trial
+    # had been measured, which is the one reading of a codex trial that would mislead.
+    workspace_usage = json.loads((driver.logs_dir / "usage.json").read_text())["workspace_agent"]
+    assert workspace_usage["cost_usd"] is None
+    assert workspace_usage["message_count"] == 0
+    # is_cost_complete asks only whether delegated and worker traffic is accounted for, so it stays
+    # true on a trial that accounted for nothing at all. A filter reading it alone takes this trial
+    # for a measurement, which is why `cost_usd` is the field that has to be read.
+    assert workspace_usage["is_cost_complete"] is True
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
 def test_a_lane_that_signs_in_without_naming_an_account_leaves_the_harness_unrecorded(
     tmp_path: Path,
 ) -> None:
@@ -4103,3 +4507,42 @@ def test_a_proxied_trial_confirms_its_model_against_what_the_proxy_metered(tmp_p
     assert harness_config["observed_models"] == ["claude-opus-4-8"]
     assert is_model_confirmed(_harness_config("haiku"), harness_config["observed_models"]) is False
     assert harness_config["is_model_confirmed"] is True
+
+
+def test_driver_embeds_an_unidentified_worker_built_from_its_stream(tmp_path: Path) -> None:
+    # Neither the listing nor the captured document names the worker, so no mngr agent id is in
+    # hand. Its stream still is, so the worker is embedded under a launch-derived stand-in rather
+    # than dropped from the trajectory.
+    listing = json.loads(worker_listing_json("WAITING"))
+    listing["agents"] = listing["agents"][:1]
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(),
+        trial_name="todo-app__worker4",
+        timeout_seconds=1800.0,
+        rules=[
+            ScriptedExecRule(
+                "MINDS_EVALS_SECTION:list_exit",
+                [ok_result(mngr_exec_json(worker_listing_output(json.dumps(listing))))],
+            ),
+            ScriptedExecRule(
+                "mngr transcript {}".format(WORKER_NAME),
+                [ok_result(mngr_exec_json(worker_capture_output("1", "0", WORKER_TASK_FILE, "no document")))],
+            ),
+            *_setup_rules(),
+        ],
+        downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
+    )
+
+    worker = _box_trajectory(environment)["subagent_trajectories"][1]
+    assert worker["trajectory_id"] == "worker-{}".format(WORKER_NAME)
+    # The stand-in is only what the evidence is filed under; the block that names the worker
+    # reports that no mngr agent id was resolved.
+    assert worker["extra"]["worker"]["agent_id"] == ""
+    assert worker["extra"]["worker"]["name"] == WORKER_NAME
+    assert [step["message"] for step in worker["steps"]] == [
+        "Harden the todo app and report back.",
+        "Hardened; report pushed.",
+    ]

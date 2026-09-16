@@ -215,13 +215,13 @@ tmr-mngr *args:
 tmr-minds *args:
   uv run --project libs/mngr_tmr mngr tmr apps/minds --name tmr-minds --mapper-prompt apps/minds/tmr/mapper.j2 {{args}} -- -m 'release and not minds_deployment and not minds_services and not minds_snapshot_resume'
 
-# minds behavior corpus (`mngr tmr-behaviors`: one agent per feature file, creating
-# and updating the tests that witness the behaviors). No testing flags after `--`:
-# behavior mappers run the specific witness tests they touch by node id, and
-# host-capability guardrails live in the variant prompt's infra_blockers block.
+# minds behavior corpus (`mngr witness`: setup, one mapper per feature file, a
+# reviewer per mapper, integration, and an annealer). The project's prompt
+# variant at apps/minds/witness/mapper.j2 is discovered positionally, and
+# host-capability guardrails live in its infra_blockers block.
 [group("minds test")]
-tmr-behaviors-minds *args:
-  uv run --project libs/mngr_tmr mngr tmr-behaviors --root apps/minds/behaviors --name tmr-behaviors-minds --mapper-prompt apps/minds/tmr/behaviors_mapper.j2 {{args}}
+witness-minds *args:
+  uv run mngr witness --root apps/minds/behaviors {{args}}
 
 # === minds deployment / services test orchestrator ===
 # Wraps apps/minds_admin/scripts/test_deployments.py. See specs/minds-deployment-tests.md

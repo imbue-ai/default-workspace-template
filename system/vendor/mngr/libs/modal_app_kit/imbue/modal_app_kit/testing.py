@@ -158,6 +158,54 @@ def modal_functions_missing_logging_bootstrap(path: Path) -> list[str]:
     ]
 
 
+def _is_asgi_app_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the function carries a ``@modal.asgi_app(...)`` decorator (the web-endpoint marker)."""
+    for decorator in node.decorator_list:
+        callee = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr == "asgi_app"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "modal"
+        ):
+            return True
+    return False
+
+
+def _app_function_decorator_keywords(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """The keyword names passed to the function's ``@app.function(...)`` decorator."""
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        callee = decorator.func
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr == "function"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "app"
+        ):
+            return {keyword.arg for keyword in decorator.keywords if keyword.arg is not None}
+    return set()
+
+
+def web_functions_missing_region_pin(path: Path) -> list[str]:
+    """The names of the entrypoint's web functions whose ``@app.function`` passes no ``region``.
+
+    A web function (one decorated ``@modal.asgi_app``) serves user-facing
+    requests, so it must pin ``region=WEB_FUNCTION_REGION``; an unpinned one is
+    scheduled anywhere in Modal's fleet and every request pays the distance.
+    Crons and spawned workers are deliberately not checked.
+    """
+    tree = ast.parse(path.read_text())
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _is_asgi_app_function(node)
+        and "region" not in _app_function_decorator_keywords(node)
+    ]
+
+
 class ShippedImport(FrozenModel):
     """One import statement reachable from a Modal app's shipped source, for the import-boundary tests."""
 

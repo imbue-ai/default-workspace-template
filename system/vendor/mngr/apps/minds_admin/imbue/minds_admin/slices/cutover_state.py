@@ -1,11 +1,13 @@
 """The operator-side state dir of the gen-1 -> gen-2 cutover (``~/.minds-<env>/cutover/``).
 
 Every stage is re-runnable per workspace from what is written here: the
-per-workspace record and ``docker inspect``, the harvested keys (shredded once
-the workspace is restored), the per-box record, and the stage reports.
+per-workspace record and ``docker inspect``, the harvested keys and latchkey
+state (shredded once the workspace is restored), the per-box record, and the
+stage reports.
 One-time tooling, deleted in phase 6 of blueprint/slice-fleet-cutover.
 """
 
+import base64
 import fcntl
 import json
 import os
@@ -27,8 +29,12 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds_admin.slices.cutover_types import CutoverBoxState
 from imbue.minds_admin.slices.cutover_types import CutoverError
 from imbue.minds_admin.slices.cutover_types import CutoverWorkspaceState
+from imbue.minds_admin.slices.cutover_types import HarvestedFile
 from imbue.minds_admin.slices.cutover_types import HarvestedKeys
+from imbue.minds_admin.slices.cutover_types import HarvestedLatchkeyState
+from imbue.minds_admin.slices.cutover_types import LatchkeyHarvestManifest
 from imbue.minds_admin.slices.cutover_types import StageReport
+from imbue.minds_admin.slices.cutover_types import classify_harvested_latchkey_files
 
 CUTOVER_STATE_DIRNAME: Final[str] = "cutover"
 _WORKSPACES_DIRNAME: Final[str] = "workspaces"
@@ -45,9 +51,14 @@ _VM_AUTHORIZED_KEYS_FILE: Final[str] = "vm_authorized_keys"
 _CONTAINER_HOST_KEY_FILE: Final[str] = "container_ssh_host_ed25519_key"
 _CONTAINER_HOST_KEY_PUB_FILE: Final[str] = "container_ssh_host_ed25519_key.pub"
 _CONTAINER_AUTHORIZED_KEYS_FILE: Final[str] = "container_authorized_keys"
+# The harvested latchkey state under ``keys/<host_db_id>/``: each file at its
+# VM path relative to ``/`` (``root/.latchkey/...``, ``etc/supervisor/conf.d/...``,
+# ``run/mngr-latchkey/...``), indexed by a manifest carrying each file's mode.
+_LATCHKEY_DIRNAME: Final[str] = "latchkey"
+_LATCHKEY_MANIFEST_FILE: Final[str] = "manifest.json"
 
 
-def _write_private_file(path: Path, content: str) -> None:
+def _write_private_bytes(path: Path, content: bytes) -> None:
     """Write ``content`` 0600 (created 0600, never briefly world-readable) and atomically.
 
     The restore's per-box threads list every workspace record while their
@@ -57,12 +68,16 @@ def _write_private_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp")
     descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
+    with os.fdopen(descriptor, "wb") as handle:
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
     temp_path.chmod(0o600)
     os.replace(temp_path, path)
+
+
+def _write_private_file(path: Path, content: str) -> None:
+    _write_private_bytes(path, content.encode("utf-8"))
 
 
 def _shred_file(path: Path) -> None:
@@ -160,10 +175,15 @@ class CutoverStateStore(MutableModel):
     def write_inspect(self, host_db_id: str, inspect_entry: dict[str, Any]) -> None:
         _write_private_file(self._inspect_path(host_db_id), json.dumps(inspect_entry, indent=2))
 
-    def write_keys(self, host_db_id: str, keys: HarvestedKeys) -> None:
+    def _private_keys_dir(self, host_db_id: str) -> Path:
+        """The workspace's ``keys/<host_db_id>/`` directory, created 0700 so nothing under it is readable by others."""
         keys_dir = self._keys_dir(host_db_id)
         keys_dir.mkdir(parents=True, exist_ok=True)
         keys_dir.chmod(0o700)
+        return keys_dir
+
+    def write_keys(self, host_db_id: str, keys: HarvestedKeys) -> None:
+        keys_dir = self._private_keys_dir(host_db_id)
         _write_private_file(keys_dir / _VM_HOST_KEY_FILE, keys.vm_host_private_key.get_secret_value())
         _write_private_file(keys_dir / _VM_HOST_KEY_PUB_FILE, keys.vm_host_public_key)
         _write_private_file(keys_dir / _VM_AUTHORIZED_KEYS_FILE, keys.vm_authorized_keys)
@@ -184,12 +204,49 @@ class CutoverStateStore(MutableModel):
             container_authorized_keys=(keys_dir / _CONTAINER_AUTHORIZED_KEYS_FILE).read_text(),
         )
 
+    def _latchkey_dir(self, host_db_id: str) -> Path:
+        return self._keys_dir(host_db_id) / _LATCHKEY_DIRNAME
+
+    def _latchkey_file_path(self, host_db_id: str, vm_path: str) -> Path:
+        return self._latchkey_dir(host_db_id) / vm_path.lstrip("/")
+
+    def write_latchkey_state(self, host_db_id: str, state: HarvestedLatchkeyState) -> None:
+        self._private_keys_dir(host_db_id)
+        for harvested in state.all_files:
+            _write_private_bytes(self._latchkey_file_path(host_db_id, harvested.path), harvested.content)
+        manifest = LatchkeyHarvestManifest(
+            is_present=state.is_present,
+            mode_by_path={harvested.path: harvested.mode for harvested in state.all_files},
+        )
+        _write_private_file(
+            self._latchkey_dir(host_db_id) / _LATCHKEY_MANIFEST_FILE, manifest.model_dump_json(indent=2)
+        )
+
+    def read_latchkey_state(self, host_db_id: str) -> HarvestedLatchkeyState | None:
+        manifest_path = self._latchkey_dir(host_db_id) / _LATCHKEY_MANIFEST_FILE
+        if not manifest_path.exists():
+            return None
+        manifest = LatchkeyHarvestManifest.model_validate_json(manifest_path.read_text())
+        files = [
+            HarvestedFile(
+                path=vm_path,
+                mode=mode,
+                content_base64=SecretStr(
+                    base64.b64encode(self._latchkey_file_path(host_db_id, vm_path).read_bytes()).decode("ascii")
+                ),
+            )
+            for vm_path, mode in manifest.mode_by_path.items()
+        ]
+        return classify_harvested_latchkey_files(manifest.is_present, files)
+
     def shred_keys(self, host_db_id: str) -> None:
+        """Shred every harvested file under ``keys/<host_db_id>/`` (the SSH keys and the latchkey state) and drop the dir."""
         keys_dir = self._keys_dir(host_db_id)
         if not keys_dir.exists():
             return
-        for path in keys_dir.iterdir():
-            _shred_file(path)
+        for path in keys_dir.rglob("*"):
+            if path.is_file():
+                _shred_file(path)
         shutil.rmtree(keys_dir, ignore_errors=True)
 
     def read_box(self, server_id: str) -> CutoverBoxState | None:

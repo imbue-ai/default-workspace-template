@@ -50,6 +50,8 @@ def test_finish_restore_cas_requires_a_parked_row_at_the_stamped_disk_size() -> 
     # The host-key columns ARE rewritten, with the harvested keys the replay
     # put on the new endpoints (see the SQL's comment for why).
     assert "outer_host_public_key = %s, container_host_public_key = %s" in _FINISH_RESTORE_POOL_HOST_SQL
+    # The re-lease is a start: the migrate's maintenance hold ends with it.
+    assert "stop_kind = NULL" in _FINISH_RESTORE_POOL_HOST_SQL
     conn = RecordingConnection([], rowcount=1)
     row_id = str(uuid4())
     server_id = str(uuid4())
@@ -171,6 +173,8 @@ def test_rollback_park_cas_returns_the_row_to_parked_gen1_at_the_default_size() 
     assert "memory_units = %s" in _ROLLBACK_PARK_POOL_HOST_SQL
     for cleared in ("vps_address = NULL", "bare_metal_server_id = NULL", "artifact_manifest = NULL"):
         assert cleared in _ROLLBACK_PARK_POOL_HOST_SQL
+    # A parked row stays held until the admin start that restores it clears the kind.
+    assert "stop_kind = 'maintenance'" in _ROLLBACK_PARK_POOL_HOST_SQL
     # A completed migration (leased on gen-2) and a mid-migration parked row
     # both match; a leased gen-1 row never does (the read-only "already back"
     # branch owns that state, so a leased-gen-1 CAS hit is a racing user start

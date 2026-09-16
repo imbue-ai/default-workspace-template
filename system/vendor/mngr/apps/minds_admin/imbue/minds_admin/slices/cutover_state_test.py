@@ -9,8 +9,10 @@ from imbue.minds_admin.slices.cutover_types import CutoverBoxStage
 from imbue.minds_admin.slices.cutover_types import CutoverBoxState
 from imbue.minds_admin.slices.cutover_types import CutoverError
 from imbue.minds_admin.slices.cutover_types import CutoverStage
+from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.testing import make_cutover_workspace_state
 from imbue.minds_admin.slices.testing import make_harvested_keys
+from imbue.minds_admin.slices.testing import make_harvested_latchkey_state
 
 
 def test_state_store_round_trips_workspace_inspect_and_box_records(cutover_state_store: CutoverStateStore) -> None:
@@ -95,3 +97,43 @@ def test_state_store_locks_refuse_a_second_holder_and_release_on_exit(cutover_st
     # Released on exit: the same names can be taken again.
     with store.acquire_locks(["box-a", "workspace-1"]):
         pass
+
+
+def test_state_store_persists_latchkey_state_under_the_mirrored_layout_and_shreds_it_with_the_keys(
+    cutover_state_store: CutoverStateStore,
+) -> None:
+    store = cutover_state_store
+    host_db_id = str(uuid4())
+    assert store.read_latchkey_state(host_db_id) is None
+    full = make_harvested_latchkey_state(LatchkeyReplayPlan.FULL)
+    store.write_keys(host_db_id, make_harvested_keys())
+    store.write_latchkey_state(host_db_id, full)
+    latchkey_dir = store.root / "keys" / host_db_id / "latchkey"
+    # Each file sits at its VM path (relative to /), byte for byte, 0600.
+    store_copy = latchkey_dir / "root/.latchkey/credentials.json.enc"
+    assert store_copy.read_bytes() == b'{"enc":"c2VjcmV0"}'
+    assert (latchkey_dir / "etc/supervisor/conf.d/latchkey-tunnel.conf").exists()
+    assert (latchkey_dir / "run/mngr-latchkey/gateway_encryption_key").read_bytes().endswith(b"ab")
+    for path in latchkey_dir.rglob("*"):
+        if path.is_file():
+            assert path.stat().st_mode & 0o777 == 0o600, path
+    # Reading back restores the same files, modes and classification.
+    assert store.read_latchkey_state(host_db_id) == full
+    # The SSH keys beside it are untouched, and one shred covers both.
+    assert store.read_keys(host_db_id) == make_harvested_keys()
+    store.shred_keys(host_db_id)
+    assert not (store.root / "keys" / host_db_id).exists()
+    assert store.read_latchkey_state(host_db_id) is None
+    assert store.read_keys(host_db_id) is None
+
+
+@pytest.mark.parametrize("plan", [LatchkeyReplayPlan.ABSENT, LatchkeyReplayPlan.DISK_ONLY])
+def test_state_store_round_trips_the_partial_latchkey_shapes(
+    cutover_state_store: CutoverStateStore, plan: LatchkeyReplayPlan
+) -> None:
+    host_db_id = str(uuid4())
+    harvested = make_harvested_latchkey_state(plan)
+    cutover_state_store.write_latchkey_state(host_db_id, harvested)
+    reread = cutover_state_store.read_latchkey_state(host_db_id)
+    assert reread == harvested
+    assert reread is not None and reread.replay_plan == plan

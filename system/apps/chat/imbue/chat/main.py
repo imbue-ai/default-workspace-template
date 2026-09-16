@@ -23,6 +23,8 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
 from imbue.chat.auto_open import ShellLayoutClient
+from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
+from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -33,7 +35,7 @@ from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -89,31 +91,33 @@ def build_production_state(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
-) -> ChatState:
+) -> ChatAppState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
     app is assembled), so it spawns no ``mngr observe`` pipeline by itself.
-    Tests do not use this; they build a ``ChatState`` with fakes via
+    Tests do not use this; they build a ``ChatAppState`` with fakes via
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
-        # The tab of a chat the Minds app starts is opened through the shell, and which chats
+        # The tab of a chat the Mind app starts is opened through the shell, and which chats
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
         auto_open=AutoOpenReactor(
             ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
         ),
+        # Which agents each chat has run on, for the chats that have had a handoff.
+        chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
-    # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
+    # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         config=config,
         provider_names=provider_names,
         include_filters=include_filters,

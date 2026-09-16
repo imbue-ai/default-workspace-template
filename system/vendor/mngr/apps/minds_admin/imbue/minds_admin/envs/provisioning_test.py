@@ -25,6 +25,7 @@ from imbue.minds.config.data_types import PlanQuotasConfig
 from imbue.minds.config.data_types import ScaledownWindowConfig
 from imbue.minds.config.data_types import StorageDeployConfig
 from imbue.minds.config.data_types import WebWorkspacesConfig
+from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import SecretTemplateValidationError
@@ -55,11 +56,13 @@ from imbue.minds_admin.envs.provisioning import destroy_env
 from imbue.minds_admin.envs.provisioning import list_dev_envs
 from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
 from imbue.minds_admin.envs.provisioning import resolve_web_template_pin
+from imbue.minds_admin.envs.provisioning import update_feed_base_url_for_tier
 from imbue.minds_admin.envs.provisioning import with_analytics_enablement
 from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
 from imbue.minds_admin.envs.recover import RecoverTargetAlreadyExistsError
 from imbue.minds_admin.envs.testing import make_workspace_storage_vault_values
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
+from imbue.mngr_imbue_cloud.primitives import PRODUCTION_TIER
 from imbue.mngr_imbue_cloud.primitives import STAGING_TIER
 
 
@@ -1894,6 +1897,23 @@ def test_resolve_web_template_pin_dev_tier_uses_the_explicit_ref_env_var(
     template_repo, template_ref = resolve_web_template_pin(WebWorkspacesConfig(), tier=DEV_TIER)
     assert template_repo == DEFAULT_WEB_TEMPLATE_REPO_KEY
     assert template_ref == "minds-v9.9.9"
+
+
+def test_update_feed_base_url_for_tier_reads_the_committed_production_feed() -> None:
+    lifecycle = load_deploy_config(PRODUCTION_TIER).lifecycle
+    assert update_feed_base_url_for_tier(PRODUCTION_TIER, lifecycle) == "https://updates.imbueminds.com"
+
+
+def test_update_feed_base_url_for_tier_is_empty_where_no_feed_is_committed() -> None:
+    lifecycle = load_deploy_config(STAGING_TIER).lifecycle
+    assert update_feed_base_url_for_tier(STAGING_TIER, lifecycle) == ""
+
+
+def test_update_feed_base_url_for_tier_is_empty_for_tiers_that_write_local_state() -> None:
+    # Dev envs have no committed client.toml to read, and publish no feed.
+    lifecycle = load_deploy_config(DEV_TIER).lifecycle
+    assert lifecycle.writes_local_state
+    assert update_feed_base_url_for_tier(DEV_TIER, lifecycle) == ""
 
 
 def test_deploy_env_dev_tier_with_web_workspaces_refuses_before_any_cloud_mutation(

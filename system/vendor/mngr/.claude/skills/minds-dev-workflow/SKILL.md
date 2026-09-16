@@ -128,7 +128,7 @@ The port is randomly assigned by Docker per agent. The container name is `<MNGR_
 ```bash
 eval "$(uv run minds-admin env activate dev-<your-user>)"   # so we know MNGR_PREFIX
 docker ps --format '{{.Names}} {{.Ports}}' | grep "${MNGR_PREFIX}mind-"
-# e.g.  minds-dev-<your-user>-mind-1-host 0.0.0.0:32772->22/tcp
+# e.g.  minds-dev-<your-user>-mind-1-host 127.0.0.1:32772->22/tcp
 ```
 
 The SSH key for a minds Docker agent lives under the activated env's `MNGR_HOST_DIR`:

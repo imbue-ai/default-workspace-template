@@ -93,3 +93,11 @@ def test_immediate_sigint_termination_uses_the_default_action_and_restores_the_h
         assert signal.getsignal(signal.SIGINT) is custom_handler
     finally:
         signal.signal(signal.SIGINT, previous)
+
+
+def test_migrate_refuses_a_workspace_id_that_is_not_a_full_uuid() -> None:
+    result = CliRunner().invoke(
+        cutover, ["migrate", "--target-server-id", "abc", "--workspace", "72aa6935", "--yes-i-mean-dev"]
+    )
+    assert result.exit_code == 2
+    assert "--workspace" in result.output and "72aa6935" in result.output

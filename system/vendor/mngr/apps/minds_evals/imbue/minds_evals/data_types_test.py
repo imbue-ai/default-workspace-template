@@ -7,6 +7,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import HarnessConfig
 from imbue.minds_evals.data_types import HarnessLane
+from imbue.minds_evals.data_types import is_same_skill
 from imbue.minds_evals.data_types import lane_id
 
 
@@ -23,7 +24,13 @@ def test_captured_file_refuses_an_uncaptured_file_without_a_reason() -> None:
 def test_every_lane_is_spelled_the_way_the_command_line_and_the_workspace_spell_it() -> None:
     """The enum member names carry underscores and the ids do not, so the two would drift silently:
     a lane sent to the accounts API under the wrong spelling is a sign-in the workspace refuses."""
-    assert {lane_id(lane) for lane in HarnessLane} == {"anthropic", "api-key", "openrouter", "opencode-go"}
+    assert {lane_id(lane) for lane in HarnessLane} == {
+        "anthropic",
+        "openai",
+        "api-key",
+        "openrouter",
+        "opencode-go",
+    }
 
 
 def test_a_harness_config_requests_a_switch_exactly_when_it_names_a_model() -> None:
@@ -40,3 +47,20 @@ def test_a_harness_config_requests_a_switch_exactly_when_it_names_a_model() -> N
 
     assert switching.is_switch_requested
     assert not switching.model_copy_update(to_update(switching.field_ref().model, "")).is_switch_requested
+
+
+@pytest.mark.parametrize(
+    ("requested", "invoked", "is_match"),
+    [
+        ("frontend-design", "frontend-design", True),
+        ("frontend-design", "frontend-design:frontend-design", True),
+        ("frontend-design", "some-plugin:frontend-design", True),
+        ("frontend-design:frontend-design", "frontend-design:frontend-design", True),
+        # A qualified request is exact: a bare invocation is not the plugin's skill.
+        ("frontend-design:frontend-design", "frontend-design", False),
+        ("design", "frontend-design", False),
+        ("frontend-design", "frontend-design-v2", False),
+    ],
+)
+def test_is_same_skill_reads_plugin_qualified_names(requested: str, invoked: str, is_match: bool) -> None:
+    assert is_same_skill(requested, invoked) is is_match

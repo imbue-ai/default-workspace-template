@@ -7,7 +7,7 @@ Houses deterministic stand-ins for outside-world dependencies that
 rather than being copy-pasted into each test module.
 
 Also houses `build_test_state`, the test-side composition root: it builds a
-`ChatState` with fakes for whichever collaborators a test overrides and cheap real
+`ChatAppState` with fakes for whichever collaborators a test overrides and cheap real
 instances for the rest, mirroring `main.build_production_state` without ever starting
 the agent manager.
 """
@@ -31,6 +31,8 @@ from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from contextlib import nullcontext
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -57,6 +59,10 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_records import ChatAgentEntry
+from imbue.chat.chat_records import ChatHandoffRecord
+from imbue.chat.chat_records import ChatRebindRecord
+from imbue.chat.chat_records import ChatRecord
 from imbue.chat.config import Config
 from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
@@ -64,10 +70,15 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
+from imbue.chat.models import HeldSendOrigin
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -154,6 +165,141 @@ def seed_agent_state(
         )
 
 
+def make_chat_agent_entry(
+    seq: int,
+    agent_id: str,
+    *,
+    is_archived: bool,
+    harness: HarnessType = HarnessType.CLAUDE,
+    final_event_count: int = 7,
+    account_id: str | None = None,
+) -> ChatAgentEntry:
+    """One agent of a hand-built chat record: archived (ended, named, counted) or the live one.
+
+    ``account_id`` names the account the entry ran on; None takes a per-seq placeholder.
+    """
+    return ChatAgentEntry(
+        seq=seq,
+        agent_id=agent_id,
+        lane="anthropic" if harness is HarnessType.CLAUDE else "openai",
+        account_id=account_id if account_id is not None else f"acct-{seq}",
+        harness=harness,
+        started_at=datetime(2026, 9, 1, 12, seq, tzinfo=timezone.utc),
+        ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
+        archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
+        final_event_count=final_event_count if is_archived else None,
+    )
+
+
+# The repo's own handoff prompt template, so a test renders the real placeholders against the runner's fields.
+CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
+    Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
+)
+
+
+def write_summary_for_request(text: str) -> None:
+    """What a fake ``deliver`` does with a handoff summary request: write a stub summary at the path it names.
+
+    A no-op for any other message, so a fake send can call it on everything it is handed.
+    """
+    if not text.startswith(f"{HANDOFF_SUMMARY_COMMAND} "):
+        return
+    path = Path(text.split(" ", 1)[1])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Summary\n\nThe user wants the tests green.\n")
+
+
+def make_chat_handoff_record(
+    *,
+    retiring_seq: int,
+    next_agent_id: str,
+    phase: HandoffPhase = HandoffPhase.SUMMARIZING,
+    handoff_id: str = "handoff-1",
+    held_sends: tuple[HeldSend, ...] | None = None,
+    target_account_id: str = "acct-openai",
+) -> ChatHandoffRecord:
+    """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
+    started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    trigger = HeldSend(
+        message_id="trigger-1", text="Carry on in Codex", origin=HeldSendOrigin.CLIENT, received_at=started_at
+    )
+    return ChatHandoffRecord(
+        handoff_id=handoff_id,
+        phase=phase,
+        started_at=started_at,
+        target_lane="openai",
+        target_account_id=target_account_id,
+        target_harness=HarnessType.CODEX,
+        retiring_seq=retiring_seq,
+        next_agent_id=next_agent_id,
+        next_seq=retiring_seq + 1,
+        chat_name="Chat-1",
+        chat_title="Chat 1",
+        trigger_message_id=trigger.message_id,
+        trigger_text=trigger.text,
+        held_sends=held_sends if held_sends is not None else (trigger,),
+    )
+
+
+def make_chat_rebind_record(
+    *,
+    agent_id: str,
+    phase: HandoffPhase = HandoffPhase.RESTARTING,
+    rebind_id: str = "rebind-1",
+    held_sends: tuple[HeldSend, ...] | None = None,
+    target_account_id: str = "acct-anthropic-2",
+    previous_account_id: str = "acct-anthropic",
+    error: str | None = None,
+) -> ChatRebindRecord:
+    """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account.
+
+    ``error`` is what the failed phase carries; a record in another phase has none.
+    """
+    started_at = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+    trigger = HeldSend(
+        message_id="trigger-1",
+        text="Carry on on the other account",
+        origin=HeldSendOrigin.CLIENT,
+        received_at=started_at,
+    )
+    return ChatRebindRecord(
+        rebind_id=rebind_id,
+        phase=phase,
+        started_at=started_at,
+        target_lane="anthropic",
+        target_account_id=target_account_id,
+        target_harness=HarnessType.CLAUDE,
+        target_label="Anthropic 2 (Claude Code)",
+        agent_id=agent_id,
+        previous_account_id=previous_account_id,
+        previous_lane="anthropic",
+        trigger_message_id=trigger.message_id,
+        trigger_text=trigger.text,
+        held_sends=held_sends if held_sends is not None else (trigger,),
+        error=error,
+    )
+
+
+def make_two_member_chat_record(first_id: str, second_id: str, first_event_count: int = 7) -> ChatRecord:
+    """A chat that ran on ``first_id`` (claude, archived) and moved to ``second_id`` (codex, active)."""
+    return ChatRecord(
+        chat_id=ChatId(first_id),
+        agents=(
+            make_chat_agent_entry(1, first_id, is_archived=True, final_event_count=first_event_count),
+            make_chat_agent_entry(2, second_id, is_archived=False, harness=HarnessType.CODEX),
+        ),
+    )
+
+
+def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's."""
+    log_path = tmp_path / "mngr-argv.log"
+    script = tmp_path / "fake-mngr"
+    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.chmod(0o755)
+    return str(script), log_path
+
+
 class RecordingMngrMessenger(MngrMessenger):
     """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
 
@@ -183,6 +329,21 @@ class RecordingMngrMessenger(MngrMessenger):
         return self.press_succeeds
 
 
+class SummaryWritingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose agent "writes" the handoff summary it is asked for at once.
+
+    The runner's summarizing phase waits for the file the request names; with this messenger it
+    appears on the send, so a fake switch reaches its create in a poll rather than after the idle
+    grace period.
+    """
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        write_summary_for_request(message)
+        return super().send_to_agent(agent_id, message, known_locations)
+
+
 class RecordingShell(MutableModel):
     """A shell for the auto-open reactor whose connected clients a test sets, recording every open it is asked for."""
 
@@ -195,8 +356,8 @@ class RecordingShell(MutableModel):
     def connected_client_ids(self) -> list[str]:
         return list(self.client_ids)
 
-    def open_chat(self, agent_id: str, client_id: str) -> bool:
-        self.opens.append((agent_id, client_id))
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
+        self.opens.append((chat_id, client_id))
         return client_id not in self.refused_client_ids
 
 
@@ -232,8 +393,8 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
-) -> ChatState:
-    """Build a `ChatState` for tests, injecting fakes where provided.
+) -> ChatAppState:
+    """Build a `ChatAppState` for tests, injecting fakes where provided.
 
     Every collaborator left unset gets a cheap default production instance;
     pass one to substitute a fake. The agent manager is built but never started,
@@ -245,7 +406,7 @@ def build_test_state(
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
         # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
@@ -434,7 +595,8 @@ def close_ws(ws: simple_websocket.Client) -> None:
 
 # The fixture chat's agent id and name, and the project every workspace starts with unless a
 # test asks for none (what a migrated workspace has, and where a fresh browser lands).
-FIXTURE_AGENT_ID: Final[str] = "agent-test-123"
+# A real mngr id shape (32 hex), so the send path can type it as an AgentId.
+FIXTURE_AGENT_ID: Final[str] = "agent-0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e"
 FIXTURE_AGENT_NAME: Final[str] = "test-agent"
 FIXTURE_CHAT_ADDRESS: Final[str] = f"app:chat?instance={FIXTURE_AGENT_ID}"
 STARTER_PROJECT_NAME: Final[str] = "Project 1"
@@ -518,7 +680,10 @@ class RunningWorkspace(FrozenModel):
     agent_info: AgentInfo = Field(description="The fixture chat's agent")
     session_file: Path = Field(description="The fixture chat's session file, appended to for streaming tests")
     state_dir: Path = Field(description="The shell's state directory")
-    chat_state: ChatState = Field(description="The chat app's state, for the manager behind its routes")
+    chat_state: ChatAppState = Field(description="The chat app's state, for the manager behind its routes")
+    account_ids: tuple[str, ...] = Field(
+        description="The signed-in accounts, the fixture chat's own first, then the additional ones in order"
+    )
     stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when offered")
     stub_url: str | None = Field(description="The stub app's loopback URL, when offered")
 
@@ -573,6 +738,8 @@ def running_workspace(
     stub_instances: Sequence[str] = (),
     project_names: Sequence[str] = (STARTER_PROJECT_NAME,),
     is_account_signed_in: bool = True,
+    additional_accounts: Sequence[tuple[str, str]] = (),
+    messenger: MngrMessenger | None = None,
 ) -> Iterator[RunningWorkspace]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -580,9 +747,11 @@ def running_workspace(
     a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
     runs; the shell reads a registry holding the chat row at the chat's own URL and, when
     ``is_stub_app_offered``, a stub app whose ``stub_instances`` are seeded as records. With
-    ``is_account_signed_in`` (the default) a signed-in account exists, so a create starts at
-    once; without one a create mints a chat that waits for an account, and its page offers
-    the provider chooser. ``project_names``
+    ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
+    is bound to, so a create starts at once; without one a create mints a chat that waits for
+    an account, and its page offers the provider chooser. ``additional_accounts`` sign further
+    accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
+    messenger the manager sends through. ``project_names``
     are created through the shell's API before anything connects, so a client's first view is
     the first of them (or Everything when there are none).
     """
@@ -660,15 +829,31 @@ def running_workspace(
     ):
         # A signed-in account is what a new chat launches on at once; without one the chat's
         # ``new`` mints a chat that waits for an account (its page shows the provider chooser).
+        account_ids: list[str] = []
         if is_account_signed_in:
             account_id, _ = mint_account_dir()
             commit_account(account_id, "anthropic", "Anthropic")
+            account_ids.append(account_id)
+        for lane_id, display in additional_accounts:
+            extra_account_id, _ = mint_account_dir()
+            commit_account(extra_account_id, lane_id, display)
+            account_ids.append(extra_account_id)
 
-        manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+        manager = AgentManager.build(
+            WebSocketBroadcaster(),
+            messenger=messenger if messenger is not None else RecordingMngrMessenger(),
+            chat_files_root=tmp_path / "chats",
+            # The successor's prompt template is cwd-relative in production (the repo root); the
+            # suite runs from the chat package, so it is named outright.
+            prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        )
+        # The agents carry the signed-in account's label, as a chat the app created would, so the
+        # page's provider row names it.
+        agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
         with manager._lock:
             for info in agents:
                 manager._agents[info.id] = AgentStateItem(
-                    id=info.id, name=info.name, state="RUNNING", labels={}, work_dir=str(tmp_path / "work")
+                    id=info.id, name=info.name, state="RUNNING", labels=agent_labels, work_dir=str(tmp_path / "work")
                 )
         for info in agents:
             manager._ensure_activity_tracking(info.id)
@@ -721,6 +906,7 @@ def running_workspace(
                         session_file=session_file,
                         state_dir=state_dir,
                         chat_state=chat_state,
+                        account_ids=tuple(account_ids),
                         stub_source=stub_source,
                         stub_url=stub_url,
                     )

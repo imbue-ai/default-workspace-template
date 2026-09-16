@@ -56,7 +56,7 @@ const SIGNUP_PLANS: { value: string; label: string; description: string }[] = [
     value: "explorer",
     label: "Explorer (2 free cloud workspaces)",
     description:
-      "You agree to share product data from those workspaces with Imbue to help improve Minds.",
+      "You agree to share product data from those workspaces with Imbue to help improve Mind.",
   },
   {
     value: "free",
@@ -420,7 +420,7 @@ function FormView(state: PageState): m.Vnode {
     ? m(
         "p",
         { class: "type-body text-secondary mb-6" },
-        `Sign in or create a Minds account to ${describeNext(state.next)}.`,
+        `Sign in or create a Mind account to ${describeNext(state.next)}.`,
       )
     : null;
   // Sign-in always shows the credentials form (Google on top). Sign-up leads

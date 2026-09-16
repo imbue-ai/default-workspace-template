@@ -5,25 +5,35 @@ Each command is a thin front end over the module that owns the work (`generate`,
 one place while the logic stays importable without click.
 """
 
+import asyncio
 import json
+import os
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
 import click
 from loguru import logger
+from pydantic import SecretStr
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.minds_evals import check_run
 from imbue.minds_evals import ci_matrix
 from imbue.minds_evals import ci_report
 from imbue.minds_evals import cleanup_environments
+from imbue.minds_evals import flow_browser
+from imbue.minds_evals import flow_lab
+from imbue.minds_evals import ui_flows
+from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import CiReportContext
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.decider import DEFAULT_DECIDER_MODEL
 from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.errors import CleanupScopeError
 from imbue.minds_evals.generate import MNGR_REPO
 from imbue.minds_evals.generate import generate_dataset
+from imbue.minds_evals.minds_bridge import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.mngr.cli.output_helpers import write_human_line
 
 
 @click.group()
@@ -269,16 +279,30 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
     help="The named harness configs file",
 )
 @click.option(
+    "--nightly-suites",
+    "nightly_suites_path",
+    default=ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH,
+    show_default=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The checked-in suite list: which eval configs a run evaluates, and the arms of each",
+)
+@click.option(
     "--select",
     "selection",
     default="",
-    help="Comma-separated harness config names to run; empty runs every config marked nightly",
+    help=(
+        "Comma-separated harness config names to run every selected config on, overriding the suites' own "
+        "arms; empty runs each suite's arms, and the nightly set for a suite that names none"
+    ),
 )
 @click.option(
     "--config",
     "config_path",
-    required=True,
-    help="The repo-relative eval config every cell generates its dataset from; part of each green marker key",
+    default="",
+    help=(
+        "One ad-hoc suite to evaluate instead of the suite list: the repo-relative eval config its cells "
+        "generate their dataset from, and part of each of their green marker keys"
+    ),
 )
 @click.option(
     "--green-markers",
@@ -321,6 +345,7 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
 def ci_matrix_command(
     pairs_path: Path,
     harness_configs_path: Path,
+    nightly_suites_path: Path,
     selection: str,
     config_path: str,
     green_markers_path: Path | None,
@@ -330,15 +355,25 @@ def ci_matrix_command(
     summary_md_path: Path | None,
     repository: str,
 ) -> None:
-    """Decide which arms a scheduled run evaluates: every frozen pair times every selected harness
-    config, minus the cells whose green marker says that exact arm was already verified.
+    """Decide which arms a scheduled run evaluates: every frozen pair times every suite's eval
+    config times that suite's harness configs, minus the cells whose green marker says that exact
+    arm was already verified.
 
-    The harness configs file is validated whole, selected or not, through the driver's own kwarg
-    parsing, so a config the driver would refuse at construction is refused here on the free job.
+    Both checked-in files are validated whole, selected or not: the harness configs through the
+    driver's own kwarg parsing, so a config the driver would refuse at construction is refused here
+    on the free job, and the suite list against the configs actually in the checkout.
     """
     try:
         entries = ci_matrix.load_harness_configs(harness_configs_path)
-        selected = ci_matrix.select_harness_configs(entries, selection)
+        suites = ci_matrix.resolve_suites(
+            ci_matrix.suites_for_run(
+                suites=ci_matrix.load_nightly_suites(nightly_suites_path, ci_matrix.REPO_ROOT),
+                entries=entries,
+                config_path=config_path,
+                selection=selection,
+            ),
+            entries,
+        )
         pairs = ci_matrix.read_frozen_pairs(pairs_path)
         green_keys = (
             frozenset()
@@ -347,12 +382,10 @@ def ci_matrix_command(
         )
     except CiMatrixError as exc:
         raise click.UsageError(str(exc)) from exc
-    matrix = ci_matrix.decide_matrix(
-        pairs=pairs, entries=selected, config_path=config_path, green_keys=green_keys, is_forced=is_forced
-    )
+    matrix = ci_matrix.decide_matrix(pairs=pairs, suites=suites, green_keys=green_keys, is_forced=is_forced)
     ci_matrix.write_matrix_reports(matrix, output_path, summary_md_path, repository)
     for cell in matrix.cells:
-        logger.info("{} x {}: {}", cell.pair, cell.harness_config, cell.decision.value)
+        logger.info("{} x {} x {}: {}", cell.pair, cell.config_slug, cell.harness_config, cell.decision.value)
     for pair in matrix.pairs:
         if pair.decision is not PairDecision.RUN:
             logger.info("pair {}: {}", pair.pair, pair.decision.value)
@@ -371,7 +404,7 @@ def ci_matrix_command(
     "summaries_dir",
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Where the per-pair and per-cell summary artifacts were downloaded to; may not exist",
+    help="Where the per-oracle-pass and per-cell summary artifacts were downloaded to; may not exist",
 )
 @click.option("--run-url", required=True, help="The workflow run's URL")
 @click.option("--trigger", required=True, help="The event that started the run (schedule, workflow_dispatch, push)")
@@ -396,7 +429,7 @@ def ci_matrix_command(
     "output_path",
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair",
+    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair and eval config",
 )
 def ci_report_command(
     matrix_path: Path | None,
@@ -410,8 +443,8 @@ def ci_report_command(
     evaluate_result: str,
     output_path: Path,
 ) -> None:
-    """Write the Slack report of a scheduled run: one webhook payload per pair, each a grid of the
-    pair's cases by harness config.
+    """Write the Slack report of a scheduled run: one webhook payload per pair and eval config, each
+    a grid of that config's cases by harness config.
 
     This command is the whole notification of a run, so it never fails: a matrix that cannot be read
     or a summary that is missing is reported as such, and the exit code is zero either way.
@@ -430,6 +463,76 @@ def ci_report_command(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payloads, indent=2))
     logger.info("Wrote {} run report message(s) to {}", len(payloads), output_path)
+
+
+@main.command("flow-lab")
+@click.option(
+    "--app",
+    "app_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory served as the app's origin; a fixture under flow_lab_apps/, or an app taken out of a trial",
+)
+@click.option(
+    "--page",
+    default="",
+    help="Appended to the served origin: empty for its index, or a query such as '?latency=300'",
+)
+@click.option("--actions", required=True, help="What the flow does in the UI, as a case would state it")
+@click.option("--expect", required=True, help="The flow's end condition, recorded in the log for the judge")
+@click.option(
+    "--output",
+    "output_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Where log.jsonl and the step frames are written, shaped as a trial's flow directory",
+)
+@click.option(
+    "--model",
+    default=DEFAULT_DECIDER_MODEL,
+    show_default=True,
+    help="The model the verification agent reasons with",
+)
+def flow_lab_command(app_dir: Path, page: str, actions: str, expect: str, output_dir: Path, model: str) -> None:
+    """Drive one UI flow against a local app with the real verification agent, and no box at all.
+
+    Needs ANTHROPIC_API_KEY for the agent's calls. Exits non-zero when the flow did not complete
+    its declared actions; whether the `expect` holds is not decided here, exactly as at trial time.
+    """
+    api_key = os.environ.get(ANTHROPIC_API_KEY_ENV_VAR, "")
+    if not api_key:
+        raise click.UsageError("{} is not set; the verification agent cannot be run".format(ANTHROPIC_API_KEY_ENV_VAR))
+    agent = ui_flows.AnthropicVerificationAgent(
+        model=model, api_key=SecretStr(api_key), timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS
+    )
+    # Resolved before the loop starts: playwright's sync API refuses to run inside one.
+    chromium_path = flow_browser.resolve_chromium_path()
+    if not chromium_path.exists():
+        raise click.UsageError(flow_browser.missing_chromium_message(chromium_path))
+    run = asyncio.run(
+        flow_lab.run_lab_flow(
+            app_dir=app_dir,
+            page=page,
+            check=flow_lab.lab_flow_check("lab", actions, expect),
+            agent=agent,
+            output_dir=output_dir,
+            chromium_path=chromium_path,
+        )
+    )
+    for record in run.records:
+        write_human_line(flow_lab.describe_record(record))
+    usage = ui_flows.summarize_verifier_usage(tuple(agent.calls), model)
+    logger.info(
+        "Flow {}{}; {} agent call(s), {} input / {} output tokens; evidence in {}",
+        run.status.value,
+        " ({})".format(run.reason) if run.reason else "",
+        usage.call_count,
+        usage.input_token_count,
+        usage.output_token_count,
+        output_dir,
+    )
+    if run.status is not CheckStatus.PASSED:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

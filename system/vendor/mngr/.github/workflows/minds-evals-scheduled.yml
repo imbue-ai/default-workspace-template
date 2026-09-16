@@ -2,12 +2,14 @@ name: minds evals (scheduled)
 
 # Nightly Minds persona eval (apps/minds_evals) as a matrix of arms: each of two
 # (mngr, dwt) pairs -- `main` vs `main`, and the released tag both repos carry --
-# times each named harness config in apps/minds_evals/configs/harness_configs.json
-# (the lane the workspace signs in on and the model it is switched to). Each pair
-# runs one cheap oracle pass (image build + generation + verifier container, no
-# Minds boot and no agent spend -- only the verifier's own judge calls); each
-# cell then runs the real eval on its harness config, and a green cell is
-# remembered so the next night skips it when nothing moved.
+# times each suite in apps/minds_evals/configs/nightly_suites.json, which names
+# an eval config and the harness configs from
+# apps/minds_evals/configs/harness_configs.json worth running it on (the lane the
+# workspace signs in on and the model it is switched to). Each pair runs one cheap
+# oracle pass per eval config (image build + generation + verifier container, no
+# Minds boot and no agent spend -- only the verifier's own judge calls); each cell
+# then runs the real eval on its harness config, and a green cell is remembered so
+# the next night skips it when nothing moved.
 #
 # This is a regression job, not a gate: a trial boots a full Minds computer on
 # Modal per case per cell, so it is far too slow and expensive for a PR check.
@@ -30,18 +32,17 @@ on:
         required: false
         default: ''
       config:
-        # Left empty rather than repeating the DEFAULT_CONFIG env value: a schedule fires with every
-        # input null and falls back to DEFAULT_CONFIG, so a second default here would be a second
-        # source of truth -- and the two diverging would silently make the nightly and a default
-        # dispatch evaluate different configs under different cache keys, leaving both permanently
-        # un-green.
-        description: 'Eval config to generate the dataset from; empty uses the DEFAULT_CONFIG below. Its persona count becomes the run concurrency, so every case runs in one wave.'
+        # Empty rather than naming one of the suite file's configs: the suite list is the only
+        # source of truth for what a night runs, and a default here would be a second one -- the
+        # two diverging would silently make the nightly and a default dispatch evaluate different
+        # configs under different cache keys, leaving both permanently un-green.
+        description: 'One ad-hoc eval config to evaluate instead of the checked-in suites; empty runs every suite in apps/minds_evals/configs/nightly_suites.json. Its persona count becomes the run concurrency, so every case runs in one wave.'
         required: false
         default: ''
       harness_configs:
-        # Empty for the same reason `config` is: the nightly set is what the harness configs file
-        # marks is_nightly, and a dispatch that names nothing runs exactly that set.
-        description: 'Comma-separated names from apps/minds_evals/configs/harness_configs.json to run each pair on; empty runs every config the file marks is_nightly.'
+        # Empty for the same reason `config` is: a suite's own arms are the checked-in decision,
+        # and a dispatch that names nothing runs exactly those.
+        description: 'Comma-separated names from apps/minds_evals/configs/harness_configs.json to run every selected config on, overriding the suites own arms; empty runs each suite as checked in.'
         required: false
         default: ''
       force:
@@ -98,9 +99,10 @@ env:
   # freezes the dwt SHA and `generate` resolves it again from the config, and the whole premise is
   # that both halves pin the identical thing.
   DWT_REPO_URL: https://github.com/imbue-ai/default-workspace-template.git
-  # The one place the default config lives: the `config` dispatch input is deliberately empty so
-  # both a schedule and a default dispatch land here.
-  DEFAULT_CONFIG: apps/minds_evals/configs/eval-config-small.json
+  # The one place the night's eval configs live: one suite per config, each naming the harness
+  # configs worth running it on. Read by `minds-evals ci-matrix`, which validates every config path
+  # and arm name before any paid runner starts.
+  NIGHTLY_SUITES: apps/minds_evals/configs/nightly_suites.json
   # The named harness configs a cell can run on. Read by `minds-evals ci-matrix`, which validates
   # every entry through the driver's own kwarg parsing before any paid runner starts.
   HARNESS_CONFIGS: apps/minds_evals/configs/harness_configs.json
@@ -114,13 +116,14 @@ jobs:
   # Free ubuntu job that does the freezing and the skipping. It resolves every
   # ref to a SHA exactly once, so a moving ref like `main` cannot drift between
   # dataset generation and the run, lists the green markers once, and hands the
-  # decision to `minds-evals ci-matrix`: pair x harness config, minus the cells
-  # whose exact arm is already green, so a night where nothing moved costs one
-  # free job instead of a fleet of boxes.
+  # decision to `minds-evals ci-matrix`: pair x suite config x harness config,
+  # minus the cells whose exact arm is already green, so a night where nothing
+  # moved costs one free job instead of a fleet of boxes.
   resolve:
     runs-on: ubuntu-latest
     outputs:
-      # Matrix of the pairs with at least one cell to run: the `oracle` job.
+      # Matrix of the (pair, eval config) combinations with at least one cell to
+      # run: the `oracle` job.
       oracle_matrix: ${{ steps.decide.outputs.oracle_matrix }}
       # Matrix of the cells that should actually be evaluated: the `evaluate` job.
       matrix: ${{ steps.decide.outputs.matrix }}
@@ -130,7 +133,6 @@ jobs:
       # whose job died.
       decision: ${{ steps.decide.outputs.decision }}
       is_live_pass_skipped: ${{ steps.decide.outputs.is_live_pass_skipped }}
-      config: ${{ steps.compute.outputs.config }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -233,17 +235,22 @@ jobs:
           # dwt is public and takes the plain URL.
           MNGR_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          CONFIG="${CONFIG_INPUT:-$DEFAULT_CONFIG}"
-          # Held to a repo-relative path shape for the same reason the refs are: it is a dispatch
-          # input, and it is later echoed into every green marker key.
-          if [[ ! "$CONFIG" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*\.json$ ]]; then
-            echo "::error::config '${CONFIG}' is not a repo-relative .json path"
-            exit 1
-          fi
-          # Checked here, on the free job, rather than minutes into a paid runner per pair.
-          if [[ ! -f "$CONFIG" ]]; then
-            echo "::error::config '${CONFIG}' does not exist on this branch"
-            exit 1
+          # An empty config is how a schedule (and a dispatch that names none) says "run the
+          # checked-in suites"; ci-matrix validates those configs itself. Only a dispatched one is
+          # checked here, because only a dispatched one can be typed wrong.
+          CONFIG="${CONFIG_INPUT}"
+          if [[ -n "$CONFIG" ]]; then
+            # Held to a repo-relative path shape for the same reason the refs are: it is a dispatch
+            # input, and it is later echoed into every green marker key.
+            if [[ ! "$CONFIG" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*\.json$ ]]; then
+              echo "::error::config '${CONFIG}' is not a repo-relative .json path"
+              exit 1
+            fi
+            # Checked here, on the free job, rather than minutes into a paid runner per pair.
+            if [[ ! -f "$CONFIG" ]]; then
+              echo "::error::config '${CONFIG}' does not exist on this branch"
+              exit 1
+            fi
           fi
           echo "config=$CONFIG" >> "$GITHUB_OUTPUT"
           # The names themselves are checked against the file by ci-matrix; this only keeps a
@@ -360,6 +367,7 @@ jobs:
           uv run --project apps/minds_evals minds-evals ci-matrix \
             --pairs "$PAIRS_PATH" \
             --harness-configs "$HARNESS_CONFIGS" \
+            --nightly-suites "$NIGHTLY_SUITES" \
             --select "$HARNESS_CONFIGS_INPUT" \
             --config "$CONFIG" \
             --green-markers "$MARKERS_PATH" \
@@ -386,31 +394,33 @@ jobs:
             echo "is_live_pass_skipped=$IS_LIVE_PASS_SKIPPED"
           } >> "$GITHUB_OUTPUT"
 
-  # One oracle pass per pair that has a cell to run. The oracle replays a canned
-  # near-perfect transcript: no Minds boot and no agent spend, but it does exercise
-  # the box image build, the generated task, the verifier container and grading,
-  # so a failure here is infrastructure and stops the pair's cells before the
-  # expensive passes pay for the same break. It boots no workspace, so it is the
-  # same whatever harness config a cell runs on -- which is why it runs once per
-  # pair and not once per cell.
+  # One oracle pass per (pair, eval config) that has a cell to run. The oracle
+  # replays a canned near-perfect transcript: no Minds boot and no agent spend, but
+  # it does exercise the box image build, the generated task, the verifier container
+  # and grading, so a failure here is infrastructure and stops that suite's cells
+  # before the expensive passes pay for the same break. It boots no workspace, so it
+  # is the same whatever harness config a cell runs on -- which is why it runs once
+  # per suite and not once per cell. It is NOT the same across suites: the task it
+  # replays a transcript against, and the criteria that grade it, are the eval
+  # config's own.
   oracle:
     # Named, because a matrix job with no `name:` is titled from every field of its
     # include entry -- here two full SHAs -- which the checks list truncates.
-    name: oracle (${{ matrix.pair }})
+    name: oracle (${{ matrix.pair }} x ${{ matrix.config_slug }})
     needs: resolve
     if: needs.resolve.outputs.any == 'true'
     runs-on: ubuntu-latest
     strategy:
-      # A red pair must not cancel the other: the two pairs answer different
-      # questions ("is main healthy?" and "is what users run healthy?"), and one
-      # answer is worth having without the other.
+      # A red pass must not cancel the others: the two pairs answer different
+      # questions ("is main healthy?" and "is what users run healthy?"), the suites
+      # measure different things, and one answer is worth having without the other.
       fail-fast: false
       matrix: ${{ fromJSON(needs.resolve.outputs.oracle_matrix) }}
-    # Per pair, so a dispatch cannot overlap the nightly for the same pair while
-    # leaving the pairs free of each other. Never collides with a cell's group
-    # below, which spells the pair and the config the other way round.
+    # Per pair and eval config, so a dispatch cannot overlap the nightly for the same
+    # suite while leaving the suites and pairs free of each other. Never collides
+    # with a cell's group below, which leads with the pair rather than with `oracle`.
     concurrency:
-      group: minds-evals-oracle-${{ matrix.pair }}
+      group: minds-evals-oracle-${{ matrix.pair }}-${{ matrix.config_slug }}
       cancel-in-progress: false
     # Budgeted like the live cells below, so the cleanup sweep's argument (its
     # cutoff is longer than any job's budget) holds for every job in this run.
@@ -478,7 +488,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DATASET_DIR: ${{ runner.temp }}/dataset
-          CONFIG: ${{ needs.resolve.outputs.config }}
+          CONFIG: ${{ matrix.config }}
           MNGR_SHA: ${{ matrix.mngr_sha }}
           DWT_SHA: ${{ matrix.dwt_sha }}
         # Outside the repo tree on purpose: each generated task embeds a full mngr
@@ -495,7 +505,7 @@ jobs:
       - name: Oracle pass
         id: oracle_pass
         env:
-          JOB_NAME: ${{ matrix.pair }}-oracle-${{ github.run_id }}
+          JOB_NAME: ${{ matrix.pair }}-${{ matrix.config_slug }}-oracle-${{ github.run_id }}
           DATASET_DIR: ${{ runner.temp }}/dataset
         run: |
           set -euo pipefail
@@ -516,29 +526,30 @@ jobs:
         if: ${{ !cancelled() && steps.oracle_pass.conclusion != 'skipped' }}
         env:
           PAIR: ${{ matrix.pair }}
-          JOB_NAME: ${{ matrix.pair }}-oracle-${{ github.run_id }}
+          CONFIG_SLUG: ${{ matrix.config_slug }}
+          JOB_NAME: ${{ matrix.pair }}-${{ matrix.config_slug }}-oracle-${{ github.run_id }}
           SUMMARY_DIR: ${{ runner.temp }}/summaries
         # check-run writes its table before it decides the verdict, so the summary is
-        # published whichever way the check went. The cells of this pair read the JSON
+        # published whichever way the check went. The cells of this suite read the JSON
         # back through the summary artifact before they start their live pass.
         #
-        # The file name carries the pair, and a cell's carries pair and harness config,
-        # because `notify` merges every summary artifact into one directory: the name is
-        # what tells the passes apart there.
+        # The file name carries the pair and the eval config, and a cell's carries the
+        # harness config on top of those, because `notify` merges every summary artifact
+        # into one directory: the name is what tells the passes apart there.
         run: |
           set -euo pipefail
           mkdir -p "$SUMMARY_DIR"
           check_status=0
           uv run --project apps/minds_evals minds-evals check-run \
             "apps/minds_evals/jobs/$JOB_NAME" \
-            --summary-md "$SUMMARY_DIR/oracle-summary-$PAIR.md" \
-            --summary-json "$SUMMARY_DIR/oracle-summary-$PAIR.json" \
+            --summary-md "$SUMMARY_DIR/oracle-summary-$PAIR-$CONFIG_SLUG.md" \
+            --summary-json "$SUMMARY_DIR/oracle-summary-$PAIR-$CONFIG_SLUG.json" \
             || check_status=$?
           {
-            echo "## Oracle pass (\`$PAIR\`)"
+            echo "## Oracle pass (\`$PAIR\` x \`$CONFIG_SLUG\`)"
             echo ""
-            if [[ -f "$SUMMARY_DIR/oracle-summary-$PAIR.md" ]]; then
-              cat "$SUMMARY_DIR/oracle-summary-$PAIR.md"
+            if [[ -f "$SUMMARY_DIR/oracle-summary-$PAIR-$CONFIG_SLUG.md" ]]; then
+              cat "$SUMMARY_DIR/oracle-summary-$PAIR-$CONFIG_SLUG.md"
             else
               echo "check-run wrote no summary -- it could not read the job directory."
             fi
@@ -549,15 +560,16 @@ jobs:
       - name: Delete the Modal environments this run created
         if: always()
         env:
-          ORACLE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-oracle-${{ github.run_id }}
+          ORACLE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-${{ matrix.config_slug }}-oracle-${{ github.run_id }}
         # Named deletion first: exactly the environments the job dir records, which is what collects
         # THIS job (an oracle trial boots no workspace, so it usually records none). The age-based
         # sweep after it is the backstop for an EARLIER run that died before recording anything --
         # its cutoff is 8 h and no job in this run has a budget above 3 h 20 m, so it never reaches
         # what this run creates, and a leak here is collected by a later run instead. That gap is
         # the point: it puts every cell running alongside, and every developer's work, out of
-        # reach. The sweep runs here, once per pair, rather than in every cell: the cells would
-        # only race each other for the same old names.
+        # reach. The sweep runs in the oracle passes rather than in every cell, because a cell adds
+        # nothing to it: the passes of one run may still overlap, and an old name another pass has
+        # already taken reads as gone rather than as a failure.
         #
         # Every pass runs whatever the ones before it did, and the step reports the
         # failure at the end: a named pass exits non-zero on an unreadable job dir
@@ -581,9 +593,11 @@ jobs:
       - name: Upload the summaries
         if: always()
         # Small and separate from the job dir so the cells and `notify` can pull just these.
+        # `-oracle` last, where a cell's artifact name carries its harness config: `ci-matrix`
+        # refuses `oracle` as a harness config name, so the two can never collide.
         uses: actions/upload-artifact@v7
         with:
-          name: minds-evals-summary-${{ matrix.pair }}
+          name: minds-evals-summary-${{ matrix.pair }}-${{ matrix.config_slug }}-oracle
           path: ${{ runner.temp }}/summaries
           retention-days: 14
           if-no-files-found: ignore
@@ -597,7 +611,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: minds-evals-jobs-${{ matrix.pair }}-oracle-${{ github.run_id }}
+          name: minds-evals-jobs-${{ matrix.pair }}-${{ matrix.config_slug }}-oracle-${{ github.run_id }}
           path: |
             apps/minds_evals/jobs
             !apps/minds_evals/jobs/**/agent/snapshots/**
@@ -606,13 +620,14 @@ jobs:
           # See the summary upload above: run_id does not change on a re-run.
           overwrite: true
 
-  # One live pass per cell: a pair times a harness config. Runs even when another
-  # pair's oracle failed (`!cancelled()` rather than the default success()), and
-  # each cell checks its own pair's oracle verdict before it spends anything.
+  # One live pass per cell: a pair times a suite's eval config times a harness
+  # config. Runs even when another oracle pass failed (`!cancelled()` rather than
+  # the default success()), and each cell checks the verdict of its own (pair, eval
+  # config) oracle before it spends anything.
   evaluate:
     # See the oracle job: without this the title carries every field of the cell
     # entry, the JSON run line and the cache key among them.
-    name: evaluate (${{ matrix.pair }} x ${{ matrix.harness_config }})
+    name: evaluate (${{ matrix.pair }} x ${{ matrix.config_slug }} x ${{ matrix.harness_config }})
     needs: [resolve, oracle]
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.any == 'true' && needs.resolve.outputs.is_live_pass_skipped != 'true' }}
     runs-on: ubuntu-latest
@@ -628,9 +643,9 @@ jobs:
     # of one cell would collide on the CI Modal environments) while leaving the
     # cells free of each other.
     concurrency:
-      group: minds-evals-${{ matrix.pair }}-${{ matrix.harness_config }}
+      group: minds-evals-${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}
       cancel-in-progress: false
-    # Budget: every case runs in one wave, so the live pass costs one case's
+    # Budget: every trial runs in one wave, so the live pass costs one case's
     # worth of harbor time (the config's agent timeout, the evidence-collection
     # budget, and harbor's grace), and around it sit setup, dataset generation,
     # grading, cleanup and upload. The remainder is margin.
@@ -645,34 +660,37 @@ jobs:
       # First, before any secret is fetched and any tooling is installed: the gate needs only
       # `jq` and this artifact, and a cell downstream of a red oracle must cost nothing. It also
       # keeps a missing `mngr/ci/<key_env>` from failing cells that were never going to run.
-      - name: Download the pair's oracle summary
+      - name: Download this suite's oracle summary
         # continue-on-error: an oracle job that died before check-run uploaded nothing,
         # and the step below says so rather than this one dying on a 404.
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
-          name: minds-evals-summary-${{ matrix.pair }}
+          name: minds-evals-summary-${{ matrix.pair }}-${{ matrix.config_slug }}-oracle
           path: ${{ runner.temp }}/oracle-summary
 
-      - name: Require the pair's oracle pass
-        # The oracle gates the live pass per pair, not per run: a matrix job cannot
-        # depend on one leg of another matrix job, so the gate is read back off the
-        # oracle's own report. A missing or failed report stops this cell before it
-        # boots anything; `notify` then reports the pair by its oracle verdict.
+      - name: Require this suite's oracle pass
+        # The oracle gates the live pass per (pair, eval config), not per run: a matrix
+        # job cannot depend on one leg of another matrix job, so the gate is read back
+        # off the oracle's own report. Its own suite's report and no other, because an
+        # oracle exercises the eval config's task and grading: another config's pass
+        # says nothing about this one. A missing or failed report stops this cell before
+        # it boots anything; `notify` then reports the suite by its oracle verdict.
         env:
-          ORACLE_SUMMARY: ${{ runner.temp }}/oracle-summary/oracle-summary-${{ matrix.pair }}.json
+          ORACLE_SUMMARY: ${{ runner.temp }}/oracle-summary/oracle-summary-${{ matrix.pair }}-${{ matrix.config_slug }}.json
           PAIR: ${{ matrix.pair }}
+          CONFIG_SLUG: ${{ matrix.config_slug }}
         run: |
           set -euo pipefail
           if [[ ! -f "$ORACLE_SUMMARY" ]]; then
-            echo "::error::pair '$PAIR' has no oracle summary -- its oracle job failed before grading, so this cell does not run"
+            echo "::error::'$PAIR' x '$CONFIG_SLUG' has no oracle summary -- its oracle job failed before grading, so this cell does not run"
             exit 1
           fi
           if [[ "$(jq -r '.is_passed' "$ORACLE_SUMMARY")" != "true" ]]; then
-            echo "::error::pair '$PAIR' did not pass its oracle pass, so this cell does not run"
+            echo "::error::'$PAIR' x '$CONFIG_SLUG' did not pass its oracle pass, so this cell does not run"
             exit 1
           fi
-          echo "pair '$PAIR' passed its oracle pass"
+          echo "'$PAIR' x '$CONFIG_SLUG' passed its oracle pass"
 
       # The Anthropic key backs the decider (simulated user) and the judges on
       # every arm. The Modal token pair is what harbor builds and runs the boxes
@@ -756,9 +774,10 @@ jobs:
           echo "user_id_prefix=$prefix" >> "$GITHUB_OUTPUT"
 
       - name: Generate the dataset at the frozen SHAs
-        # The same generation the oracle job ran at the same SHAs: the dataset is
-        # byte-identical whatever the harness config, so the box image build below
-        # is a Modal cache hit and only the live pass varies between cells.
+        # The same generation this suite's oracle job ran at the same SHAs: the
+        # dataset is byte-identical whatever the harness config, so the box image
+        # build below is a Modal cache hit and only the live pass varies between the
+        # cells of one suite.
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DATASET_DIR: ${{ runner.temp }}/dataset
@@ -776,8 +795,10 @@ jobs:
 
       - name: Count the cases in the config
         id: cases
-        # Concurrency equals the case count so every case runs in one wave; cost is
-        # the number of boxes, which is the same however they are spread over time.
+        # Concurrency is the case count times the attempts, so every trial of every
+        # case runs in one wave; cost is the number of boxes, which is the same
+        # however they are spread over time, and the job's budget below is written
+        # for one wave.
         env:
           CONFIG: ${{ matrix.config }}
         run: |
@@ -795,13 +816,17 @@ jobs:
         id: live_pass
         env:
           HARNESS_CONFIG: ${{ matrix.harness_config }}
-          JOB_NAME: ${{ matrix.pair }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
+          JOB_NAME: ${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
           DATASET_DIR: ${{ runner.temp }}/dataset
           CASE_COUNT: ${{ steps.cases.outputs.count }}
           USER_ID_PREFIX: ${{ steps.scope.outputs.user_id_prefix }}
           # The `--ak` flags ci-matrix composed from the harness config, as a JSON
           # list: the same values it validated and hashed into the green marker key.
           HARBOR_ARGS_JSON: ${{ matrix.harbor_args }}
+          # How many times harbor runs each case. One is the only count that costs
+          # nothing extra, so the flag is passed only above it -- a suite asks for
+          # more where one sample of an arm is too noisy to read.
+          ATTEMPTS: ${{ matrix.attempts }}
         run: |
           set -euo pipefail
           # Decoded through a variable, not a process substitution: mapfile reports its own status
@@ -816,9 +841,21 @@ jobs:
             echo "::error::harness config '$HARNESS_CONFIG' decoded to too few harbor arguments from $HARBOR_ARGS_JSON"
             exit 1
           fi
-          just minds-evals-run "$DATASET_DIR" "$JOB_NAME" "$CASE_COUNT" \
+          # Checked rather than read straight into the arithmetic below, where bash reads an empty
+          # value as zero: a matrix field that lost its name interpolates empty, and this cell
+          # would then quietly run one attempt where its suite asked for several.
+          if [[ ! "$ATTEMPTS" =~ ^[0-9]+$ ]]; then
+            echo "::error::attempts '$ATTEMPTS' is not a number -- the cell's matrix entry does not carry it"
+            exit 1
+          fi
+          attempt_args=()
+          if (( ATTEMPTS > 1 )); then
+            attempt_args=(-k "$ATTEMPTS")
+          fi
+          just minds-evals-run "$DATASET_DIR" "$JOB_NAME" "$(( CASE_COUNT * ATTEMPTS ))" \
             --ak "user_id_prefix=$USER_ID_PREFIX" \
-            "${harbor_args[@]}"
+            "${harbor_args[@]}" \
+            "${attempt_args[@]}"
 
       - name: Check the live pass
         # Read off the pass step rather than restating its condition: skipped when the live pass
@@ -826,8 +863,9 @@ jobs:
         if: ${{ !cancelled() && steps.live_pass.conclusion != 'skipped' }}
         env:
           PAIR: ${{ matrix.pair }}
+          CONFIG_SLUG: ${{ matrix.config_slug }}
           HARNESS_CONFIG: ${{ matrix.harness_config }}
-          JOB_NAME: ${{ matrix.pair }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
+          JOB_NAME: ${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
           SUMMARY_DIR: ${{ runner.temp }}/summaries
         # Judge scores are reported, never gated: they are statistical, and a
         # single run's number is not a regression signal. What gates is structural
@@ -839,14 +877,14 @@ jobs:
           check_status=0
           uv run --project apps/minds_evals minds-evals check-run \
             "apps/minds_evals/jobs/$JOB_NAME" \
-            --summary-md "$SUMMARY_DIR/live-summary-$PAIR-$HARNESS_CONFIG.md" \
-            --summary-json "$SUMMARY_DIR/live-summary-$PAIR-$HARNESS_CONFIG.json" \
+            --summary-md "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md" \
+            --summary-json "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.json" \
             || check_status=$?
           {
-            echo "## Live pass (\`$PAIR\` x \`$HARNESS_CONFIG\`)"
+            echo "## Live pass (\`$PAIR\` x \`$CONFIG_SLUG\` x \`$HARNESS_CONFIG\`)"
             echo ""
-            if [[ -f "$SUMMARY_DIR/live-summary-$PAIR-$HARNESS_CONFIG.md" ]]; then
-              cat "$SUMMARY_DIR/live-summary-$PAIR-$HARNESS_CONFIG.md"
+            if [[ -f "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md" ]]; then
+              cat "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md"
             else
               echo "check-run wrote no summary -- it could not read the job directory."
             fi
@@ -892,9 +930,9 @@ jobs:
       - name: Delete the Modal environments this cell created
         if: always()
         env:
-          LIVE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
+          LIVE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}-live-${{ github.run_id }}
         # Exactly the environments this cell's job dir records. The age-based
-        # backstop sweep for earlier runs lives in the oracle job, once per pair.
+        # backstop sweep for earlier runs lives in the oracle passes.
         run: |
           set -euo pipefail
           if [[ -d "$LIVE_JOB_DIR" ]]; then
@@ -908,7 +946,7 @@ jobs:
         # Small and separate from the job dir so `notify` can pull just these.
         uses: actions/upload-artifact@v7
         with:
-          name: minds-evals-summary-${{ matrix.pair }}-${{ matrix.harness_config }}
+          name: minds-evals-summary-${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}
           path: ${{ runner.temp }}/summaries
           retention-days: 14
           if-no-files-found: ignore
@@ -921,7 +959,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: minds-evals-jobs-${{ matrix.pair }}-${{ matrix.harness_config }}-${{ github.run_id }}
+          name: minds-evals-jobs-${{ matrix.pair }}-${{ matrix.config_slug }}-${{ matrix.harness_config }}-${{ github.run_id }}
           # Snapshots are excluded: the workspace tarball is ~90 MB of a trial's
           # ~92 MB, and nothing about a red run is diagnosed from it.
           path: |
@@ -931,8 +969,9 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  # One Slack message per pair, each a grid of that pair's cases by harness config
-  # -- or a single broken message when the run decided nothing to evaluate at all.
+  # One Slack message per pair and eval config, each a grid of that config's cases
+  # by harness config -- or a single broken message when the run decided nothing to
+  # evaluate at all.
   # Degrades to a warning when the webhook is missing, so a run is never red
   # because the notification is.
   notify:
@@ -978,9 +1017,10 @@ jobs:
           # One flat directory whatever the artifact count. Without this the action
           # puts each artifact in a directory of its own -- EXCEPT when exactly one
           # matches the pattern, which it extracts flat; an oracle-only run on one pair
-          # is exactly that case, and the report would find nothing where it looked and
-          # call a passing run broken. Every summary file carries its pair (and a cell's
-          # its harness config), so merging cannot collide.
+          # and one suite is exactly that case, and the report would find nothing where
+          # it looked and call a passing run broken. Every summary file carries its pair
+          # and its eval config (and a cell's its harness config too), so merging cannot
+          # collide.
           merge-multiple: true
       - name: Report
         env:
@@ -1041,7 +1081,8 @@ jobs:
               --arg text ":x: *minds-evals* -- the report could not be rendered (resolve=${RESOLVE_RESULT}, oracle=${ORACLE_RESULT}, evaluate=${EVALUATE_RESULT}); read the run instead: <${RUN_URL}|run logs>" \
               '[{username: "Evals", icon_emoji: ":brainless:", text: $text}]' > /tmp/slack-payloads.json
           fi
-          # One webhook payload per pair, one per line, so each is posted and summarised on its own.
+          # One webhook payload per pair and eval config, one per line, so each is posted and
+          # summarised on its own.
           jq -c '.[]' /tmp/slack-payloads.json > /tmp/slack-payloads.jsonl
           echo "## minds-evals" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"

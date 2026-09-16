@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
+from uuid import UUID
 
 import click
 from loguru import logger
@@ -214,7 +215,8 @@ def preflight(server_ids: tuple[str, ...], json_out: Path | None, database_url: 
     "--workspace",
     "workspace_ids",
     multiple=True,
-    help="A pool_hosts row id to migrate (repeatable).",
+    type=click.UUID,
+    help="A pool_hosts row id to migrate (repeatable; the full UUID, not the preflight table's 8-character prefix).",
 )
 @click.option("--user", "user_email", default=None, help="Migrate every gen-1 workspace of this account (by email).")
 @click.option(
@@ -244,7 +246,7 @@ def preflight(server_ids: tuple[str, ...], json_out: Path | None, database_url: 
 @tier_confirmation_options
 def migrate(
     target_server_id: str,
-    workspace_ids: tuple[str, ...],
+    workspace_ids: tuple[UUID, ...],
     user_email: str | None,
     source_server_id: str | None,
     is_keep_origin_vm: bool,
@@ -277,7 +279,7 @@ def migrate(
             run_migrate(
                 ctx,
                 target_server_id=target_server_id,
-                workspace_ids=list(workspace_ids),
+                workspace_ids=[str(workspace_id) for workspace_id in workspace_ids],
                 user_email=user_email,
                 source_server_id=source_server_id,
                 is_keep_origin_vm=is_keep_origin_vm,

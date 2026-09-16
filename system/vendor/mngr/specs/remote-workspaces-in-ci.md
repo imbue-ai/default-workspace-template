@@ -22,7 +22,7 @@ These resources exist and are the substrate the rest of this spec builds on:
   Its pooled DSN lives at the previously-templated-but-empty Vault leaf `secrets/minds/ci/neon/DATABASE_URL`.
   This DB is the canonical registry of CI bare-metal boxes: the `bare_metal_servers` rows (status, public address, pinned sshd host key, slice sizing) live here, and the `minds-admin server` order/await/setup/prep/list commands operate against it.
 - The CI tier's `ovh` and `pool-ssh` Vault entries were already populated; the `neon` leaf was populated as part of this work.
-- Both boxes are provisioned to `ready` (OS reinstalled, prepped, host keys recorded).
+- Both boxes are provisioned to `ready` (OS reinstalled, prepped, host keys recorded), and were repaved to gen-2 on 2026-09-13 (`minds-admin cutover repave` from the `ci-infra` activation; encrypted storage, the ci tier's SSH CA, no `:22` lockdown since the tier has no management plane).
 - `secrets/minds/ci/storage/*` is populated (mirrored from the dev tier's entry, sharing its bucket) with `WORKSPACE_STOP_RETENTION_SECONDS=60`, so per-run ci envs deploy with workspace stop/start enabled and a CI-sized retention window.
 - A read-only deploy key on the template repo lives at `secrets/minds/ci/dwt/DWT_READ_KEY_B64` (deliberately not the read-write vendor-sync key).
 

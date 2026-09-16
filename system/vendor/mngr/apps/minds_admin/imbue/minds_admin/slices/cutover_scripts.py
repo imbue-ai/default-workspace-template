@@ -1,31 +1,48 @@
 """Pure renderers for the gen-1 -> gen-2 migration's box-side and VM-side commands.
 
-Everything here is text: the gen-2 disk transplant, the reserve follow-ups,
-the container ``docker create`` line replayed from a harvested
-``docker inspect``, and the small probe commands. The drivers in
-``cli/cutover_drivers.py`` ship these over SSH; the transfer conventions (env
-file, status file) come from ``gen2_scripts.transfer``.
+The commands, the parsers of what they print, and the files they ship: the
+gen-2 disk transplant, the reserve follow-ups, the container ``docker create``
+line replayed from a harvested ``docker inspect``, the machine-owned latchkey
+state (its harvest command and parser, the replay tars extracted over ``/``
+on the target, the tunnel-port check), and the small probe commands. The
+drivers in ``cli/cutover_drivers.py`` ship these over SSH; the transfer
+conventions (env file, status file) come from ``gen2_scripts.transfer``.
 
 One-time tooling: deleted with the rest of ``minds-admin cutover`` in phase 6
 of blueprint/slice-fleet-cutover.
 """
 
 import base64
+import binascii
+import io
 import json
 import posixpath
+import re
 import shlex
+import tarfile
 import tomllib
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 from typing import Final
+from typing import assert_never
+
+from pydantic import SecretStr
 
 from imbue.imbue_common.pure import pure
 from imbue.minds_admin.primitives import SLICE_PROVIDER_INSTANCE_NAME
 from imbue.minds_admin.slices.cutover_types import CutoverError
+from imbue.minds_admin.slices.cutover_types import HarvestedFile
 from imbue.minds_admin.slices.cutover_types import HarvestedKeys
+from imbue.minds_admin.slices.cutover_types import HarvestedLatchkeyState
+from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.cutover_types import ReplayedContainerFile
 from imbue.minds_admin.slices.cutover_types import TemplateReplayInputs
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_DIR
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_SUPERVISOR_CONF_DIR
+from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_TMPFS_DIR
+from imbue.minds_admin.slices.cutover_types import VM_ROOT_HOME
+from imbue.minds_admin.slices.cutover_types import classify_harvested_latchkey_files
 from imbue.mngr.providers.ssh_host_setup import SSHD_PROVISIONED_MARKER_PATH
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN2_CONTAINER_RUNTIME
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN2_CONTAINER_TMPFS_START_ARGS
@@ -46,6 +63,15 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import is_same_ssh_public
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import ssh_ca_trust_files
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DATADISK_OBJECT
 from imbue.mngr_imbue_cloud.slices.ssh_box_image_cache import SLICE_LOOPBACK_SSH_OPTS
+from imbue.mngr_latchkey.remote.provisioning import GATEWAY_PROGRAM_NAME
+from imbue.mngr_latchkey.remote.provisioning import GATEWAY_RUN_SCRIPT_FILENAME
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_DISK_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_SUPERVISOR_CONF_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_TMPFS_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import OUTER_PORT
+from imbue.mngr_latchkey.remote.provisioning import REMOTE_EXTENSIONS_DIR_NAME
+from imbue.mngr_latchkey.remote.provisioning import TUNNEL_CONF_FILENAME
+from imbue.mngr_latchkey.remote.provisioning import TUNNEL_PROGRAM_NAME
 from imbue.mngr_vps.container_setup import CONTAINER_ENTRYPOINT_CMD
 
 # Object layout under the tier bucket's key prefix: one rollback-copy dir per
@@ -59,6 +85,28 @@ IMAGES_KEY_SEGMENT: Final[str] = "images"
 # disk's byte size), and the marker the key harvest prints before each file.
 TRANSPLANT_DONE_MARKER: Final[str] = "MNGR_CUTOVER_TRANSPLANT_DONE"
 HARVEST_FILE_MARKER: Final[str] = "MNGR_CUTOVER_FILE"
+# The latchkey harvest's markers: one per file (path and octal mode, the base64
+# content on the next line) and one line saying the VM has a latchkey directory
+# at all (so an absent directory is told apart from an empty harvest).
+LATCHKEY_HARVEST_FILE_MARKER: Final[str] = "MNGR_CUTOVER_LATCHKEY_FILE"
+LATCHKEY_DIR_PRESENT_MARKER: Final[str] = "MNGR_CUTOVER_LATCHKEY_DIR_PRESENT"
+
+# The octal mode ``stat -c %a`` reports, printed without leading zeros (one to
+# three digits, four with a special bit); the parser zero-pads it to four.
+_OCTAL_MODE_RE: Final[re.Pattern[str]] = re.compile(r"^[0-7]{1,4}$")
+# Where the replay lands each group's tar on the target VM before extracting it
+# over ``/``: the disk files' beside their destination on the boot disk, the
+# tmpfs secrets' inside the RAM-backed directory they are extracted into (so the
+# machine's key never touches the disk, not even in transit).
+LATCHKEY_DISK_REPLAY_TAR_PATH: Final[str] = f"{VM_ROOT_HOME}/.mngr-cutover-latchkey.tar"
+LATCHKEY_TMPFS_REPLAY_TAR_PATH: Final[str] = f"{VM_LATCHKEY_TMPFS_DIR}/.mngr-cutover-latchkey.tar"
+# The directories the disk tar carries as members, so a fresh VM gets them 0700
+# (the supervisord drop-in dir already exists once supervisor is installed and
+# must keep its own mode, so it is deliberately not a member).
+_LATCHKEY_TAR_DIRS: Final[tuple[str, ...]] = (VM_LATCHKEY_DIR, f"{VM_LATCHKEY_DIR}/{REMOTE_EXTENSIONS_DIR_NAME}")
+_LATCHKEY_TAR_DIR_MODE: Final[int] = 0o700
+# The ``-p <port>`` of the tunnel program's ssh command line.
+_TUNNEL_CONF_PORT_RE: Final[re.Pattern[str]] = re.compile(r" -p (\d+) ")
 
 # Where the disk transplant works on the box: on the storage partition (the
 # gen-2 root partition is 20 GiB and holds the OS alone), one dir per instance.
@@ -70,6 +118,7 @@ CUTOVER_TRANSPLANT_ROOT: Final[str] = f"{GEN2_STORAGE_ROOT}/cutover"
 SSHD_HOST_KEY_PATH: Final[str] = "/etc/ssh/ssh_host_ed25519_key"
 ROOT_AUTHORIZED_KEYS_PATH: Final[str] = "/root/.ssh/authorized_keys"
 # The workspace checkout inside the container, where the version tag is read.
+WORKSPACE_HOME_PATH: Final[str] = "/home/user"
 WORKSPACE_CHECKOUT_PATH: Final[str] = "/home/user/workspace"
 # The system_interface the health probe curls inside the container.
 SYSTEM_INTERFACE_URL: Final[str] = "http://127.0.0.1:8000/"
@@ -364,13 +413,73 @@ def build_container_id_command(host_id: str) -> str:
 
 
 @pure
+def build_workspace_version_probe_script(checkout_path: str) -> str:
+    """A shell script printing the workspace checkout's release version: its nearest ``minds-v*`` tag, else the vendored pin.
+
+    A workspace created from a branch rather than a release tag holds no tags at
+    all (the desktop's single-branch clone fetches heads only), so ``git describe``
+    finds nothing. Its vendored mngr still names the release it was cut from in
+    ``FALLBACK_BRANCH``, which is the release image whose system layers match it,
+    so that pin is the fallback. Prints nothing (and exits 0) when neither source
+    names a version, so the caller reports the version, not a shell error.
+    """
+    describe = (
+        f"git -c safe.directory={checkout_path} -C {checkout_path} describe --tags --match 'minds-v*' --abbrev=0"
+    )
+    vendored_build_info = f"{checkout_path}/system/vendor/mngr/apps/minds/imbue/minds/build_info.py"
+    read_pin = (
+        f"sed -n 's/^FALLBACK_BRANCH: Final\\[str\\] = \"\\(minds-v[0-9][0-9.]*\\)\"$/\\1/p' {vendored_build_info}"
+    )
+    return f"{describe} 2>/dev/null || {read_pin} 2>/dev/null || true"
+
+
+@pure
 def build_git_describe_command(container_id: str) -> str:
-    """The version probe: the nearest ``minds-v*`` tag of the workspace checkout, read inside the container."""
+    """The version probe (``build_workspace_version_probe_script``), run inside the workspace container."""
+    inner = build_workspace_version_probe_script(WORKSPACE_CHECKOUT_PATH)
+    return f"docker exec --workdir / {shlex.quote(container_id)} sh -c {shlex.quote(inner)}"
+
+
+# The home-layout verdicts the probe prints; the same classification as the
+# ``repair-home-layout`` operator command's in-VM script.
+HOME_LAYOUT_HOME: Final[str] = "home"
+HOME_LAYOUT_LEGACY: Final[str] = "legacy"
+HOME_LAYOUT_UNKNOWN: Final[str] = "unknown"
+
+
+@pure
+def build_home_layout_probe_command(container_id: str) -> str:
+    """Print ``home`` / ``legacy`` / ``unknown`` for the workspace container's home layout.
+
+    ``home``: ``/home/user`` is a symlink onto the volume's ``home/`` (the bake
+    layout, where the data disk carries the whole home tree). ``legacy``: a real
+    ``/home/user`` in the container's writable layer with only ``.mngr`` on the
+    volume -- the slow-path rebuild layout ``repair-home-layout`` exists for.
+    """
     inner = (
-        f"git -c safe.directory={WORKSPACE_CHECKOUT_PATH} -C {WORKSPACE_CHECKOUT_PATH} "
-        "describe --tags --match 'minds-v*' --abbrev=0"
+        f"if [ -L {WORKSPACE_HOME_PATH} ]; then echo {HOME_LAYOUT_HOME}; "
+        f"elif [ -d {WORKSPACE_HOME_PATH} ] && [ -L {WORKSPACE_HOME_PATH}/.mngr ]; then echo {HOME_LAYOUT_LEGACY}; "
+        f"else echo {HOME_LAYOUT_UNKNOWN}; fi"
     )
     return f"docker exec --workdir / {shlex.quote(container_id)} sh -c {shlex.quote(inner)}"
+
+
+@pure
+def home_layout_error_or_none(probe_output: str, host_id: str) -> str | None:
+    """Why the container's home layout blocks a migration, or None when the data disk carries the home tree.
+
+    The migrate transplants the data disk only, so a workspace whose home lives
+    in the container's writable layer would come back empty.
+    """
+    layout = probe_output.strip()
+    if layout == HOME_LAYOUT_HOME:
+        return None
+    remedy = f"run `minds-admin repair-home-layout --host-id {host_id} --migrate` on its gen-1 box first"
+    if layout == HOME_LAYOUT_LEGACY:
+        return (
+            f"legacy home layout: /home/user lives in the container's writable layer, not on the data disk; {remedy}"
+        )
+    return f"unrecognized home layout {layout!r}: /home/user is neither a symlink onto the volume nor a legacy tree; {remedy}"
 
 
 @pure
@@ -439,6 +548,268 @@ def parse_marked_files(output: str) -> dict[str, str]:
 
 
 @pure
+def _guarded_base64_file_block(path_word: str) -> str:
+    """One ``if [ -f ... ]`` block printing the marker line (path, mode) and the file's base64 on one line.
+
+    ``path_word`` is a shell word: a quoted literal path, or the loop variable
+    of the extensions listing. An absent file emits nothing at all (unlike the
+    key harvest, where a missing file must fail the chain), and the content is
+    base64 so it round-trips byte for byte (a bare ``cat`` cannot tell a file
+    ending in a newline from one that does not). The reads are separate
+    commands rather than an ``&&`` chain so the script's ``set -e`` ends the
+    harvest on a file it cannot read, with the error on stderr.
+    """
+    return (
+        f"if [ -f {path_word} ]; then "
+        f"_mode=$(stat -c %a {path_word}); "
+        f"printf '%s %s %s\\n' {LATCHKEY_HARVEST_FILE_MARKER} {path_word} \"$_mode\"; "
+        f"base64 -w0 {path_word}; echo; fi"
+    )
+
+
+@pure
+def build_vm_latchkey_harvest_command() -> str:
+    """Print the VM's machine-owned latchkey state: every disk file, supervisord drop-in and tmpfs secret that exists.
+
+    Refuses when the VM root's ``$HOME`` is not ``/root`` (the replay writes the
+    harvested paths verbatim on the target, whose root home is ``/root``).
+    """
+    disk_paths = [f"{VM_LATCHKEY_DIR}/{filename}" for filename in MACHINE_LATCHKEY_DISK_FILENAMES]
+    conf_paths = [
+        f"{VM_LATCHKEY_SUPERVISOR_CONF_DIR}/{filename}" for filename in MACHINE_LATCHKEY_SUPERVISOR_CONF_FILENAMES
+    ]
+    tmpfs_paths = [f"{VM_LATCHKEY_TMPFS_DIR}/{filename}" for filename in MACHINE_LATCHKEY_TMPFS_FILENAMES]
+    extensions_glob = f"{VM_LATCHKEY_DIR}/{REMOTE_EXTENSIONS_DIR_NAME}/*"
+    extension_block = _guarded_base64_file_block('"$f"')
+    lines = [
+        "set -e",
+        f'[ "$HOME" = {shlex.quote(VM_ROOT_HOME)} ] || {{ echo "VM root home is $HOME, not {VM_ROOT_HOME}" >&2; exit 1; }}',
+        f"if [ -d {shlex.quote(VM_LATCHKEY_DIR)} ]; then echo {LATCHKEY_DIR_PRESENT_MARKER}; fi",
+        *(_guarded_base64_file_block(shlex.quote(path)) for path in disk_paths),
+        f"for f in {extensions_glob}; do {extension_block}; done",
+        *(_guarded_base64_file_block(shlex.quote(path)) for path in [*conf_paths, *tmpfs_paths]),
+    ]
+    return "\n".join(lines)
+
+
+@pure
+def _normalized_octal_mode(mode: str, path: str) -> str:
+    if not _OCTAL_MODE_RE.match(mode):
+        raise CutoverError(f"latchkey harvest printed a malformed mode {mode!r} for {path}")
+    return mode.zfill(4)
+
+
+@pure
+def parse_latchkey_harvest_output(output: str) -> HarvestedLatchkeyState:
+    """Read the latchkey harvest's markers back into the harvested state (validating each file's base64)."""
+    is_present = False
+    files: list[HarvestedFile] = []
+    lines = output.splitlines()
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if line.strip() == LATCHKEY_DIR_PRESENT_MARKER:
+            is_present = True
+            idx += 1
+        elif line.startswith(f"{LATCHKEY_HARVEST_FILE_MARKER} "):
+            parts = line.split(" ")
+            if len(parts) != 3:
+                raise CutoverError(f"latchkey harvest printed a malformed marker line: {line!r}")
+            path, mode = parts[1], parts[2]
+            if idx + 1 >= len(lines):
+                raise CutoverError(f"latchkey harvest output ends after the marker for {path}")
+            encoded = lines[idx + 1].strip()
+            try:
+                base64.b64decode(encoded, validate=True)
+            except binascii.Error as exc:
+                raise CutoverError(f"latchkey harvest printed non-base64 content for {path}") from exc
+            files.append(
+                HarvestedFile(path=path, mode=_normalized_octal_mode(mode, path), content_base64=SecretStr(encoded))
+            )
+            idx += 2
+        else:
+            # Anything else is shell noise; nothing to keep.
+            idx += 1
+    return classify_harvested_latchkey_files(is_present, files)
+
+
+@pure
+def _tar_member(name: str, *, mode: int, size: int, type_flag: bytes) -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name=name)
+    member.mode = mode
+    member.size = size
+    member.type = type_flag
+    member.uid = 0
+    member.gid = 0
+    member.uname = "root"
+    member.gname = "root"
+    member.mtime = 0
+    return member
+
+
+@pure
+def build_latchkey_replay_tar(files: Sequence[HarvestedFile], *, is_including_latchkey_dirs: bool) -> bytes:
+    """One tar, rooted at ``/``, carrying the harvested files with their modes (and, for the disk group, the 0700 dirs).
+
+    Extracted on the target with ``tar -xp -C /`` as root, which recreates
+    each file byte for byte at its VM path with the origin's mode -- one
+    upload and one command per group instead of a round trip per file, and
+    the content never rides a command line.
+    """
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        if is_including_latchkey_dirs:
+            for directory in _LATCHKEY_TAR_DIRS:
+                archive.addfile(
+                    _tar_member(directory.lstrip("/"), mode=_LATCHKEY_TAR_DIR_MODE, size=0, type_flag=tarfile.DIRTYPE)
+                )
+        for harvested in files:
+            content = harvested.content
+            archive.addfile(
+                _tar_member(
+                    harvested.path.lstrip("/"),
+                    mode=int(harvested.mode, 8),
+                    size=len(content),
+                    type_flag=tarfile.REGTYPE,
+                ),
+                io.BytesIO(content),
+            )
+    return buffer.getvalue()
+
+
+@pure
+def build_latchkey_tar_extract_command(tar_path: str) -> str:
+    """Extract a replay tar over ``/`` keeping its modes and owners, then drop the tar.
+
+    The tar carries secrets, so it is removed whether or not the extract
+    succeeded; the extract's own exit status is what the command reports.
+    """
+    quoted = shlex.quote(tar_path)
+    return f"tar -xpf {quoted} -C /; _status=$?; rm -f {quoted}; exit $_status"
+
+
+@pure
+def tunnel_conf_container_ssh_port(conf_text: str) -> int | None:
+    """The container sshd port the harvested tunnel drop-in dials on the VM loopback; None when it has none."""
+    for line in conf_text.splitlines():
+        if line.startswith("command="):
+            match = _TUNNEL_CONF_PORT_RE.search(line)
+            return int(match.group(1)) if match is not None else None
+    return None
+
+
+@pure
+def container_ssh_host_port_from_inspect(inspect_entry: Mapping[str, Any]) -> int | None:
+    """The VM-side port the container's sshd (``22/tcp``) is published on, per the harvested inspect."""
+    bindings = ((inspect_entry.get("HostConfig") or {}).get("PortBindings") or {}).get("22/tcp") or []
+    for binding in bindings:
+        host_port = binding.get("HostPort")
+        if host_port:
+            return int(host_port)
+    return None
+
+
+@pure
+def latchkey_tunnel_port_error_or_none(
+    latchkey_state: HarvestedLatchkeyState, inspect_entry: Mapping[str, Any]
+) -> str | None:
+    """Why the harvested tunnel drop-in would dial the wrong port on the target, or None when it matches the container.
+
+    The drop-in embeds the container's published sshd port; the container is
+    recreated from the same inspect, so the two agree unless the origin's
+    tunnel was configured against a port the container no longer publishes. A
+    drop-in with no port to read, or an inspect with no published sshd, is
+    refused too: the replayed tunnel could never connect, and the harvest is
+    where that shows while the origin still runs.
+    """
+    tunnel_conf = next(
+        (
+            harvested
+            for harvested in latchkey_state.supervisor_confs
+            if posixpath.basename(harvested.path) == TUNNEL_CONF_FILENAME
+        ),
+        None,
+    )
+    if tunnel_conf is None:
+        return None
+    conf_port = tunnel_conf_container_ssh_port(tunnel_conf.content.decode("utf-8", "replace"))
+    if conf_port is None:
+        return (
+            f"the latchkey tunnel drop-in {tunnel_conf.path} names no container sshd port (no '-p <port>' on its "
+            "command line); the replayed tunnel would have nothing to dial"
+        )
+    inspect_port = container_ssh_host_port_from_inspect(inspect_entry)
+    if inspect_port is None:
+        return (
+            "the container's inspect publishes no 22/tcp port on the VM, so the latchkey tunnel drop-in "
+            f"(dialing port {conf_port}) would never connect"
+        )
+    if conf_port == inspect_port:
+        return None
+    return (
+        f"the latchkey tunnel drop-in dials the container sshd on port {conf_port} but the container "
+        f"publishes it on {inspect_port}; the replayed tunnel would never connect"
+    )
+
+
+@pure
+def latchkey_gateway_files_error_or_none(latchkey_state: HarvestedLatchkeyState) -> str | None:
+    """Why a FULL replay could not start the gateway and tunnel on the target, or None when every file it needs was harvested.
+
+    A FULL replay restarts both supervisord programs, which needs the two
+    drop-ins and the gateway's wrapper; the machine's tmpfs pair alone (what
+    decides FULL) does not guarantee them, since provisioning writes the
+    secrets before the wrapper and the drop-in. Checked at the harvest so an
+    origin caught mid-provisioning is refused while it still runs, rather than
+    failing at the restart with the row parked.
+    """
+    if latchkey_state.replay_plan is not LatchkeyReplayPlan.FULL:
+        return None
+    disk_names = {posixpath.basename(harvested.path) for harvested in latchkey_state.disk_files}
+    conf_names = {posixpath.basename(harvested.path) for harvested in latchkey_state.supervisor_confs}
+    missing = [
+        *(name for name in (GATEWAY_RUN_SCRIPT_FILENAME,) if name not in disk_names),
+        *(name for name in MACHINE_LATCHKEY_SUPERVISOR_CONF_FILENAMES if name not in conf_names),
+    ]
+    if not missing:
+        return None
+    return (
+        "the origin holds the gateway's tmpfs pair but not "
+        + ", ".join(missing)
+        + "; the replayed gateway and tunnel could not be started"
+    )
+
+
+@pure
+def build_vm_latchkey_supervisor_status_command() -> str:
+    return f"supervisorctl status {GATEWAY_PROGRAM_NAME} {TUNNEL_PROGRAM_NAME}"
+
+
+@pure
+def build_vm_gateway_port_probe_command() -> str:
+    """A TCP connect to the gateway's loopback port on the VM (its HTTP routes all need the listen password)."""
+    return f"timeout 3 bash -c {shlex.quote(f'exec 3<>/dev/tcp/127.0.0.1/{OUTER_PORT}')}"
+
+
+@pure
+def latchkey_replay_detail(plan: LatchkeyReplayPlan | None) -> str:
+    """The outcome note saying how much latchkey state the migration carried."""
+    match plan:
+        case None:
+            return "latchkey state not harvested (record predates the latchkey leg)"
+        case LatchkeyReplayPlan.ABSENT:
+            return "no latchkey state on the origin"
+        case LatchkeyReplayPlan.DISK_ONLY:
+            return (
+                "latchkey files replayed; the gateway starts at the desktop's next provisioning pass (no tmpfs pair)"
+            )
+        case LatchkeyReplayPlan.FULL:
+            return "latchkey state replayed and the gateway restarted"
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
 def build_docker_inspect_command(container_id: str) -> str:
     return f"docker inspect {shlex.quote(container_id)}"
 
@@ -495,19 +866,30 @@ _SUPERVISOR_HEALTHY_STATES: Final[frozenset[str]] = frozenset(("RUNNING", "EXITE
 
 
 @pure
-def parse_supervisorctl_unhealthy(output: str) -> list[str]:
-    """The supervisord programs whose state is neither RUNNING nor EXITED, plus any non-program line (supervisord unreachable)."""
+def _parse_supervisorctl_outside_states(output: str, healthy_states: frozenset[str]) -> list[str]:
     unhealthy: list[str] = []
     for line in output.splitlines():
         parts = line.split()
         if not parts:
             continue
         if len(parts) >= 2 and parts[1] in _SUPERVISOR_STATES:
-            if parts[1] not in _SUPERVISOR_HEALTHY_STATES:
+            if parts[1] not in healthy_states:
                 unhealthy.append(f"{parts[0]} {parts[1]}")
         else:
             unhealthy.append(line.strip())
     return unhealthy
+
+
+@pure
+def parse_supervisorctl_unhealthy(output: str) -> list[str]:
+    """The supervisord programs whose state is neither RUNNING nor EXITED, plus any non-program line (supervisord unreachable)."""
+    return _parse_supervisorctl_outside_states(output, _SUPERVISOR_HEALTHY_STATES)
+
+
+@pure
+def parse_supervisorctl_not_running(output: str) -> list[str]:
+    """The programs not RUNNING (the gateway and tunnel are long-running: EXITED is a failure for them), plus any non-program line."""
+    return _parse_supervisorctl_outside_states(output, frozenset(("RUNNING",)))
 
 
 @pure

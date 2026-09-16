@@ -4,12 +4,12 @@
 Usage, from the repo root:
 
     uv run python libs/mngr_mapreduce/scripts/render_pipeline_svg.py \\
-        imbue.mngr_witness.pipeline:WITNESS_PIPELINE specs/behaviors-mapreduce/pipeline.svg
+        <module>:<PIPELINE_ATTRIBUTE> <output>.svg
 
 PIPELINE_REF is a dotted ``module:attribute`` reference to a ``Pipeline``
-instance, so any pipeline built on the model can be drawn. A drift test next
-to each committed diagram fails when the picture no longer matches its model,
-and running this script is how the two are brought back in sync.
+instance, so any pipeline built on the model can be drawn. The rendering is a
+pure function of the model, so re-running it is how a checked-in diagram is
+brought back into agreement with the pipeline it was drawn from.
 """
 
 import pkgutil

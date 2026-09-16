@@ -18,6 +18,7 @@ from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstra
 from imbue.modal_app_kit.testing import shipped_module_files
 from imbue.modal_app_kit.testing import transitive_shipped_imports
 from imbue.modal_app_kit.testing import uses_dunder_name_logger
+from imbue.modal_app_kit.testing import web_functions_missing_region_pin
 from imbue.remote_service_connector.deploy_constants import THIRD_PARTY_IMPORT_ROOTS
 
 _PACKAGE_DIR = Path(__file__).parent
@@ -181,3 +182,8 @@ def test_entrypoint_logger_is_named_under_imbue() -> None:
 def test_every_modal_function_bootstraps_logging_first() -> None:
     """The JSON root handler exists only once ``configure_logging()`` runs; a function that skips it drops its INFO lines."""
     assert modal_functions_missing_logging_bootstrap(_PACKAGE_DIR / "app.py") == []
+
+
+def test_every_web_function_pins_its_region() -> None:
+    """A web function scheduled outside the US makes every user request pay the distance (see WEB_FUNCTION_REGION)."""
+    assert web_functions_missing_region_pin(_PACKAGE_DIR / "app.py") == []

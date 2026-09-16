@@ -113,7 +113,7 @@ describe("renderAssistantMessageChildren API errors", () => {
     const classes = collectClasses(children);
     expect(classes).toContain("message-api-error");
     expect(classes).toContain("message-api-error-note");
-    expect(allText(children)).toContain("isn't Minds' fault");
+    expect(allText(children)).toContain("isn't Mind's fault");
     expect(allText(children)).toContain("overloaded");
   });
 
@@ -584,7 +584,7 @@ describe("expanded tool row payload states", () => {
   });
 
   it("renders the full fetched input and output once loaded", () => {
-    mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
+    mockDetailState.mockImplementation((_chatId: string, eventId: string) =>
       eventId === "a-pc-1"
         ? {
             state: "loaded",

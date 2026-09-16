@@ -10,12 +10,12 @@ import pytest
 from click.testing import CliRunner
 from pydantic import BaseModel
 
+from imbue.imbue_common.primitives import PositiveInt
 from imbue.minds_evals.check_run import check_job_directory
 from imbue.minds_evals.check_run import write_run_check_reports
+from imbue.minds_evals.ci_matrix import config_slug
 from imbue.minds_evals.ci_report import DETAIL_BUDGET
 from imbue.minds_evals.ci_report import GREEN_ICON_EMOJI
-from imbue.minds_evals.ci_report import LIVE_SUMMARY_STEM
-from imbue.minds_evals.ci_report import ORACLE_SUMMARY_STEM
 from imbue.minds_evals.ci_report import SLACK_USERNAME
 from imbue.minds_evals.ci_report import SUMMARY_ARTIFACT_PREFIX
 from imbue.minds_evals.ci_report import SlackMessage
@@ -44,6 +44,12 @@ from imbue.minds_evals.testing import write_trial_dir
 
 RUN_URL: Final[str] = "https://github.com/imbue-ai/mngr-internal/actions/runs/42"
 EVAL_CONFIG: Final[str] = "apps/minds_evals/configs/eval-config-small.json"
+# The one word every job, artifact and summary name spells that config as, derived the way the
+# decided matrix derives it so the composed summary paths are the ones a real run writes.
+CONFIG_SLUG: Final[str] = config_slug(EVAL_CONFIG)
+# A second suite's eval config, for the runs that evaluate more than one.
+SECOND_EVAL_CONFIG: Final[str] = "apps/minds_evals/configs/eval-config-time-to-mock.json"
+SECOND_CONFIG_SLUG: Final[str] = config_slug(SECOND_EVAL_CONFIG)
 # A SHA whose first twelve characters are recognisable in the rendered pair label.
 FROZEN_SHA: Final[str] = "abcdef123456" + "0" * 28
 PAIR_LABEL: Final[str] = "[_mngr_ `main` (`abcdef123456`) | _dwt_ `main` (`abcdef123456`)]"
@@ -69,6 +75,9 @@ WRONG_MODEL_HARNESS_CONFIG: Final[Mapping[str, Any]] = {
 # captured, or the catalog id has no known reported name. The driver writes null there, which is
 # silence rather than evidence of a wrong model, so the trial still passes.
 UNCONFIRMED_HARNESS_CONFIG: Final[Mapping[str, Any]] = {"lane": "anthropic", "model": "haiku", "effort": "medium"}
+# The same silence, on a lane that can never be anything else: mngr's codex transcript emitter names
+# no model on a step, so every trial of a codex arm records null however well its switch went.
+CODEX_HARNESS_CONFIG: Final[Mapping[str, Any]] = {"lane": "openai", "model": "gpt-5.6-sol", "effort": "low"}
 
 
 def make_pair(pair_name: str, decision: PairDecision) -> DecidedPair:
@@ -76,7 +85,8 @@ def make_pair(pair_name: str, decision: PairDecision) -> DecidedPair:
     return DecidedPair(pair=pair_name, mngr_ref="main", mngr_sha=sha, dwt_ref="main", dwt_sha=sha, decision=decision)
 
 
-def make_cell(pair_name: str, harness_config: str, decision: CellDecision) -> MatrixCell:
+def make_cell(pair_name: str, harness_config: str, decision: CellDecision, config: str = EVAL_CONFIG) -> MatrixCell:
+    """One cell of the decided matrix: a pair, one suite's eval config, and one harness config."""
     return MatrixCell(
         pair=pair_name,
         harness_config=harness_config,
@@ -84,17 +94,24 @@ def make_cell(pair_name: str, harness_config: str, decision: CellDecision) -> Ma
         mngr_sha=FROZEN_SHA,
         dwt_ref="main",
         dwt_sha=FROZEN_SHA,
-        config=EVAL_CONFIG,
+        config=config,
+        config_slug=config_slug(config),
+        attempts=PositiveInt(1),
         lane_key_env="ANTHROPIC_API_KEY",
         harbor_args="[]",
-        cache_key="minds-evals-green-{}-{}".format(pair_name, harness_config),
+        cache_key="minds-evals-green-{}-{}-{}".format(pair_name, config_slug(config), harness_config),
         decision=decision,
     )
 
 
 def write_matrix(matrix_path: Path, pairs: Sequence[DecidedPair], cells: Sequence[MatrixCell]) -> None:
-    """The decided matrix exactly as `ci-matrix` writes it, computed fields and all."""
-    matrix = CiMatrix(config=EVAL_CONFIG, pairs=tuple(pairs), cells=tuple(cells))
+    """The decided matrix exactly as `ci-matrix` writes it, computed fields and all.
+
+    Its configs are the ones its cells name, in cell order, which is what a run's suite list leaves
+    behind. A matrix with no cell at all still names the suite the run was asked to evaluate.
+    """
+    configs = tuple(dict.fromkeys(cell.config for cell in cells)) or (EVAL_CONFIG,)
+    matrix = CiMatrix(configs=configs, pairs=tuple(pairs), cells=tuple(cells))
     matrix_path.parent.mkdir(parents=True, exist_ok=True)
     matrix_path.write_text(matrix.model_dump_json())
 
@@ -117,15 +134,17 @@ def write_two_case_summary(summary_path: Path, job_dir: Path, **trial_arguments:
     return run_check
 
 
-def write_passing_oracle(summaries_dir: Path, job_root: Path, pair_name: str = "main") -> RunCheck:
-    """The pair's oracle pass, graded green, where the report looks for it.
+def write_passing_oracle(
+    summaries_dir: Path, job_root: Path, pair_name: str = "main", slug: str = CONFIG_SLUG
+) -> RunCheck:
+    """The oracle pass of one pair and eval config, graded green, where the report looks for it.
 
     An oracle trial replays a canned transcript and boots no workspace, so it records no Modal
     environment -- which is what `is_environment_recorded=False` says here.
     """
     return write_summary(
-        oracle_summary_path(summaries_dir, pair_name),
-        job_root / "{}-oracle".format(pair_name),
+        oracle_summary_path(summaries_dir, pair_name, slug),
+        job_root / "{}-{}-oracle".format(pair_name, slug),
         harness_config=DEFAULT_HARNESS_CONFIG,
         is_environment_recorded=False,
     )
@@ -310,8 +329,9 @@ def assert_within_slack_limits(message: SlackMessage) -> None:
 
 
 def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tmp_path: Path) -> None:
-    """The whole shape of a good night: the pair in the header, the commits it froze to under it,
-    and a grid whose rows are the cases and whose columns are the harness configs."""
+    """The whole shape of a good night: the pair and the eval config in the header, the commits the
+    pair froze to under it, and a grid whose rows are the config's cases and whose columns are the
+    harness configs it ran them on."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(
@@ -321,12 +341,12 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_two_case_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
     write_two_case_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=HAIKU_HARNESS_CONFIG,
     )
@@ -334,7 +354,7 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
     assert_within_slack_limits(message)
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_sections(message)[0] == (
         ":white_check_mark: {} -- oracle passed\npassed in 41m20s, _trigger=_ `schedule`".format(PAIR_LABEL)
     )
@@ -359,7 +379,7 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
     )
 
 
-def test_render_slack_report_posts_one_message_per_pair(tmp_path: Path) -> None:
+def test_render_slack_report_posts_a_message_for_each_pair_of_a_one_suite_run(tmp_path: Path) -> None:
     """The two pairs answer different questions -- what we are about to ship, and what users are
     running -- and a reader acts on one at a time, so neither is a paragraph of the other's."""
     matrix_path = tmp_path / "matrix.json"
@@ -372,12 +392,12 @@ def test_render_slack_report_posts_one_message_per_pair(tmp_path: Path) -> None:
     for pair_name in ("main", "released"):
         write_passing_oracle(summaries_dir, tmp_path, pair_name)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
     write_summary(
-        live_summary_path(summaries_dir, "released", "haiku"),
+        live_summary_path(summaries_dir, "released", CONFIG_SLUG, "haiku"),
         tmp_path / "released-haiku-live",
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
@@ -385,11 +405,219 @@ def test_render_slack_report_posts_one_message_per_pair(tmp_path: Path) -> None:
     messages = render_slack_report(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
-        "minds-evals: main -- passed",
-        "minds-evals: released -- failed",
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: released x eval-config-small -- failed",
     ]
     assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
     assert read_grid(messages[1]) == (("case", "haiku"), ("todo-app", "large_green_square 0.75\u00a0\u2717"))
+
+
+def test_render_slack_report_posts_a_message_for_each_eval_config_a_pair_ran(tmp_path: Path) -> None:
+    """A suite's cases, arms and oracle pass are its own, so a pair that ran two of them gets two
+    messages. One message over both would grade the pair on an oracle verdict that belongs to
+    neither suite, and its grid would report every column as not evaluated for the other suite's
+    cases."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [
+            make_cell("main", "default", CellDecision.RUN),
+            make_cell("main", "opus-standard", CellDecision.RUN, SECOND_EVAL_CONFIG),
+        ],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_passing_oracle(summaries_dir, tmp_path, "main", SECOND_CONFIG_SLUG)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+    write_two_case_summary(
+        live_summary_path(summaries_dir, "main", SECOND_CONFIG_SLUG, "opus-standard"),
+        tmp_path / "main-opus-standard-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert [read_header(message) for message in messages] == [
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: main x eval-config-time-to-mock -- passed",
+    ]
+    # Each grid holds its own suite's arm and its own suite's cases, read out of that suite's own
+    # summary files.
+    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
+    assert read_grid(messages[1]) == (
+        ("case", "opus-standard"),
+        ("greeting", "large_green_square 0.75"),
+        ("todo-app", "large_green_square 0.75"),
+    )
+    assert [row[0] for row in read_judge_table(messages[1])[1:]] == ["opus-standard", "opus-standard"]
+
+
+def test_render_slack_report_gates_a_cell_on_the_oracle_pass_of_its_own_eval_config(tmp_path: Path) -> None:
+    """The oracle builds the box image, generates the task and grades the result, all of which are
+    the eval config's own, so a pair has one oracle pass per suite. A cell reads the one its own
+    suite ran: gating it on another suite's would either start a cell whose gate never passed or
+    report an arm as broken that was never allowed to begin."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [
+            make_cell("main", "default", CellDecision.RUN),
+            make_cell("main", "opus-standard", CellDecision.RUN, SECOND_EVAL_CONFIG),
+        ],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        oracle_summary_path(summaries_dir, "main", SECOND_CONFIG_SLUG),
+        tmp_path / "main-time-to-mock-oracle",
+        is_environment_recorded=False,
+        failed_gate_names=("all_turns_completed",),
+    )
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert [read_header(message) for message in messages] == [
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: main x eval-config-time-to-mock -- failed",
+    ]
+    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
+    assert read_sections(messages[1])[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
+    assert read_details(messages[1]).splitlines() == [
+        "*opus-standard* -- not evaluated (the oracle pass did not pass)",
+        "*oracle* `todo-app`: gates failed",
+    ]
+
+
+def test_render_slack_report_reports_a_suite_whose_every_cell_is_already_green_as_skipped(tmp_path: Path) -> None:
+    """A pair runs the moment one of its arms moves, and the suites none of whose arms moved run no
+    oracle pass -- the run pays for one exactly where a cell gates on it. Such a suite has to read as
+    verified-but-not-tonight rather than as a pass whose summary went missing."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [
+            make_cell("main", "default", CellDecision.RUN),
+            make_cell("main", "opus-standard", CellDecision.SKIP, SECOND_EVAL_CONFIG),
+        ],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert [read_header(message) for message in messages] == [
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: main x eval-config-time-to-mock -- skipped (already green)",
+    ]
+    # The skipped cell keeps its column, so the reader sees an arm that was not measured tonight,
+    # and nothing claims a missing oracle summary.
+    assert read_grid(messages[1]) == ()
+    assert read_details(messages[1]) == "*opus-standard* -- skipped (already green)"
+    assert "oracle" not in messages[1].text
+
+
+def test_render_slack_report_gives_a_skipped_pair_one_message_however_many_suites_it_has_cells_of(
+    tmp_path: Path,
+) -> None:
+    """A pair whose every cell is already green was decided as a whole, not suite by suite: it ran no
+    oracle pass and no cell of any suite, so one message per suite would report decisions the run
+    never made."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN), make_pair("released", PairDecision.SKIP)],
+        [
+            make_cell("main", "default", CellDecision.RUN),
+            make_cell("released", "default", CellDecision.SKIP),
+            make_cell("released", "opus-standard", CellDecision.SKIP, SECOND_EVAL_CONFIG),
+        ],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    messages = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="skipped"))
+
+    assert [read_header(message) for message in messages] == [
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: released -- skipped (already green)",
+    ]
+    assert read_grid(messages[1]) == ()
+
+
+def test_render_slack_report_gives_an_unresolved_pair_one_message_however_many_suites_the_run_ran(
+    tmp_path: Path,
+) -> None:
+    """A pair whose refs did not resolve has no cells of any suite, so there is no suite to attribute
+    its message to -- and multiplying it by the suites the other pair ran would report a missing
+    release tag once per eval config."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN), make_pair("released", PairDecision.UNRESOLVED)],
+        [
+            make_cell("main", "default", CellDecision.RUN),
+            make_cell("main", "opus-standard", CellDecision.RUN, SECOND_EVAL_CONFIG),
+        ],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_passing_oracle(summaries_dir, tmp_path, "main", SECOND_CONFIG_SLUG)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+    write_summary(
+        live_summary_path(summaries_dir, "main", SECOND_CONFIG_SLUG, "opus-standard"),
+        tmp_path / "main-opus-standard-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert [read_header(message) for message in messages] == [
+        "minds-evals: main x eval-config-small -- passed",
+        "minds-evals: main x eval-config-time-to-mock -- passed",
+        "minds-evals: released -- not evaluated",
+    ]
+    assert read_sections(messages[2])[0].startswith(
+        ":x: [_mngr_ `main` (`unresolved`) | _dwt_ `main` (`unresolved`)] -- a ref did not resolve"
+    )
+
+
+def test_render_slack_report_still_reports_a_running_pair_whose_matrix_names_no_cell(tmp_path: Path) -> None:
+    """A running pair always has a cell, so such a matrix contradicts itself. The report is the whole
+    notification of a run, so the pair gets its one message and reads as broken rather than being
+    left out of the report altogether."""
+    matrix_path = tmp_path / "matrix.json"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [])
+
+    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
+
+    assert read_header(message) == "minds-evals: main -- broken"
+    assert "-- broken (no oracle summary; the job failed before grading)" in read_sections(message)[0]
 
 
 def test_render_slack_report_names_a_failing_cells_reason_in_the_failures_table(tmp_path: Path) -> None:
@@ -404,12 +632,12 @@ def test_render_slack_report_names_a_failing_cells_reason_in_the_failures_table(
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         test_state="crashed",
     )
     write_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=HAIKU_HARNESS_CONFIG,
         errored_entry_ids=("todo-app__first_message",),
@@ -417,7 +645,7 @@ def test_render_slack_report_names_a_failing_cells_reason_in_the_failures_table(
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_header(message) == "minds-evals: main -- failed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_grid(message) == (
         ("case", "default", "haiku"),
         ("todo-app", "large_green_square 0.75\u00a0\u2717", "large_green_square 0.75\u00a0\u2717"),
@@ -438,7 +666,7 @@ def test_render_slack_report_fails_a_cell_whose_trial_answered_on_another_model(
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
@@ -463,19 +691,42 @@ def test_render_slack_report_names_a_passing_arm_whose_model_nothing_confirmed(t
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=UNCONFIRMED_HARNESS_CONFIG,
     )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_grid(message) == (("case", "haiku"), ("todo-app", "large_green_square 0.75"))
     # Nothing failed, so the failures table is not drawn and the note has nowhere else to go: the
     # details block is what carries it, naming the arm it belongs to.
     assert read_failed_trials(message) == ()
     assert read_details(message) == "*haiku* `todo-app`: model haiku unconfirmed"
+
+
+def test_render_slack_report_says_nothing_about_a_lane_that_can_never_confirm_a_model(tmp_path: Path) -> None:
+    """A codex arm records null every trial of every night, so the note above would never clear
+    there. A permanent line is one a reader learns to skim, which costs the arms that raise it for a
+    reason, so the lane's known shape is left to the docs and the trial's own arm block."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "codex-sol-low", CellDecision.RUN)]
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "codex-sol-low"),
+        tmp_path / "main-codex-live",
+        harness_config=CODEX_HARNESS_CONFIG,
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_grid(message) == (("case", "codex-sol-low"), ("todo-app", "large_green_square 0.75"))
+    assert "unconfirmed" not in message.text
 
 
 def test_render_slack_report_marks_a_green_cell_of_a_running_pair_as_not_attempted(tmp_path: Path) -> None:
@@ -491,14 +742,14 @@ def test_render_slack_report_marks_a_green_cell_of_a_running_pair_as_not_attempt
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=HAIKU_HARNESS_CONFIG,
     )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_grid(message) == (
         ("case", "default", "haiku"),
         ("todo-app", "heavy_minus_sign", "large_green_square 0.75"),
@@ -521,14 +772,14 @@ def test_render_slack_report_marks_a_cell_whose_summary_never_arrived_as_unknown
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
-    assert read_header(message) == "minds-evals: main -- broken"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- broken"
     assert read_grid(message) == (
         ("case", "default", "haiku"),
         ("todo-app", "large_green_square 0.75", "grey_question"),
@@ -548,12 +799,12 @@ def test_render_slack_report_marks_a_case_a_cell_never_ran_as_unknown(tmp_path: 
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_two_case_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
     write_summary(
-        live_summary_path(summaries_dir, "main", "haiku"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
         tmp_path / "main-haiku-live",
         harness_config=HAIKU_HARNESS_CONFIG,
     )
@@ -588,7 +839,7 @@ def test_render_slack_report_marks_the_cells_of_a_pair_whose_oracle_failed_as_no
         [make_cell("main", "default", CellDecision.RUN), make_cell("main", "haiku", CellDecision.RUN)],
     )
     write_summary(
-        oracle_summary_path(summaries_dir, "main"),
+        oracle_summary_path(summaries_dir, "main", CONFIG_SLUG),
         tmp_path / "main-oracle",
         is_environment_recorded=False,
         failed_gate_names=("all_turns_completed",),
@@ -596,7 +847,7 @@ def test_render_slack_report_marks_the_cells_of_a_pair_whose_oracle_failed_as_no
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_header(message) == "minds-evals: main -- failed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_sections(message)[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
     # No cell graded anything, so there is no grid to draw; the oracle's own trial is the story.
     assert read_grid(message) == ()
@@ -658,7 +909,7 @@ def test_render_slack_report_gives_an_oracle_only_run_a_single_oracle_column(tmp
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_sections(message)[0].endswith("passed in 41m20s, _trigger=_ `schedule` _(oracle only)_")
     assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75"))
     assert read_judge_table(message) == (
@@ -676,7 +927,7 @@ def test_render_slack_report_gives_a_failed_oracle_only_run_its_reason_in_the_fa
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_summary(
-        oracle_summary_path(summaries_dir, "main"),
+        oracle_summary_path(summaries_dir, "main", CONFIG_SLUG),
         tmp_path / "main-oracle",
         is_environment_recorded=False,
         failed_gate_names=("all_turns_completed",),
@@ -686,7 +937,7 @@ def test_render_slack_report_gives_a_failed_oracle_only_run_its_reason_in_the_fa
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
-    assert read_header(message) == "minds-evals: main -- failed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_sections(message)[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
     assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75\u00a0\u2717"))
     assert read_failed_trials(message) == (
@@ -703,7 +954,7 @@ def test_render_slack_report_tells_an_unreadable_summary_from_a_missing_one(tmp_
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
-    truncated_path = live_summary_path(summaries_dir, "main", "default")
+    truncated_path = live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default")
     truncated_path.parent.mkdir(parents=True, exist_ok=True)
     truncated_path.write_text('{"job_name": "main-default-live", "trials": [{"trial_name"')
 
@@ -722,12 +973,12 @@ def test_render_slack_report_reports_an_unreadable_cell_summary_even_when_the_or
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_summary(
-        oracle_summary_path(summaries_dir, "main"),
+        oracle_summary_path(summaries_dir, "main", CONFIG_SLUG),
         tmp_path / "main-oracle",
         is_environment_recorded=False,
         failed_gate_names=("all_turns_completed",),
     )
-    truncated_path = live_summary_path(summaries_dir, "main", "default")
+    truncated_path = live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default")
     truncated_path.parent.mkdir(parents=True, exist_ok=True)
     truncated_path.write_text("{not json at all")
 
@@ -745,7 +996,7 @@ def test_render_slack_report_says_a_pair_that_wrote_no_oracle_summary_is_broken(
 
     (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
 
-    assert read_header(message) == "minds-evals: main -- broken"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- broken"
     assert "-- broken (no oracle summary; the job failed before grading)" in read_sections(message)[0]
     assert read_details(message) == "*default* -- not evaluated (the oracle pass did not pass)"
 
@@ -755,8 +1006,8 @@ def test_render_slack_report_tells_an_unreadable_oracle_summary_from_a_missing_o
     behind, which sends the reader somewhere else entirely."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
-    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [])
-    summary_path = oracle_summary_path(summaries_dir, "main")
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    summary_path = oracle_summary_path(summaries_dir, "main", CONFIG_SLUG)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("{not json at all")
 
@@ -796,7 +1047,7 @@ def test_render_slack_report_reports_a_matrix_that_decided_no_pairs_as_broken(tm
 
 def test_render_slack_report_reports_a_matrix_file_it_cannot_read_the_same_way(tmp_path: Path) -> None:
     matrix_path = tmp_path / "matrix.json"
-    matrix_path.write_text('{"config": "x", "pairs": [')
+    matrix_path.write_text('{"configs": ["x"], "pairs": [')
 
     (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context(resolve_result="cancelled"))
 
@@ -810,11 +1061,11 @@ def test_render_slack_report_warns_when_every_arm_passed_but_a_job_did_not(tmp_p
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
-    write_summary(live_summary_path(summaries_dir, "main", "default"), tmp_path / "main-default-live")
+    write_summary(live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"), tmp_path / "main-default-live")
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_sections(message)[0] == (
         ":warning: {} -- oracle passed\npassed in 41m20s, _trigger=_ `schedule`"
         " _every arm passed, but the job did not (evaluate=failure; check cleanup and uploads)_".format(PAIR_LABEL)
@@ -835,9 +1086,9 @@ def test_render_slack_report_does_not_blame_the_job_when_an_arm_already_explains
     )
     for pair_name in ("main", "released"):
         write_passing_oracle(summaries_dir, tmp_path, pair_name)
-    write_summary(live_summary_path(summaries_dir, "main", "default"), tmp_path / "main-default-live")
+    write_summary(live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"), tmp_path / "main-default-live")
     write_summary(
-        live_summary_path(summaries_dir, "released", "default"),
+        live_summary_path(summaries_dir, "released", CONFIG_SLUG, "default"),
         tmp_path / "released-default-live",
         test_state="crashed",
     )
@@ -858,7 +1109,7 @@ def test_render_slack_report_names_every_job_of_a_red_run_that_nothing_else_expl
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
-    write_summary(live_summary_path(summaries_dir, "main", "default"), tmp_path / "main-default-live")
+    write_summary(live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"), tmp_path / "main-default-live")
 
     (message,) = render_slack_report(
         matrix_path, summaries_dir, make_context(oracle_result="cancelled", evaluate_result="failure")
@@ -878,7 +1129,7 @@ def test_render_slack_report_marks_a_trial_that_was_never_graded_without_a_rewar
     write_run_check_reports(
         check_job_directory(tmp_path / "main-default-live"),
         None,
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
     )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
@@ -906,7 +1157,7 @@ def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_p
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
@@ -950,7 +1201,7 @@ def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_model_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         [
             make_graded_trial(
                 "greeting",
@@ -1002,7 +1253,7 @@ def test_render_slack_report_fills_a_judge_table_row_and_says_when_columns_did_n
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_model_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         [
             make_graded_trial(
                 "todo-app",
@@ -1032,7 +1283,7 @@ def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_model_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         [
             make_graded_trial(
                 "todo-app",
@@ -1096,7 +1347,7 @@ def test_render_slack_report_keeps_a_huge_judge_table_inside_slacks_character_bu
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_model_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         [
             make_graded_trial(
                 "case-{}-{}".format(index, "x" * 300),
@@ -1132,7 +1383,7 @@ def test_render_slack_report_says_so_when_no_judge_row_fits_at_all(tmp_path: Pat
     write_passing_oracle(summaries_dir, tmp_path)
     # Enough cases that the grid alone spends the message's whole table budget.
     write_model_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         [
             make_graded_trial(
                 "case-{}-{}".format(index, "x" * 300),
@@ -1167,7 +1418,9 @@ def test_render_slack_report_truncates_a_long_details_block(tmp_path: Path) -> N
             test_state="crashed",
             is_environment_recorded=False,
         )
-    write_run_check_reports(check_job_directory(oracle_job_dir), None, oracle_summary_path(summaries_dir, "main"))
+    write_run_check_reports(
+        check_job_directory(oracle_job_dir), None, oracle_summary_path(summaries_dir, "main", CONFIG_SLUG)
+    )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
@@ -1194,7 +1447,7 @@ def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_two_case_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
@@ -1217,7 +1470,7 @@ def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(
     ]
     # The grid keeps its words rather than its emoji here: Slack renders no emoji inside a fence.
     assert message.text.splitlines() == [
-        ":white_check_mark: *minds-evals: main -- passed*",
+        ":white_check_mark: *minds-evals: main x eval-config-small -- passed*",
         ":white_check_mark: {} -- oracle passed".format(PAIR_LABEL),
         "passed in 41m20s, _trigger=_ `schedule`",
         "```",
@@ -1249,7 +1502,7 @@ def test_as_slack_payload_posts_a_green_pair_under_the_green_icon(tmp_path: Path
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
@@ -1257,7 +1510,7 @@ def test_as_slack_payload_posts_a_green_pair_under_the_green_icon(tmp_path: Path
     messages = render_slack_report(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
-        "minds-evals: main -- passed",
+        "minds-evals: main x eval-config-small -- passed",
         "minds-evals: released -- skipped (already green)",
     ]
     assert [as_slack_payload(message)["icon_emoji"] for message in messages] == [
@@ -1280,7 +1533,7 @@ def test_as_slack_payload_posts_an_oracle_only_run_whose_oracle_passed_under_the
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
-    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert as_slack_payload(message)["icon_emoji"] == GREEN_ICON_EMOJI
 
 
@@ -1296,7 +1549,7 @@ def test_as_slack_payload_posts_anything_that_wants_reading_under_the_ungreen_ic
     )
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
@@ -1305,7 +1558,7 @@ def test_as_slack_payload_posts_anything_that_wants_reading_under_the_ungreen_ic
     (undecided,) = render_slack_report(None, summaries_dir, make_context(resolve_result="failure"))
 
     assert [read_header(message) for message in messages] == [
-        "minds-evals: main -- failed",
+        "minds-evals: main x eval-config-small -- failed",
         "minds-evals: released -- not evaluated",
     ]
     assert [as_slack_payload(message)["icon_emoji"] for message in (*messages, undecided)] == [
@@ -1325,7 +1578,7 @@ def test_as_slack_payload_posts_a_run_whose_arms_all_passed_but_whose_job_did_no
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(
-        live_summary_path(summaries_dir, "main", "default"),
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
         tmp_path / "main-default-live",
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
@@ -1432,12 +1685,16 @@ def test_format_ref_label_does_not_repeat_a_ref_that_is_already_the_sha() -> Non
 def test_the_summary_file_names_the_report_composes_are_the_ones_the_workflow_writes() -> None:
     """The report finds a pass's summary by composing its file name from the matrix, never by
     discovering what is on disk, so a rename on either side is silent: the report simply says every
-    pass is broken. The workflow cannot import these constants, so this reads the check-run output
-    paths and the download pattern back out of it."""
+    pass is broken. The workflow cannot import this module, so this composes each name out of the
+    shell variables the workflow's check steps hold those parts in, and reads the result back out of
+    the workflow -- which pins the order of a name's parts as well as its spelling.
+    """
     workflow_text = read_scheduled_workflow_text()
+    oracle_name = oracle_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG").name
+    live_name = live_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG", "$HARNESS_CONFIG").name
 
-    assert '--summary-json "$SUMMARY_DIR/{}-$PAIR.json"'.format(ORACLE_SUMMARY_STEM) in workflow_text
-    assert '--summary-json "$SUMMARY_DIR/{}-$PAIR-$HARNESS_CONFIG.json"'.format(LIVE_SUMMARY_STEM) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}"'.format(oracle_name) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}"'.format(live_name) in workflow_text
     assert "pattern: {}*\n".format(SUMMARY_ARTIFACT_PREFIX) in workflow_text
 
 
@@ -1460,8 +1717,9 @@ def test_the_notify_job_merges_the_summary_artifacts_into_one_directory() -> Non
 
 
 def test_the_notify_job_posts_every_payload_the_report_writes() -> None:
-    """`ci-report` writes an array of webhook payloads, one per pair, and each is a whole message:
-    posting only the first, or the array itself, would drop a pair's report on the floor."""
+    """`ci-report` writes an array of webhook payloads, one per pair and eval config, and each is a
+    whole message: posting only the first, or the array itself, would drop a suite's report on the
+    floor."""
     workflow_text = read_scheduled_workflow_text()
 
     assert "jq -c '.[]' /tmp/slack-payloads.json > /tmp/slack-payloads.jsonl" in workflow_text

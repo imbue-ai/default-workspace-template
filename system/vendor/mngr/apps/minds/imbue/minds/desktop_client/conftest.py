@@ -36,6 +36,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
+from imbue.minds.desktop_client.imbue_cloud_cli import MachineSizeCliInfo
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliRelayEndpoint
 from imbue.minds.desktop_client.latchkey.permission_overview import clear_service_sign_in_options_cache
@@ -122,6 +123,15 @@ class FakeImbueCloudCli(ImbueCloudCli):
     is_resend_suppressed: bool = Field(
         default=False, description="When True, auth_resend_verification reports the server cooldown (sent=False)"
     )
+    verified_emails: set[str] = Field(
+        default_factory=set, description="Accounts auth_is_email_verified reports as verified"
+    )
+    is_verified_checks: list[str] = Field(
+        default_factory=list, description="Every email auth_is_email_verified was called with, in order"
+    )
+    is_verified_error_to_raise: ImbueCloudCliError | None = Field(
+        default=None, description="When set, auth_is_email_verified raises it instead of answering"
+    )
     set_plan_calls: list[tuple[str, str]] = Field(
         default_factory=list, description="(account email, plan) for every set_account_plan call, in order"
     )
@@ -137,6 +147,12 @@ class FakeImbueCloudCli(ImbueCloudCli):
     def auth_resend_verification(self, account: str) -> bool:
         self.resent_verification_emails.append(account)
         return not self.is_resend_suppressed
+
+    def auth_is_email_verified(self, account: str) -> bool:
+        self.is_verified_checks.append(account)
+        if self.is_verified_error_to_raise is not None:
+            raise self.is_verified_error_to_raise
+        return account in self.verified_emails
 
     def set_account_plan(self, account: str, plan: str) -> dict[str, Any]:
         self.set_plan_calls.append((account, plan))
@@ -224,6 +240,27 @@ class FakeImbueCloudCli(ImbueCloudCli):
     def create_storage_cleanup_grant(self, account: str) -> dict[str, object]:
         self.cleanup_grant_call_count += 1
         return dict(self.cleanup_grant_result)
+
+    # -- In-memory machine listing (drives the stop-kind tracker) --
+
+    machines: list[MachineSizeCliInfo] = Field(
+        default_factory=list, description="The machines list_machines and show_machine answer from, every account"
+    )
+    is_machine_listing_failing: bool = Field(
+        default=False, description="When True, list_machines raises ImbueCloudCliError (connector unreachable)"
+    )
+    machine_list_call_count: int = Field(default=0, description="How many times list_machines was called")
+    machine_show_call_count: int = Field(default=0, description="How many times show_machine was called")
+
+    def list_machines(self, account: str) -> list[MachineSizeCliInfo]:
+        self.machine_list_call_count += 1
+        if self.is_machine_listing_failing:
+            raise ImbueCloudCliError("machines show: connector unreachable (fake)")
+        return list(self.machines)
+
+    def show_machine(self, account: str, machine_ref: str) -> MachineSizeCliInfo | None:
+        self.machine_show_call_count += 1
+        return next((machine for machine in self.machines if machine.host_id == machine_ref), None)
 
     # -- In-memory workspace-sync backend (mirrors the connector's semantics) --
 

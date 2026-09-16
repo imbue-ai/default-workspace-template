@@ -8,7 +8,7 @@ metadata:
 # Changing an existing app or service
 
 Both apps and background services run as a `[program:<name>]` under
-supervisord (see `system/supervisord.conf`). They differ only in whether
+supervisord (one program per file under `system/supervisord.conf.d/`). They differ only in whether
 there's a tab to refresh:
 
 - **App** -- the user opens it as a tab rendering at the service's own
@@ -124,9 +124,12 @@ Make the change interactive and keep the user's view in sync as you go.
 
 Edit the service's code under `system/apps/<package>/` (or wherever the program's
 command points). If the change renders HTML a person looks at, invoke the
-`frontend-design` skill before writing markup, and if it calls Claude,
+`frontend-design:frontend-design` skill before writing markup, and if it calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
-built.
+built. Anything the change creates for the app outside its own directory --
+a skill that drives it, a script, a doc -- is registered in the app's `app.toml`
+under `[[references]]` with a `note` naming the surface it uses, so it travels
+with the app through hardening, testing, and publishing.
 
 ### 2. Apply it so it actually takes effect
 
@@ -163,7 +166,8 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `system/supervisord.conf`, then
+  config, or adding/removing a program): edit the program's own
+  `system/supervisord.conf.d/<name>.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -203,7 +207,7 @@ the user's whole view instead:
 python3 system/scripts/refresh_workspace_view.py
 ```
 
-Nothing else does this for you. The Minds app only intervenes when a workspace
+Nothing else does this for you. The Mind app only intervenes when a workspace
 looks unreachable for a sustained stretch, and a services restart that comes
 back quickly never crosses that bar, so the user is left reading the page the
 previous build rendered. The helper is fire-and-forget and always exits 0; it

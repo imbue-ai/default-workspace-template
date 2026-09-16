@@ -52,6 +52,12 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
       };
     case "skill_expansion":
       return { kind: UserMessageKind.SkillExpansion, label: event.display_label ?? null, body: content };
+    case "status":
+      return {
+        kind: UserMessageKind.StatusMessage,
+        label: event.display_label ?? (event.display_body !== undefined ? content : null),
+        body: event.display_body ?? content,
+      };
     default:
       return { kind: UserMessageKind.UserPrompt, label: null, body: content };
   }
@@ -78,6 +84,11 @@ export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
 
+/** True when the message is a subtle inline status message. */
+export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
+  return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
+}
+
 /** True when the content is a skill expansion (its body is folded into the
  *  preceding Skill tool-call block; see buildToolResultsWithSkillExpansions). */
 export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boolean {
@@ -89,6 +100,16 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
  *  (skill expansion). The rendering/rows layers use this to skip emitting a row. */
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
+}
+
+/** The slash command the chat app sends a retiring agent for its handoff summary (the backend's
+ *  ``HANDOFF_SUMMARY_COMMAND``); the transcript walk opens the handoff node on it. */
+const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
+
+/** True for the chat app's own summary request: the user message that starts a handoff's summary turn. */
+export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean {
+  const content = event.content.trim();
+  return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
 // --- Permission REQUEST (a tool call) ---------------------------------------

@@ -33,6 +33,19 @@ running (leased) -> stopping -> stopped -> starting -> running
 - `crashed`: operator-abandoned (`minds-admin workspaces abandon`);
   the user recovers by restoring the workspace's backup.
 
+Beside the status, every stop stamps `stop_kind` with why it happened
+(`specs/workspace-stop-kinds.md`): `owner` (the user's own stop, from any
+device), `maintenance` (an operator hold -- the gen-2 migration; only an
+operator start, or `minds-admin workspaces set-stop-kind <id> idle` on a row
+the cutover has not parked, ends it; the owner's start answers 409
+`workspace_under_maintenance` and the
+desktop shows "Maintenance" with no Start control), `idle` (an operator stop
+to free capacity -- `server drain`; the user starts it) or `suspension` (the
+suspend fan-out; unsuspend rewrites it to `idle`). Every start clears it. The
+desktop's unattended recovery never starts a cloud machine whose connector
+status is `stopping`, `stopped` or `starting`: those states only come from a
+requested stop.
+
 ## Moving parts
 
 - **Connector** (`apps/remote_service_connector`): `GET /workspaces` (the
@@ -131,18 +144,27 @@ A tier's `deploy.toml` may also declare a git-owned retention window
 `WORKSPACE_STOP_RETENTION_SECONDS` over the Vault entry, so git wins over
 any stale Vault value. ci sets 60s and dev 300s so stop/start tests and
 dev iteration see the retention finalize (slot freed, restore path
-exercised) land in minutes; staging / production omit the block and keep
-the connector's default hour-long instant-restart window.
+exercised) land in minutes; staging / production set 600s (since
+2026-09-13; before that they kept the connector's default hour). The window
+is a latency optimization only -- the row reaches `stopped` only after the
+durable artifact is verified, and the finalize re-checks the manifest before
+deleting the parked VM -- so it is sized for the stop-then-restart and
+restart-for-resize flows, not for safety. Note that a `server drain` runs
+the ordinary stop, and `cutover repave` refuses a box while any `stopped`
+row still holds its box link, so the window is also the minimum wait between
+draining a box and repaving it; supervisors already sleeping when the value
+changes keep the window they started with.
 
 ## Operations
 
 - `minds-admin workspaces start <host-db-id>` starts a `stopped` row on its
   owner's behalf (no ownership or quota check) -- the gen-2 cutover's
-  pre-window step (see [gen2-cutover.md](./gen2-cutover.md)). While the
+  pre-window step (see [gen2-cutover.md](../gen2-cutover.md)). While the
   cutover holds a gen-1 row parked (placement and artifact manifest both
   cleared), both the owner's and the operator's start answer 409
-  `workspace_migrating`; the row comes back on its own when the cutover
-  restores it.
+  `workspace_under_maintenance` (the parked-row guard's answer, the same
+  detail the `maintenance` stop kind gives); the row comes back on its own
+  when the cutover restores it.
 - `minds-admin workspaces abandon <host-db-id> --reason ...`
   marks a row on a permanently dead box `crashed` (retries stop; the user
   restores from backup; artifacts are reclaimed at release). Releasing a

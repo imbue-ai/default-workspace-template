@@ -14,6 +14,11 @@ feed that serves nothing.
 
 ``manifest.py`` stays the single-channel primitive; this reads the file, checks
 each entry against reality, and calls it.
+
+The same file's ``[web_channels.<channel>]`` entries -- the template tag
+browser-created workspaces pin to -- publish beside the desktop manifests as
+``<channel>-web.json`` through ``web_channels.py``, under the same
+dry-run / no-op / undeclared-channel reporting.
 """
 
 import os
@@ -50,6 +55,10 @@ from scripts.release_channel.manifest import rewrite_manifest
 from scripts.release_channel.manifest import upload_manifest
 from scripts.release_channel.manifest import version_of
 from scripts.release_channel.manifest import with_rollout_percentage
+from scripts.release_channel.web_channels import WEB_CHANNELS_TABLE
+from scripts.release_channel.web_channels import apply_web_entry
+from scripts.release_channel.web_channels import parse_web_channels
+from scripts.release_channel.web_channels import undeclared_web_channel_reports
 
 # Strict because TOML admits a number, a bool or a list where a string is meant,
 # and `build_id` goes straight into a URL -- coerced, it 404s instead of refusing.
@@ -84,9 +93,12 @@ def parse_channels(text: str) -> tuple[ChannelEntry, ...]:
     # A misspelled table name is neither a parse error nor an unknown channel:
     # it declares nothing, so the entry it was meant to be is skipped while the
     # run publishes the rest and exits green.
-    stray = sorted(set(raw) - {"channels"})
+    stray = sorted(set(raw) - {"channels", WEB_CHANNELS_TABLE})
     if stray:
-        raise PromotionError(f"Unknown top-level key(s) {stray}. Every entry lives under `[channels.<name>]`.")
+        raise PromotionError(
+            f"Unknown top-level key(s) {stray}. Every entry lives under `[channels.<name>]` "
+            f"(desktop builds) or `[{WEB_CHANNELS_TABLE}.<name>]` (the web create pin)."
+        )
     declared = raw.get("channels", {})
     if not isinstance(declared, dict):
         raise PromotionError(f"`channels` must be a table of per-channel entries, not {declared!r}.")
@@ -148,6 +160,13 @@ def assert_fallback_branch_matches_build(entry: ChannelEntry, manifest_version: 
         )
 
 
+# CLEANUP: the web create pin (``[web_channels.*]``, published by
+# ``web_channels.py``) is applied by its own reader/uploader below rather than
+# as a platform of this entry, so that it neither shares a desktop entry's
+# version nor conflicts textually with the per-platform rewrite of this
+# function on mngr/linux-packaging (imbue-ai/mngr-internal#943). Fold it into
+# that machinery once both branches are on main -- owed by whichever merges
+# second.
 def apply_entry(
     entry: ChannelEntry,
     *,
@@ -270,7 +289,9 @@ def main(
     dry_run: bool,
 ) -> None:
     try:
-        entries = parse_channels(channels_file.read_text())
+        channels_text = channels_file.read_text()
+        entries = parse_channels(channels_text)
+        web_entries = parse_web_channels(channels_text)
         # Said out loud because the two sources can disagree: a credential-less
         # dry run reads the feed, and the publish that follows it reads the
         # bucket.
@@ -280,7 +301,7 @@ def main(
             if from_bucket
             else f"No R2 credentials: reading current channel state from {feed_base_url}, which the CDN may cache."
         )
-        if not entries:
+        if not entries and not web_entries:
             click.echo("No channels declared; nothing to publish.")
         if entries and not lima_image_base_url:
             # Said out loud because release-channels.toml promises a reviewer
@@ -304,6 +325,24 @@ def main(
             )
         for report in undeclared_channel_reports(
             entries, bucket=bucket, feed_base_url=feed_base_url, from_bucket=from_bucket
+        ):
+            click.echo(report)
+        # The web create pin, published beside the desktop manifests. Its one
+        # gate (the tag exists on the template remote) reads a public remote,
+        # so the credential-less validate job runs it too.
+        for web_entry in web_entries:
+            click.echo(
+                apply_web_entry(
+                    web_entry,
+                    bucket=bucket,
+                    feed_base_url=feed_base_url,
+                    cache_seconds=cache_seconds,
+                    dry_run=dry_run,
+                    from_bucket=from_bucket,
+                )
+            )
+        for report in undeclared_web_channel_reports(
+            web_entries, bucket=bucket, feed_base_url=feed_base_url, from_bucket=from_bucket
         ):
             click.echo(report)
     except (PromotionError, R2CredentialsError) as exc:

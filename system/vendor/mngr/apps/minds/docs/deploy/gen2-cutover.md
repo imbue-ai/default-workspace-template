@@ -23,11 +23,24 @@ minds-admin cutover repave    --yes-i-mean-<tier> --server-id ID [--server-id ID
 ```
 
 `<tier>` is `dev`, `staging` or `production`; the flag must name the activated
-env's tier. Every command writes `reports/<stage>-<timestamp>.{json,txt}` to
-the state dir and exits non-zero when anything failed. While a workspace is
-mid-migration its owner sees it *stopped* and `POST /workspaces/{id}/start`
-answers `409 workspace_migrating` ("this workspace is being migrated to new
-infrastructure and will come back on its own").
+env's tier (a `ci-*` env, such as the `ci-infra` scaffolding the standing CI
+boxes are operated from, is guarded by `--yes-i-mean-dev`). Every command
+writes `reports/<stage>-<timestamp>.{json,txt}` to
+the state dir and exits non-zero when anything failed. The migrate's stop is
+a `maintenance` hold (`specs/workspace-stop-kinds.md`): from the moment it is
+requested, and until the finish CAS re-leases the row, the owner's
+`POST /workspaces/{id}/start` answers `409 workspace_under_maintenance` ("This
+machine is undergoing maintenance and will be back shortly."), a 0.6.1+ desktop
+shows the machine as "Maintenance" with no Start control, and no desktop's
+unattended recovery starts it (an older desktop that tries gets the same
+refusal, one failure card, and no start). A migration abandoned after the
+stop but before the park is handed back to its owner with
+`minds-admin workspaces set-stop-kind <id> idle`; once the row is parked
+(placement and artifact manifest cleared), the connector's parked-row guard
+refuses the owner's start whatever the kind and there is no artifact for the
+product's restore, so only `cutover rollback` (or a re-run of the migrate)
+brings it back. The migrate refuses to run against a connector that predates
+stop kinds (migration 042).
 
 ## How each cohort moves
 
@@ -45,9 +58,9 @@ infrastructure and will come back on its own").
 ## Prerequisites (per tier)
 
 - The release carrying this tooling is deployed to the tier (connector with
-  the `workspace_migrating` guard, the `max_box_generation` lease filter, and
-  the admin start/stop endpoints; migration 039 has stamped every gen-1 row's
-  `disk_gb`).
+  the parked-row `workspace_under_maintenance` guard, the `max_box_generation`
+  lease filter, and the admin start/stop endpoints; migration 039 has stamped
+  every gen-1 row's `disk_gb`).
 - At least one ready gen-2 box in the workspace's region (the beachhead):
   order a fresh box for production; on dev/staging, repave a box that holds
   zero pool rows (destroy its `available` rows via `minds-admin pool destroy`
@@ -102,7 +115,20 @@ infrastructure and will come back on its own").
   then -- never mid-migration.
 - The workspace version floor is `minds-v0.3.10`: older workspaces are refused
   by the preflight. Ask their owners to run `update-self`, or accept losing
-  them.
+  them. A workspace created from a branch rather than a release tag holds no
+  tags; its version is then read from its vendored mngr's `FALLBACK_BRANCH`.
+- Every workspace must be on the `home/` volume layout: the migrate transplants
+  the data disk only, and a slow-path-rebuilt workspace on the legacy layout
+  keeps `/home/user` in the container's writable layer, so it would come back
+  empty. Run `minds-admin repair-home-layout --all-leased` (probe) on the tier
+  and `--host-id <id> --migrate` each `legacy_layout` workspace on its gen-1
+  box first; the preflight and the harvest refuse a legacy layout and name
+  this remedy. Staging had three such workspaces out of eight (2026-09-15).
+- Templates before `minds-v0.5.0` bake only through the migrate's image seed
+  (they name settings fields today's mngr renamed, and create a boot chat the
+  pool bake refuses); the seed tolerates both. A gen-1 row that was stopped on
+  no box when migration 039 ran carries `disk_gb = 44` (039's fallback); the
+  migrate restamps it from the measured disk at the harvest.
 - Migration announcement (per cohort, not per tier): the workspace stops,
   moves, and comes back at a new address on its own; expect minutes to tens of
   minutes of downtime depending on data size; afterwards the container runs
@@ -126,10 +152,18 @@ infrastructure and will come back on its own").
    - a soft capacity check on the target, so an obviously full box refuses
      before the workspace is touched (the reserve script on the target is
      the authoritative guard);
+   - the invocation probes the connector for stop kinds (refusing on a
+     connector without migration 042): up front against a running candidate
+     when there is one, and again right before each product stop;
    - admin-start it when stopped, then live-harvest its SSH keys, container
-     `docker inspect`, and `git describe` version;
-   - the product's own admin stop: the connector uploads and verifies the
-     normal three-object stop artifact;
+     `docker inspect`, `git describe` version, and machine-owned latchkey
+     state (the VM root's `~/.latchkey` files, the gateway and tunnel
+     supervisord drop-ins, and the tmpfs gateway secrets, kept 0600 in the
+     state dir until the workspace is re-leased);
+   - the product's own admin stop as a `maintenance` hold (an owner-stopped
+     row takes the hold without a new transition): the connector uploads and
+     verifies the normal three-object stop artifact, and refuses owner starts
+     from here on;
    - the artifact is copied server-side to
      `s3://<bucket>/<prefix>cutover/<host_id>/rollback/` (the product deletes
      the previous generation's objects on the workspace's next stop, so this
@@ -138,10 +172,14 @@ infrastructure and will come back on its own").
    - the row is parked (the 409 guard covers user starts);
    - the data disk is transplanted onto the target (fresh gen-2 btrfs disk,
      `send | receive` of the home subvolume, quota qgroup), the slice is
-     reserved at freshly picked free ports, booted, the version's image tar
-     is published lazily and loaded, the container is recreated from the
-     harvested inspect (runsc, tmpfs, memory limits applied), keys replayed,
-     the autostart installer run, and the health probe polled;
+     reserved at freshly picked free ports, booted, the latchkey software
+     installed and the harvested `~/.latchkey` files and drop-ins written,
+     the version's image tar published lazily and loaded, the container
+     recreated from the harvested inspect (runsc, tmpfs, memory limits
+     applied), keys replayed, the autostart installer run, the tmpfs
+     secrets written and `latchkey-gateway` / `latchkey-tunnel` started
+     (skipped when the origin's gateway was down: the desktop's next
+     provisioning pass supplies the pair), and the health probe polled;
    - the row is re-leased at the target's address and ports, and the origin
      VM is destroyed (skipped by `--keep-origin-vm`, an early-drill safety
      net: the kept VM still carries the migrated row's instance name, so the
@@ -154,8 +192,20 @@ infrastructure and will come back on its own").
    new address with no host-key prompt; `/home/user` intact; a package
    installed before the migration is present after env-converge;
    `supervisorctl status` all RUNNING/EXITED; stop/start from the UI works;
-   `machines resize` + restart works. For the first drills, also open one
-   from a deliberately held-back 0.5.x desktop client.
+   `machines resize` + restart works; latchkey: `supervisorctl status` on
+   the VM (not the container) shows `latchkey-gateway` and `latchkey-tunnel`
+   RUNNING, `/root/.latchkey/credentials.json.enc` is present, and an agent
+   can use a service granted before the migration without re-granting it and
+   without an app restart (the report's per-workspace detail says how much
+   latchkey state the migrate carried: "latchkey state replayed and the
+   gateway restarted", "latchkey files replayed; the gateway starts at the
+   desktop's next provisioning pass" when the origin's gateway was down, or
+   "no latchkey state on the origin"; a 0.6.1+ desktop follows the move
+   within one discovery cycle,
+   while a <= 0.6.0 desktop keeps wiring the old VM for its desktop-forwarded
+   routes -- permissions, the Minds API -- and needs an app restart, so
+   migrate 0.6.1+ cohorts first). For the first drills, also open one from a
+   deliberately held-back 0.5.x desktop client.
 
 ## When a migration stays FAILED
 
@@ -165,7 +215,11 @@ way out, which is what the state files and locks are for).
 
 Re-run the same `migrate` invocation: it resumes from the state file (a
 finished stop is not re-run; a transplanted disk is rescued from a half-built
-slice; the reserve reclaims its own leftover dir). If the health probe keeps
+slice; the reserve reclaims its own leftover dir). A `--source-server-id`
+sweep re-selects the rows an earlier run parked off that box onto the same
+target even though a parked row no longer sits on any box (its state record's
+origin ties it to the sweep); a row parked onto a *different* target is
+reported in the log and left for the invocation that owns it. If the health probe keeps
 failing, inspect the slice on the target box (VM SSH with your operator
 certificate -- `ssh -i ~/.mindsadmin/<tier>/ssh_id -p <reserved port> root@<box>`
 -- at the reserved port) -- the row stays parked (users see the 409) until the probe
@@ -210,8 +264,8 @@ refuses older tags on it).
 
 - Stragglers: an announced forced-migration sweep of the remaining gen-1
   workspaces (admin-started as needed), then the last gen-1 boxes repave.
-- Phase 6 (delete the `cutover` group, the connector's `workspace_migrating`
-  guard, and the gen-1 code paths) requires **zero `box_generation = 1` rows
+- Phase 6 (delete the `cutover` group, the connector's parked-row guard
+  (`_raise_if_workspace_is_migrating`), and the gen-1 code paths) requires **zero `box_generation = 1` rows
   in every tier's DB, in every status** -- a stopped gen-1 row's artifact is
   restorable only by gen-1 code -- and the rollback horizon closed. The
   `max_box_generation` lease field outlives phase 6 (it gates on client age).

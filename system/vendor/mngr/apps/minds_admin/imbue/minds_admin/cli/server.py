@@ -66,6 +66,7 @@ from imbue.minds_admin.bake.pool_bake import ephemeral_bake_namespace
 from imbue.minds_admin.bake.pool_bake import finalize_baked_pool_host
 from imbue.minds_admin.bake.pool_bake import sweep_stale_bake_namespaces
 from imbue.minds_admin.bake.pool_bake import sync_mngr_into_template
+from imbue.minds_admin.bake.pool_bake import tolerate_unknown_template_config
 from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
 from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
@@ -243,6 +244,7 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_vc
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import is_allowed_machine_units
 from imbue.mngr_imbue_cloud.slices.slice_client import build_slice_vm_client
 from imbue.mngr_imbue_cloud.slices.ssh_box_image_cache import SshBoxImageCache
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
 from imbue.mngr_lima.constants import DEFAULT_IMAGE_URL_X86_64
 from imbue.mngr_lima.errors import LimaCommandError
 from imbue.mngr_ovh.client import build_ovh_client
@@ -2263,6 +2265,10 @@ def _bake_one_slice(
     # so the inner ``mngr create`` never touches the operator's own mngr data root.
     extra_create_env: Mapping[str, str],
     row_ledger: BakeRowLedger,
+    # The cutover's image seed wants only the tar the create's cache path saves on
+    # the box: the slice is torn down as soon as the create returns, with none of
+    # the pool-row steps (finalize, converge wait, primary-agent check, row).
+    is_image_seed_bake: bool,
 ) -> SliceBakeOutcome:
     """Bake one slice (laptop-driven ``mngr create`` against the slice provider) + insert its pool row.
 
@@ -2347,6 +2353,31 @@ def _bake_one_slice(
             _delete_baking_row_and_forget(database_url, row_ledger, row_id, host_name)
             raise BareMetalProvisioningError(
                 f"slice {host_name} was carved as {baked.host_id}, not the requested {host_id_obj}"
+            )
+        if is_image_seed_bake:
+            # A template older than the pool bake's gates (a pre-0.5.0 boot chat
+            # fails the primary-agent check) still yields a perfectly good image,
+            # and the image is all the seed is for.
+            _rollback_slice_vm(
+                server=server,
+                ssh_user=ssh_user,
+                private_key_path=private_key_path,
+                host_id=baked.host_id,
+                env_name=env_name,
+            )
+            _delete_baking_row_and_forget(database_url, row_ledger, row_id, host_name)
+            logger.info(
+                "Image seed slice {} left its tar on {}; the slice is torn down", host_name, server.public_address
+            )
+            return SliceBakeOutcome(
+                host_name=host_name,
+                server_id=str(server.id),
+                status=SliceBakeOutcomeStatus.SUCCEEDED,
+                host_id=baked.host_id,
+                agent_id=baked.agent_id,
+                vm_ssh_port=baked.outer_ssh_port,
+                container_ssh_port=baked.ssh_port,
+                attributes=attributes,
             )
         # The VM now exists; any failure in the post-create steps or the row update must
         # tear it down so it does not leak its box slot + forwarded ports.
@@ -3551,8 +3582,13 @@ def allocate_slices(
             is_env_converge_wait_skipped=is_env_converge_wait_skipped,
             default_workspace_template_cache_tag=default_workspace_template_cache_tag,
             container_runtime=container_runtime,
-            extra_create_env=bake_namespace.to_subprocess_env(),
+            extra_create_env=(
+                tolerate_unknown_template_config(bake_namespace.to_subprocess_env())
+                if is_image_seed_bake
+                else bake_namespace.to_subprocess_env()
+            ),
             row_ledger=row_ledger,
+            is_image_seed_bake=is_image_seed_bake,
         )
         logger.info("Baking {} slice(s) on {} ({} at a time)", count, server.public_address, max_concurrency)
 
@@ -3973,7 +4009,11 @@ def drain_server(
         admin_key = resolve_admin_api_key(api_key)
         for leased_row_id in leased_row_ids:
             try:
-                stop_result_by_row_id[leased_row_id] = client.admin_stop_workspace(admin_key, leased_row_id)
+                # A drain frees capacity; the owner's next start restores the
+                # workspace onto a surviving box, so its stop stays theirs to end.
+                stop_result_by_row_id[leased_row_id] = client.admin_stop_workspace(
+                    admin_key, leased_row_id, WorkspaceStopKind.IDLE
+                )
             except ImbueCloudConnectorError as exc:
                 logger.warning("Force-stop of leased workspace {} failed: {}", leased_row_id, exc)
                 stop_result_by_row_id[leased_row_id] = {"error": str(exc)}

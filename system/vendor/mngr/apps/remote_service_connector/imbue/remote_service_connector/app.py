@@ -42,6 +42,7 @@ import imbue.remote_service_connector.r2.stores as r2_stores_module
 import imbue.remote_service_connector.ssh_certs as ssh_certs_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.sync as sync_module
+from imbue.modal_app_kit.deploy import WEB_FUNCTION_REGION
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
 from imbue.modal_app_kit.deploy import forwarded_env_secret
 from imbue.modal_app_kit.deploy import read_custom_domains
@@ -210,6 +211,9 @@ def _connector_secrets() -> list[modal.Secret]:
     name="api",
     secrets=_connector_secrets(),
     proxy=_MODAL_PROXY,
+    # US-only scheduling for the one function the desktop client waits on; the
+    # crons below stay unpinned (see WEB_FUNCTION_REGION).
+    region=WEB_FUNCTION_REGION,
     # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this
     # module: defaults to 1 for production / staging (avoid cold-boot
     # penalty on auth / lease / share hits from the desktop client) and

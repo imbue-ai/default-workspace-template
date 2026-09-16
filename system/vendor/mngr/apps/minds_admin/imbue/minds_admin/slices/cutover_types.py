@@ -6,7 +6,10 @@ stopped. The whole ``cutover`` command group is one-time tooling, deleted in
 phase 6 of blueprint/slice-fleet-cutover.
 """
 
+import base64
+import posixpath
 import re
+from collections.abc import Sequence
 from enum import auto
 from typing import Any
 from typing import Final
@@ -20,6 +23,10 @@ from imbue.imbue_common.pure import pure
 from imbue.minds.errors import MindError
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DATA_DISK_BASE_GIB
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import REMOTE_LATCHKEY_DIR_NAME
+from imbue.mngr_latchkey.remote.provisioning import SUPERVISOR_CONFD_DIR
+from imbue.mngr_latchkey.remote.provisioning import TMPFS_SECRETS_DIR
 
 # The oldest workspace version the cutover restores: older default-workspace-template
 # tags predate the shape the gen-2 restore replays (the env-converge record, the
@@ -35,6 +42,15 @@ _VERSION_TAG_RE: Final[re.Pattern[str]] = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d
 # client version onto its generation through the exact-tag lease match.
 FIRST_GEN2_RELEASE_TAG: Final[str] = "minds-v0.6.0"
 
+# Where the slice VM keeps the machine-owned latchkey state the migrate carries:
+# the VM root's ``$HOME/.latchkey`` (``$HOME`` is ``/root`` on both generations'
+# guests, which the harvest and the replay each check), the supervisord drop-ins,
+# and the RAM-backed secrets directory.
+VM_ROOT_HOME: Final[str] = "/root"
+VM_LATCHKEY_DIR: Final[str] = f"{VM_ROOT_HOME}/{REMOTE_LATCHKEY_DIR_NAME}"
+VM_LATCHKEY_SUPERVISOR_CONF_DIR: Final[str] = str(SUPERVISOR_CONFD_DIR)
+VM_LATCHKEY_TMPFS_DIR: Final[str] = str(TMPFS_SECRETS_DIR)
+
 
 class CutoverError(MindError):
     """Raised when a cutover stage cannot proceed for a workspace or a box."""
@@ -43,7 +59,7 @@ class CutoverError(MindError):
 class CutoverStage(UpperCaseStrEnum):
     """How far one workspace has progressed through its migration (its state file's ``stage``)."""
 
-    # Keys, inspect, and version read off the live workspace.
+    # Keys, inspect, version and latchkey state read off the live workspace.
     HARVESTED = auto()
     # The product's gen-1 stop finished (verified artifact uploaded) and the
     # artifact pointers are saved to the state file for rollback.
@@ -67,6 +83,19 @@ class CutoverBoxStage(UpperCaseStrEnum):
 
     REPAVED = auto()
     FINISHED = auto()
+
+
+class LatchkeyReplayPlan(UpperCaseStrEnum):
+    """How much of the origin's latchkey state the migrate replays on the gen-2 VM."""
+
+    # The origin had no ``~/.latchkey`` at all: no latchkey work.
+    ABSENT = auto()
+    # The disk files and supervisor confs were harvested but the gateway's own
+    # tmpfs pair was gone (its gateway was down): software installed and files
+    # replayed, no start; the desktop's next provisioning pass supplies the pair.
+    DISK_ONLY = auto()
+    # Everything harvested: the gateway and tunnel come back on their own.
+    FULL = auto()
 
 
 class RowVerdict(UpperCaseStrEnum):
@@ -110,6 +139,58 @@ class HarvestedKeys(FrozenModel):
     container_host_private_key: SecretStr = Field(description="The container's sshd host private key (PEM)")
     container_host_public_key: str = Field(description="The container's sshd host public key (OpenSSH line)")
     container_authorized_keys: str = Field(description="The container root's authorized_keys file")
+
+
+class HarvestedFile(FrozenModel):
+    """One latchkey file read off the origin VM, replayed byte for byte at the same path on the target.
+
+    The whole set is handled as secret: the encrypted credential store, the
+    tunnel key and the tmpfs secrets must never reach a log, and the only
+    content the operator side inspects is the tunnel drop-in's port (to check
+    it against the container's published sshd port before the stop).
+    """
+
+    path: str = Field(description="Absolute path on the VM")
+    mode: str = Field(description="Octal mode the origin reported (``0600`` style)")
+    content_base64: SecretStr = Field(description="The file's bytes, base64-encoded")
+
+    @property
+    def content(self) -> bytes:
+        return base64.b64decode(self.content_base64.get_secret_value())
+
+
+class HarvestedLatchkeyState(FrozenModel):
+    """The machine-owned latchkey state harvested off a live gen-1 workspace VM."""
+
+    is_present: bool = Field(description="Whether the origin VM had a latchkey directory at all")
+    disk_files: tuple[HarvestedFile, ...] = Field(description="Files under the VM root's ~/.latchkey (logs excepted)")
+    supervisor_confs: tuple[HarvestedFile, ...] = Field(description="The gateway and tunnel supervisord drop-ins")
+    tmpfs_files: tuple[HarvestedFile, ...] = Field(description="The RAM-backed gateway secrets")
+
+    @property
+    def replay_plan(self) -> LatchkeyReplayPlan:
+        if not self.is_present:
+            return LatchkeyReplayPlan.ABSENT
+        tmpfs_names = {posixpath.basename(harvested.path) for harvested in self.tmpfs_files}
+        if all(name in tmpfs_names for name in MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES):
+            return LatchkeyReplayPlan.FULL
+        return LatchkeyReplayPlan.DISK_ONLY
+
+    @property
+    def all_files(self) -> tuple[HarvestedFile, ...]:
+        return (*self.disk_files, *self.supervisor_confs, *self.tmpfs_files)
+
+    @property
+    def disk_replay_files(self) -> tuple[HarvestedFile, ...]:
+        """The files the disk replay tar carries onto the migrated VM: everything but the RAM-backed secrets."""
+        return (*self.disk_files, *self.supervisor_confs)
+
+
+class LatchkeyHarvestManifest(FrozenModel):
+    """The state dir's index of one workspace's harvested latchkey files (their content sits beside it, per path)."""
+
+    is_present: bool = Field(description="Whether the origin VM had a latchkey directory at all")
+    mode_by_path: dict[str, str] = Field(description="The harvested VM paths and the mode each is replayed with")
 
 
 class ReplayedContainerFile(FrozenModel):
@@ -186,6 +267,16 @@ class CutoverWorkspaceState(FrozenModel):
     is_origin_vm_kept: bool = Field(
         default=False,
         description="Whether --keep-origin-vm left the halted origin VM in place (finalize it by hand)",
+    )
+    # CLEANUP: make this required once no state dir holds a record written
+    # before the latchkey leg landed on 2026-09-13 (every earlier migration is
+    # RESTORED or ROLLED_BACK, so once those records are cleared it can go).
+    latchkey_replay_plan: LatchkeyReplayPlan | None = Field(
+        default=None,
+        description=(
+            "How much latchkey state the restore replays, decided at the harvest; None on a record "
+            "written before the migrate carried latchkey state (nothing was harvested, so nothing replays)"
+        ),
     )
     stage: CutoverStage = Field(description="How far the workspace has progressed")
     last_error: str | None = Field(default=None, description="The last failure, when the stage is FAILED")
@@ -402,6 +493,40 @@ def bake_tag_generation_error_or_none(box_generation: int, repo_branch_or_tag: s
 
 
 @pure
+def classify_harvested_latchkey_files(
+    is_latchkey_dir_present: bool, files: Sequence[HarvestedFile]
+) -> HarvestedLatchkeyState:
+    """Sort the harvested files by where they live on the VM; a file outside the three places is a harvest bug.
+
+    The paths come off the origin VM and are joined under the operator's state
+    dir verbatim, so each must be an absolute, normalized path (no ``..`` that
+    would escape the three places while still carrying their prefix).
+    """
+    disk_files: list[HarvestedFile] = []
+    supervisor_confs: list[HarvestedFile] = []
+    tmpfs_files: list[HarvestedFile] = []
+    for harvested in files:
+        if not harvested.path.startswith("/") or posixpath.normpath(harvested.path) != harvested.path:
+            raise CutoverError(f"harvested latchkey file {harvested.path!r} is not a normalized absolute path")
+        if harvested.path.startswith(f"{VM_LATCHKEY_DIR}/"):
+            disk_files.append(harvested)
+        elif harvested.path.startswith(f"{VM_LATCHKEY_SUPERVISOR_CONF_DIR}/"):
+            supervisor_confs.append(harvested)
+        elif harvested.path.startswith(f"{VM_LATCHKEY_TMPFS_DIR}/"):
+            tmpfs_files.append(harvested)
+        else:
+            raise CutoverError(f"harvested latchkey file {harvested.path!r} is outside every known location")
+    if not is_latchkey_dir_present and files:
+        raise CutoverError("the harvest reported no latchkey directory yet printed files")
+    return HarvestedLatchkeyState(
+        is_present=is_latchkey_dir_present,
+        disk_files=tuple(disk_files),
+        supervisor_confs=tuple(supervisor_confs),
+        tmpfs_files=tuple(tmpfs_files),
+    )
+
+
+@pure
 def gen1_data_disk_size_error_or_none(data_disk_virtual_gib: int, row_disk_gb: int) -> str | None:
     """Why a gen-1 data disk cannot be transplanted into the row's stamped gen-2 size, or None when it can.
 
@@ -412,3 +537,25 @@ def gen1_data_disk_size_error_or_none(data_disk_virtual_gib: int, row_disk_gb: i
     if data_disk_virtual_gib == row_disk_gb - DATA_DISK_BASE_GIB:
         return None
     return f"data disk virtual size {data_disk_virtual_gib} GiB != row disk_gb {row_disk_gb} - {DATA_DISK_BASE_GIB}"
+
+
+# The ``disk_gb`` migration 039 stamped on a gen-1 row it could not measure (a
+# workspace stopped on no box at the time): the default carve size, not the
+# row's own disk plus the base.
+UNMEASURED_GEN1_DISK_GB_STAMP: Final[int] = 44
+
+
+@pure
+def restamped_gen1_disk_gb_or_none(data_disk_virtual_gib: int, row_disk_gb: int) -> int | None:
+    """The ``disk_gb`` a gen-1 row should carry once its data disk is measured, or None when the stamp stands.
+
+    Only a row still on 039's unmeasured fallback is restamped, and only when
+    the measurement disagrees with it; any other mismatch stays a refusal
+    (``gen1_data_disk_size_error_or_none``), since a measured stamp that has
+    drifted is something to understand, not paper over.
+    """
+    if row_disk_gb != UNMEASURED_GEN1_DISK_GB_STAMP:
+        return None
+    if gen1_data_disk_size_error_or_none(data_disk_virtual_gib, row_disk_gb) is None:
+        return None
+    return data_disk_virtual_gib + DATA_DISK_BASE_GIB

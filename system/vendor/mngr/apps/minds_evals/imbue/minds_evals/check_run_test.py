@@ -213,19 +213,25 @@ def test_check_job_directory_names_an_errored_evidence_entry_that_carries_no_id(
 
 
 def _harness_config_state(
-    *, model: str, is_model_confirmed: bool | None, observed_models: tuple[str, ...] = ()
+    *,
+    model: str,
+    is_model_confirmed: bool | None,
+    observed_models: tuple[str, ...] = (),
+    lane: str = "anthropic",
+    harness: str = "claude",
+    welcome_model: str = "claude-opus-4-8",
 ) -> dict[str, Any]:
     """The harness-config block of the arm the driver records, as a trial that ran on the anthropic
-    lane leaves it."""
+    lane leaves it. Name a lane and its harness to describe a trial that ran on another."""
     return {
-        "lane": "anthropic",
-        "harness": "claude",
+        "lane": lane,
+        "harness": harness,
         "model": model,
         "effort": "medium" if model else "",
         "fast": False,
         "model_choice_switch": "applied" if model else "skipped",
         "observed_models": list(observed_models),
-        "welcome_model": "claude-opus-4-8",
+        "welcome_model": welcome_model,
         "is_model_confirmed": is_model_confirmed,
     }
 
@@ -315,6 +321,17 @@ def test_check_job_directory_charges_a_trial_only_for_a_model_it_observably_ran_
             _harness_config_state(model="haiku", is_model_confirmed=None),
             "anthropic haiku unconfirmed",
             id="one it could not",
+        ),
+        pytest.param(
+            _harness_config_state(
+                model="gpt-5.6-sol",
+                is_model_confirmed=None,
+                lane="openai",
+                harness="codex",
+                welcome_model="",
+            ),
+            "openai gpt-5.6-sol not observable",
+            id="one whose lane names no model to confirm",
         ),
         pytest.param(
             _harness_config_state(model="", is_model_confirmed=None),

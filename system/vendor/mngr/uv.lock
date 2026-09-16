@@ -23,6 +23,7 @@ members = [
     "imbue-minds-admin",
     "imbue-mngr",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     "imbue-mngr-aws",
     "imbue-mngr-azure",
     "imbue-mngr-behaviors",
@@ -57,6 +58,7 @@ members = [
     "imbue-mngr-vps",
     "imbue-mngr-vultr",
     "imbue-mngr-wait",
+    "imbue-mngr-witness",
     "imbue-observability",
     "minds",
     "modal-app-kit",
@@ -2429,6 +2431,7 @@ dev = [
     { name = "semver" },
     { name = "shellcheck-py" },
     { name = "tomlkit" },
+    { name = "types-psycopg2" },
 ]
 
 [package.metadata]
@@ -2456,6 +2459,7 @@ dev = [
     { name = "semver", specifier = ">=3.0" },
     { name = "shellcheck-py", specifier = ">=0.10.0" },
     { name = "tomlkit", specifier = ">=0.12.0" },
+    { name = "types-psycopg2", specifier = ">=2.9.21" },
 ]
 
 [[package]]
@@ -2624,6 +2628,17 @@ requires-dist = [
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
 source = { editable = "libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+
+[[package]]
+name = "imbue-mngr-autocompact"
+version = "0.1.0"
+source = { editable = "libs/mngr_autocompact" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -3024,10 +3039,14 @@ version = "0.1.0"
 source = { editable = "libs/mngr_mapreduce" }
 dependencies = [
     { name = "imbue-mngr" },
+    { name = "jinja2" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+requires-dist = [
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "jinja2", specifier = ">=3.1" },
+]
 
 [[package]]
 name = "imbue-mngr-modal"
@@ -3331,6 +3350,37 @@ dependencies = [
 requires-dist = [
     { name = "click-option-group", specifier = ">=0.5.6" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+]
+
+[[package]]
+name = "imbue-mngr-witness"
+version = "0.1.0"
+source = { editable = "libs/mngr_witness" }
+dependencies = [
+    { name = "click" },
+    { name = "concurrency-group" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "imbue-mngr-behaviors" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-mapreduce" },
+    { name = "jinja2" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click" },
+    { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "imbue-mngr-behaviors", editable = "libs/mngr_behaviors" },
+    { name = "imbue-mngr-claude", editable = "libs/mngr_claude" },
+    { name = "imbue-mngr-mapreduce", editable = "libs/mngr_mapreduce" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "loguru" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -6782,6 +6832,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/05/e4/4ab4df17433a3c576ee3f0c11b74038b5ac19b618cae4eda0a461510e8f6/types_paramiko-4.0.0.20260508.tar.gz", hash = "sha256:3a00f0847fc4097ec99cfa53dca566169a50baefc93e2cace624642edec32bc1", size = 29167, upload-time = "2026-05-08T04:51:11.562Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/7d/f3661f4b69ca8b104e871151b419ee8495945895a9a6bc8bbff40c142b25/types_paramiko-4.0.0.20260508-py3-none-any.whl", hash = "sha256:a4389857b497b8eef8159cbf21dbd76c471c8d388acb2bca376c5ff023daa306", size = 38784, upload-time = "2026-05-08T04:51:10.357Z" },
+]
+
+[[package]]
+name = "types-psycopg2"
+version = "2.9.21.20260712"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/f2/4326b61737922d4e5b2ce18f6e9f9034fda861414bff07fc473fdc879692/types_psycopg2-2.9.21.20260712.tar.gz", hash = "sha256:18157ddfe3f2d66db5c2908c2e27fe79a6867b11bdba515434b108ac2aa377d8", size = 27581, upload-time = "2026-07-12T05:13:30.106Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/c8/5a8e02cb0ff4e0cc2ed12a7bc30a7d6ad498d40d98c6f508774ad9cdac49/types_psycopg2-2.9.21.20260712-py3-none-any.whl", hash = "sha256:a78a615a5e828d99dc6fe46ddf16d0732ab7564de1065d1b3ad9dac3067b64cc", size = 24967, upload-time = "2026-07-12T05:13:29.188Z" },
 ]
 
 [[package]]

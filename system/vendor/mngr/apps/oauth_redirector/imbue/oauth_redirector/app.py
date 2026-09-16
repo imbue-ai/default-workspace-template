@@ -14,6 +14,7 @@ import modal
 from fastapi import FastAPI
 
 from imbue.modal_app_kit.deploy import DEPLOY_ENV_VAR
+from imbue.modal_app_kit.deploy import WEB_FUNCTION_REGION
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
@@ -75,6 +76,9 @@ app = modal.App(name=f"oauth-redirector-{_DEPLOY_ENV}", image=image)
     # per sign-in is essentially always cold -- measured 4-34s boots that
     # read as "Google is slow". A single tiny warm container is near-free.
     min_containers=1,
+    # US-only scheduling: the redirector sits on every Google sign-in's
+    # critical path (see WEB_FUNCTION_REGION).
+    region=WEB_FUNCTION_REGION,
 )
 @modal.concurrent(max_inputs=32)
 @modal.asgi_app()

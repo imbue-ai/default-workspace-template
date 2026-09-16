@@ -15,6 +15,7 @@ from imbue.minds_admin.bake.pool_bake import ephemeral_bake_namespace
 from imbue.minds_admin.bake.pool_bake import finalize_baked_pool_host
 from imbue.minds_admin.bake.pool_bake import parse_baked_host
 from imbue.minds_admin.bake.pool_bake import sweep_stale_bake_namespaces
+from imbue.minds_admin.bake.pool_bake import tolerate_unknown_template_config
 from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
 from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 
@@ -353,3 +354,12 @@ def test_sweep_stale_bake_namespaces_tolerates_a_missing_parent_dir() -> None:
     assert not bake_namespace_parent_dir().exists()
     sweep_stale_bake_namespaces()
     assert not bake_namespace_parent_dir().exists()
+
+
+def test_tolerate_unknown_template_config_adds_the_loader_switch_without_touching_the_namespace_vars() -> None:
+    with ephemeral_bake_namespace() as namespace:
+        env = tolerate_unknown_template_config(namespace.to_subprocess_env())
+    assert env["MNGR_ALLOW_UNKNOWN_CONFIG"] == "1"
+    assert env["MNGR_HOST_DIR"] == str(namespace.host_dir)
+    assert env["MNGR_PREFIX"] == EPHEMERAL_BAKE_MNGR_PREFIX
+    assert set(env) == {"MNGR_ALLOW_UNKNOWN_CONFIG", "MNGR_HOST_DIR", "MNGR_PREFIX"}

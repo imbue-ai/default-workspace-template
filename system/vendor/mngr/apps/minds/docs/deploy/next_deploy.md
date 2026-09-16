@@ -55,11 +55,14 @@ deploy was deliberately not done.
      `box_logs` stream) must show `management_login` events and no
      `MANAGEMENT_SSH_ANOMALY` signal with reason `static_key_login`.
   Gen-1 boxes are untouched (they keep the pool key until the cutover's
-  phase 6). The CI bake path signs its operator certificate with the run's
-  `minds_ci_env_gh` Vault token once the CI infra boxes are gen-2;
-  `test_deployments.py warm-pool-cache` runs without an activated env and
-  still needs the pool key, so it must gain an activated ci env (or a tier
-  hint) before the CI boxes are cut over.
+  phase 6). Done for the CI tier on 2026-09-13: both standing CI boxes were
+  repaved gen-2, and the warm-cache job and the teardown sweep run under the
+  `ci-infra` activation so the runner's `minds_ci_env_gh` token signs their
+  operator certificate (verified in the boxes' sshd logs). Staging: steps 1-3
+  done on 2026-09-13 (CA committed in `3e97dd1ea2`, AppRole minted, deploy
+  `20260913T160033Z` seeded the certificate Dict); step 5 waits on its first
+  gen-2 box. Production: steps 2, 3 and 5 remain (needs the `minds_production`
+  Vault role), plus its first gen-2 box.
 
 - [ ] **Slice-fleet gen-2 connector migrations 034-041** (branches
   `new-fleet-base` -> `new-fleet-runsc-prototype` -> `new-fleet-phase-2` ->
@@ -87,6 +90,17 @@ deploy was deliberately not done.
   the CI env). dev-josh-2 and the throwaway dev-gen2mig env (deployed
   from minds-v0.5.2, then redeployed from this branch) applied 034-041
   through `env deploy` in order.
+
+- [ ] **Connector migration 042 (`042_workspace_stop_kind.sql`)**: adds
+  `pool_hosts.stop_kind` (why a workspace was stopped, and so who may start
+  it again; `specs/workspace-stop-kinds.md`). Additive, no backfill (NULL
+  reads as an owner stop); the env deploy applies it in filename order.
+  `minds-admin cutover migrate` probes the connector for the stop-kind route
+  before every stop and aborts against a connector without it, so each tier's
+  connector must carry 042 before that tier's first migration. Done for
+  staging on 2026-09-14 (deploy `20260914T135700Z`; see
+  [history/minds-v0.6.0.md](./history/minds-v0.6.0.md)). Production gets it
+  with its first phase-5.5 connector deploy (034-042 in one go).
 
 - [x] **Artifact mirror serving** (imbue-ai/mngr-internal#856, #851). Done
   2026-09-09 for production: `minds-admin artifacts upload` (14 artifacts),
@@ -135,6 +149,28 @@ deploy was deliberately not done.
   `minds-v0.5.0`. Until this deploys, keep `available` rows at `minds-v0.4.3`
   -- `/hosts/claim` matches the tag exactly and has no rebuild fallback.
 
+  From `mngr/remote-workspace-fixes` on, the connector reads the web pin from
+  the release feed's `<channel>-web.json` (`[web_channels.*]` in
+  `apps/minds/release-channels.toml`, published by the channels workflow when
+  that branch merges) and uses `FALLBACK_BRANCH` only while the feed cannot be
+  read, so this coupling ends with that deploy. Before deploying: confirm
+  every `curl -s https://updates.imbueminds.com/<channel>-web.json` (stable,
+  beta, alpha) names a tag the production pool has `available` rows at -- the
+  deployed connector leases exactly what each channel's file says (the entries
+  land at `minds-v0.5.2`, matching desktop stable); repoint the web channels
+  there if one does not. After deploying: exercise a web create from the chrome on each
+  channel and check the connector log for `Could not read the web pin`
+  (a feed read problem) or `No web pin published` (a channel file missing).
+  Also check the three Modal web functions (`rsc-production` `api`,
+  `llm-production` `proxy`, `oauth-redirector-production` `redirect`) run in
+  a US region: `modal container list` (with `MODAL_PROFILE=minds-production
+  MODAL_ENVIRONMENT=main`) names the live containers, and `modal container
+  exec <id> -- sh -c 'echo $MODAL_REGION'` must print a `us-*` region (the
+  Modal CLI has no `app describe`). Then confirm a lease/stop cycle against a
+  gen-2 box still works through the proxy. Verified on staging on 2026-09-15
+  (`us-west-2` for both the connector and the proxy after deploy
+  `20260915T021647Z`).
+
 - [ ] **Promote 0.5.0 past alpha.** Beta and stable are still 0.4.2 (build
   `260825un55i8ix7`), so most users are two releases behind. The 0.5.0 build is
   `260902shwco3ynx`.
@@ -145,16 +181,37 @@ deploy was deliberately not done.
   leaving it *ahead* of stable is unrecoverable, since `allowDowngrade` is false.
 
 - [ ] **Bake the production pool at whatever tag is promoted**, before the
-  services deploy that pins to it.
+  `[web_channels.*]` repoint that pins browser creates to it
+  ([ops/app-release.md](./ops/app-release.md) step 9b). The services deploy no
+  longer pins to it: it reads the feed, so it goes first.
 
-- [ ] **Staging management-plane lockdown** before staging's first gen-2 box
-  takes workspaces: Modal proxy, the `[management_plane]` table in `envs/staging/deploy.toml`,
-  connector deploy, then box prep -- the prerequisites list in
-  [gen2-cutover.md](./gen2-cutover.md). Gated on imbue-ai/mngr-internal#850.
+- [x] **Staging management-plane lockdown** before staging's first gen-2 box
+  takes workspaces. Done 2026-09-13: the Modal proxy `mind-connector-east`
+  (us-east, `98.90.51.49`), the `[management_plane]` table in
+  `envs/staging/deploy.toml`, and the connector deploy `20260913T160033Z` that
+  egresses from it (verified from inside the live container), and the first
+  gen-2 box prep (`21ae4720`, repaved 17:35Z-17:49Z) installed the `:22`
+  lockdown: public `:22` refused, allowlist `wg0` + the proxy IP, operator dial
+  over onetun verified. Every further staging gen-2 prep locks down the same way.
 
-- [ ] **Production management-plane lockdown**, same steps with
-  the `[management_plane]` table in `envs/production/deploy.toml`, after staging has rehearsed it.
-  Gated on imbue-ai/mngr-internal#850.
+- [ ] **Production management-plane lockdown**: the Modal proxy
+  `mind-connector-east` (us-east, `52.206.40.121`) exists and the
+  `[management_plane]` table in `envs/production/deploy.toml` is committed
+  (2026-09-13); the connector deploy that attaches it and the first gen-2 box
+  prep remain, after staging has rehearsed.
+
+- [ ] **Pin the Modal apps to a US region.** Nothing passes `region=` to
+  `@app.function`, and Modal schedules unpinned containers globally: the live
+  dev connector was observed in `eu-central-2` and the freshly deployed staging
+  connector in `spaincentral` (2026-09-13). Requests already route through
+  Modal's default `us-east`, the proxies are in us-east, the boxes are in
+  Virginia/Oregon and Neon in `us-west-2`, so every proxied SSH and every DB
+  round trip currently crosses the Atlantic and back through the WireGuard
+  tunnel. Thread `region="us"` (broad; ~1.15x) through `deploy.toml` for the
+  connector, LiteLLM proxy and analytics apps, then redeploy each tier. The
+  pin landed in `dcf4b7075c` on the web functions (crons stay unpinned);
+  staging's deploy `20260915T021647Z` verified `us-west-2` for both the
+  connector and the proxy containers. Production gets it with its next deploy.
 
 ## Should land soon
 
@@ -190,19 +247,46 @@ deploy was deliberately not done.
 
 ## Gen-2 slice-fleet incremental migration (phase 5.5; see [gen2-cutover.md](./gen2-cutover.md))
 
-- [ ] From the release carrying the phase-5.5 stack on, gen-2 boxes bake only
-  minds-v0.6.0+ tags and gen-1 boxes only older ones (the bake-time guard);
-  the provisional `minds-v0.6.0` tags that pointed at the gen2-combined
-  test commits were deleted on 2026-09-12 (no release build was ever made
-  for them), so the real 0.6.0 is cut fresh from `main`; the dev-josh-2
-  pool rows baked from them stay usable but show the "older version"
-  banner and are destroyed at the re-bake;
-  cut 0.6.x releases for the gen-2 cohort and keep 0.5.x stocked on gen-1
-  until its create rate reads ~zero.
+- [x] From the release carrying the phase-5.5 stack on, gen-2 boxes bake only
+  minds-v0.6.0+ tags and gen-1 boxes only older ones (the bake-time guard).
+  The real `minds-v0.6.0` pair was cut on 2026-09-13 (mngr `5325e15e73`,
+  dwt `96935db5b`; see [history/minds-v0.6.0.md](./history/minds-v0.6.0.md));
+  the dev-josh-2 rows baked from the deleted provisional tags were destroyed
+  and the dev pool re-baked from the real tag. `minds-v0.6.1` was cut and
+  built on 2026-09-15 (mngr `0c9d81e7f6`, dwt `a87c68e19`, build
+  `260915wjcyd06bp`; see [history/minds-v0.6.1.md](./history/minds-v0.6.1.md)),
+  deployed to staging and baked on all three staging boxes (one 0.6.1 row
+  each) on 2026-09-15; staging holds no gen-1 box or row any more. Still to
+  do: cut further 0.6.x releases for the gen-2 cohort and keep 0.5.x stocked
+  on production's gen-1 boxes until its create rate reads ~zero.
+- [ ] **Production has no gen-2 box yet**, and the bake guard refuses
+  `minds-v0.6.0` on gen-1 boxes, so it cannot hold 0.6.0 rows until its gen-2
+  prerequisites land: the tier's `[ssh_ca]` committed (and dropped from the
+  pinned `loader_test`), the connector AppRole in
+  `secrets/minds/production/ssh-ca`, a connector deploy (the `[management_plane]`
+  table is already committed), then a repaved or freshly ordered gen-2 box.
+  Until then a 0.6.0 desktop there takes the slow path onto gen-1 rows and
+  browser creates pinned to 0.6.0 find no row. Staging completed all of this on
+  2026-09-13 (`21ae4720` repaved gen-2; see
+  [history/minds-v0.6.0.md](./history/minds-v0.6.0.md)).
+- [ ] **Draining a box costs the full stop-retention window before `cutover
+  repave` accepts it** (a `stopped` row keeps its box link until the retention
+  finalize). Staging and production now set the window to 600 s
+  (`[storage] stop_retention_seconds`), which is the per-box floor for the
+  production drain-and-repave sweep; supervisors already sleeping when the
+  value changes keep their old window.
 - [ ] Begin migrations per tier in the order dev -> staging -> production once
   the release carrying `minds-admin cutover migrate`/`rollback` and the
   connector's `max_box_generation` lease filter is deployed there (start with
-  single alpha workspaces).
+  single alpha workspaces). Staging: the full stack (latchkey leg, stop kinds,
+  the #970 supervisor fix) passed its drills on 2026-09-14 with both a real
+  0.5.2 client and a branch client open (see
+  [history/minds-v0.6.0.md](./history/minds-v0.6.0.md)). Staging is DONE as
+  of 2026-09-15: every remaining workspace migrated, both gen-1 boxes repaved
+  gen-2 (see [history/minds-v0.6.1.md](./history/minds-v0.6.1.md), whose
+  findings list what the sweep taught the tooling: legacy-layout workspaces
+  need `repair-home-layout` first, rows 039 could not measure are restamped,
+  pre-0.5.0 templates need the tolerant seed bake). Production remains.
 - [ ] `CLEANUP: drop the lima_service_user / lima_instance_name /
   lima_disk_name columns (a follow-up connector migration) and the dual writes
   and COALESCE reads marked CLEANUP in minds_admin and the connector once
@@ -210,8 +294,8 @@ deploy was deliberately not done.
 - [ ] `CLEANUP: delete s3://<bucket>/<prefix>cutover/ (the rollback copies of
   migrated workspaces' stop artifacts plus `images/<tag>.tar.zst`) after
   <date well past the last migration>`. Then delete the `cutover` command
-  group and the connector's `workspace_migrating` guard (phase 6; requires
-  zero gen-1 rows in every tier, all statuses).
+  group and the connector's parked-row guard `_raise_if_workspace_is_migrating`
+  (phase 6; requires zero gen-1 rows in every tier, all statuses).
 
 ## Accepted, no action
 

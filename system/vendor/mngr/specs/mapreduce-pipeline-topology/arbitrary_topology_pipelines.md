@@ -49,14 +49,14 @@ Traceability, so an unaddressed requirement is visible.
 |---|---|
 | M1 pipeline is data, validated up front | [The pipeline graph](#the-pipeline-graph), [Validation](#validation) |
 | M2 any directed acyclic graph | [The pipeline graph](#the-pipeline-graph) |
-| M3 more than one upstream product | `Node.needs` |
+| M3 more than one upstream product | `Node.needs`, and `Fanout.over` naming which one is fanned over |
 | M4 waiting is separate from the starting ref | `Node.needs` versus `Job.base_ref` |
 | M5 fan-out shape is machine-readable | [Fan-out shape](#fan-out-shape) |
 | M6 shuffle | `FanoutKind.PER_PARTITION`, [Bindings](#bindings) |
 | M7 renderable without executing | [Diagrams](#diagrams) |
 | M8 invalid pipelines are unconstructible | [Validation](#validation) |
 | M9 readable by a stranger | [Worked example](#worked-example) |
-| M10 prompts are part of the pipeline | [Prompts and context](#prompts-and-context) |
+| M10 prompts are part of the pipeline | [Prompts and context](#prompts-and-context), `Pipeline.template_by_name` |
 | E1 runtime fan-out width | [Bindings](#bindings) |
 | E2 concurrent in structure, capped in parallelism | [The scheduler](#the-scheduler) |
 | E3 a node that falls short ends the run | [Node outcomes](#node-outcomes-and-halting) |
@@ -127,6 +127,10 @@ class Pipeline(FrozenModel):
 
     name: str = Field(description="The pipeline's name")
     parameters: tuple[Parameter, ...] = Field(description="The context an execution supplies, available to every prompt template")
+    template_by_name: dict[str, str] = Field(
+        default_factory=dict,
+        description="Shared Jinja sources a node's prompt template may extend or include, keyed by the name it uses",
+    )
     inputs: tuple[Artifact, ...] = Field(description="The artifacts the operator supplies before the run starts")
     nodes: tuple[Node, ...] = Field(description="The nodes, in no particular order; execution order is derived from needs")
     outputs: tuple[Artifact, ...] = Field(description="The artifacts the run delivers to the operator")
@@ -183,18 +187,41 @@ class FanoutKind(UpperCaseStrEnum):
     DISCOVERED = auto()
 
 
-class Fanout(FrozenModel):
-    """How a node fans out, as both a machine-readable kind and the prose a diagram shows."""
+class UpstreamFanout(FrozenModel):
+    """Shared by the fan-outs that run over the results of the node producing a named artifact."""
 
-    kind: FanoutKind = Field(description="Which fan-out the framework performs for the node")
+    over: ArtifactName = Field(description="The artifact whose producer's results the fan-out runs over")
     description: str = Field(description="How the fan-out reads to a person, e.g. 'one agent per feature file'")
+
+
+class PerUpstreamJobFanout(UpstreamFanout):
+    kind: Literal[FanoutKind.PER_UPSTREAM_JOB] = FanoutKind.PER_UPSTREAM_JOB
+
+
+class PerPartitionFanout(UpstreamFanout):
+    kind: Literal[FanoutKind.PER_PARTITION] = FanoutKind.PER_PARTITION
+
+
+class SingleFanout(FrozenModel):
+    kind: Literal[FanoutKind.SINGLE] = FanoutKind.SINGLE
+    description: str = Field(description="How the fan-out reads to a person, e.g. 'the reducer, once'")
+
+
+class DiscoveredFanout(FrozenModel):
+    kind: Literal[FanoutKind.DISCOVERED] = FanoutKind.DISCOVERED
+    description: str = Field(description="How the fan-out reads to a person, e.g. 'one agent per feature file'")
+
+
+Fanout = PerUpstreamJobFanout | PerPartitionFanout | SingleFanout | DiscoveredFanout
 ```
+
+A fan-out that runs over an upstream node names the artifact it runs over, and `over` is a field only of the two kinds where it means something.
 
 | Kind | Job count | The MapReduce analogue |
 |---|---|---|
 | `SINGLE` | exactly one | the reducer |
-| `PER_UPSTREAM_JOB` | one per successful upstream job, minus those the binding declines | a map over the previous node's results |
-| `PER_PARTITION` | one per distinct partition key | the shuffle, with a partition function |
+| `PER_UPSTREAM_JOB` | one per successful job of the named artifact's producer, minus those the binding declines | a map over that node's results |
+| `PER_PARTITION` | one per distinct partition key over the named artifact's producer's results | the shuffle, with a partition function |
 | `DISCOVERED` | decided by the binding | the initial map over an input split the pipeline cannot see |
 
 The framework owns the arithmetic and the binding owns the content.
@@ -225,8 +252,14 @@ Rendering happens in the executor, immediately before the prompt is delivered, s
 Jinja is the template engine.
 It is [already a dependency](../../libs/mngr_tmr/pyproject.toml) of `mngr_tmr` and `mngr_forward`, and `mngr tmr` already ships `.j2` mapper prompts, so C1 is satisfied without adding anything.
 
+**A pipeline carries its own template family.**
+The prompts this model formalises are built on inheritance: `mngr tmr` loads a packaged base through a `ChoiceLoader` so a project template may `{% extends %}` it.
+`Pipeline.template_by_name` holds those shared sources, and the executor renders through a `DictLoader` built from it, so a family composes without a loader reaching outside the pipeline object.
+A loader owned by the bindings would render the same templates, but the pipeline would then hold a pointer rather than the prompt, which is the defect M10 exists to remove; an override becomes a different source under the same name rather than a second loader in a chain.
+
 Templates are checked before any agent launches, which extends M8 to prompts.
-`jinja2.meta.find_undeclared_variables` yields every variable a template reads; each must be a pipeline parameter or one of the node's declared `job_variables`, or the pipeline is refused.
+`jinja2.meta.find_referenced_templates` walks what a template extends or includes, and `find_undeclared_variables` is taken over the whole family, so a variable read only by an inherited base is caught at construction and a template reaching for a name the pipeline does not carry is refused there too.
+Checking the family is only possible because the family is in the pipeline: an external loader defers it to bind time at the earliest.
 At runtime the executor asserts the binding actually supplied every name in `job_variables`, because the type system cannot guarantee a `dict[str, str]` has particular keys.
 
 ### Bindings
@@ -267,10 +300,12 @@ class DiscoveredJobsBindingInterface(MutableModel, ABC):
 
 `OrchestratorNodeBindingInterface`, `GateBindingInterface` and `ExecutionObserverInterface` carry over unchanged apart from the stage-to-node rename.
 
-**Upstream is unambiguous by construction.**
-`PER_UPSTREAM_JOB` and `PER_PARTITION` require that every artifact in the node's `needs` be produced by the same single upstream node, enforced by a validator.
-Without that rule, a node needing artifacts from two producers would fan out over an undefined union of their results.
-A node that has to join two upstreams uses `DISCOVERED` and reads the `Execution` itself.
+**Upstream is unambiguous because the fan-out names it.**
+A `PER_UPSTREAM_JOB` or `PER_PARTITION` node says which artifact it fans out over, and the node producing that artifact is the one whose results it runs over.
+The node is then free to need other things: a reviewer fans out over the mappers' branches and still reads the guide a setup node wrote, and both dependencies stay in `needs` where the scheduler and the diagram can see them.
+
+Requiring instead that every need come from one producer would have forced that second dependency back into the binding, which is the condition M3 exists to remove.
+A node that fans out over what several producers made still uses `DISCOVERED` and reads the `Execution` itself, because "one job per upstream job" has no defined meaning across two sets.
 
 ### Validation
 
@@ -280,8 +315,8 @@ Constructing a `Pipeline` raises `PipelineInvariantError` unless all of the foll
 - Every output either matches the artifact of that name defined in the pipeline, or is defined only in `outputs`.
 - Every name in every `needs` is a pipeline input or some node's product.
 - The derived graph is acyclic, checked by building a `TopologicalSorter` and calling `prepare()`, which raises `CycleError`.
-- A node whose fan-out is `PER_UPSTREAM_JOB` or `PER_PARTITION` has at least one `needs` entry, and all of its `needs` come from one producing node.
-- Every variable an agent node's template reads is a pipeline parameter or one of that node's `job_variables`.
+- A node that fans out over an artifact lists that artifact among its `needs`, and some node of the pipeline produces it; fanning out over an operator-supplied input is refused, because an input has no results to fan over.
+- Every template a node's prompt template extends or includes is carried in `Pipeline.template_by_name`, and every variable read anywhere in that family is a pipeline parameter or one of the node's `job_variables`.
 - `min_job_count` is not greater than what the fan-out can produce: a `SINGLE` node's `min_job_count` is at most 1.
 
 `Node.work` removes the need for three further rails: an orchestrator node cannot carry a prompt template, a fan-out or gates, and an agent node cannot carry an empty template.
@@ -445,6 +480,9 @@ WITNESS_PIPELINE = Pipeline(
         Parameter(name=NonEmptyStr("corpus_root"), description="Directory holding the behavior corpus"),
         Parameter(name=NonEmptyStr("style_guide"), description="Path to the style guide agents must follow"),
     ),
+    template_by_name={
+        "witness_base.j2": "You are working in {{ corpus_root }}, following {{ style_guide }}.\n{% block task %}{% endblock %}"
+    },
     inputs=(Artifact(name=ArtifactName("corpus"), description="The behavior corpus at the base commit"),),
     nodes=(
         Node(
@@ -453,9 +491,10 @@ WITNESS_PIPELINE = Pipeline(
             needs=(ArtifactName("corpus"),),
             produces=(Artifact(name=ArtifactName("witness_branches"), description="One branch per feature file"),),
             work=AgentWork(
-                fanout=Fanout(kind=FanoutKind.DISCOVERED, description="one agent per feature file"),
+                fanout=DiscoveredFanout(description="one agent per feature file"),
                 prompt_template=NonEmptyStr(
-                    "Write witness tests for {{ feature_file }} in {{ corpus_root }}, following {{ style_guide }}."
+                    '{% extends "witness_base.j2" %}'
+                    "{% block task %}Write witness tests for {{ feature_file }}.{% endblock %}"
                 ),
                 job_variables=(NonEmptyStr("feature_file"),),
                 gates=(Gate(name=NonEmptyStr("tests_run"), description="The branch's witness tests execute"),),
@@ -466,11 +505,16 @@ WITNESS_PIPELINE = Pipeline(
         Node(
             name=NodeName("consolidate"),
             summary="Reduce every witness branch of one area into a single branch.",
-            needs=(ArtifactName("witness_branches"),),
+            needs=(ArtifactName("witness_branches"), ArtifactName("corpus")),
             produces=(Artifact(name=ArtifactName("area_branches"), description="One reduced branch per area"),),
             work=AgentWork(
-                fanout=Fanout(kind=FanoutKind.PER_PARTITION, description="one agent per behavior area"),
-                prompt_template=NonEmptyStr("Consolidate the witness branches for area {{ area }}: {{ branches }}."),
+                fanout=PerPartitionFanout(
+                    over=ArtifactName("witness_branches"), description="one agent per behavior area"
+                ),
+                prompt_template=NonEmptyStr(
+                    '{% extends "witness_base.j2" %}'
+                    "{% block task %}Consolidate the branches for area {{ area }}: {{ branches }}.{% endblock %}"
+                ),
                 job_variables=(NonEmptyStr("area"), NonEmptyStr("branches")),
                 gates=(Gate(name=NonEmptyStr("tests_run"), description="The reduced branch's tests execute"),),
             ),
@@ -488,7 +532,8 @@ WITNESS_PIPELINE = Pipeline(
 ```
 
 `generate` is `DISCOVERED` because the number of feature files is not visible to the pipeline, sets `min_job_count=1` so an empty corpus is an error rather than a quiet success, and sets `required_completion=0.9` because at corpus scale demanding every agent succeed would make the run fail most of the time.
-`consolidate` is `PER_PARTITION`: its partition function maps each witness branch to its behavior area, and one agent runs per area.
+`consolidate` fans out `over="witness_branches"`, so it runs over `generate`'s results while still needing `corpus` for its own reading; its partition function maps each witness branch to its behavior area, and one agent runs per area.
+Both agent nodes extend `witness_base.j2`, which the pipeline carries, so the shared preamble is written once and the construction-time check still sees that `corpus_root` and `style_guide` are read.
 `integrate` is `OrchestratorWork()`, which is the whole declaration: there is no prompt, fan-out, gate or threshold to state, because none of them mean anything for work the executor does itself.
 Nothing in the pipeline says where any of it runs; that is the execution plan's job, and the same object runs locally, on Docker or on Modal.
 

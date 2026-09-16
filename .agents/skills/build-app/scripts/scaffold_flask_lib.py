@@ -6,13 +6,25 @@
 """Stand up a new Flask app (and its supervisord program entry).
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
-is available for WebSockets) and its `app.toml` manifest, appends a
-`[program:<name>]` block to system/supervisord.conf whose command registers
-the manifest and runs the app's own entry point, installs the app as its own
-uv tool environment (`uv tool install -e system/apps/<package>`), and runs
-`uv sync --all-packages` so the root lockfile covers the new workspace member
-(the `system/apps/*` member glob picks the package up automatically; the root
-pyproject.toml is not edited).
+is available for WebSockets) and its `app.toml` manifest, writes a
+`[program:<name>]` block to its own `system/supervisord.conf.d/<name>.conf`
+whose command registers the manifest and runs the app's own entry point,
+installs the app as its own uv tool environment (`uv tool install -e
+system/apps/<package>`), and runs `uv sync --all-packages` so the root lockfile
+covers the new workspace member (the `system/apps/*` member glob picks the
+package up automatically; the root pyproject.toml is not edited).
+
+No shared file is *authored*: the supervisord program lives in its own file
+rather than being appended to a config shared with every other creation. That is
+what lets two agents scaffold two apps concurrently without editing the same
+file.
+
+The one shared file still written is `uv.lock`, which `uv sync --all-packages`
+regenerates to add the new member. It is derived rather than authored, so
+harden-contention.md keeps it out of a creation's footprint and regenerates it
+on merge instead of treating the conflict as a stale pass -- but it does still
+show up as a dirty file in the tree, so it is not accurate to say a scaffold
+touches nothing shared.
 
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
@@ -110,14 +122,51 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
+def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
+    """``<supervisord.conf>.d/``: the one directory the config's ``[include]`` glob names.
+
+    Fixed by convention rather than read out of the config, and pinned by
+    ``system/test_supervisord_layout.py``: every reader of the config, here and in
+    the evals capture that reads it from outside the workspace, assumes it.
+    """
+    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
+
+
+def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
+    """The main config plus every drop-in, in supervisord's read order.
+
+    Only regular files: a directory named like a drop-in (``supervisord.conf.d/archive.conf/``)
+    would otherwise be handed to a caller that reads it. supervisord cannot read it either.
+    """
+    files = [supervisord_conf] if supervisord_conf.is_file() else []
+    dropin_dir = _supervisord_dropin_dir(supervisord_conf)
+    files.extend(path for path in sorted(dropin_dir.glob("*.conf")) if path.is_file())
+    return files
+
+
+def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
+    """The drop-in ``name``'s program belongs in: ``<supervisord.conf>.d/<name>.conf``.
+
+    One program per file, named after it, is what the teardown in
+    ``references/cleanup.md`` deletes and what
+    ``system/test_supervisord_layout.py`` pins.
+    """
+    return _supervisord_dropin_dir(supervisord_conf) / f"{name}.conf"
+
+
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # Every app registers its localhost backend via a forward_port.py call in
-    # its [program:*] command, so scanning the whole config text for
+    # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    if not supervisord_conf.exists():
-        return set()
-    text = supervisord_conf.read_text()
-    return {int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(text)}
+    # Scans the main config AND every drop-in, which is where every program
+    # lives -- missing the drop-ins would hand a new app a port another program
+    # already holds.
+    ports: set[int] = set()
+    for path in _supervisord_conf_files(supervisord_conf):
+        ports.update(
+            int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+        )
+    return ports
 
 
 def _apps_toml_ports(apps_toml: Path) -> set[int]:
@@ -215,7 +264,6 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
-import os
 from pathlib import Path
 
 from flask import Flask, Response
@@ -436,26 +484,48 @@ stderr_logfile_backups=3
 """
 
 
-def _update_supervisord_conf(repo_root: Path, name: str, package: str, port: int) -> None:
-    # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
-    # preserving, so append a [program:<name>] block as text rather than
-    # round-tripping through a parser. The command is wrapped in `bash -c "..."`
-    # because supervisord exec's commands directly (no shell) and this one chains
-    # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
-    # new (user-created) app so it is shed before any built-in app or service
-    # under memory pressure (see system/services/oom_priority/README.md). The app
-    # runs as its own tool's entry point (installed by _install_app_tool), not
-    # through `uv run`, so the root venv is never on its path.
-    path = repo_root / "system/supervisord.conf"
-    if not path.exists():
-        sys.exit(f"error: {path} not found (cannot register the new app)")
-    existing = path.read_text()
-    if f"[program:{name}]" in existing:
-        sys.exit(
-            f"error: system/supervisord.conf already has a [program:{name}] section"
-        )
-    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
-    path.write_text(existing.rstrip("\n") + "\n\n" + block)
+def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
+    """The drop-in this scaffold will write, once nothing else claims the name.
+
+    Exits non-zero if the name is already claimed, whether in the main config or
+    in a drop-in, and whether by a program or by an event listener: supervisord
+    holds both in one process-group namespace, so a duplicate name either
+    resolves silently to whichever the include order read last, or breaks the
+    config for every program at the next reread.
+
+    Runs before anything is written, so a refusal leaves no half-scaffolded lib
+    for the agent to clean up.
+    """
+    conf = repo_root / "system/supervisord.conf"
+    if not conf.exists():
+        sys.exit(f"error: {conf} not found (cannot register the new app)")
+    for existing in _supervisord_conf_files(conf):
+        text = existing.read_text()
+        for section in (f"[program:{name}]", f"[eventlistener:{name}]"):
+            if section in text:
+                sys.exit(
+                    f"error: {existing.relative_to(repo_root)} already has a "
+                    f"{section} section"
+                )
+    return _supervisord_program_path(conf, name)
+
+
+def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
+    """Write the app's supervisord program to its own drop-in file.
+
+    The command is wrapped in `bash -c "..."` because supervisord exec's commands
+    directly (no shell) and this one chains forward_port.py with `&&`; the
+    `oom_tag_service.py user` prefix tags the new (user-created) app so it is
+    shed before any built-in app or service under memory pressure (see
+    system/services/oom_priority/README.md).
+
+    The app runs as its own tool's entry point (installed by _install_app_tool),
+    not through `uv run`, so the root venv is never on its path.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
+    )
 
 
 def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
@@ -549,12 +619,13 @@ def main() -> None:
     )
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port)
+    program_path = _reserve_supervisord_program_path(repo_root, args.name)
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
         repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
     )
-    _update_supervisord_conf(repo_root, args.name, package, port)
+    _write_supervisord_program(program_path, args.name, package, port)
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)
@@ -563,7 +634,8 @@ def main() -> None:
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(app `{args.name}` on port {port}; the tab renders at the service's "
+        f"(app `{args.name}` on port {port}, registered in "
+        f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."

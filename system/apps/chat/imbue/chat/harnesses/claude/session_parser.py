@@ -20,6 +20,7 @@ from imbue.chat.harnesses.claude.error_notice import classify_error_notice
 from imbue.chat.harnesses.claude.tool_labels import shell_command
 from imbue.chat.harnesses.claude.tool_labels import tool_labels
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
@@ -132,6 +133,22 @@ def _normalize_slash_command(text: str) -> str:
     args_match = _COMMAND_ARGS_PATTERN.search(text)
     args = args_match.group(1).strip() if args_match is not None else ""
     return f"{command} {args}".strip()
+
+
+_COMPACTION_COMMAND_RE = re.compile(r"^\s*<command-name>\s*/compact\s*</command-name>", re.DOTALL)
+
+
+def _is_compaction_command(raw_text: str, normalized_text: str) -> bool:
+    """True if text is Claude Code's /compact slash command invocation."""
+    trimmed_norm = normalized_text.strip()
+    if trimmed_norm == "/compact" or trimmed_norm.startswith("/compact "):
+        return True
+    return bool(_COMPACTION_COMMAND_RE.search(raw_text))
+
+
+def _is_compaction_output(raw_text: str) -> bool:
+    """True if text is Claude Code's local command output acknowledging compaction."""
+    return "<local-command-stdout>" in raw_text and "Compacted" in raw_text
 
 
 def extract_text_content(content: str | list[dict[str, Any]] | Any) -> str:
@@ -363,7 +380,7 @@ def _parse_assistant_message(
     # A failed turn surfaces as a synthetic assistant message (e.g. "API Error: 529
     # Overloaded", "You've hit your monthly spend limit"). Classify it so the frontend can
     # style it as an error and, for a provider-side failure (5xx / overloaded), add a "not
-    # Minds' fault" note. Gated on the synthetic model: only Claude Code's own
+    # Mind's fault" note. Gated on the synthetic model: only Claude Code's own
     # framework-generated notices are failures, so a REAL assistant message that quotes
     # "API Error: 500" or an error JSON (routine in a coding chat) is not mistaken for an
     # outage, and an agent helping with a credential does not get its own reply painted as
@@ -419,35 +436,57 @@ def _parse_user_message(
 
     # Emit user text message if there is actual user text
     if not _has_tool_results_only(content):
-        event_id = _make_event_id(uuid, "user")
-        if event_id not in existing_event_ids:
-            text = _normalize_slash_command(extract_text_content(content))
-            if text and not is_interrupt_sentinel_text(text):
-                event: dict[str, Any] = {
+        raw_text = extract_text_content(content)
+        text = _normalize_slash_command(raw_text)
+
+        if raw.get("isCompactSummary"):
+            event_id = _make_event_id(uuid, "context_compacted")
+            if event_id not in existing_event_ids:
+                event = {
                     "timestamp": timestamp,
                     "type": "user_message",
                     "event_id": event_id,
                     "source": _SOURCE,
-                    "role": "user",
-                    "content": text,
+                    "role": "system",
+                    "content": "Context was compacted",
                     "message_uuid": uuid,
+                    "display": DisplayKind.STATUS,
+                    "non_turn_tail": True,
                 }
-                # Claude Code's own markers (``isMeta`` for framework-injected,
-                # model-only messages; ``isCompactSummary`` for the post-compaction
-                # summary record) are read HERE and become the shared render decision
-                # -- the raw flags never cross the wire. Explicit detectors win over
-                # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
-                # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
-                stamp_user_message_display(
-                    event,
-                    text,
-                    is_meta=bool(raw.get("isMeta")),
-                    is_compact_summary=bool(raw.get("isCompactSummary")),
-                )
+                if text:
+                    event["display_body"] = text
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
                 new_events.append((timestamp, event))
+        else:
+            is_compaction = _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text)
+            if not is_compaction and text and not is_interrupt_sentinel_text(text):
+                event_id = _make_event_id(uuid, "user")
+                if event_id not in existing_event_ids:
+                    event = {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": _SOURCE,
+                        "role": "user",
+                        "content": text,
+                        "message_uuid": uuid,
+                    }
+                    # Claude Code's own markers (``isMeta`` for framework-injected,
+                    # model-only messages) are read HERE and become the shared render decision
+                    # -- the raw flags never cross the wire. Explicit detectors win over
+                    # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
+                    # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
+                    stamp_user_message_display(
+                        event,
+                        text,
+                        is_meta=bool(raw.get("isMeta")),
+                    )
+                    if session_id is not None:
+                        event["session_id"] = session_id
+                    existing_event_ids.add(event_id)
+                    new_events.append((timestamp, event))
 
     # Emit tool result events for any tool_result blocks
     if isinstance(content, list):
@@ -653,7 +692,7 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 # live queue as out-of-band ``queue-operation`` records that carry no ``uuid`` and
 # so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
 # law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
-# queue through exactly one dequeue/remove/popAll record. In the real Minds flow
+# queue through exactly one dequeue/remove/popAll record. In the real Mind flow
 # EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
 # commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
 # slash commands / task-notifications also leave via dequeue/remove -- none of

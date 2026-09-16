@@ -16,9 +16,6 @@ from typing import Final
 from urllib.parse import quote
 from uuid import UUID
 
-# Note: psycopg2.errors is reachable through the base import, matching app.py;
-# an explicit ``import psycopg2.errors`` makes ty resolve the module and then
-# reject its dynamically-generated members (UniqueViolation) as unknown.
 import paramiko
 import psycopg2
 import pytest
@@ -71,6 +68,7 @@ import imbue.remote_service_connector.storage as connector_storage_module
 import imbue.remote_service_connector.suspension as suspension_module
 import imbue.remote_service_connector.suspension_admin as suspension_admin_module
 import imbue.remote_service_connector.sync as sync_mod
+import imbue.remote_service_connector.web_template_channel as web_template_channel_module
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.box_scripts import CLEANUP_DELETE_FAILED_MARKER
@@ -1160,6 +1158,7 @@ class FakePoolRow:
     target_memory_units: int | None
     disk_gb: int
     target_disk_gb: int | None
+    stop_kind: str | None
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -1243,6 +1242,7 @@ def _make_pool_row(
     row.target_memory_units = None
     row.disk_gb = 44
     row.target_disk_gb = None
+    row.stop_kind = None
     return row
 
 
@@ -1283,6 +1283,8 @@ class FakeCursor:
         self._result_idx = 0
         self.rowcount = 0
         query_lower = query.strip().lower()
+        if self._backend.query_callback is not None:
+            self._backend.query_callback(query, params)
 
         if "pg_advisory_xact_lock" in query_lower:
             # The per-user lease serialization lock; the in-memory fake is
@@ -1423,7 +1425,7 @@ class FakeCursor:
                     self._results.append(self._backend.workspace_info_tuple(row))
 
         elif query_lower.startswith("update pool_hosts set status = 'stopping', stop_requested_at"):
-            transition_id, raw_id = params
+            transition_id, stop_kind, raw_id = params
             found = self._backend.find_pool_row(raw_id)
             if found is not None and found.status == "leased":
                 found.status = "stopping"
@@ -1432,17 +1434,44 @@ class FakeCursor:
                 found.transition_failure_count = 0
                 found.transition_id = transition_id
                 found.transition_heartbeat_at = datetime.now(timezone.utc)
+                found.stop_kind = stop_kind
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set stop_kind = %s where leased_to_user"):
+            # workspaces.py: the unsuspend fan-out's re-stamp of one user's stops.
+            to_kind, user_id_prefix, from_kind = params
+            for row in self._backend.pool_rows:
+                if (
+                    row.leased_to_user == user_id_prefix
+                    and row.stop_kind == from_kind
+                    and row.status in ("stopping", "stopped")
+                ):
+                    row.stop_kind = to_kind
+                    self.rowcount += 1
+
+        elif query_lower.startswith("update pool_hosts set stop_kind = %s where id"):
+            # workspaces.py: re-stamp one stopping/stopped row's kind.
+            stop_kind, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status in ("stopping", "stopped"):
+                found.stop_kind = stop_kind
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'starting'"):
             transition_id, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopped":
+            # workspaces.py: the owner's statement also carries the hold
+            # predicate (the admin's does not).
+            is_hold_honored = "stop_kind is null or" not in query_lower or (
+                found is not None and found.stop_kind in (None, "owner", "idle")
+            )
+            if found is not None and found.status == "stopped" and is_hold_honored:
                 found.status = "starting"
                 found.transition_error = None
                 found.transition_failure_count = 0
                 found.transition_id = transition_id
                 found.transition_heartbeat_at = datetime.now(timezone.utc)
+                found.stop_kind = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'crashed'"):
@@ -2479,6 +2508,10 @@ class FakePoolBackend:
     is_ssh_cert_bundle_missing: bool
     box_command_should_fail_matching: str | None
     box_command_callback: Any
+    # Called with every ``(query, params)`` a fake cursor executes, before the
+    # fake acts on it: lets a test change the store between two statements of
+    # one route (a concurrent request landing mid-transaction).
+    query_callback: Any
     sleep_callback: Any
     # Paid-list stores: value -> {"is_paid", "created_at", "updated_at"}.
     paid_domains: dict[str, dict[str, Any]]
@@ -2770,6 +2803,7 @@ class FakePoolBackend:
             row.target_memory_units,
             row.disk_gb,
             row.target_disk_gb,
+            row.stop_kind,
         )
 
     def workspace_supervisor_tuple(self, row: "FakePoolRow") -> tuple[Any, ...]:
@@ -3371,6 +3405,7 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.is_ssh_cert_bundle_missing = False
     backend.box_command_should_fail_matching = None
     backend.box_command_callback = None
+    backend.query_callback = None
     backend.sleep_callback = None
     backend.slice_teardown_generations = []
     return backend
@@ -4475,6 +4510,33 @@ def read_stable_download_link() -> str | None:
     key = hashkey()
     assert key in cache, "nothing has resolved the stable download link"
     return cache[key]
+
+
+# The feed URL tests point the web-pin reader at; nothing is ever fetched from
+# it, since every read is served from the held cache entry.
+FAKE_UPDATE_FEED_BASE_URL = "https://updates.fake-feed.example.com"
+
+
+def hold_web_template_ref(monkeypatch: pytest.MonkeyPatch, channel: str, template_ref: str | None) -> None:
+    """Configure a feed and put ``template_ref`` -- or "could not be read" -- in the web-pin cache for ``channel``.
+
+    ``POST /hosts/claim`` resolves its template tag from the feed's
+    ``<channel>-web.json`` when the tier configures a feed, so a test of that
+    path holds the entry rather than reaching a live feed.
+    """
+    monkeypatch.setenv(web_template_channel_module.UPDATE_FEED_BASE_URL_ENV_VAR, FAKE_UPDATE_FEED_BASE_URL)
+    _web_template_ref_cache()[hashkey(channel, FAKE_UPDATE_FEED_BASE_URL)] = template_ref
+
+
+def clear_web_template_refs() -> None:
+    """Drop every held web pin, so no test inherits another's channel entry."""
+    _web_template_ref_cache().clear()
+
+
+def _web_template_ref_cache() -> MutableMapping[Any, Any]:
+    cache = web_template_channel_module.cached_web_template_ref.cache
+    assert cache is not None, "the web pin resolver is not cached"
+    return cache
 
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:

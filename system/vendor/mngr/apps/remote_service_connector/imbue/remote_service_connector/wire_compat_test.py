@@ -447,6 +447,7 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/release"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/stop-kind"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/start"): _OPERATOR,
     ("POST", "/admin/machines/{host_db_id}/resize"): _OPERATOR,
     # Machine resize: the plugin CLI reads the response with tolerant .get

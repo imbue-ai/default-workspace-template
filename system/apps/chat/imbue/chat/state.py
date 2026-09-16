@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,32 +16,36 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
+from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
 
-# Key under which the single ChatState is stored on ``app.config`` so handlers can fetch it
+# Key under which the single ChatAppState is stored on ``app.config`` so handlers can fetch it
 # via ``get_state()``.
-_STATE_CONFIG_KEY = "CHAT_STATE"
+_STATE_CONFIG_KEY = "CHAT_APP_STATE"
 
 
-class ChatStateError(RuntimeError):
-    """Raised when the ChatState is not attached to a Flask app."""
+class ChatAppStateError(RuntimeError):
+    """Raised when the ChatAppState is not attached to a Flask app."""
 
 
 # The frontend build's output, inside the package: what the chat routes serve in production.
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
-class ChatState(MutableModel):
+class ChatAppState(MutableModel):
     """Holds every shared service handle and config for one chat app.
 
     Built once in ``main.build_production_state`` (or by a test) and stored on the Flask
-    app; handlers read it via ``get_state()``. Owns the per-agent session-watcher registry
-    and the latchkey catalog cache (both guarded for concurrent access under the threaded
-    WSGI server).
+    app; handlers read it via ``get_state()``. Owns the per-agent session-watcher registry,
+    the loaders of the archived segments a chat's transcript has been read into, and the
+    latchkey catalog cache (all guarded for concurrent access under the threaded WSGI
+    server).
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -56,6 +61,10 @@ class ChatState(MutableModel):
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
+    # The archived segments read so far, by agent id: loaded on the first read that reaches
+    # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
+    # being read holds none of its history resident.
+    loaders: dict[str, TranscriptLoader] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
     static_directory: Path = Field(
         default=DEFAULT_STATIC_DIRECTORY,
@@ -93,8 +102,10 @@ class ChatState(MutableModel):
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
-                # via the REST /events endpoint, so nothing is buffered for replay.
-                self.event_queues.broadcast_batch(agent_id, events)
+                # via the REST /events endpoint, so nothing is buffered for replay. The
+                # fan-out is keyed by chat, so a page's stream follows the chat across a
+                # handoff rather than the agent it happened to open on.
+                self.event_queues.broadcast_batch(str(self.agent_manager.chat_id_of_agent(agent_id)), events)
                 # Fold the delta into the per-agent activity signals. The tracker is
                 # incremental (seeded with the full backlog below), so it only ever
                 # needs the newly parsed events.
@@ -138,15 +149,71 @@ class ChatState(MutableModel):
         watcher.start()
         return watcher
 
+    def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
+        """The loader over one archived agent's transcript, built on the first read that needs it.
+
+        The read side of the agent's watcher with nothing live: an archived segment of a chat
+        is read through this (``chat_transcript.py``). Cached beside the watchers, under the
+        same lock, and dropped with the chat by ``stop_and_remove_watcher``.
+        """
+        with self._watchers_lock:
+            existing = self.loaders.get(agent_info.id)
+            if existing is not None:
+                return existing
+            logger.debug("Loading the archived transcript of agent {}", agent_info.id)
+            loader = build_loader(agent_info)
+            self.loaders[agent_info.id] = loader
+            return loader
+
+    def get_resident_loader(self, agent_id: str) -> TranscriptLoader | None:
+        """The loader an earlier read already loaded for one archived agent, or None.
+
+        Never loads one: a chat's transcript hands its resident readers over at build and
+        calls ``get_or_create_loader`` only from the first read that reaches into a segment.
+        """
+        with self._watchers_lock:
+            return self.loaders.get(agent_id)
+
+    def is_main_session_event(self, event: dict[str, Any]) -> bool:
+        """Whether a streamed event belongs to its agent's own session rather than a subagent's.
+
+        The agent is the one the event names (a chat's stream carries several agents' events
+        across a handoff); an agent with no resident watcher, and a chat-level event such as
+        the switch chip, count as main.
+        """
+        with self._watchers_lock:
+            watcher = self.watchers.get(str(event.get("agent_id", "")))
+        return watcher is None or watcher.is_main_session_event(event)
+
+    def drain_to_composer(self, agent_info: AgentInfo, restart_process: Callable[[], tuple[bool, str]]) -> str:
+        """The stop button's path: interrupt the agent's turn and return its queue as one block.
+
+        Dispatches through the agent's session to the harness's registered interrupt (the
+        base restart-drain, or a native override), binding the watcher, the restart the caller
+        supplies, the activity settle, and the native cancel chord. Shared by the route and
+        the handoff's draining step. Raises ``AgentRestartError`` when the restart fails.
+        """
+        watcher = self.get_or_create_watcher(agent_info)
+        return self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            restart_process,
+            lambda: self.agent_manager.reset_activity_state(agent_info.id),
+            lambda: self.agent_manager.press_key_chord_on_agent(
+                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+            ),
+        )
+
     def stop_and_remove_watcher(self, agent_id: str) -> None:
-        """Evict one agent's watcher, releasing its resident transcript, thread, and
-        filesystem watches.
+        """Evict everything resident for one agent: its watcher (the resident transcript, thread,
+        and filesystem watches) and, for an archived member of a chat, its loader.
 
         The memory half of the chat lifecycle: called when an agent is destroyed or its
-        lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an OOM
-        shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
-        Cheap no-op when no watcher exists. Rebuild-on-demand is `get_or_create_watcher`:
-        viewing a stopped chat re-reads its transcript from disk transparently.
+        chat's lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an
+        OOM shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
+        Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
+        and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
+        transparently.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
@@ -154,15 +221,22 @@ class ChatState(MutableModel):
         """
         with self._watchers_lock:
             watcher = self.watchers.pop(agent_id, None)
+            loader = self.loaders.pop(agent_id, None)
         if watcher is not None:
             logger.debug("Evicting the session watcher for agent {}", agent_id)
             watcher.stop()
+        if loader is not None:
+            logger.debug("Evicting the loaded transcript of agent {}", agent_id)
+            loader.close()
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
             for watcher in self.watchers.values():
                 watcher.stop()
             self.watchers.clear()
+            for loader in self.loaders.values():
+                loader.close()
+            self.loaders.clear()
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""
@@ -183,21 +257,21 @@ class ChatState(MutableModel):
             logger.debug("Skipped closing latchkey http client during shutdown: {}", e)
 
 
-def attach_state(app: Flask, state: ChatState) -> None:
+def attach_state(app: Flask, state: ChatAppState) -> None:
     app.config[_STATE_CONFIG_KEY] = state
 
 
-def get_state() -> ChatState:
-    """Return the ChatState for the current Flask app."""
+def get_state() -> ChatAppState:
+    """Return the ChatAppState for the current Flask app."""
     state = current_app.config.get(_STATE_CONFIG_KEY)
-    if not isinstance(state, ChatState):
-        raise ChatStateError("ChatState is not attached to the current app")
+    if not isinstance(state, ChatAppState):
+        raise ChatAppStateError("ChatAppState is not attached to the current app")
     return state
 
 
-def state_of(app: Flask) -> ChatState:
-    """Return the ChatState attached to ``app`` without needing an app context."""
+def state_of(app: Flask) -> ChatAppState:
+    """Return the ChatAppState attached to ``app`` without needing an app context."""
     state = app.config.get(_STATE_CONFIG_KEY)
-    if not isinstance(state, ChatState):
-        raise ChatStateError("ChatState is not attached to the app")
+    if not isinstance(state, ChatAppState):
+        raise ChatAppStateError("ChatAppState is not attached to the app")
     return state

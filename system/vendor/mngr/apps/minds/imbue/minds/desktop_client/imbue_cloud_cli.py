@@ -29,6 +29,8 @@ from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import SecretStr
+from pydantic import TypeAdapter
+from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -211,11 +213,17 @@ class MachineSizeCliInfo(WireModel):
     host_id: str
     host_name: str
     status: str
+    # Why the machine's current stop happened (owner / maintenance / idle /
+    # suspension), None while running or against a connector without kinds.
+    stop_kind: str | None = None
     memory_units: int | None = None
     target_memory_units: int | None = None
     disk_gb: int | None = None
     target_disk_gb: int | None = None
     is_restart_needed_to_apply: bool = False
+
+
+_MACHINES_LISTING_ADAPTER: Final = TypeAdapter(list[MachineSizeCliInfo])
 
 
 class LiteLLMKeyMaterial(WireModel):
@@ -597,14 +605,19 @@ class ImbueCloudCli(MutableModel):
             cg_name="imbue-cloud-auth-resend-verification",
         )
         body = self._expect_success(result, "auth resend-verification")
-        sent = body.get("sent") if isinstance(body, dict) else None
-        if not isinstance(sent, bool):
-            # A missing/non-bool ``sent`` is a broken plugin contract; raising
-            # (rather than defaulting to False) keeps the UI from claiming an
-            # email "was sent recently" when nothing of the sort is known.
-            shape = f"dict with keys {sorted(body)}" if isinstance(body, dict) else type(body).__name__
-            raise ImbueCloudCliError(f"Malformed auth resend-verification output: expected a 'sent' bool, got {shape}")
-        return sent
+        # A missing/non-bool ``sent`` is a broken plugin contract; raising
+        # (rather than defaulting to False) keeps the UI from claiming an
+        # email "was sent recently" when nothing of the sort is known.
+        return _expect_bool_field(body, "sent", "auth resend-verification")
+
+    def auth_is_email_verified(self, account: str) -> bool:
+        """Whether ``account``'s email is verified; a plain status query, safe to poll."""
+        result = self._run(
+            ["auth", "is-verified", "--account", account],
+            cg_name="imbue-cloud-auth-is-verified",
+        )
+        body = self._expect_success(result, "auth is-verified")
+        return _expect_bool_field(body, "verified", "auth is-verified")
 
     # ------------------------------------------------------------------
     # Hosts (list / release)
@@ -648,6 +661,25 @@ class ImbueCloudCli(MutableModel):
         if not isinstance(body, dict):
             return None
         return MachineSizeCliInfo.model_validate(body)
+
+    def list_machines(self, account: str) -> list[MachineSizeCliInfo]:
+        """Every machine of one account with its lifecycle status, sizes and stop kind.
+
+        The stop-kind tracker's one round trip per account: the machines list
+        is the connector's full lifecycle listing, so it names stopped machines
+        discovery only knows by their state. A CLI failure raises
+        :class:`ImbueCloudCliError` rather than reading as an empty account, so
+        the tracker can keep what it last read instead of forgetting a hold.
+        """
+        result = self._run(["machines", "show", "--account", account], cg_name="imbue-cloud-machines-list")
+        body = self._expect_success(result, "machines show")
+        # Not an empty account: a listing of unknown shape, or one with an
+        # entry that is not a machine, must not read as "no machine is held"
+        # and clear the tracker's kinds.
+        try:
+            return _MACHINES_LISTING_ADAPTER.validate_python(body)
+        except ValidationError as exc:
+            raise _machines_listing_shape_error(result.stdout, exc) from exc
 
     def release_host(self, account: str, host_db_id: str) -> bool:
         result = self._run(
@@ -776,7 +808,7 @@ class ImbueCloudCli(MutableModel):
             # Describe only the body's shape, never its contents: a well-formed
             # body carries the relay token, which must not leak into an error
             # message that reaches logs and the sharing UI.
-            shape = f"dict with keys {sorted(body)}" if isinstance(body, dict) else type(body).__name__
+            shape = _describe_body_shape(body)
             raise ImbueCloudCliError(f"Malformed shares create output: expected a share object, got {shape}")
         return ShareCliInfo.model_validate({"state": "active", **body})
 
@@ -1016,6 +1048,17 @@ class ImbueCloudCli(MutableModel):
         self._expect_success(result, "sync bundle delete")
 
 
+def _machines_listing_shape_error(stdout: str, exc: ValidationError) -> ImbueCloudCliError:
+    """The error for a successful ``machines show`` whose output is not a list of machine objects."""
+    detail = "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'listing'}: {error['msg']}" for error in exc.errors()
+    )
+    shape_exc = ImbueCloudCliError(f"machines show: expected a list of machine objects ({detail})")
+    shape_exc.exit_code = 0
+    shape_exc.stdout = stdout
+    return shape_exc
+
+
 def _parse_conflict_stored(stderr: str) -> dict[str, Any] | None:
     """Extract the ``stored`` row from a sync-push conflict's JSON error body, if present.
 
@@ -1088,6 +1131,21 @@ def _parse_auth_failure_body(stderr: str) -> dict[str, Any] | None:
     if body is None or body.get("error_class") != _AUTH_FAILED_ERROR_CLASS:
         return None
     return body
+
+
+def _describe_body_shape(body: Any) -> str:
+    """Name only a body's shape, never its contents, which may carry a token."""
+    return f"dict with keys {sorted(body)}" if isinstance(body, dict) else type(body).__name__
+
+
+def _expect_bool_field(body: Any, key: str, command_repr: str) -> bool:
+    """The bool at ``key`` of a dict body; anything else is a broken plugin contract."""
+    value = body.get(key) if isinstance(body, dict) else None
+    if not isinstance(value, bool):
+        raise ImbueCloudCliError(
+            f"Malformed {command_repr} output: expected a '{key}' bool, got {_describe_body_shape(body)}"
+        )
+    return value
 
 
 def _parse_stdout_json(stdout: str, command_repr: str) -> Any:

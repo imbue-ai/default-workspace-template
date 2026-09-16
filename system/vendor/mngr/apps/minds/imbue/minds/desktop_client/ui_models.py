@@ -49,7 +49,7 @@ from imbue.minds.desktop_client.update_status import UpdateVerdict
 # while a window stayed open across a reconnect -- it cannot catch assets
 # built for another version being served with a matching bootstrap, since
 # both values come from the same live server.
-UI_SCHEMA_VERSION: int = 9
+UI_SCHEMA_VERSION: int = 10
 
 
 class UiWorkspaceEntry(FrozenModel):
@@ -96,6 +96,13 @@ class UiWorkspaceEntry(FrozenModel):
     supports_shutdown: bool = Field(default=False, description="Whether minds can stop/start this workspace's host")
     liveness: str = Field(
         default="", description="RUNNING / STOPPED / STOPPING / STARTING / UNKNOWN when supports_shutdown, else empty"
+    )
+    stop_kind: str = Field(
+        default="",
+        description=(
+            "Why a cloud machine's current stop happened: owner / maintenance / idle / suspension, 'unknown' for a "
+            "kind this build does not recognize, empty while running or when not known"
+        ),
     )
     account: str = Field(default="", description="Owning account email, when known")
     create_attempt_state: str = Field(
@@ -512,6 +519,9 @@ class UiBootstrapSeed(FrozenModel):
     accent: str = Field(description="Initial accent color (avoids neutral->accent pop-in)")
     is_mac: bool = Field(description="Whether the client platform is macOS (traffic-light padding etc.)")
     mngr_forward_origin: str = Field(description="Bare origin of the mngr forward plugin for /goto/ URLs")
+    is_onboarding_complete: bool = Field(
+        description="Whether this install is past the first-run start flow (drives the home page's /start redirect)"
+    )
 
 
 class UiBootstrap(FrozenModel):

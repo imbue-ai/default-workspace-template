@@ -1,4 +1,4 @@
-"""Per-agent, per-client presence: which clients have a chat's page open, and whether it is showing.
+"""Per-chat, per-client presence: which clients have a chat's page open, and whether it is showing.
 
 The chat page reports its own presence to the chat app (contracts.md section 10):
 ``hidden`` once the shell has handed it its handshake,
@@ -21,6 +21,7 @@ from typing import Final
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -42,7 +43,7 @@ class PresenceState(LowerCaseStrEnum):
 
 
 class PresenceReport(FrozenModel):
-    """The body of ``POST /api/agents/<id>/presence``."""
+    """The body of ``POST /api/chats/<id>/presence``."""
 
     client_id: str = Field(min_length=1, description="The reporting client, as the shell's handshake named it")
     state: PresenceState = Field(description="The page's state in that client")
@@ -69,47 +70,47 @@ class PresenceTracker(MutableModel):
         default=PRESENCE_EXPIRY_SECONDS, frozen=True, description="How long an unrefreshed report counts"
     )
 
-    _presence_by_client_by_agent: dict[str, dict[str, _ClientPresence]] = PrivateAttr(default_factory=dict)
+    _presence_by_client_by_chat: dict[ChatId, dict[str, _ClientPresence]] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def record(self, agent_id: str, client_id: str, state: PresenceState) -> None:
-        """Replace ``client_id``'s standing report about ``agent_id``; ``CLOSED`` drops it."""
+    def record(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
+        """Replace ``client_id``'s standing report about ``chat_id``; ``CLOSED`` drops it."""
         with self._lock:
-            by_client = self._presence_by_client_by_agent.setdefault(agent_id, {})
+            by_client = self._presence_by_client_by_chat.setdefault(chat_id, {})
             if state is PresenceState.CLOSED:
                 by_client.pop(client_id, None)
                 if not by_client:
-                    del self._presence_by_client_by_agent[agent_id]
+                    del self._presence_by_client_by_chat[chat_id]
                 return
             by_client[client_id] = _ClientPresence(state=state, reported_at=self.clock())
 
-    def forget_agent(self, agent_id: str) -> None:
+    def forget_chat(self, chat_id: ChatId) -> None:
         with self._lock:
-            self._presence_by_client_by_agent.pop(agent_id, None)
+            self._presence_by_client_by_chat.pop(chat_id, None)
 
-    def is_open(self, agent_id: str) -> bool:
+    def is_open(self, chat_id: ChatId) -> bool:
         """Whether any client holds an unexpired report about the chat, visible or hidden."""
-        return len(self._live_reports(agent_id)) > 0
+        return len(self._live_reports(chat_id)) > 0
 
-    def is_visible(self, agent_id: str) -> bool:
+    def is_visible(self, chat_id: ChatId) -> bool:
         """Whether any client's unexpired last report says the chat is showing."""
-        return any(report.state is PresenceState.VISIBLE for report in self._live_reports(agent_id))
+        return any(report.state is PresenceState.VISIBLE for report in self._live_reports(chat_id))
 
-    def open_agent_ids(self) -> set[str]:
+    def open_chat_ids(self) -> set[ChatId]:
         with self._lock:
-            agent_ids = list(self._presence_by_client_by_agent)
-        return {agent_id for agent_id in agent_ids if self.is_open(agent_id)}
+            chat_ids = list(self._presence_by_client_by_chat)
+        return {chat_id for chat_id in chat_ids if self.is_open(chat_id)}
 
-    def visible_agent_ids(self) -> set[str]:
+    def visible_chat_ids(self) -> set[ChatId]:
         with self._lock:
-            agent_ids = list(self._presence_by_client_by_agent)
-        return {agent_id for agent_id in agent_ids if self.is_visible(agent_id)}
+            chat_ids = list(self._presence_by_client_by_chat)
+        return {chat_id for chat_id in chat_ids if self.is_visible(chat_id)}
 
-    def _live_reports(self, agent_id: str) -> list[_ClientPresence]:
-        """The unexpired reports about ``agent_id``, dropping the expired ones as they are found."""
+    def _live_reports(self, chat_id: ChatId) -> list[_ClientPresence]:
+        """The unexpired reports about ``chat_id``, dropping the expired ones as they are found."""
         now = self.clock()
         with self._lock:
-            by_client = self._presence_by_client_by_agent.get(agent_id)
+            by_client = self._presence_by_client_by_chat.get(chat_id)
             if by_client is None:
                 return []
             expired_client_ids = [
@@ -118,5 +119,5 @@ class PresenceTracker(MutableModel):
             for client_id in expired_client_ids:
                 del by_client[client_id]
             if not by_client:
-                del self._presence_by_client_by_agent[agent_id]
+                del self._presence_by_client_by_chat[chat_id]
             return list(by_client.values())

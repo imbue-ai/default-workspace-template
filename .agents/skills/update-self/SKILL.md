@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -10,8 +10,8 @@ metadata:
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
 the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
-`Dockerfile`, `system/supervisord.conf`, the system interface, the vendored
-`mngr`.
+`Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
+the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace, so this flow never mutates the
 live tree from an unverified state: an isolated **worker** does the merge and
@@ -27,7 +27,7 @@ launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
 The default target is the **latest stable `minds-v*` tag**, never newer than
-the Minds app driving this workspace (the template ships the code that app
+the Mind app driving this workspace (the template ships the code that app
 talks to); see `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
@@ -71,7 +71,7 @@ UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
 
 then `tk start "$UPDATE_LEASE_ID"`.
 
-**Record the run for the Minds app** -- as soon as the lease is yours, so the
+**Record the run for the Mind app** -- as soon as the lease is yours, so the
 app can see a run is under way:
 
 ```bash
@@ -123,7 +123,7 @@ refusal's `error:` line as the last thing printed. The output carries `ref`,
 version you are updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Minds app
+Its single `error:` line says why no target could be chosen (the Mind app
 could not be reached or is too old to report its version; every release is
 newer than the app; the workspace is already on the release it may take).
 Relay that line in plain terms and offer the next step; never resolve a ref by
@@ -135,7 +135,7 @@ error names a release the workspace could still take).
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
 risks and get an explicit go-ahead, unless the message that started this pass
-already carries that confirmation (the Minds app's "Update to a specific
+already carries that confirmation (the Mind app's "Update to a specific
 version" prompt says so). If they decline, record `run-status verdict REFUSED
 --detail "<the version they asked for, and that they chose not to attempt
 it>"` and end the pass. Details in `references/version-ceiling.md`.
@@ -192,14 +192,14 @@ verdict REFUSED --detail "..."` as in Step 2.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Minds app sends the user into this
+Surface your own chat tab first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --agent-id "$MNGR_AGENT_ID"
+    surface-chat-tab --chat-id "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"
 ```
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
@@ -211,16 +211,17 @@ tk create "update-self" -t task \
     --acceptance "worker launched; conflicts triaged; validated; branch applied"
 ```
 
-Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_NAME`
+Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_ID`
 and `$REF` expand, then a **quoted** body. The `lead_agent` line must stay:
 this prose runs cross-version, and an older workspace's launcher may not stamp
-it at launch.
+it at launch. It is the lead's agent id, not its name: a rename of the lead's
+chat mid-update would otherwise strand the worker's report.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
+lead_agent: $MNGR_AGENT_ID
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -242,12 +243,13 @@ lead and synced into your worktree with this runtime dir) -- run *all* its
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
+Per §6 of the worker guide: the report shapes come from
+`.agents/shared/references/worker-reporting.md`, but you write and push the
+report by hand as §6 spells out -- not with the launcher's `report` subcommand,
+which this workspace's own launcher may predate. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
 review-gate escape hatch, or a §4b customization the update cannot keep),
-`done` / `stuck` (terminal). Substitutions:
-`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
+`done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
@@ -270,7 +272,7 @@ mngr destroy update-self --force
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
-the worker reports this chat is idle, and naming the worker lets the Minds app
+the worker reports this chat is idle, and naming the worker lets the Mind app
 read the worker's liveness instead of "waiting for you"), then background-poll:
 
 ```bash
@@ -294,7 +296,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. Either way: reply via `mngr message`, consume the
+the third reaches the user. Either way: reply via `create_worker.py reply
+--task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default

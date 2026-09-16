@@ -43,8 +43,11 @@ User-visible:
   prompt. `/home/user`, the workspace version, apt records, and container identity are
   intact; afterwards the container runs under gVisor (same caveats as the cutover:
   ptrace/FUSE/io_uring gone, metadata-heavy filesystem ops slower).
-- While a workspace is mid-migration, Start answers the existing 409
-  `workspace_migrating`; each workspace's downtime is its own stop + restore, nothing else.
+- While a workspace is mid-migration -- from the migrate's stop request to its finish CAS --
+  the row carries the `maintenance` stop kind ([`specs/workspace-stop-kinds.md`](../../specs/workspace-stop-kinds.md)):
+  Start answers 409 `workspace_under_maintenance`, a 0.6.1+ desktop shows "Maintenance" with no
+  Start control, and no desktop's unattended recovery starts it. Each workspace's downtime is its
+  own stop + restore, nothing else.
 - A rolled-back workspace comes back on gen-1 (on whatever gen-1 box the product restore
   picks) at its pre-migration state: **work done after the migration is lost by policy** --
   rollback is for migrations judged failed promptly, not a general gen-2 -> gen-1 path.
@@ -52,7 +55,13 @@ User-visible:
   are untouched until migrated; a migrated workspace still opens, runs, and stop/starts
   from an old client; their *new* creates only ever lease gen-1 rows, and once a tier's
   gen-1 stock is retired those creates fail with an "update the app" error instead of
-  silently landing an unsandboxed container on a gen-2 box.
+  silently landing an unsandboxed container on a gen-2 box. One exception: a <= 0.6.0
+  desktop's latchkey supervisor keeps wiring a migrated workspace's gateway against the
+  old VM until the app is restarted (imbue-ai/mngr-internal#970; fixed in 0.6.1, whose
+  supervisor follows the move within one discovery cycle), so migrate 0.6.1+ cohorts
+  first and tell old-client owners to restart the app after their migration. The
+  machine's own gateway and its service sign-ins survive the migration regardless of the
+  client version (see [migrate-latchkey-state.md](./migrate-latchkey-state.md)).
 - New (0.6.x+) clients' creates lease gen-2 rows via the tag match; if the gen-2 pool is
   exhausted their slow path may still rebuild on a gen-1 row (capability field permits
   both) -- safe, just not a gen-2 workspace.

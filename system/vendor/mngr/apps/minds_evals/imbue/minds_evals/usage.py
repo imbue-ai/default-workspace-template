@@ -61,6 +61,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import DeciderResult
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.ui_flows import VerifierUsage
 from imbue.mngr_usage.data_types import TokenSnapshot
 from imbue.mngr_usage.pricing import compute_cost
@@ -466,6 +467,20 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
 
 
 @pure
+def summarize_turn_usage(events: Sequence[Mapping[str, Any]], start_index: int) -> TrialUsage:
+    """What the workspace agent consumed answering one client message: the same summary over the
+    events from ``start_index`` on, which is where the stream stood when that message was sent.
+
+    Per-turn spend is transcript-sourced by construction. The in-box proxy's log records requests
+    with no way back to the message that provoked them, so it cannot be split per turn however
+    complete it is. That means a per-turn figure carries every transcript caveat: it excludes
+    delegated and worker spend, prices every request at the standard rate whatever tier served it,
+    and is unknown on a codex trial, whose stream reports no usage at all.
+    """
+    return summarize_workspace_usage(events[start_index:])
+
+
+@pure
 def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> DeciderUsage:
     """Aggregate the decider's own calls. Every result in the bucket came from ``model``, the
     configured decider model, so that is what the whole bucket is labelled and priced against; a
@@ -486,13 +501,20 @@ def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> Dec
 
 
 @pure
+def token_buckets(tokens: TokenSnapshot) -> TokenBuckets:
+    """A snapshot in the artifacts' shape: absent counters read as zero, and the cache-creation
+    bucket takes the ``cache_write`` name every usage figure in the trial record uses."""
+    return TokenBuckets(
+        input=tokens.input or 0,
+        output=tokens.output or 0,
+        cache_read=tokens.cache_read or 0,
+        cache_write=tokens.cache_creation or 0,
+    )
+
+
+@pure
 def _token_dict(tokens: TokenSnapshot) -> dict[str, int]:
-    return {
-        "input": tokens.input or 0,
-        "output": tokens.output or 0,
-        "cache_read": tokens.cache_read or 0,
-        "cache_write": tokens.cache_creation or 0,
-    }
+    return token_buckets(tokens).model_dump()
 
 
 @pure

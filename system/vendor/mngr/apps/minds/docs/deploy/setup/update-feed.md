@@ -46,6 +46,12 @@ fallback_branch = "minds-v0.3.12"
 rollout_percentage = 100
 ```
 
+The file's `[web_channels.<channel>]` entries (`template_ref = "minds-vX.Y.Z"`)
+publish to the same bucket as `<channel>-web.json`: the template tag the
+connector pins browser creates to for that channel, read live rather than at
+deploy time (see the Release channels section of
+[../ops/app-release.md](../ops/app-release.md)).
+
 Installs that predate channels configure no feed host and keep reading
 ToDesktop's feed, so moving `stable` here does not reach them. They roll onto
 this manifest the first time they take a build that names a host -- there is no

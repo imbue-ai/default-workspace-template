@@ -90,6 +90,12 @@ name = "josh"
 public_key = "GbBZ3zKqhQYW8R9nbYrV1le0S10KxLT4KqPcRp2r5QI="
 address = "10.112.0.2"
 
+
+[[management_plane.wireguard.operators]]
+name = "hynek"
+public_key = "kourKwkC4VkX9RS0nuPeJHo9hUGQTV7lpzAGyXtbrSQ="
+address = "10.112.0.3"
+
 # The tier's Modal Proxy: created once in the minds-dev Modal workspace,
 # named here with its static egress IPs. Proxy lookup is Modal-environment
 # scoped and the workspace holds at most one proxy, so the shared dev proxy
@@ -111,7 +117,7 @@ tracks_generation = false
 # deploy time. Dev envs keep the retention window (halted local VM held for
 # instant restart-in-place before the slot is freed) short so stop/start
 # iteration and the opt-in release test see the retention finalize land in
-# minutes; production/staging keep the default hour.
+# minutes; production/staging use ten minutes.
 [storage]
 stop_retention_seconds = 300
 
@@ -166,6 +172,8 @@ max_total_machine_disk_gb = 1400
 # dev-tier deploy must instead state the ref explicitly, matching what the
 # dev pool is baked at (see `just pool-bake-from-worktree` / `pool-bake`):
 #   MINDS_WEB_TEMPLATE_REF=<branch-or-tag> uv run minds-admin env deploy
+# Dev envs publish no update feed, so this deploy-time ref is the live pin
+# (production's comes from the feed's `<channel>-web.json`).
 [web_workspaces]
 template_repo = "github.com/imbue-ai/default-workspace-template"
 

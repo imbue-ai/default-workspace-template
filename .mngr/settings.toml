@@ -220,8 +220,6 @@ Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`t
 
 `.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to the Bash tool timeout.
-
 Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`)."""]
 
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
@@ -307,7 +305,7 @@ check_installation = false
 #   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
 #   silently ignored (verified -- the bypass still worked). With this flag the model reports
 #   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
-#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Mind does not use.
 #   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
@@ -319,13 +317,11 @@ append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
-
 Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
-### Welcome to Minds
+### Welcome to Mind
 
 I'm an AI operating system built to extend *you* — so you can do your best work.
 
@@ -372,7 +368,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
-### Welcome to Minds
+### Welcome to Mind
 
 I'm an AI operating system built to extend *you* — so you can do your best work.
 
@@ -479,6 +475,13 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
+# Publish each workspace container's sshd on loopback only. The minds desktop
+# client always talks to a local daemon and connects to 127.0.0.1, so nothing
+# needs the container reachable from the machine's LAN. This is also mngr's
+# default for a local daemon; it is pinned here so the workspace's exposure does
+# not depend on that default. (Requires the vendored mngr to know the field:
+# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -1703,7 +1706,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=$MNGR_AGENT_ID\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
@@ -1723,10 +1726,10 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # the stop hook must never auto-create PRs or push to origin (the repo-level
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
 #
-# install_worker_skills.sh installs the single generic worker sub-skill from
-# .agents/shared/worker/ into the worker's .agents/skills/ tree as
-# `harden-worker`, which the crystallize / update / heal creation lifecycle
-# relies on. (The venv converge that used to sit here now runs for every agent
+# Nothing worker-specific is installed into the worker's skill tree: the harden
+# worker is followed in place, from the checkout every worker already has at
+# .agents/shared/worker/SKILL.md, because a lead's task file names that path
+# outright. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
 #
 # claude_update_plugin.sh installs the code-guardian plugin (and the other
@@ -1742,7 +1745,7 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Converge the venv for worker agents, ahead of the skill install so deps are ready
+# Converge the venv for worker agents, ahead of the plugin install so deps are ready
 # first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
 # (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
 # lazily, with root-closure scope rather than --all-packages, racing whatever the agent
@@ -1751,7 +1754,7 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted

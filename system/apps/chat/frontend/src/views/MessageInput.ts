@@ -13,13 +13,19 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { drainToComposer, interruptAgent, sendMessage } from "../models/Response";
+import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import { cancelHandoff, switchChat } from "../models/Handoffs";
+import { getPendingPick, pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
+import type { ProviderAccount } from "../models/Providers";
+import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { openProviderChooser } from "../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getAgentById, whenAgentRegistered } from "../models/AgentManager";
+import { getChatById, isHandoffCancellable, whenChatRegistered } from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
+import { harnessLabel } from "./harness-labels";
+import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
@@ -47,8 +53,8 @@ const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-s
 
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 
-function messageTextKey(agentId: string): string {
-  return `${MESSAGE_TEXT_KEY_PREFIX}${agentId}`;
+function messageTextKey(chatId: string): string {
+  return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
 // Blocks handed back to the composer from OUTSIDE this component (a native shoulder tap whose combined
@@ -71,31 +77,95 @@ interface PendingFailureNotice {
 const pendingFailureNotices = new Map<string, PendingFailureNotice>();
 
 /**
- * Raise the chat's failure notice for ``agentId`` from a sibling view.
+ * Raise the chat's failure notice for ``chatId`` from a sibling view.
  *
  * The composer owns the notice because it owns the composer -- Cancel means "the message is back
  * in the box, go look at it". A sibling that fails a send hands the failure here rather than
  * putting up its own dialog, so one shape of failure gets one shape of answer no matter which
  * button started it.
  */
-export function raiseFailureNotice(agentId: string, notice: PendingFailureNotice): void {
+export function raiseFailureNotice(chatId: string, notice: PendingFailureNotice): void {
   // Only ever one pending per agent, and only for the agent it concerns: a composer that is not
   // mounted cannot show this, and a stale entry would otherwise surface as a modal about
   // something that failed long ago the next time the user opened that chat.
   pendingFailureNotices.clear();
-  pendingFailureNotices.set(agentId, notice);
+  pendingFailureNotices.set(chatId, notice);
   m.redraw();
 }
 
-/** Hand ``block`` back to ``agentId``'s composer (prepended above any draft), from a sibling view. */
-export function prependToComposer(agentId: string, block: string): void {
+// Chats whose draft was taken out of the composer by a sibling view (the switch dialog's "Start a
+// new chat" moves it to the new chat); the mounted composer clears its own text on its next pass.
+const pendingComposerClears = new Set<string>();
+
+/** What a sibling view took out of ``chatId``'s composer to send somewhere else. */
+export interface TakenComposerDraft {
+  /** What the user typed, for putting back if it could not be sent. */
+  text: string;
+  /** What goes on the wire: the text with the attachment references appended. */
+  finalText: string;
+  attachments: readonly ComposerAttachment[];
+}
+
+/**
+ * Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
+ * switch dialog begins with. The attachments travel with the text, so a file dropped in this
+ * composer is not left behind by the move, and in-flight uploads are awaited first so a file
+ * dropped a moment ago still makes it. The persisted copy goes too, so a reload does not bring it
+ * back. Null when an upload failed: the file would leave the message silently and its chip would be
+ * cleared along with the rest, so this refuses and names it instead, as an ordinary send does.
+ */
+export async function takeComposerDraft(chatId: string): Promise<TakenComposerDraft | null> {
+  await waitForComposerUploads(chatId);
+  const failed = getComposerAttachments(chatId).filter((attachment) => attachment.status === "error");
+  if (failed.length > 0) {
+    const names = failed.map((attachment) => attachment.fileName).join(", ");
+    raiseFailureNotice(chatId, {
+      title: failed.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload",
+      detail: `${names} could not be uploaded, so the new chat was not started. Remove the attachment, or try again.`,
+    });
+    return null;
+  }
+  const text = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  const attachments = getComposerAttachments(chatId);
+  const finalText = buildMessageWithAttachments(text, getReadyAttachmentPaths(chatId));
+  localStorage.removeItem(messageTextKey(chatId));
+  clearComposerAttachments(chatId);
+  pendingComposerClears.add(chatId);
+  m.redraw();
+  return { text, finalText, attachments };
+}
+
+/** Hand a taken draft back to ``chatId``'s composer when what it was taken for did not happen. */
+export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft): void {
+  restoreToComposer(chatId, taken.text, taken.attachments);
+}
+
+/**
+ * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
+ *
+ * Prepending is what lets it run unconditionally: the returned message first and any draft typed
+ * since after it, and neither is lost. The attachments merge rather than overwrite, since anything
+ * attached in the meantime would otherwise go with them.
+ */
+function restoreToComposer(chatId: string, text: string, attachments: readonly ComposerAttachment[]): void {
+  prependToComposer(chatId, text);
+  const existingAttachments = getComposerAttachments(chatId);
+  const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
+  restoreComposerAttachments(chatId, [
+    ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
+    ...existingAttachments,
+  ]);
+}
+
+/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view. */
+export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
-  const existingDraft = localStorage.getItem(messageTextKey(agentId)) ?? "";
+  const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
   const merged = existingDraft.trim().length === 0 ? block : `${block}\n\n${existingDraft}`;
-  localStorage.setItem(messageTextKey(agentId), merged);
-  pendingComposerPrepends.set(agentId, merged);
+  localStorage.setItem(messageTextKey(chatId), merged);
+  pendingComposerPrepends.set(chatId, merged);
   m.redraw();
 }
 
@@ -121,9 +191,9 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
   return files;
 }
 
-export function MessageInput(): m.Component<{ agentId: string | null }> {
+export function MessageInput(): m.Component<{ chatId: string | null }> {
   let messageText = "";
-  let currentAgentId: string | null = null;
+  let currentChatId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
   // Set instead of sending when the user types one of the harness's declared
   // auth commands (the `open_auth` composer popup). Delivered raw, /login or
@@ -145,7 +215,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // actually sent (attachment references appended), for repeating the send. They differ whenever
   // the message carried attachments, and sending the typed text alone would silently drop them.
   type SendRecovery = {
-    agentId: string;
+    chatId: string;
     text: string;
     sentText: string;
     attachments: readonly ComposerAttachment[];
@@ -168,6 +238,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
+  // The switch to the pending lane (spec 5.1): the handoff request is out, or the cancel of a
+  // running switch is out.
+  let isSwitchInFlight = false;
+  let isCancelSwitchInFlight = false;
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -176,7 +250,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // Its own handler rather than the one above: each notice clears only its own state, and
   // registering one shared function reference from two overlays would be de-duplicated by
   // addEventListener and then torn down by whichever overlay closed first.
-  function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
+  function renderComposerAttachment(chatId: string, attachment: ComposerAttachment): m.Vnode {
     const isReadyImage = attachment.status === "ready" && attachment.isImage && attachment.uploaded !== undefined;
     const thumbnail = isReadyImage
       ? m("img", {
@@ -244,7 +318,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 extra: "composer-attachment-remove shrink-0",
                 "aria-label": "Remove attachment",
                 ...hoverTooltipAttrs("Remove attachment"),
-                onclick: () => removeComposerAttachment(agentId, attachment.localId),
+                onclick: () => removeComposerAttachment(chatId, attachment.localId),
               },
               m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
             ),
@@ -254,16 +328,18 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
   return {
     view(vnode) {
-      const agentId = vnode.attrs.agentId;
+      const chatId = vnode.attrs.chatId;
 
-      if (!agentId) {
+      if (!chatId) {
         return null;
       }
 
-      if (currentAgentId !== agentId) {
-        currentAgentId = agentId;
-        messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
+      if (currentChatId !== chatId) {
+        currentChatId = chatId;
+        messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         isInterruptInFlight = false;
+        isSwitchInFlight = false;
+        isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
         // user to the next one.
         declinedSlashCommand = null;
@@ -280,9 +356,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
       // persisted draft; adopt it into the live composer so it is visible at once, then clear the flag.
       // A sibling view raised a failure for this agent; adopt it into the notice.
-      const pendingNotice = pendingFailureNotices.get(agentId);
+      const pendingNotice = pendingFailureNotices.get(chatId);
       if (pendingNotice !== undefined) {
-        pendingFailureNotices.delete(agentId);
+        pendingFailureNotices.delete(chatId);
         clearActionFailureNotice();
         actionFailureTitle = pendingNotice.title;
         actionFailureDetail = pendingNotice.detail;
@@ -290,15 +366,35 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         externalRetry = pendingNotice.retry ?? null;
       }
 
-      const pendingPrepend = pendingComposerPrepends.get(agentId);
+      const pendingPrepend = pendingComposerPrepends.get(chatId);
+      // The clear before the prepend: a take-then-hand-straight-back (a new chat the shell could
+      // not start) leaves both pending on the same pass, and the restored draft must win.
+      if (pendingComposerClears.delete(chatId)) {
+        messageText = "";
+      }
       if (pendingPrepend !== undefined) {
-        pendingComposerPrepends.delete(agentId);
+        pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
       }
 
-      async function handleSend(): Promise<void> {
-        if (!agentId) {
-          return;
+      /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
+      interface PreparedSend {
+        /** What the user typed, for the bubble and for restoring the composer. */
+        text: string;
+        /** What goes to the agent: the text with the attachment references appended. */
+        finalText: string;
+        attachments: readonly ComposerAttachment[];
+      }
+
+      /**
+       * The preflight every send shares: the harness's composer guard, the upload wait, the
+       * failed-upload refusal, and the empty check; then the composer is cleared and what was
+       * in it comes back for the wire. Null when nothing is to be sent (the guard raised a notice,
+       * an upload failed, or the box was empty).
+       */
+      async function prepareSend(): Promise<PreparedSend | null> {
+        if (!chatId) {
+          return null;
         }
         // The composer guard is whatever the agent's harness declared (its
         // `composer_command` popups on the catalog): auth commands open the
@@ -308,7 +404,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // catalog when it has not loaded yet -- otherwise an early /login could
         // slip through the fetch window.
         if (messageText.trim().startsWith("/")) {
-          const harness = getAgentById(agentId)?.harness;
+          const harness = getChatById(chatId)?.active_agent.harness;
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
           }
@@ -320,28 +416,26 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               declinedSlashCommand = { command: match.command, body: match.popup.notice_body ?? null };
             }
             m.redraw();
-            return;
+            return null;
           }
         }
         // Wait for in-flight uploads so a just-dropped file is included rather
         // than dropped from the message.
-        await waitForComposerUploads(agentId);
+        await waitForComposerUploads(chatId);
 
-        const attachmentPaths = getReadyAttachmentPaths(agentId);
+        const attachmentPaths = getReadyAttachmentPaths(chatId);
         const text = messageText;
 
         // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
         // below, so without this the file would leave the message silently and the only clue
         // would be a small label that then disappears. Refuse the send and say which file.
-        const failedAttachments = getComposerAttachments(agentId).filter(
-          (attachment) => attachment.status === "error",
-        );
+        const failedAttachments = getComposerAttachments(chatId).filter((attachment) => attachment.status === "error");
         if (failedAttachments.length > 0) {
           // Same guard as the send-failure path: the upload wait above is awaited, so the user
           // may have switched agents, and a notice about this agent's files must not land on
           // another agent's chat.
-          if (currentAgentId !== agentId) {
-            return;
+          if (currentChatId !== chatId) {
+            return null;
           }
           const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
           actionFailureTitle =
@@ -350,64 +444,151 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           actionFailureRecovery = null;
           externalRetry = null;
           m.redraw();
-          return;
+          return null;
         }
 
         if (!text.trim() && attachmentPaths.length === 0) {
           // Nothing to send. Reachable by clicking Send with an empty box, which needs no
           // explanation -- the button simply does nothing.
-          return;
+          return null;
         }
 
         const finalText = buildMessageWithAttachments(text, attachmentPaths);
         // Snapshot for rollback if the send fails.
-        const sentText = text;
-        const sentAttachments = getComposerAttachments(agentId);
+        const attachments = getComposerAttachments(chatId);
 
         messageText = "";
-        clearComposerAttachments(agentId);
-        localStorage.removeItem(messageTextKey(agentId));
+        clearComposerAttachments(chatId);
+        localStorage.removeItem(messageTextKey(chatId));
+        return { text, finalText, attachments };
+      }
+
+      async function handleSend(): Promise<void> {
+        if (!chatId) {
+          return;
+        }
+        const prepared = await prepareSend();
+        if (prepared === null) {
+          return;
+        }
+        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
         // optimism the frontend is allowed (contract A2). It is a client-only overlay
         // (see models/OutgoingMessages) whose removal is BACKEND-DRIVEN: it drops only
         // once the real message arrives from the backend (its queued chip or committed
-        // transcript turn), real-first, so there is never a gap.
-        const outgoingId = addOutgoing(agentId, sentText);
+        // transcript turn), real-first, so there is never a gap. The id minted here rides
+        // the send too, so a chat app that holds the message while the chat switches
+        // harness can name it back and the bubble stands down for that rendering.
+        const messageId = mintMessageId();
+        const outgoingId = addOutgoing(chatId, sentText, messageId);
         m.redraw();
 
         try {
           // A chat still being created has no agent to deliver to yet: the bubble stays
           // "Sending…" until the create lands, and the send goes out then. A create that
           // fails rejects here and the message goes back to the composer like any failed send.
-          await whenAgentRegistered(agentId);
-          await sendMessage(agentId, finalText);
-          // The send resolved: the message is now real (committed or queued), so its
-          // "Sending…" bubble is removed by the arriving transcript turn or queued
-          // snapshot (see OutgoingMessages.noteBackendArrivals) -- nothing to do here.
+          await whenChatRegistered(chatId);
+          await sendMessage(chatId, finalText, messageId);
+          // The send resolved: the message is now real (committed, queued, or held for the
+          // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
+          // transcript turn, queued snapshot, or held-send snapshot (see
+          // OutgoingMessages) -- nothing to do here.
         } catch (err) {
           // The send genuinely failed (the backend confirms delivery before
           // resolving, so a rejection means the message was NOT accepted). Drop the
           // optimistic bubble and handle failure the original way: restore the
           // text/attachments to the composer, then surface a popup.
           const detail = describeRequestError(err);
-          console.error(`Failed to send message to agent ${agentId}: ${detail}`);
-          dropOutgoing(agentId, outgoingId);
+          console.error(`Failed to send message to chat ${chatId}: ${detail}`);
+          dropOutgoing(chatId, outgoingId);
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
-          restoreFailedMessageToComposer(agentId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
           // Actions only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
-          if (currentAgentId === agentId) {
+          if (currentChatId === chatId) {
             actionFailureTitle = "Couldn't send your message";
             actionFailureDetail = detail;
             actionFailureKind = describeRequestErrorKind(err);
-            actionFailureRecovery = { agentId, text: sentText, sentText: finalText, attachments: sentAttachments };
+            actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
           }
           m.redraw();
         }
 
+        refocusAfterSend();
+      }
+
+      /**
+       * The armed switch, carried out (spec 5.1): the typed message becomes the new agent's first,
+       * through the handoff route, with the model picked in the dialog. The choice was made in the
+       * dialog, so nothing asks again here. The bubble painted here carries the send-time id, so
+       * the held-send rendering the next snapshot brings replaces it exactly; the queued text
+       * draining took off the old agent comes back for the composer.
+       */
+      async function handleSwitchAndSend(target: ProviderAccount): Promise<void> {
+        if (!chatId || isSwitchInFlight) {
+          return;
+        }
+        isSwitchInFlight = true;
+        m.redraw();
+        const prepared = await prepareSend();
+        if (prepared === null) {
+          isSwitchInFlight = false;
+          m.redraw();
+          return;
+        }
+        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        const messageId = mintMessageId();
+        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        m.redraw();
+        try {
+          await whenChatRegistered(chatId);
+          const pick = getPendingPick(chatId)?.identity ?? null;
+          const { returned_block } = await switchChat(chatId, target.id, finalText, messageId, pick);
+          prependToComposer(chatId, returned_block);
+        } catch (err) {
+          const detail = describeRequestError(err);
+          console.error(`Failed to switch chat ${chatId} to ${target.id}: ${detail}`);
+          dropOutgoing(chatId, outgoingId);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          if (currentChatId === chatId) {
+            clearActionFailureNotice();
+            actionFailureTitle = `Couldn't switch to ${harnessLabel(target.harness)}`;
+            actionFailureDetail = detail;
+          }
+        } finally {
+          isSwitchInFlight = false;
+          m.redraw();
+        }
+        refocusAfterSend();
+      }
+
+      /** Call a running switch off (spec 5.6): the confirming message comes back to the composer, and
+       *  the pending lane stays so the user can try again. */
+      async function handleCancelSwitch(): Promise<void> {
+        if (!chatId || isCancelSwitchInFlight) {
+          return;
+        }
+        isCancelSwitchInFlight = true;
+        m.redraw();
+        try {
+          const { returned_block } = await cancelHandoff(chatId);
+          prependToComposer(chatId, returned_block);
+        } catch (err) {
+          const detail = describeRequestError(err);
+          console.error(`Failed to cancel the switch of chat ${chatId}: ${detail}`);
+          clearActionFailureNotice();
+          actionFailureTitle = "Couldn't cancel the switch";
+          actionFailureDetail = detail;
+        } finally {
+          isCancelSwitchInFlight = false;
+          m.redraw();
+        }
+      }
+
+      function refocusAfterSend(): void {
         requestAnimationFrame(() => {
           // Not while a notice is open: this rAF lands after mithril has mounted the notice and
           // focused its OK button, so refocusing the composer would steal it -- leaving a modal
@@ -419,7 +600,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       }
 
       async function handleStopToComposer(): Promise<void> {
-        if (!agentId || isInterruptInFlight) {
+        if (!chatId || isInterruptInFlight) {
           return;
         }
         // Hide the stop button until the request settles so the user cannot fire
@@ -431,16 +612,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // block below -- so any that remain are Returned with no arrival to clear them
         // (the ghost). Clearing only the pre-interrupt set leaves a message the user
         // sends DURING the round-trip untouched (it is not in the returned block).
-        const preInterruptBubbleIds = getOutgoingMessages(agentId).map((message) => message.id);
+        const preInterruptBubbleIds = getOutgoingMessages(chatId).map((message) => message.id);
         m.redraw();
         try {
           // Interrupt the agent and pull any queued messages back into the composer,
           // unsent, for the user to edit and send. Empty block = nothing was queued
           // (a clean no-op).
-          const { block } = await drainToComposer(agentId);
+          const { block } = await drainToComposer(chatId);
           // Every not-Delivered message is now back in the composer (or was Delivered and
           // dropped its own bubble); clear the pre-interrupt Sending bubbles so none ghost.
-          clearOutgoing(agentId, preInterruptBubbleIds);
+          clearOutgoing(chatId, preInterruptBubbleIds);
           if (block) {
             // Merge instead of drop: prepend the handed-back block above any existing draft
             // (block, blank line, draft) rather than dropping it when the composer is
@@ -449,11 +630,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             const draft = messageText;
             const merged = draft.trim().length === 0 ? block : `${block}\n\n${draft}`;
             messageText = merged;
-            localStorage.setItem(messageTextKey(agentId), merged);
+            localStorage.setItem(messageTextKey(chatId), merged);
           }
         } catch (err) {
           const detail = describeRequestError(err);
-          console.error(`Failed to interrupt agent ${agentId}: ${detail}`);
+          console.error(`Failed to interrupt chat ${chatId}: ${detail}`);
           // Surface the failure: they deliberately clicked Stop, and on failure
           // the agent is still running. Same notice as a failed send -- leaving this one as a
           // system alert while its neighbour is a styled notice is worse than either.
@@ -468,21 +649,29 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         }
       }
 
+      /** Enter and the send button do the same thing: send, or carry the armed switch out. */
+      function handleSubmit(): Promise<void> {
+        if (switchTarget !== null) {
+          return chatId && canSend ? handleSwitchAndSend(switchTarget) : Promise.resolve();
+        }
+        return handleSend();
+      }
+
       function handleKeydown(event: KeyboardEvent): void {
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
-          handleSend();
+          void handleSubmit();
         }
       }
 
       function handlePaste(event: ClipboardEvent): void {
-        if (!agentId) {
+        if (!chatId) {
           return;
         }
         const files = imageFilesFromClipboard(event.clipboardData);
         if (files.length > 0) {
           event.preventDefault();
-          uploadFilesToComposer(agentId, files);
+          uploadFilesToComposer(chatId, files);
         }
       }
 
@@ -493,8 +682,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       function dismissAuthCommandNotice(): void {
         interceptedAuthCommand = null;
         messageText = "";
-        if (agentId) {
-          localStorage.removeItem(messageTextKey(agentId));
+        if (chatId) {
+          localStorage.removeItem(messageTextKey(chatId));
         }
         m.redraw();
       }
@@ -506,27 +695,15 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       /** Put a failed message back in the composer, in FRONT of whatever is already there. */
       function restoreFailedMessageToComposer(
-        forAgentId: string,
+        forChatId: string,
         text: string,
         attachments: readonly ComposerAttachment[],
       ): void {
-        // Reuses the module-level prepend that Stop's drain and QueuedMessageView already hand
-        // blocks back through: it persists to localStorage (so the message survives a reload or
-        // an unmounted composer) and merges the same way, rather than this path inventing a
-        // second set of rules for the same job. Prepending is what lets it run unconditionally:
-        // put the failed message first and any draft typed during the send after it, and neither
-        // is lost.
-        prependToComposer(forAgentId, text);
-        // Merge rather than replace: restoreComposerAttachments overwrites, and anything attached
-        // while the send was in flight would go with it.
-        const existingAttachments = getComposerAttachments(forAgentId);
-        const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
-        restoreComposerAttachments(forAgentId, [
-          ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
-          ...existingAttachments,
-        ]);
-        if (currentAgentId === forAgentId) {
-          messageText = localStorage.getItem(messageTextKey(forAgentId)) ?? text;
+        // Reuses the module-level hand-back that Stop's drain, QueuedMessageView and the switch
+        // dialog already go through, rather than inventing a second set of rules for the same job.
+        restoreToComposer(forChatId, text, attachments);
+        if (currentChatId === forChatId) {
+          messageText = localStorage.getItem(messageTextKey(forChatId)) ?? text;
         }
       }
 
@@ -551,7 +728,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
       function clearRestoredMessage(
-        forAgentId: string,
+        forChatId: string,
         restoredText: string,
         deliveredAttachments: readonly ComposerAttachment[],
       ): void {
@@ -566,21 +743,21 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // block above it and a prefix-only strip would leave it behind -- sent, and still in the
         // box. Only the first occurrence goes, so a user who genuinely typed the same text twice
         // keeps their copy.
-        const current = localStorage.getItem(messageTextKey(forAgentId)) ?? "";
+        const current = localStorage.getItem(messageTextKey(forChatId)) ?? "";
         const withoutRestored = removeFirstBlock(current, restoredText);
         if (withoutRestored) {
-          localStorage.setItem(messageTextKey(forAgentId), withoutRestored);
+          localStorage.setItem(messageTextKey(forChatId), withoutRestored);
         } else {
-          localStorage.removeItem(messageTextKey(forAgentId));
+          localStorage.removeItem(messageTextKey(forChatId));
         }
         // The delivered attachments go regardless of whether text remains. Keying this off the
         // text emptying meant a Retry after the user had typed something left the files behind,
         // to be sent again with whatever they wrote next.
         restoreComposerAttachments(
-          forAgentId,
-          getComposerAttachments(forAgentId).filter((attachment) => !deliveredIds.has(attachment.localId)),
+          forChatId,
+          getComposerAttachments(forChatId).filter((attachment) => !deliveredIds.has(attachment.localId)),
         );
-        if (currentAgentId === forAgentId) {
+        if (currentChatId === forChatId) {
           messageText = withoutRestored;
         }
       }
@@ -647,20 +824,21 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
-        const outgoingId = addOutgoing(recovery.agentId, recovery.text);
+        const messageId = mintMessageId();
+        const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         try {
-          await whenAgentRegistered(recovery.agentId);
-          await sendMessage(recovery.agentId, recovery.sentText);
+          await whenChatRegistered(recovery.chatId);
+          await sendMessage(recovery.chatId, recovery.sentText, messageId);
           // Landed, so take the restored copy back out of the composer.
-          clearRestoredMessage(recovery.agentId, recovery.text, recovery.attachments);
+          clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
-          dropOutgoing(recovery.agentId, outgoingId);
+          dropOutgoing(recovery.chatId, outgoingId);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.
           // The message is already back in that agent's composer either way.
-          if (currentAgentId === recovery.agentId) {
+          if (currentChatId === recovery.chatId) {
             actionFailureDetail = describeRequestError(err);
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
@@ -687,9 +865,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // are about to force is often the one that is stuck, so a drain that fails or is refused
         // must not stop the restart the user actually asked for.
         try {
-          const drained = await drainToComposer(recovery.agentId);
+          const drained = await drainToComposer(recovery.chatId);
           if (drained.block) {
-            prependToComposer(recovery.agentId, drained.block);
+            prependToComposer(recovery.chatId, drained.block);
           }
         } catch {
           // Nothing to do: the restart still goes ahead, and anything queued is lost with it.
@@ -700,7 +878,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           // restarting -- so a non-empty block is not evidence the process was replaced, and a
           // wedged agent is exactly what Force is for. If this is refused (the services agent
           // carries is_primary=true, say) that refusal becomes the notice's text, nothing is sent.
-          await interruptAgent(recovery.agentId);
+          await interruptAgent(recovery.chatId);
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
           actionFailureInFlight = null;
@@ -764,6 +942,59 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         });
       }
 
+      /**
+       * What the armed switch will do, above the composer (spec 5.1): the account the next message
+       * moves the chat to and the model picked for it, with a way to call the choice off. A handoff
+       * also offers a way back into the dialog; a rebind was armed without one, and carries no pick
+       * to change.
+       */
+      function renderSwitchStrip(target: ProviderAccount, isHandoff: boolean): m.Children {
+        const pick = chatId ? getPendingPick(chatId) : null;
+        const destination = pick === null ? target.label : `${target.label}, ${pick.label}`;
+        return m(
+          "div",
+          {
+            class:
+              "message-input-switch-strip mx-1 mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 " +
+              "text-(length:--font-size-helper) text-secondary",
+            role: "status",
+          },
+          [
+            m(
+              "span",
+              { class: "message-input-switch-strip-text" },
+              `Your next message switches this chat to ${destination}`,
+            ),
+            isHandoff
+              ? m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    extra: "message-input-switch-change",
+                    onclick: () => {
+                      if (chatId) openSwitchDialog(chatId, target);
+                    },
+                  },
+                  "Change",
+                )
+              : null,
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "message-input-switch-cancel",
+                onclick: () => {
+                  if (chatId) setPendingAccount(chatId, null);
+                },
+              },
+              "Cancel",
+            ),
+          ],
+        );
+      }
+
       function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Children {
         return m(declinedCommandNotice, {
           title: `${declined.command} can't be sent from chat`,
@@ -795,17 +1026,26 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         });
       }
 
-      const attachments = getComposerAttachments(agentId);
+      const attachments = getComposerAttachments(chatId);
       const hasMessageText = messageText.trim().length > 0;
-      const canSend = hasMessageText || hasReadyAttachments(agentId);
+      const canSend = hasMessageText || hasReadyAttachments(chatId);
+
+      const chat = getChatById(chatId);
+      // The switch the chat is in the middle of, if any, and the one the next send would start.
+      // Nothing is pending once a switch is running: the lane was applied by confirming it.
+      const handoff = chat?.handoff ?? null;
+      const switchTarget = handoff === null ? pendingSwitchTarget(chatId) : null;
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
-      // above the input, read straight off the backend-derived activity state.
-      const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
-      const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
+      // above the input, read straight off the backend-derived activity state. While the
+      // chat switches harness the turn in progress is the switch's own (the summary it asked
+      // for), so the button is the switch's cancel instead, for as long as that is possible.
+      const isAgentWorking = isWorkingActivityState(chat?.active_agent.activity_state ?? null);
+      const isStopButtonVisible = isAgentWorking && !isInterruptInFlight && handoff === null;
+      const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
-      const hasQueuedMessages = (getAgentById(agentId)?.queued_messages ?? []).length > 0;
+      const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
       const stopButtonLabel = hasQueuedMessages
         ? "Interrupt agent and bring queued messages to draft area"
         : "Interrupt agent";
@@ -817,6 +1057,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
+          switchTarget !== null
+            ? renderSwitchStrip(switchTarget, chat === undefined || switchKind(chat, switchTarget) === "handoff")
+            : null,
           m("input", {
             type: "file",
             multiple: true,
@@ -829,7 +1072,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             onchange: (event: Event) => {
               const input = event.target as HTMLInputElement;
-              uploadFilesToComposer(agentId, input.files);
+              uploadFilesToComposer(chatId, input.files);
               input.value = "";
             },
           }),
@@ -838,7 +1081,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               ? m(
                   "div",
                   { class: "message-input-attachments flex flex-wrap gap-2 pt-3 pr-3 pl-4" },
-                  attachments.map((attachment) => renderComposerAttachment(agentId, attachment)),
+                  attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
                 )
               : null,
             m("div", { class: "message-input-row flex flex-row items-center" }, [
@@ -847,7 +1090,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                   "message-input-textbox flex-1 resize-none border-none bg-transparent pt-3.5 pr-2 pb-3.5 pl-5 " +
                   "font-sans text-(length:--font-size-body) leading-normal text-primary focus:outline-none " +
                   "placeholder:text-faint",
-                placeholder: isAgentWorking ? "Type to queue more messages..." : "Type a message...",
+                placeholder:
+                  handoff !== null
+                    ? handoffComposerPlaceholder(handoff)
+                    : isAgentWorking
+                      ? "Type to queue more messages..."
+                      : "Type a message...",
                 rows: 1,
                 value: messageText,
                 oncreate: (textareaVnode: m.VnodeDOM) => {
@@ -865,7 +1113,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 oninput: (event: Event) => {
                   const textarea = event.target as HTMLTextAreaElement;
                   messageText = textarea.value;
-                  localStorage.setItem(messageTextKey(agentId), messageText);
+                  localStorage.setItem(messageTextKey(chatId), messageText);
                   autoResizeTextarea(textarea);
                 },
                 onkeydown: handleKeydown,
@@ -885,6 +1133,21 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                   },
                   m.trust(icon("attach", { size: 18 })),
                 ),
+                isCancelSwitchVisible
+                  ? m(
+                      Button,
+                      {
+                        variant: "secondary",
+                        sm: true,
+                        extra: "message-input-cancel-switch-button shrink-0",
+                        readonly: isCancelSwitchInFlight,
+                        ...hoverTooltipAttrs("Keep this chat on its current agent; your message comes back here"),
+                        "aria-label": "Cancel switch",
+                        onclick: () => void handleCancelSwitch(),
+                      },
+                      isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                    )
+                  : null,
                 isStopButtonVisible
                   ? m(
                       Button,
@@ -905,21 +1168,43 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                       m.trust(stopIcon(14)),
                     )
                   : null,
-                canSend
+                // The send button reads "Switch and send" while a pending lane differs from the
+                // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                canSend && switchTarget !== null
                   ? m(
                       Button,
                       {
                         variant: "primary",
-                        icon: true,
-                        round: true,
-                        extra: "message-input-send-button shrink-0",
-                        ...hoverTooltipAttrs("Send message"),
-                        "aria-label": "Send message",
-                        onclick: handleSend,
+                        sm: true,
+                        extra: "message-input-send-button message-input-send-button--switch shrink-0",
+                        ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`),
+                        "aria-label": "Switch and send",
+                        onclick: handleSubmit,
                       },
-                      m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
+                      [
+                        m("span", "Switch and send"),
+                        m(
+                          "span",
+                          { class: "ml-1.5 inline-flex items-center" },
+                          m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
+                        ),
+                      ],
                     )
-                  : null,
+                  : canSend
+                    ? m(
+                        Button,
+                        {
+                          variant: "primary",
+                          icon: true,
+                          round: true,
+                          extra: "message-input-send-button shrink-0",
+                          ...hoverTooltipAttrs("Send message"),
+                          "aria-label": "Send message",
+                          onclick: handleSubmit,
+                        },
+                        m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
+                      )
+                    : null,
               ]),
             ]),
           ]),

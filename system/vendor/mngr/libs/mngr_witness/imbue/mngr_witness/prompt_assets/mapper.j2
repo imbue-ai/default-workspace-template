@@ -1,0 +1,249 @@
+Your task is the behavior file: {{ feature_path }}
+
+You are on branch `{{ branch_name }}`; your deliverable is that branch plus the
+evidence archive you publish last, which an adversarial reviewer then takes.
+
+# Your units
+
+Every scenario, scenario outline, and rule selected from the file is listed
+below with its steps, its clauses (the observable claims your trace must name,
+spelled exactly as here), its in-scope invariant Rules, and its existing
+witnesses.
+
+{{ units_section }}
+Read the feature file, the README.md of its folder and of every folder above
+it up to the corpus root, and the .md sidecar of the same basename if present.
+Steps and tables are normative; prose explains. The corpus CLI, run from the
+repository root:
+
+    uv run mngr behaviors list --root {{ corpus_root }} --tag <coordinate>
+    {{ matrix_command }}
+    uv run mngr behaviors validate --root {{ corpus_root }}
+
+# The behavior is the anchor and the arbiter
+
+Take each unit as given; never re-derive intended behavior from the
+implementation. When a test and the implementation disagree, the behavior
+decides which is wrong: fix an implementation that diverges from a clause
+(`FIX_IMPL`), fix a test that asserts what the behavior does not say, and
+never make the implementation match your own judgment.
+
+If a unit itself looks wrong (it contradicts another unit, describes a flow
+that cannot exist, demands something clearly unintended, or makes no
+observable claim at all), do NOT edit the corpus: record the problem and the
+edit you would propose under that unit's `behavior_problems`, mark the
+affected change `FAILED`, and move on.
+
+{% include "_ground_rules.j2" %}
+
+# Witnessing tests
+
+A test declares the units it verifies with the `witnesses` marker, by
+coordinate:
+
+    @pytest.mark.witnesses("checkout.fresh-cart")
+    def test_fresh_cart_checks_out() -> None: ...
+
+    @pytest.mark.witnesses("checkout.single-use-coupons", partial="does not exercise concurrent redemptions")
+    def test_spent_coupon_is_refused() -> None: ...
+
+- `partial=` states precisely what the test does NOT cover; omit it when the
+  test covers the unit fully; keep it exactly true on every test you touch.
+- A test may carry several markers: mark every unit it genuinely witnesses,
+  including an in-scope Rule verified in passing (note under which flow).
+- The marker is registered repository-wide; one naming no unit of this corpus
+  is a broken link, not a coverage gap, and fails the `links` gate.
+
+# The objective: converge each unit's witnesses on its clauses
+
+Make each unit's witnessing tests verify exactly its clauses plus its
+in-scope invariant Rules, no more and no less, in both directions:
+
+- Forward: every clause has a witnessing assertion that fails if the clause
+  stops holding. Close a gap by building reach (missing setup is yours to
+  build, not a reason to stop), never by widening assertions elsewhere.
+- Backward: every assertion traces to a clause of the unit or an in-scope
+  invariant; one that traces to neither is gold-plating: remove it (or the
+  whole test, when all of it is redundant).
+
+Before writing any assertion:
+
+- Name the clause. State which clause the assertion witnesses, as written in
+  the file and listed above, not scope you infer the author intended.
+  If you cannot name one, do not write it.
+- Match the clause's precision. Where a clause names a value, a status, or a
+  target, assert that value; where it says only that something is refused or
+  absent, assert that and nothing about how. Do not pin details the clause
+  leaves open (an exact status the step does not name, page wording, header
+  order).
+
+An unwitnessed unit is not a special mode: expect to write new tests for it,
+recorded under `CREATE_TEST`. A unit whose witnesses already verify exactly
+its clauses needs no change. Before writing a new test, search the test roots
+for one that already exercises the unit's surface, marked or not, and prefer
+marking and extending it. Duplicating coverage that already exists is a
+defect in this run.
+
+# Verdicts
+
+Report one verdict per unit, its end state after your work. Each clause is
+closed-world or open-world:
+
+- Closed-world: the claim ranges over a domain you can enumerate (a finite
+  set of paths, statuses, states, origins). Every scenario and scenario
+  outline is closed-world, and so are many Rules (a Rule naming four ways a
+  token is invalid is four checks). Witness these completely.
+- Open-world: the claim quantifies over an unbounded domain ("under any
+  interleaving of requests", "over its whole lifetime"); no finite set of
+  tests closes it. Witness it by attacking the property (present a spent code
+  again, tamper with a token, request data without a session) and asserting
+  the refusal, write a `partial=` note naming the exact quantifier no test
+  can cross, and list the clause under `open_world_clauses`.
+
+Witness a Rule's property itself, not just the flows scenarios describe. A
+Rule's single clause is its name; one quantified over all states and
+interleavings is open-world.
+
+The verdicts:
+
+- `FULL`: every clause has a witnessing assertion that fails if it stops
+  holding; the trace names every clause and `open_world_clauses` is empty.
+- `PARTIAL_STEADY`: at least one clause is open-world, named under
+  `open_world_clauses`, and every closed-world clause is witnessed: the fixed
+  point for such a unit; do not churn past it.
+- `PARTIAL_IMPROVABLE`: at least one closed-world clause has no witnessing
+  assertion; the next run re-targets it.
+- `NONE`: no clause has a witnessing assertion. Legitimate only with a
+  blocker or a behavior problem explaining why.
+
+`FULL` is defined by the trace, not by the absence of `partial=` notes; never
+clear a truthful note to claim it. Only an open-world quantifier earns
+`PARTIAL_STEADY`: a note that names effort ("would need a fixture", "would
+need a live backend") names your job now, not open-world residue.
+
+# Where tests go
+
+{% block placement -%}
+New witnessing tests for this file go in `{{ generation_module }}`, under the
+generation root `{{ generation_root }}` (a `witnesses` package mirroring the
+corpus folders, one module per feature file); create the module when it does
+not exist, with a blank `__init__.py` (no code at all) in every new directory.
+A unit that already has a witness anywhere under the test roots (its
+"Existing witnesses" above) keeps it: extend or correct that test where it
+is, and never create a parallel witness for it in `{{ generation_module }}`.
+{%- endblock %}
+
+# Scaffolding
+
+The setup stage's guide to the fixtures, helpers, and factories the tree
+provides for this corpus; use what it names and never write a second version
+of anything in it:
+
+{{ scaffolding_guide_markdown }}
+
+Add a fixture, helper, or factory only when the guide names none for the
+need, put it where the project's conventions put such things (a `conftest.py`
+or `testing.py` next to its users; both are test paths), and record it under
+`scaffolding_added` in the outcome. Extract only scaffolding: a test's core
+action stays written out in the test.
+
+# Project guidance
+
+{% block project_guidance -%}
+Follow the target project's test taxonomy and style guide: match the
+surrounding tests' fixtures and idioms, and drive the system under test the
+way its existing tests do.
+{%- endblock %}
+
+# Kinds of change
+
+Record every kind of change you make, one entry and one commit per kind used:
+
+- `CREATE_TEST`: a unit gains a witness, by a new test or by a `witnesses`
+  marker on an existing test that already verifies it.
+- `IMPROVE_TEST`: an existing witness reshaped to its unit's clauses (missing
+  coverage added, gold-plating removed, `partial=` notes corrected).
+- `FIX_TEST`: a witnessing test repaired that failed although the
+  implementation matches the behavior.
+- `FIX_IMPL`: the implementation fixed because it diverges from a clause.
+
+Each change is `SUCCEEDED`, `FAILED` (tried, could not complete), or
+`SKIPPED`; there is no blocked status. A change needing intervention beyond
+this task is `FAILED`, its summary saying why and the need recorded in its
+channel (the unit's `blockers`, a `{{ fixme_tag }}` comment, or
+`behavior_problems`).
+
+# Cross-cutting setup blockers
+
+A blocker is a need only a substantial shared setup change can meet: a
+fixture the whole suite lacks, or credentials or infrastructure absent from
+this environment.
+{% block infra_blockers -%}
+Nothing is known in advance about what this host cannot run; find out by
+running the tests, and treat an apparent need for a credential or an external
+service as a signal to reread the unit for the claim you can make at the
+observable surface first.
+{%- endblock %}
+
+Do not paper over one with a brittle local hack. Leave a comment at the spot
+in the test code, on its own line, in exactly this form so the annealer can
+find it:
+
+    # {{ fixme_tag }} <one-line description of the shared setup change needed>
+
+and record it on the affected unit's `blockers` list, marking the relevant
+change `FAILED` with an explanation in its summary.
+
+# Running the tests
+
+Run the witnessing tests you create or touch after each change, by node id,
+from the repository root. The final run after your last commit is the
+evidence you ship: every test named in your trace, by node id, whether you
+touched it or not (an adopted witness is re-verified, not assumed), plus
+every test module you touched, in one invocation.
+
+{% include "_evidence.j2" %}
+
+# Writing the outcome
+
+Write `{{ test_output_dirname }}/{{ outcome_filename }}` as a `MapperOutcome`
+in exactly this shape; every key shown is required, and a verdict, kind, or
+status outside the vocabularies above is rejected:
+
+{{ outcome_schema_json }}
+
+- `units`: one record per unit listed above, all of them, in any order,
+  untouched ones reported as found. Its `tests` name every witnessing test
+  by repository-relative pytest node id (one per example row of a scenario
+  outline), with the marker's `partial` note (or null) and a trace of one
+  entry per assertion: the clause exactly as listed above and the assertion
+  exactly as the line reads in the test source.
+- `changes`: one entry per kind used, with the commit hash when it landed.
+- `scaffolding_added`: what you added because the guide named none, in the
+  guide's own shape.
+- `errored`: true only when an infrastructure error prevented you from
+  working at all.
+
+# What is checked mechanically
+
+After you publish, these gates run against your branch and archive; failing
+any one discards the branch:
+
+- `corpus_untouched`: no change under `{{ corpus_root }}`.
+- `lint`: `ruff check` and `ruff format --check` pass on every Python file
+  the branch touches.
+- `paths`: every commit touches only what its kind allows, as listed under
+  "Branch and commits".
+- `no_changelog`: no file under any `changelog/` directory is added or
+  changed. Never write a changelog entry; the annealer writes them.
+- `units_reported`: the outcome's coordinates are exactly the units above.
+- `links`: `{{ witness_links_filename }}` is present, no link is broken, and
+  every unit with a verdict other than `NONE` has at least one link.
+- `junit`: `{{ junit_filename }}` is present, has no failure or error, and
+  every node id named in the trace is present and passed.
+- `trace`, held by the reviewer that follows you: every traced clause is one
+  of the unit's clauses, every traced assertion string occurs in the named
+  test's source at the branch tip, and the trace bears out the verdict as
+  defined above.
+
+{% include "_publish.j2" %}

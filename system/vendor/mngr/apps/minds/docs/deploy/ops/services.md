@@ -75,12 +75,20 @@ git show "<deployed-sha>:apps/minds/imbue/minds/build_info.py" | grep FALLBACK_B
 Yes, and it is the normal way to recover a failed deploy — but it is not a no-op.
 Every deploy:
 
-- **Moves the web-create pin** to `FALLBACK_BRANCH` in the tree being shipped.
-  `/hosts/claim` (browser creates) matches that tag exactly with no rebuild
-  fallback, so deploying ahead of a bake breaks browser creates until the bake
-  lands. The desktop falls back to a slow rebuild and is unaffected. Bake first
-  ([pool-hosts.md](./pool-hosts.md)), or pass
-  `MINDS_WEB_TEMPLATE_REF=<the baked tag>` and re-deploy after.
+- **Refreshes the web-create fallback pin** to `FALLBACK_BRANCH` in the tree
+  being shipped. On production the live pin for `/hosts/claim` (browser
+  creates) is the release feed's `<channel>-web.json`, published from
+  `[web_channels.*]` in `apps/minds/release-channels.toml`, so a deploy does not
+  move it; the deploy-time value serves only while that file cannot be read.
+  `/hosts/claim` matches its tag exactly with no rebuild fallback, so the
+  production order is deploy the connector, bake the pool
+  ([pool-hosts.md](./pool-hosts.md)), then repoint the web channel
+  ([app-release.md](./app-release.md) step 9b). On a tier with no update feed
+  (staging, dev envs) the deploy-time pin is the live one, so the deploy moves
+  browser creates to the new tag at once. Keep the same order there anyway:
+  deploy first, then bake. The only cost is that browser-chrome creates on
+  that tier answer 503 until the bake lands, which is acceptable on a
+  non-production tier. Do not bake before the deploy.
 - **Ships the working tree.** `modal deploy` uploads what is on disk; nothing
   checks a ref. Deploy from a clean tree at the ref you mean to ship.
 - **Overwrites the `plans` table** from `deploy.toml`. Per-user entitlement rows

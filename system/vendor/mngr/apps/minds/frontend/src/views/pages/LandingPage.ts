@@ -9,7 +9,8 @@ import m from "mithril";
 import { getAppContext } from "../../app-context";
 import { electronBridge } from "../../electron-bridge";
 import type { LandingExtras, MindLiveness } from "../../models/create";
-import { MIND_LIVENESS_LABELS, MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
+import { MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
+import { onboardingProgress } from "../../models/onboarding";
 import type { UiWorkspaceEntry } from "../../channel/messages";
 import type { UiProviderEntry } from "../../generated/ui";
 import { Button, ButtonLink } from "../components/Button";
@@ -24,9 +25,11 @@ import {
   isMachineStateKnown,
   keyStateChipFor,
   lifecycleConfirmation,
+  livenessBadgeLabelFor,
   mindControlsFor,
   remoteLocationBadgeFor,
   remoteStateChipFor,
+  rowClickActionFor,
 } from "./landing-controls";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
@@ -66,6 +69,21 @@ interface LandingState {
   dismissedNoteKeys: Set<string>;
   /** Which bulk press is held for the go-ahead-without-backups confirmation. */
   bulkNoBackupConfirm: "now" | "schedule" | null;
+}
+
+/**
+ * An install that has never been taken past the start flow, with discovery
+ * finished and nothing found, belongs on the start flow. Electron's startup
+ * router lands there itself; this is the same rule for a plain browser, and
+ * for a window that reaches home before the flow has completed.
+ */
+export function shouldRedirectToStartFlow(
+  isOnboardingComplete: boolean,
+  hasRows: boolean,
+  extras: LandingExtras | null,
+): boolean {
+  if (isOnboardingComplete || hasRows || extras === null) return false;
+  return extras.is_discovery_complete && !extras.has_restorable_workspaces;
 }
 
 function loadExtras(state: LandingState): void {
@@ -212,9 +230,9 @@ export const LandingPage: m.ClosureComponent = () => {
     });
   }
 
-  function livenessBadge(liveness: MindLiveness): m.Children {
+  function livenessBadge(liveness: MindLiveness, stopKind: string): m.Children {
     if (liveness === "RUNNING") return null;
-    const label = MIND_LIVENESS_LABELS[liveness] ?? "Status unknown";
+    const label = livenessBadgeLabelFor(liveness, stopKind);
     const tone =
       liveness === "STOPPING" || liveness === "STARTING"
         ? "bg-warning/15 text-warning"
@@ -427,10 +445,15 @@ export const LandingPage: m.ClosureComponent = () => {
         : ("UNKNOWN" as MindLiveness);
     const controls = mindControlsFor(entry, liveness, discoveryHealth);
     const providerLabel = entry.provider_label ?? "";
-    // A cloud machine this device holds no key for cannot be entered, so the
-    // row is not clickable and says why in place of an open that would hang.
+    // A row whose click would go nowhere (a cloud machine this device holds no
+    // key for, a stop an operator holds) is not clickable; the chip or the
+    // badge says why in place of an open that would hang. Decided by the same
+    // rule the click runs, so the two cannot disagree.
     const keyChip = keyStateChipFor(entry.key_state ?? "");
-    const isOpenable = keyChip === null;
+    const isHealthy = stores.health.statusFor(entry.id) === "healthy";
+    const isOpenable =
+      rowClickActionFor(entry, state.tracker.displayedLiveness(entry.id, entry.liveness ?? ""), isHealthy) !==
+      "blocked";
     const row = m(
       Card,
       {
@@ -439,7 +462,7 @@ export const LandingPage: m.ClosureComponent = () => {
         extra: `accent-spine relative overflow-hidden ${isOpenable ? "cursor-pointer" : "cursor-default"}`,
         style: `--workspace-accent: ${entry.accent};`,
         "data-agent-id": entry.id,
-        onclick: () => rowClick(entry),
+        onclick: isOpenable ? () => rowClick(entry) : undefined,
       },
       [
         m("span", { class: "flex-1 min-w-0 truncate font-semibold text-primary pl-1" }, entry.name),
@@ -456,7 +479,7 @@ export const LandingPage: m.ClosureComponent = () => {
             ),
         // Slot for the backup badge (T4 wires the backup-status data source).
         m("span", { class: "landing-backup-badge hidden" }),
-        (entry.supports_shutdown ?? false) ? livenessBadge(liveness) : null,
+        (entry.supports_shutdown ?? false) ? livenessBadge(liveness, entry.stop_kind ?? "") : null,
         healthBadge(entry, liveness),
         updateBadge(entry),
         backupsButton(entry, liveness),
@@ -684,10 +707,23 @@ export const LandingPage: m.ClosureComponent = () => {
     ]);
   }
 
+  // Every input (the extras landing, the workspace list, the onboarding copy)
+  // arrives with a redraw, so the hook sees each change; view() stays free of
+  // navigation.
+  function redirectToStartFlowIfDue(): void {
+    const hasRows = getAppContext().stores.workspaces.workspaces.length > 0;
+    if (shouldRedirectToStartFlow(onboardingProgress.isComplete, hasRows, state.extras)) {
+      m.route.set("/start");
+    }
+  }
+
   return {
     oninit() {
       loadExtras(state);
       state.unsubscribe = getAppContext().stores.workspaces.onChanged(() => loadExtras(state));
+    },
+    onupdate() {
+      redirectToStartFlowIfDue();
     },
     onremove() {
       state.unsubscribe?.();
@@ -832,7 +868,7 @@ export const LandingPage: m.ClosureComponent = () => {
                 "flex items-center gap-2 h-8 px-2 rounded-md cursor-pointer type-body text-secondary hover:text-primary hover:bg-fill-hover bg-transparent border-0 text-left",
               onclick: () => m.route.set("/settings"),
             },
-            [m(Icon16, { name: "settings", extra: "shrink-0" }), m("span", "Minds Settings")],
+            [m(Icon16, { name: "settings", extra: "shrink-0" }), m("span", "Mind Settings")],
           ),
           m(
             "button",

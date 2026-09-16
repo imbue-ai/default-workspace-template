@@ -34,7 +34,7 @@ gh run list -R imbue-ai/mngr-internal --workflow=minds-launch-to-msg.yml -L 5 \
 ```
 
 Version not bumped or a tag missing → step 1. Both tags exist without a green
-launch-to-msg → step 8. Green → done here until promotion (step 9).
+launch-to-msg → step 8. Green → done here until promotion (steps 9 and 9b).
 
 A run reporting success in **under ~2 minutes** was a marker **cache skip**, not
 a verification — check its job durations.
@@ -380,6 +380,45 @@ unattended — the `minds-release` environment has no reviewers. Confirm after:
 curl -s https://updates.imbueminds.com/<channel>-mac.yml | grep -E 'version:|stagingPercentage:'
 ```
 
+### 9b. Repoint the web channels
+
+The same file's `[web_channels.<channel>]` entries name the template tag browser
+creates (`/hosts/claim`) pin to, published as `<channel>-web.json` and read by the
+connector on every web create (cached about a minute), so no connector deploy is
+involved:
+
+```toml
+[web_channels.alpha]
+template_ref = "minds-v0.5.0"
+```
+
+The production order is: deploy the connector ([services.md](./services.md)),
+bake the pool at the tag ([pool-hosts.md](./pool-hosts.md)), then repoint here.
+Repoint a web channel only **after** the pool has `available` rows at that tag:
+web creates lease an exact match and have no rebuild fallback, and the publish
+checks only that the tag exists on the template remote. Until you repoint, browser
+creates keep leasing the old tag, so do not retire those rows first; they can go
+once no `<channel>-web.json` on the feed names that tag and the connector's
+one-minute cache has rolled ([pool-hosts.md](./pool-hosts.md) owns the retire).
+
+The web pin is deliberately independent of the desktop entry: a web-only template
+fix is a dwt tag baked to the pool plus this one line, and a desktop promotion
+never moves it. Which channel a web user is on is their own choice in the web
+chrome's Settings (default stable). Confirm with:
+
+```bash
+curl -s https://updates.imbueminds.com/<channel>-web.json
+```
+
+then create a workspace from the web chrome on that channel and check the
+connector log for `Could not read the web pin` (a feed read problem) or `No web
+pin published` (the channel file is missing).
+
+Staging and dev envs publish no feed, so this step does not apply there: their
+browser creates pin to the deploy-time `MINDS_WEB_TEMPLATE_REF`, so a deploy
+moves them at once. Those tiers still deploy first and bake right after; their
+browser-chrome creates answer 503 in between, which is acceptable there.
+
 > **Historical note, not a step.** The first channel-capable build had to be
 > Released in ToDesktop once, because installs predating the channel code read
 > ToDesktop's own feed and would never have seen our manifests. That happened
@@ -490,6 +529,13 @@ Production sets it (`https://updates.imbueminds.com`), so builds cut from here o
 stable and alpha; beta is in the machinery but listed for nobody until an audience
 for it is decided. That URL is compiled in at build time, so installs shipped before it was
 committed stay stable-only for good. See `specs/minds-release-channels/spec.md`.
+
+The same feed carries the web create pins (`<channel>-web.json`, from the file's
+`[web_channels.*]` entries; see step 9b). `minds-admin env deploy` hands the tier's
+`update_feed_base_url` to the connector, which reads the pin for the channel a
+web user chose. A tier with no feed (staging, dev envs) pins web creates to the
+deploy-time `MINDS_WEB_TEMPLATE_REF` instead, as does production while the feed
+cannot be read.
 
 ### Working on the update UI
 

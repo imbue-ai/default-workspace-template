@@ -79,12 +79,25 @@ def _insert_under_workspace(lines: list[str], new_line: str, *, first: bool) -> 
 def _origin_line(repo_root: Path, runner: Runner) -> str:
     """The one-time ``created from`` seed for ``## Workspace``.
 
-    The template base is the OLDEST first-parent template-state marker (an
-    ``update-self:`` merge or the ``Initial workspace commit``), falling back to
-    the first-parent root; its date, version and sha come from that commit
-    itself, so seeding late still records when the workspace was created. The
-    version uses ``git describe`` (reachability), never ``--points-at``: no tag
-    is ever *on* a template base, only on an ancestor of it.
+    Where the workspace started is its own ``Initial workspace commit``, falling
+    back to the first-parent root; its date, version and sha come from that
+    commit itself, so seeding late still records when the workspace was created.
+    A full-history clone reaches older markers -- the template repo's own, and a
+    source mind's when this one was created from a published template -- and any
+    of those would date this workspace to a stranger's creation, so the walk
+    takes the NEWEST. (``publish-template`` resolves the base the workspace is on
+    *now* from the same log, which is the newest marker of either kind and
+    resolves a merge to its upstream parent; this wants where the mind started.)
+    The version uses ``git describe`` (reachability), never ``--points-at``: no
+    tag is ever *on* an ``Initial workspace commit`` -- bootstrap writes it on
+    top of the cloned template, so the tag is on an ancestor of it.
+
+    The rule is spelled out here rather than imported from
+    ``.agents/shared/scripts/resolve_template_base.py`` (whose ``--origin`` is the
+    same rule, and which the skills reach as a CLI): the apply is staged and run
+    from ``data/.tasks/update-self/skill-at-target/``, a ``git archive`` of the
+    update-self skill directory alone, so nothing outside it can be imported --
+    see ``update_banding._load_bands``. Keep the two in step.
     """
     log = git_out(
         runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"]
@@ -92,8 +105,9 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     creation = ""
     for line in log.splitlines():
         sha, _, subject = line.partition(" ")
-        if subject.startswith("update-self:") or subject == "Initial workspace commit":
-            creation = sha  # keep walking: the log is newest-first, we want the oldest
+        if subject == "Initial workspace commit":
+            creation = sha  # the newest: the log is newest-first
+            break
     if not creation:
         revs = git_out(runner, repo_root, ["rev-list", "--first-parent", "HEAD"])
         creation = revs.splitlines()[-1] if revs else "HEAD"

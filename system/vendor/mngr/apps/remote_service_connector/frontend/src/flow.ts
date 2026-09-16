@@ -28,6 +28,6 @@ export function markNextConfirmed(next: string): string {
 // What the interstitial / waiting copy calls the thing being authorized.
 export function describeNext(next: string): string {
   if (next.startsWith("/share/authorize")) return "open the shared workspace";
-  if (next.startsWith("/accounts/authorize")) return "sign in to the Minds app";
+  if (next.startsWith("/accounts/authorize")) return "sign in to the Mind app";
   return "continue";
 }

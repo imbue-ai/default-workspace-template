@@ -1,0 +1,3 @@
+A UI-flow step no longer reads a page that keeps changing as `settled` when the renderer stalls. The reaction watch returns a verdict that rests on silence (`settled` or `none`) only once the next tick still sees no new mutation, so a renderer the OS deschedules, or a main thread a long task holds, no longer passes for a page that went quiet. A step that settles or sees no reaction takes about one extra poll tick to say so.
+
+The todo flow lab app gains `?jank=<ms>`, which holds the page's main thread busy for that long once a second, and `test_flow_lab.py` pins that a ticking page with it is still read as `still_changing`.

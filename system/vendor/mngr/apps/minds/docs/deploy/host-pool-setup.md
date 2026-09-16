@@ -243,7 +243,7 @@ or `--workspace-dir <dir>` (dev; a working tree, default `$DEFAULT_WORKSPACE_TEM
 shell or a gitignored `apps/minds/.env` -- else the
 `.external_worktrees/default-workspace-template` checkout). The minds desktop client always sends
 `repo_branch_or_tag` in its lease request (the resolved DEFAULT_WORKSPACE_TEMPLATE branch in dev, or the
-latest semver tag in production), so that key must be present on every row that
+app's pinned `minds-v*` release tag in production), so that key must be present on every row that
 should ever be leased. Other dimensions (`cpus`, `memory_gb`, `gpu_count`) can be
 set for a more constrained pool generation; they're only required on the row when
 the lease request also includes them. For slices, the per-slice size

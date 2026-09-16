@@ -384,3 +384,7 @@ class StorageDeletionError(WorkspaceTransitionError):
     existing failure handling records it on the row; on the release path it
     surfaces as a 5xx, keeping the release retryable.
     """
+
+
+class WebChannelManifestError(ConnectorError, ValueError):
+    """Raised when a release feed's ``<channel>-web.json`` does not carry a usable template tag."""

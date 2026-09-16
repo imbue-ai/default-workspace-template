@@ -448,13 +448,29 @@ def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
                 "case {!r} declares 'steps' and a case-level 'expectations'; a stepped case states "
                 "its expectations per step".format(case_id)
             )
+        expectations = parse_expectations(raw_expectations, case_id) if raw_expectations is not None else None
+        # A timing block measures the time to a goal-holding client's satisfaction, so a flat case
+        # with no goal entry has nothing that can ever satisfy one and would score zero however
+        # fast the agent was. A stepped case is exempt: the entry records accumulate, so a step's
+        # time can be closed by a goal an earlier step held.
+        if (
+            steps is None
+            and expectations is not None
+            and expectations.timing is not None
+            and not any(isinstance(entry, GoalEntry) for entry in prompts)
+        ):
+            raise EvalConfigError(
+                "case {!r}: expectations.timing measures the time to a goal entry's client being "
+                "satisfied, but the case declares no goal entry, so the time could never be "
+                "measured".format(case_id)
+            )
         cases.append(
             PersonaCase(
                 case_id=case_id,
                 persona=str(raw_case.get("persona", "")).strip(),
                 prompts=prompts,
                 steps=steps,
-                expectations=parse_expectations(raw_expectations, case_id) if raw_expectations is not None else None,
+                expectations=expectations,
                 reward_strategy=_parse_reward_strategy(
                     raw_case.get(REWARD_STRATEGY_KEY), case_id, is_stepped=steps is not None
                 ),
@@ -954,6 +970,10 @@ def oracle_entry_records(case_config: CaseConfig) -> list[dict[str, Any]]:
             "exchange_count": 1,
             "outcome": (TurnOutcome.SATISFIED if isinstance(entry, GoalEntry) else TurnOutcome.COMPLETED).value,
             "detail": "",
+            # One message per entry in the canned conversation, so a goal entry is satisfied by the
+            # reply to its own message; every other entry satisfied nobody.
+            "satisfied_at": _ORACLE_TIMESTAMP if isinstance(entry, GoalEntry) else "",
+            "satisfied_at_turn": index + 1 if isinstance(entry, GoalEntry) else None,
         }
         for index, entry in enumerate(case_config.prompts)
     ]

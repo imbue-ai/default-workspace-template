@@ -83,8 +83,12 @@ RELEASE_DATE = date(2026, 8, 18)
 # (box_generation, the machine-sizing units/disk fields and their pending
 # targets, the machine-unit entitlement and usage fields), which adds no
 # required field, and the one new client route (POST /machines/{id}/resize) is
-# parsed tolerantly. Its support window ends 2026-10-13.
-SUPPORT_ENDS = date(2026, 10, 13)
+# parsed tolerantly.
+# Also covers minds 0.6.1 (released 2026-09-14): the only wire_types.py change
+# since minds-v0.6.0 is the optional ``stop_kind`` field on the workspace entry
+# (defaulting to None) and the ``WorkspaceStopKind`` WireEnum it carries, which
+# adds no required field. Its support window ends 2026-10-14.
+SUPPORT_ENDS = date(2026, 10, 14)
 
 
 class _TolerantModel(BaseModel):

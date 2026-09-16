@@ -90,7 +90,7 @@ function Nav(): m.Component {
           class:
             "flex items-center gap-4 border-b border-slate-200 dark:border-slate-800 px-6 py-3",
         },
-        m("span", { class: "font-semibold text-lg" }, "minds"),
+        m("span", { class: "font-semibold text-lg" }, "Mind"),
         NAV_LINKS.map((link) =>
           m(
             m.route.Link,

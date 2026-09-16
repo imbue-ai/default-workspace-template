@@ -1,5 +1,6 @@
-"""Render the Slack report of a scheduled run: a message per pair, holding a grid of case by config,
-the trials that failed, and a collapsed table of every judge score behind them.
+"""Render the Slack report of a scheduled run: a message per pair and eval config, holding a grid of
+case by harness config, the trials that failed, and a collapsed table of every judge score behind
+them.
 
 Only the blocks an incoming webhook actually accepts are used. A webhook refuses `data_table`
 outright -- a minimal one is answered with 400 invalid_blocks -- so the sorting and paging it would
@@ -7,10 +8,13 @@ bring are not available here, and `container` is what keeps the long table out o
 `markdown` is refused as well. Both would need an app posting with a bot token rather than a
 webhook, so do not reach for either without changing how the notify job posts.
 
-A scheduled run evaluates arms -- a frozen (mngr, dwt) pair times a named harness config -- and this
-is everything anyone reads about it. Each pair gets a message of its own, because the pairs answer
-different questions ("is what we are about to ship healthy?" and "is what users are running
-healthy?") and a reader acts on one of them at a time.
+A scheduled run evaluates arms -- a frozen (mngr, dwt) pair times one suite's eval config times a
+named harness config -- and this is everything anyone reads about it. Each (pair, eval config) gets
+a message of its own. The pairs answer different questions ("is what we are about to ship healthy?"
+and "is what users are running healthy?") and a reader acts on one of them at a time; the eval
+configs are separate because a config's cases, its arms and its oracle pass are all its own -- a grid
+whose rows were two configs' cases together would report every column as not evaluated for the other
+config's rows, and there would be no single oracle verdict to put on the message's section line.
 
 Every message carries a plain mrkdwn `text` beside its blocks. Slack shows that wherever the blocks
 cannot be rendered, the workflow re-posts it on its own if Slack refuses a block, and it is what the
@@ -51,13 +55,14 @@ from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
+from imbue.minds_evals.data_types import is_model_observable_on_lane
 from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
 
 # The pattern the notify job downloads every summary artifact under, and the stems of the files
 # inside them. The download merges the artifacts into one flat directory, so a summary file's own
-# name is what identifies the pass: the oracle runs per pair and the live pass per cell. These names
-# are composed here from the matrix rather than discovered on disk, so they must stay equal to the
-# ones the scheduled workflow's check steps write.
+# name is what identifies the pass: the oracle runs per pair and eval config, the live pass per
+# cell. These names are composed here from the matrix rather than discovered on disk, so they must
+# stay equal to the ones the scheduled workflow's check steps write.
 SUMMARY_ARTIFACT_PREFIX: Final[str] = "minds-evals-summary-"
 ORACLE_SUMMARY_STEM: Final[str] = "oracle-summary"
 LIVE_SUMMARY_STEM: Final[str] = "live-summary"
@@ -125,9 +130,9 @@ FAIL_MARK: Final[str] = "FAIL"
 JUDGE_REWARD_HEADING: Final[str] = "reward"
 MISSING_SCORE_MARK: Final[str] = "-"
 
-# The judge table's other columns. It carries every graded trial of the pair rather than one pass's,
-# so it has to name the arm each row came from, and the state column is what makes the table stand
-# on its own when it is expanded away from the rest of the message.
+# The judge table's other columns. It carries every graded trial the message reports rather than one
+# pass's, so it has to name the arm each row came from, and the state column is what makes the table
+# stand on its own when it is expanded away from the rest of the message.
 JUDGE_CONFIG_HEADING: Final[str] = "config"
 JUDGE_STATE_HEADING: Final[str] = "state"
 
@@ -173,7 +178,7 @@ class ArmVerdict(LowerCaseStrEnum):
 
     BROKEN is the arm whose story cannot be told -- no summary, or an unreadable one -- as against
     FAILED, which is an arm that was measured and fell short. NOT_EVALUATED is an arm nothing was
-    ever attempted on, because a ref did not resolve or because the pair's oracle gated it off.
+    ever attempted on, because a ref did not resolve or because its suite's oracle gated it off.
     `combine_verdicts` is where their order is decided.
     """
 
@@ -201,7 +206,8 @@ SummaryReading = RunCheck | UnreadSummary
 
 
 class PassReport(FrozenModel):
-    """One pass of a pair -- its oracle, or one of its cells -- as the message presents it.
+    """One pass a message reports -- its suite's oracle, or one of the suite's cells -- as the
+    message presents it.
 
     A pass is a column of the grid and, when there is something to say about it beyond its column,
     a line of the details block.
@@ -213,14 +219,20 @@ class PassReport(FrozenModel):
     trials: tuple[TrialCheck, ...] = Field(description="The trials it graded; empty when it graded none")
 
 
-class PairReport(FrozenModel):
-    """Everything one pair's message says: the pair, how it came out, and the passes behind it."""
+class SuiteReport(FrozenModel):
+    """Everything one message says: which pair and eval config it is about, how that came out, and
+    the passes behind it.
+
+    A report of a pair the run never evaluated names no eval config: nothing was decided per suite
+    there, so the pair gets one message rather than one per config the other pairs ran.
+    """
 
     pair: DecidedPair = Field(description="The pair, with the refs it froze to")
-    verdict: ArmVerdict = Field(description="How the pair and all of its cells came out together")
-    summary_text: str = Field(description="Why the pair reads as it does; empty when the verdict says it all")
-    oracle: PassReport | None = Field(description="The pair's oracle pass; None when the run attempted none")
-    cells: tuple[PassReport, ...] = Field(description="The pair's live passes, in matrix order; empty when none ran")
+    config_slug: str = Field(description="The eval config the message reports on; empty when it reports on none")
+    verdict: ArmVerdict = Field(description="How the suite's oracle pass and all of its cells came out together")
+    summary_text: str = Field(description="Why the suite reads as it does; empty when the verdict says it all")
+    oracle: PassReport | None = Field(description="The suite's oracle pass; None when the run attempted none")
+    cells: tuple[PassReport, ...] = Field(description="The suite's live passes, in matrix order; empty when none ran")
 
 
 class GridMark(FrozenModel):
@@ -263,7 +275,7 @@ class JudgeCriterion(FrozenModel):
 
 
 class JudgeTable(FrozenModel):
-    """Every graded trial of a pair in one table: which arm ran it, what it earned, how the judges
+    """Every graded trial of one suite in one table: which arm ran it, what it earned, how the judges
     scored it, and what became of it.
 
     One table rather than one per harness config, so a criterion can be compared straight down its
@@ -297,11 +309,11 @@ class SlackMessage(FrozenModel):
     icon_emoji: str = Field(description="The shortcode of the avatar the message posts under")
 
 
-# The grid of a pair that graded nothing. Nothing is drawn for it, and nothing is said about it: the
-# pair's own section already says why there is no grid.
+# The grid of a message whose passes graded nothing. Nothing is drawn for it, and nothing is said
+# about it: the message's own section already says why there is no grid.
 EMPTY_GRID: Final[Grid] = Grid(headings=(), rows=())
 
-# The judge table of a pair that graded nothing.
+# The judge table of a message whose passes graded nothing.
 EMPTY_JUDGE_TABLE: Final[JudgeTable] = JudgeTable(criteria=(), rows=(), total_criteria=0, dropped_rows=0)
 
 
@@ -339,15 +351,15 @@ def parse_run_check(summary_text: str) -> RunCheck:
 
 
 @pure
-def oracle_summary_path(summaries_dir: Path, pair_name: str) -> Path:
-    """Where the pair's oracle pass uploaded its summary."""
-    return summaries_dir / "{}-{}.json".format(ORACLE_SUMMARY_STEM, pair_name)
+def oracle_summary_path(summaries_dir: Path, pair_name: str, config_slug: str) -> Path:
+    """Where the oracle pass of one pair and eval config uploaded its summary."""
+    return summaries_dir / "{}-{}-{}.json".format(ORACLE_SUMMARY_STEM, pair_name, config_slug)
 
 
 @pure
-def live_summary_path(summaries_dir: Path, pair_name: str, harness_config: str) -> Path:
+def live_summary_path(summaries_dir: Path, pair_name: str, config_slug: str, harness_config: str) -> Path:
     """Where the cell's live pass uploaded its summary."""
-    return summaries_dir / "{}-{}-{}.json".format(LIVE_SUMMARY_STEM, pair_name, harness_config)
+    return summaries_dir / "{}-{}-{}-{}.json".format(LIVE_SUMMARY_STEM, pair_name, config_slug, harness_config)
 
 
 def read_summary(summary_path: Path) -> SummaryReading:
@@ -470,11 +482,11 @@ def format_verdict_word(verdict: ArmVerdict) -> str:
 
 @pure
 def combine_verdicts(verdicts: Sequence[ArmVerdict]) -> ArmVerdict:
-    """How a pair reads once its cells are in: the worst thing that happened to any of its arms.
+    """How a message reads once its passes are in: the worst thing that happened to any of its arms.
 
     A measured shortfall outranks an arm whose story cannot be told, because it is the one a reader
-    can act on. The all-skipped case is what a pair of only-green cells would read as; a pair the
-    run skipped whole never reaches here, because its decision already says so and it has no arms.
+    can act on. The all-skipped case is what a suite of only-green cells reads as; a pair the run
+    skipped whole never reaches here, because its decision already says so and it has no arms.
     """
     for candidate in (ArmVerdict.FAILED, ArmVerdict.BROKEN, ArmVerdict.NOT_EVALUATED):
         if candidate in verdicts:
@@ -510,7 +522,15 @@ def is_model_unconfirmed(trial: TrialCheck) -> bool:
     `null` is silence rather than evidence of a wrong model -- no transcript was captured, or the
     catalog id has no known reported name -- so the trial still passes, and the reader has to be
     told, or a green arm reads as measured on the model it names.
+
+    A lane that can never name a model is the exception, because there the silence is the lane's
+    known shape rather than anything about this trial: a line every trial of that arm carries every
+    night is one a reader learns to skim, which costs the arms that raise it for a reason. Such a
+    trial that observably ran on the wrong model still answers `False` rather than `None`, and fails
+    into the failures table.
     """
+    if not is_model_observable_on_lane(trial.lane):
+        return False
     return trial.is_passed and bool(trial.requested_model) and trial.is_model_confirmed is None
 
 
@@ -531,7 +551,7 @@ def describe_unread_summary(reading: UnreadSummary, pass_name: str) -> str:
 
 @pure
 def describe_oracle(reading: SummaryReading) -> str:
-    """What the pair's section line says about its oracle pass."""
+    """What the message's section line says about its suite's oracle pass."""
     if isinstance(reading, UnreadSummary):
         return describe_unread_summary(reading, ORACLE_LABEL)
     return "oracle passed" if reading.is_passed else "oracle failed"
@@ -539,10 +559,10 @@ def describe_oracle(reading: SummaryReading) -> str:
 
 @pure
 def render_oracle_pass(reading: SummaryReading) -> PassReport:
-    """The pair's oracle pass as a pass of its own.
+    """The suite's oracle pass as a pass of its own.
 
-    It carries no detail line: its status is already on the pair's section line, and repeating it
-    under the cells would read as a fourth cell. Its trials are still listed there like any others,
+    It carries no detail line: its status is already on the message's section line, and repeating it
+    under the cells would read as a further cell. Its trials are still listed there like any others,
     which is what a failed oracle's message is mostly made of.
     """
     if isinstance(reading, UnreadSummary):
@@ -555,10 +575,10 @@ def render_oracle_pass(reading: SummaryReading) -> PassReport:
 def render_running_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_passed: bool) -> PassReport:
     """One cell the run meant to evaluate.
 
-    A cell whose pair's oracle did not pass never started, so it is reported as not evaluated rather
-    than as a missing summary -- but only when it wrote no summary at all. One that wrote a summary
-    which cannot be read got further than the oracle's story allows, and saying otherwise would name
-    a pass that never ran.
+    A cell whose own suite's oracle did not pass never started, so it is reported as not evaluated
+    rather than as a missing summary -- but only when it wrote no summary at all. One that wrote a
+    summary which cannot be read got further than the oracle's story allows, and saying otherwise
+    would name a pass that never ran.
     """
     if isinstance(live, UnreadSummary):
         if live.is_summary_absent and not is_oracle_passed:
@@ -595,36 +615,83 @@ def render_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_passed: b
             assert_never(unreachable)
 
 
+@pure
+def suite_cells(pair: DecidedPair, config_slug: str, matrix: CiMatrix) -> tuple[MatrixCell, ...]:
+    """The cells one pair has of one eval config, in matrix order -- which is the order of the
+    grid's columns."""
+    return tuple(cell for cell in matrix.cells if cell.pair == pair.pair and cell.config_slug == config_slug)
+
+
+@pure
+def suite_config_slugs(pair: DecidedPair, matrix: CiMatrix) -> tuple[str, ...]:
+    """The eval configs this pair has cells of, in the order the cells name them.
+
+    Read off the cells rather than off the matrix's own list of configs, so a message can only be
+    about a suite the run decided cells of for this pair.
+    """
+    slugs: list[str] = []
+    for cell in matrix.cells:
+        if cell.pair == pair.pair and cell.config_slug not in slugs:
+            slugs.append(cell.config_slug)
+    return tuple(slugs)
+
+
 def read_cell_passes(
-    pair: DecidedPair, matrix: CiMatrix, summaries_dir: Path, oracle: PassReport
+    pair_name: str, config_slug: str, cells: Sequence[MatrixCell], summaries_dir: Path, oracle: PassReport
 ) -> tuple[PassReport, ...]:
-    """Every cell of one pair, in matrix order."""
+    """One suite's cells, each with whatever its live pass left behind, in matrix order."""
     is_oracle_passed = oracle.verdict is ArmVerdict.PASSED
     passes: list[PassReport] = []
-    for cell in matrix.cells:
-        if cell.pair != pair.pair:
-            continue
+    for cell in cells:
         live = (
             ABSENT_SUMMARY
             if cell.decision is CellDecision.SKIP
-            else read_summary(live_summary_path(summaries_dir, pair.pair, cell.harness_config))
+            else read_summary(live_summary_path(summaries_dir, pair_name, config_slug, cell.harness_config))
         )
         passes.append(render_cell_pass(cell, live, is_oracle_passed))
     return tuple(passes)
 
 
-def read_running_pair_report(
-    pair: DecidedPair, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext
-) -> PairReport:
-    """A pair the run evaluated: its oracle pass is what the pair itself is judged on, and its cells
-    are what the grid is made of."""
-    reading = read_summary(oracle_summary_path(summaries_dir, pair.pair))
+@pure
+def render_skipped_suite_report(pair: DecidedPair, config_slug: str, cells: Sequence[MatrixCell]) -> SuiteReport:
+    """A suite of a running pair that runs none of its own cells: every one of them is already green.
+
+    An oracle pass exists exactly where a cell gates on one, so the run pays for none here, and
+    reading a missing oracle summary would report an already-verified suite as broken. The cells
+    keep their columns the way a skipped cell of a running suite does, so a reader sees what was not
+    measured tonight rather than seeing the suite disappear.
+    """
+    passes = tuple(render_cell_pass(cell, ABSENT_SUMMARY, False) for cell in cells)
+    return SuiteReport(
+        pair=pair,
+        config_slug=config_slug,
+        verdict=combine_verdicts(tuple(cell_pass.verdict for cell_pass in passes)),
+        summary_text="",
+        oracle=None,
+        cells=passes,
+    )
+
+
+def read_suite_report(
+    pair: DecidedPair, config_slug: str, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext
+) -> SuiteReport:
+    """One suite of a pair the run evaluated: the oracle pass of this pair and eval config is what
+    the suite is judged on, and its cells are what the grid is made of."""
+    cells_of_suite = suite_cells(pair, config_slug, matrix)
+    if cells_of_suite and all(cell.decision is CellDecision.SKIP for cell in cells_of_suite):
+        return render_skipped_suite_report(pair, config_slug, cells_of_suite)
+    reading = read_summary(oracle_summary_path(summaries_dir, pair.pair, config_slug))
     oracle = render_oracle_pass(reading)
     # A run that stops after the oracle passes has cells in its matrix that never ran; putting a
     # verdict on them would claim a live pass nobody paid for.
-    cells = () if context.is_live_pass_skipped else read_cell_passes(pair, matrix, summaries_dir, oracle)
-    return PairReport(
+    cells = (
+        ()
+        if context.is_live_pass_skipped
+        else read_cell_passes(pair.pair, config_slug, cells_of_suite, summaries_dir, oracle)
+    )
+    return SuiteReport(
         pair=pair,
+        config_slug=config_slug,
         verdict=combine_verdicts((oracle.verdict, *(cell.verdict for cell in cells))),
         summary_text=describe_oracle(reading),
         oracle=oracle,
@@ -632,31 +699,47 @@ def read_running_pair_report(
     )
 
 
-def read_pair_report(pair: DecidedPair, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext) -> PairReport:
-    """One pair's whole message, read out of the matrix and whatever summaries reached the run."""
+def read_pair_reports(
+    pair: DecidedPair, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext
+) -> tuple[SuiteReport, ...]:
+    """Every message one pair gets, read out of the matrix and whatever summaries reached the run:
+    one per eval config it has cells of, each judged on that config's own oracle pass."""
     match pair.decision:
         case PairDecision.UNRESOLVED:
+            # One message rather than one per config, because nothing was decided per suite here.
             # Reported rather than aborting the run, so a missing release tag never costs the other
             # pairs.
-            return PairReport(
-                pair=pair,
-                verdict=ArmVerdict.NOT_EVALUATED,
-                summary_text="a ref did not resolve",
-                oracle=None,
-                cells=(),
+            return (
+                SuiteReport(
+                    pair=pair,
+                    config_slug="",
+                    verdict=ArmVerdict.NOT_EVALUATED,
+                    summary_text="a ref did not resolve",
+                    oracle=None,
+                    cells=(),
+                ),
             )
         case PairDecision.SKIP:
-            # The emoji answers "is this pair good?", which a skip does not change.
-            return PairReport(pair=pair, verdict=ArmVerdict.SKIPPED, summary_text="", oracle=None, cells=())
+            # One message, for the same reason as above. The emoji answers "is this pair good?",
+            # which a skip does not change.
+            return (
+                SuiteReport(
+                    pair=pair, config_slug="", verdict=ArmVerdict.SKIPPED, summary_text="", oracle=None, cells=()
+                ),
+            )
         case PairDecision.RUN:
-            return read_running_pair_report(pair, matrix, summaries_dir, context)
+            # A running pair has at least one cell, so the empty slug is only reached by a matrix
+            # that contradicts itself -- and one message reading as broken beats a pair the report
+            # leaves out altogether.
+            slugs = suite_config_slugs(pair, matrix) or ("",)
+            return tuple(read_suite_report(pair, slug, matrix, summaries_dir, context) for slug in slugs)
         case _ as unreachable:
             assert_never(unreachable)
 
 
 @pure
-def grid_columns(report: PairReport) -> tuple[PassReport, ...]:
-    """The columns of a pair's grid: its cells, or its oracle pass when it has no cells.
+def grid_columns(report: SuiteReport) -> tuple[PassReport, ...]:
+    """The columns of the message's grid: the suite's cells, or its oracle pass when it has no cells.
 
     An oracle-only run pays for no cell, so the oracle's own trials are the only grid there is.
     """
@@ -666,13 +749,13 @@ def grid_columns(report: PairReport) -> tuple[PassReport, ...]:
 
 
 @pure
-def detail_passes(report: PairReport) -> tuple[PassReport, ...]:
+def detail_passes(report: SuiteReport) -> tuple[PassReport, ...]:
     """Every pass whose trials and status the details block draws on, oracle first."""
     return report.cells if report.oracle is None else (report.oracle, *report.cells)
 
 
 @pure
-def judge_passes(report: PairReport) -> tuple[PassReport, ...]:
+def judge_passes(report: SuiteReport) -> tuple[PassReport, ...]:
     """Every grid column that graded something, which is what a judge table can be made of.
 
     A skipped, not-evaluated or broken cell graded nothing and gets no section of its own; the
@@ -832,13 +915,13 @@ def format_unconfirmed_model_lines(columns: Sequence[PassReport]) -> tuple[str, 
 
 
 @pure
-def format_detail_lines(report: PairReport) -> tuple[str, ...]:
+def format_detail_lines(report: SuiteReport) -> tuple[str, ...]:
     """Everything neither the grid nor a pass's own section says, grouped so a reader can stop after
     the first group.
 
     A graded pass's failures are in the failures table, so what is left here is the passes with no
     column of their own: the cells that graded nothing, and above all a failed oracle, whose trials
-    are what its pair's message is mostly made of.
+    are what its message is mostly made of.
 
     The unconfirmed models are every pass's, graded or not. Nothing else in the message says a
     passing arm was never confirmed to have answered on the model it names, and a green arm that
@@ -1182,7 +1265,7 @@ def format_job_note(context: CiReportContext, is_only_the_job_unhealthy: bool) -
 
 @pure
 def format_pair_section(
-    report: PairReport, context: CiReportContext, emoji: str, is_only_the_job_unhealthy: bool
+    report: SuiteReport, context: CiReportContext, emoji: str, is_only_the_job_unhealthy: bool
 ) -> str:
     """The pair's own two lines: which commits it froze to and what became of them, then the run."""
     label_line = "{} {}".format(emoji, format_pair_label(report.pair))
@@ -1335,11 +1418,11 @@ def build_failed_trials_block(failures: Sequence[FailedTrial]) -> dict[str, Any]
 
 @pure
 def build_judge_blocks(table: JudgeTable) -> tuple[dict[str, Any], ...]:
-    """What the message shows for the pair's judge scores.
+    """What the message shows for its suite's judge scores.
 
     Three outcomes, and the last is not an oversight: a table with rows is folded into a container,
     a table the message's character budget emptied says so where that container would have gone, and
-    a pair that graded nothing has no scores to show and draws neither.
+    a suite that graded nothing has no scores to show and draws neither.
     """
     if table.rows:
         return (
@@ -1372,9 +1455,9 @@ def build_message(
 ) -> SlackMessage:
     """One message from its parts, as blocks and as the mrkdwn that stands in for them.
 
-    The order is the order a reader asks the questions in: which pair, how did each case do on each
-    arm, what went wrong, and only then every number behind it. The last of those is collapsed,
-    because a green run is read for its first two blocks alone.
+    The order is the order a reader asks the questions in: which pair and which eval config, how did
+    each case do on each arm, what went wrong, and only then every number behind it. The last of
+    those is collapsed, because a green run is read for its first two blocks alone.
     """
     blocks: list[dict[str, Any]] = [build_header_block(header_text), build_section_block(pair_section)]
     text_parts = ["{} *{}*".format(emoji, header_text), pair_section]
@@ -1397,8 +1480,21 @@ def build_message(
 
 
 @pure
-def render_pair_message(report: PairReport, context: CiReportContext, is_only_the_job_unhealthy: bool) -> SlackMessage:
-    """One pair's whole message."""
+def format_header_text(report: SuiteReport) -> str:
+    """The header: which pair and eval config the message is about, and how that came out.
+
+    A report about no one eval config -- a pair the run skipped whole, or one whose refs did not
+    resolve -- names the pair alone rather than trailing an empty half.
+    """
+    subject = report.pair.pair if not report.config_slug else "{} x {}".format(report.pair.pair, report.config_slug)
+    return "minds-evals: {} -- {}".format(subject, format_verdict_word(report.verdict))
+
+
+@pure
+def render_suite_message(
+    report: SuiteReport, context: CiReportContext, is_only_the_job_unhealthy: bool
+) -> SlackMessage:
+    """One suite's whole message: one pair times one eval config."""
     emoji = WARNING_EMOJI if is_only_the_job_unhealthy else format_verdict_emoji(report.verdict)
     details = format_budgeted_block(format_detail_lines(report))
     graded = judge_passes(report)
@@ -1408,7 +1504,7 @@ def render_pair_message(report: PairReport, context: CiReportContext, is_only_th
         format_failed_trials_rows(failures)
     )
     return build_message(
-        "minds-evals: {} -- {}".format(report.pair.pair, format_verdict_word(report.verdict)),
+        format_header_text(report),
         emoji,
         format_verdict_icon(report.verdict),
         format_pair_section(report, context, emoji, is_only_the_job_unhealthy),
@@ -1458,15 +1554,18 @@ def as_slack_payload(message: SlackMessage) -> dict[str, Any]:
 def render_slack_report(
     matrix_path: Path | None, summaries_dir: Path, context: CiReportContext
 ) -> tuple[SlackMessage, ...]:
-    """Every message a scheduled run posts: one per pair, or one saying it decided nothing."""
+    """Every message a scheduled run posts: one per pair and eval config it evaluated, one for each
+    pair it evaluated nothing of, or one saying it decided nothing at all."""
     matrix = read_ci_matrix(matrix_path)
     if matrix is None or not matrix.pairs:
         return (render_undecided_message(context),)
-    reports = tuple(read_pair_report(pair, matrix, summaries_dir, context) for pair in matrix.pairs)
-    # Read across the whole run, not per pair: a red job that one pair's failure already explains is
-    # not news in the other pair's message.
+    reports = tuple(
+        report for pair in matrix.pairs for report in read_pair_reports(pair, matrix, summaries_dir, context)
+    )
+    # Read across the whole run, not per message: a red job that one arm's failure already explains
+    # is not news in the message of another pair or another suite.
     is_any_arm_bad = any(
         report.verdict in (ArmVerdict.FAILED, ArmVerdict.BROKEN, ArmVerdict.NOT_EVALUATED) for report in reports
     )
     is_only_the_job_unhealthy = bool(describe_unhealthy_jobs(context)) and not is_any_arm_bad
-    return tuple(render_pair_message(report, context, is_only_the_job_unhealthy) for report in reports)
+    return tuple(render_suite_message(report, context, is_only_the_job_unhealthy) for report in reports)

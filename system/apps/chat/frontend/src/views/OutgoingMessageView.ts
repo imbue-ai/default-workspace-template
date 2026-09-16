@@ -23,24 +23,34 @@ export const OUTGOING_BUBBLE_CLASS = `${USER_BUBBLE_CLASS} border border-dashed`
 
 export const OUTGOING_STATUS_CLASS = "outgoing-status mt-[3px] text-(length:--font-size-helper) text-secondary";
 
-function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
-  return m(
-    "div",
-    {
-      class: OUTGOING_ROW_CLASS,
-      key: outgoing.id,
-    },
-    [
-      m("div", { class: OUTGOING_BUBBLE_CLASS }, [
-        m("div", { class: "message-content whitespace-pre-wrap" }, outgoing.content),
-      ]),
-      m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
-    ],
-  );
+export interface NotYetRealBubble {
+  key: string;
+  /** The user's text, verbatim. */
+  content: string;
+  /** What stands under the bubble: "Sending…", or the phase of the switch holding the message. */
+  caption: string;
+  /** Marker classes added to the row, for a caller whose bubbles a test or a style picks out. */
+  extraRowClass?: string;
 }
 
-/** The optimistic outgoing bubbles for an agent, in send order. Returns [] when
+/** A user message that is not yet a real turn, in the dimmed dashed bubble with a caption beneath. */
+export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
+  const rowClass =
+    bubble.extraRowClass === undefined ? OUTGOING_ROW_CLASS : `${OUTGOING_ROW_CLASS} ${bubble.extraRowClass}`;
+  return m("div", { class: rowClass, key: bubble.key }, [
+    m("div", { class: OUTGOING_BUBBLE_CLASS }, [
+      m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
+    ]),
+    m("div", { class: OUTGOING_STATUS_CLASS }, bubble.caption),
+  ]);
+}
+
+function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
+  return renderNotYetRealBubble({ key: outgoing.id, content: outgoing.content, caption: "Sending…" });
+}
+
+/** The optimistic outgoing bubbles for a chat, in send order. Returns [] when
  *  there are none. */
-export function renderOutgoingMessages(agentId: string): m.Vnode[] {
-  return getOutgoingMessages(agentId).map(renderOutgoingBubble);
+export function renderOutgoingMessages(chatId: string): m.Vnode[] {
+  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
 }

@@ -35,6 +35,14 @@ DEPLOY_ID_ENV_VAR: Final[str] = "MINDS_DEPLOY_ID"
 # the timestamped-secret rollback model needs.
 DEPLOY_ID_UNSET_SENTINEL: Final[str] = "MINDS_DEPLOY_ID_UNSET"
 
+# Where the containers behind our web endpoints run. Left unpinned, Modal
+# schedules them anywhere in its fleet -- in practice often Europe -- and every
+# desktop request (auth, lease, share, LLM streaming) pays that round trip.
+# Only the user-facing web functions carry the pin; crons and spawned workers
+# stay unpinned, since nobody waits on their latency and a pin costs a compute
+# multiplier. Modal's broad region groups are ``us`` / ``eu`` / ``ap``.
+WEB_FUNCTION_REGION: Final[str] = "us"
+
 
 def read_deploy_env() -> str:
     return os.environ.get(DEPLOY_ENV_VAR, "production")

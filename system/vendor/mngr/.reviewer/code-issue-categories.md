@@ -93,7 +93,7 @@ The diff should not include excessive changes, or changes unrelated to the user'
 
 ## comment_cruft
 
-Apply the repository's `/crispy-comments` skill to comments added or changed in the diff. **Read `.claude/skills/crispy-comments/SKILL.md` for the criteria and rationale** -- that skill is the source of truth; this category does not restate it. In brief: prune comments that do not help a future maintainer, and keep the ones that explain a non-obvious "why".
+Apply the repository's `/crispy-comments` skill to comments added or changed in the diff, and to ASCII banners anywhere in the files the diff touches. **Read `.claude/skills/crispy-comments/SKILL.md` for the criteria and rationale** -- that skill is the source of truth; this category does not restate it. In brief: prune comments that do not help a future maintainer, and keep the ones that explain a non-obvious "why".
 
 **Exception:** change-process / bug-fix comments ("# Changed X to Y", "# Fixed bug where...") are covered by `user_request_artifacts_left_in_code`; do not double-report them here.
 
