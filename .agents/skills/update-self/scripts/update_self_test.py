@@ -619,7 +619,7 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
     ]
     local_changed = [
         "system/apps/system_interface/src/App.tsx",
-        "PURPOSE.md",  # local only, not an upstream update -> ignored
+        "PURPOSE.md",  # local only, not an upstream update
     ]
     result = update_classification.classify_merge(upstream_changed, local_changed)
 
