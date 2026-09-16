@@ -772,7 +772,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         return;
       }
 
-      const hideButton = createTabActionButton("Close tab", "close", disposables, () => {
+      const hideButton = createTabActionButton("Close tab", "close", () => {
         parameters.api.close();
       });
 
@@ -795,7 +795,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
             trigger,
           );
         };
-        const menuButton = createTabActionButton("Tab options", "kebab", disposables, () => {
+        const menuButton = createTabActionButton("Tab options", "kebab", () => {
           openMenu(menuButton.getBoundingClientRect(), menuButton);
         });
         actions.appendChild(menuButton);
@@ -842,7 +842,6 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 function createTabActionButton(
   title: string,
   iconName: IconName | "kebab",
-  disposables: Array<{ dispose: () => void }>,
   onClick: (ev: MouseEvent) => void,
 ): HTMLButtonElement {
   const button = document.createElement("button");
