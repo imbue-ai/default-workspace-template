@@ -139,7 +139,8 @@ def account_model_options(account_id: str) -> Response:
     catalog (``models`` null). A harness whose set is per agent (codex) has no catalog to offer,
     so the answer is the set an existing agent of this account was last offered, read off its
     sidecar, and ``options`` is empty when the account has run no agent yet: the dialog then
-    offers only the default. A harness whose model the chat app cannot switch offers nothing.
+    offers only the default. A harness whose model the chat app cannot switch offers nothing (``options``
+    empty).
     """
     try:
         account = accounts.resolve_account(account_id)
