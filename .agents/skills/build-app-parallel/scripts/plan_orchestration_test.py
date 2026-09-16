@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,8 @@ assert _spec is not None and _spec.loader is not None
 plan_orchestration = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(plan_orchestration)
 
-# The to-do list example from the planner prompt: two nodes start together, two
-# interactive nodes, and a final handoff.
+# A to-do list plan: two nodes start together, two interactive nodes, and a
+# trailing worker node after the last conversation.
 _TODO_PLAN = """<thinking>
 Cut the spec out first so the scaffold and data layer can start early.
 </thinking>
@@ -74,6 +75,21 @@ def test_every_worker_capability_maps_to_opus_by_default() -> None:
         "medium": "opus",
         "high": "opus",
     }
+
+
+def test_planner_prompt_examples_are_valid_plans() -> None:
+    """The example plans the planner is shown must parse, so the prompt and the
+    parser cannot drift apart."""
+    prompt = (Path(__file__).parents[1] / "references" / "planner-prompt.md").read_text()
+    example_blocks = re.findall(r"<output>\n(capability = .*?)\n</output>", prompt, re.DOTALL)
+
+    assert len(example_blocks) == 2
+    for block in example_blocks:
+        plan = plan_orchestration.parse_plan(f"<output>\n{block}\n</output>")
+        capabilities = [node["capability"] for node in plan["nodes"]]
+        # A plan ends at the working-site conversation; the orchestrator does the
+        # merge and the hardening handoff itself.
+        assert capabilities[-1] == "interactive"
 
 
 def test_parse_plan_expands_all_to_every_earlier_node() -> None:
@@ -168,6 +184,20 @@ def test_find_ready_nodes_respects_the_parallelism_cap() -> None:
     assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 2, 3, 4]) == []
 
 
+def test_interactive_nodes_take_no_worker_slot() -> None:
+    """A conversation with the user neither uses a worker slot nor waits for one."""
+    capability = json.dumps(["low"] * 5 + ["interactive", "low", "interactive"])
+    subtasks = json.dumps([f"task {idx}" for idx in range(8)])
+    access = json.dumps([[], [], [], [], [], [], [], [6]])
+    plan = plan_orchestration.parse_plan(_plan_text(capability, subtasks, access))
+
+    # Five workers fill every slot, and the conversation still starts.
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 2, 3, 4]) == [5]
+    # A running conversation leaves both free slots to workers.
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 2, 5]) == [3, 4]
+    assert plan_orchestration.find_ready_nodes(plan, [0, 1, 2], [3, 5]) == [4, 6]
+
+
 def test_find_ready_nodes_rejects_inconsistent_state() -> None:
     plan = plan_orchestration.parse_plan(_TODO_PLAN)
 
@@ -184,11 +214,13 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     text = plan_orchestration.render_node_task(
         plan=plan,
         node_idx=2,
+        task_path=Path("data/.tasks/build-app-parallel/todo/nodes/2/task.md"),
         finish_report_path=report_path,
         report_by_node_idx={0: "Spec: items have a title.", 1: "Scaffolded todo on 8082."},
     )
 
     assert text.startswith(f"---\nfinish_report_path: {report_path}\n---\n")
+    assert "This task file: `data/.tasks/build-app-parallel/todo/nodes/2/task.md`" in text
     assert "## Your subtask\n\nBuild the mock." in text
     assert "### Node 0\n\n**Its subtask:** Settle the spec." in text
     assert "Spec: items have a title." in text
@@ -202,6 +234,7 @@ def test_render_node_task_without_dependencies_says_so() -> None:
     text = plan_orchestration.render_node_task(
         plan=plan,
         node_idx=0,
+        task_path=Path("r/task.md"),
         finish_report_path=Path("r/report.md"),
         report_by_node_idx={},
     )
@@ -214,12 +247,17 @@ def test_render_node_task_refuses_interactive_and_missing_reports() -> None:
 
     with pytest.raises(plan_orchestration.PlanError, match="interactive"):
         plan_orchestration.render_node_task(
-            plan=plan, node_idx=3, finish_report_path=Path("r"), report_by_node_idx={}
+            plan=plan,
+            node_idx=3,
+            task_path=Path("t"),
+            finish_report_path=Path("r"),
+            report_by_node_idx={},
         )
     with pytest.raises(plan_orchestration.PlanError, match=r"nodes \[1\]"):
         plan_orchestration.render_node_task(
             plan=plan,
             node_idx=2,
+            task_path=Path("t"),
             finish_report_path=Path("r"),
             report_by_node_idx={0: "spec"},
         )
