@@ -313,11 +313,14 @@ pre-check. It also exits 5 for a base that descends from this workspace's
 `Initial workspace commit` -- the merge commit itself, `HEAD`, or any other
 commit carrying the mind's own work.
 
-(The same script seeds the version ledger's `## Workspace` origin line in
-§8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
-`scripts/update_ledger.py`), under `--origin`: that asks where the mind
-*started* -- its own `Initial workspace commit` -- where this section asks what
-template state it is on *now*. Two questions, one marker convention.)
+(The same script, under `--origin`, seeds the version ledger's `## Workspace`
+origin line in §8 step 4 below: that asks where the mind *started* -- its own
+`Initial workspace commit` -- where this section asks what template state it is
+on *now*. Two questions, one marker convention. The update apply seeds the same
+line from its own inline copy of the `--origin` rule, because it runs from a
+`git archive` of the update-self skill directory alone and cannot import
+anything outside it -- see `_origin_line` in `update-self`'s
+`scripts/update_ledger.py`.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is
