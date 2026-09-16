@@ -205,7 +205,7 @@ def classify_path(path: str) -> PathClass:
 
 
 class MergeClassification(NamedTuple):
-    """The upstream-changed files split by disposition, with per-file class info.
+    """Every file either side changed, split by disposition, with per-file class info.
 
     ``merged`` are files where local also diverged (reconcile + validate);
     ``pulled_in`` are clean upstream arrivals local left untouched (trust, but
@@ -257,7 +257,7 @@ def _entry(path: str, disposition: str) -> dict[str, object]:
 def classify_merge(
     upstream_changed: Sequence[str], local_changed: Sequence[str]
 ) -> MergeClassification:
-    """Split the upstream-changed files into the merged vs pulled-in sets.
+    """Split the changed files into the merged, pulled-in and local-only sets.
 
     ``upstream_changed`` is the set of files upstream changed relative to the
     merge base; ``local_changed`` the set the local branch changed relative to
