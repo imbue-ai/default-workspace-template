@@ -184,7 +184,7 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     return CHAT_APP_FALLBACK_URL
 
 
-def post_json(base_url: str, path: str, body: Mapping[str, str]) -> ChatAppAnswer:
+def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
     """POST ``body`` and wait for the answer, however long it takes.
 
     Raises ``ChatAppUnreachableError`` only when the connection itself cannot be made;
