@@ -181,6 +181,21 @@ describe("hoverTooltipAttrs", () => {
     unhoverTooltip(button);
   });
 
+  it("takes the bubble down when its trigger stops offering a tooltip while it is up", async () => {
+    vi.useFakeTimers();
+    const button = renderButton("Starting");
+    hoverTooltip(button);
+    expect(shownTooltipText()).toBe("Starting");
+
+    // What the launcher's tiles do when the apps arrive under a resting pointer: the row
+    // stays, the explanation for it does not.
+    expect(renderButton(null)).toBe(button);
+    await Promise.resolve();
+    expect(shownTooltipText()).toBeNull();
+
+    unhoverTooltip(button);
+  });
+
   it("takes the bubble down with an element that leaves the document while it is up", async () => {
     vi.useFakeTimers();
     // Hand-built DOM, as the lightbox and the dock's tab strip build it.
