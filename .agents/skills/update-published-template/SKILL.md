@@ -177,14 +177,20 @@ and a correct base descends from that one:
 PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
     | awk '$2 != "template:" {print $1; exit}')"
 INITIAL="$(uv run .agents/shared/scripts/resolve_template_base.py --origin)"
-if [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \
+if [ -z "$PUBLISHED_BASE" ]; then
+    echo "NO BASE"
+elif [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \
     && git merge-base --is-ancestor "$INITIAL" "$PUBLISHED_BASE"; then
     echo "CONTAINS $INITIAL"
 fi
 ```
 
 A clean published repo prints nothing and exits 0; read the output, not the exit
-code. If it prints anything, **STOP and tell the user plainly**: the published repo
+code. `NO BASE` means the tip is `template:` snapshots all the way down -- a
+parentless publish that §8's own guard rejects -- and the question cannot be
+answered at all, so STOP and surface that rather than reading it as clean.
+
+If it prints `CONTAINS`, **STOP and tell the user plainly**: the published repo
 contains this workspace's own commits (other apps and anything else committed
 before its base), and an update cannot remove them -- a new commit on top leaves
 the history in place. The remedy is theirs to choose: make the repo private or
