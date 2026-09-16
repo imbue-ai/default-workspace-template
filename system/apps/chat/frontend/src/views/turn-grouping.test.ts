@@ -1667,6 +1667,26 @@ describe("agent switches", () => {
     expect(bare[1].user_event).toBeNull();
   });
 
+  it("marks nothing where the chat's first agent takes over from the seed segment", () => {
+    // The seed segment is the conversation the Mind app wrote before the workspace existed;
+    // nothing was handed off to the first agent, so the switch after it is a turn boundary
+    // with no handoff node, and the user's first message opens its own section.
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "Wait.. what is honest software?", "u-t1", { source: "seed" }),
+      assistantText("t2", "Software that works for you."),
+      agentSwitch("t3", "sw1", "seed", "claude"),
+      userMsg("t4", "Let's build something"),
+      assistantText("t5", "On it."),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.flatMap((s) => s.items.map((i) => i.kind))).not.toContain("handoff");
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", null, "u-t4"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["a-t5"]);
+  });
+
   it("carries a step still open at the switch over into the new agent's section", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "do it"),
