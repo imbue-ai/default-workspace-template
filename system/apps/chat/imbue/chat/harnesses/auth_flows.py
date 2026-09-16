@@ -287,7 +287,9 @@ class AuthFlowService:
             # already there and reported as a success. Nothing changed, and the UI says
             # "signed in again".
             if not minted:
-                session.cleared_credentials = _read_credentials(_harness_credential_paths(lane.harness, account_path))
+                session.cleared_credentials = _read_credentials(
+                    build_account_binding(lane.harness).credential_paths(account_path)
+                )
                 # Parked on DISK before anything is unlinked, so the only copy is never
                 # process memory alone. A stop, a snapshot or an OOM kill in this window used
                 # to destroy a working credential with no trace: the row still pointed at a
@@ -873,16 +875,6 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
             return (account_path / "settings.json",)
         case _ as unreachable:
             assert_never(unreachable)
-
-
-def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple[Path, ...]:
-    """Every file that says this account is signed in, whoever wrote it.
-
-    Wider than `_credential_paths`, which only knows what OUR paste sinks write: a browser
-    sign-in leaves the CLI's own store there too. Used to take an account's credential AWAY
-    before re-driving its sign-in -- see `_clear_for_reauth`.
-    """
-    return build_account_binding(harness).credential_paths(account_path)
 
 
 def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:
