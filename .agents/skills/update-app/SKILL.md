@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app-parallel; for the workspace UI itself use update-system-interface."
 metadata:
   author: imbue
 ---
@@ -25,7 +25,7 @@ refreshed. The live change loop below handles both.
 
 If you're doing something *other* than editing an existing app or service:
 
-- **Creating a new app** -> `build-app`.
+- **Creating a new app** -> `build-app-parallel`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and

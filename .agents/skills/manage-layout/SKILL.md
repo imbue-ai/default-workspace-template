@@ -282,8 +282,8 @@ no-op messages always go to stderr.
 
 ## When NOT to use this skill
 
-- **Building a brand-new app.** Use `build-app` to
-  scaffold the service first; it ends with a `layout.py open` call to
+- **Building a brand-new app.** Use `build-app-parallel` to
+  build the service first; it ends with a `layout.py open` call to
   surface the new tab.
 - **Persisting layout state.** The frontend auto-saves the layout on
   every change; you don't need to do anything special after a mutation.

@@ -213,7 +213,7 @@ raw payload (rendered in its native format -- "view raw email" shows the rendere
 email, not HTML source) and jump to its source (e.g. "open in Gmail"). Build it in
 quietly from the confirmed sample, so the throwaway and crystallized versions
 agree; this depends on the sample carrying the raw payload + source reference.
-**If the surface is a web view, use the `build-app` skill** -- it runs its
+**If the surface is a web view, use the `build-app-parallel` skill** -- it runs its
 own UI-mock confirmation (the data sample confirms the data *shape*, not the UI
 shape) and covers the same raw-data requirement, including rendering untrusted HTML
 safely. Hand it the confirmed `sample.json` so the mock renders real data.
