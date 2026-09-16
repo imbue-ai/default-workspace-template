@@ -162,7 +162,8 @@ export const ACCOUNT_ROW =
 /** The same row when the chooser was opened to pick an account: the whole row picks it, as a
  *  lane row walks into its lane, while its own actions stay on top and keep their clicks. */
 export const ACCOUNT_ROW_PICKABLE =
-  `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) hover:border-accent ` +
+  `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) ` +
+  "has-[.account-pick:enabled]:hover:border-accent " +
   "has-[.account-pick:focus-visible]:outline-2 has-[.account-pick:focus-visible]:outline-offset-2 " +
   "has-[.account-pick:focus-visible]:outline-accent";
 /** The pick target. Its `after` box stretches over the whole row, so a click anywhere on the
