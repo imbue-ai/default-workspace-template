@@ -155,10 +155,11 @@ goes to it through the send path, then the held messages. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat created
 with a pick (`POST /api/chats/create` takes `model` too) is set up the same
-way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
-successor's models from: the catalog for a static harness, the options the
-account's last agent was offered for codex. The dialog offers no pick for
-antigravity, whose model is changed from the agent's terminal.
+way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers
+the models of the target account from, for a handoff's successor and a rebound
+agent alike: the catalog for a static harness, the options the account's last
+agent was offered for codex, and nothing for antigravity, whose model is changed
+from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
