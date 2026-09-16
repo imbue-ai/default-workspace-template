@@ -1706,26 +1706,27 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 extra_provision_command__extend = ["uv sync --all-packages", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
-# Plan node: one node of a build-app-parallel plan. The orchestrating agent creates
-# one git worktree for the whole build and starts every node inside it with
-# `--from :<build folder>`, so transfer is "none": nodes see each other's files the
-# moment they are written, and there is one merge at the end instead of one per node.
+# Shared-folder worker: one of several workers an orchestrating agent runs in parallel
+# inside a single folder (first used by build-app-parallel). The orchestrator creates
+# one git worktree for the whole job and starts every worker inside it with
+# `--from :<folder>`, so transfer is "none": workers see each other's files the
+# moment they are written, and there is one merge at the end instead of one per worker.
 #
 # Differences from `worker`, each following from that shared folder:
 # - No provision commands. The orchestrator runs `uv sync --all-packages` in the
-#   build folder once; a per-node sync would race the other nodes on one .venv.
+#   folder once; a per-worker sync would race the other workers on one .venv.
 #   No harden-worker install either -- hardening is the orchestrator's final
-#   crystallize-creation handoff, not a node.
+#   crystallize-creation handoff, not a shared-folder worker.
 # - The stop hook is fully off (REVIEWER_STOP_HOOK_ENABLE=0). Its uncommitted-changes
-#   gate would see the other nodes' in-progress files, and nodes do not commit: the
-#   orchestrator commits the folder when no node is running.
-# - The appended prompt limits verification to a quick check of the node's own piece.
+#   gate would see the other workers' in-progress files, and these workers do not
+#   commit: the orchestrator commits the folder when no worker is running.
+# - The appended prompt limits verification to a quick check of the worker's own piece.
 #   The single thorough test-and-review pass is the final hardening worker.
-[create_templates.plan_node]
+[create_templates.shared_folder_worker]
 transfer = "none"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
-env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0", "MNGR_AGENT_ROLE=plan_node"]
-append_system_prompt__extend = ["You are one node of a build plan, launched by an orchestrating agent. Other nodes are working in this same folder at the same time. Only create or edit the files your task assigns to you, and never touch another node's files. Do not run git commit, git add, git stash, git checkout or any other command that changes git state; the orchestrator commits. Verify only your own piece with a quick check (it runs, it serves, it renders). Do not run the full test suite, coverage, ratchets, /autofix or any review gate, even where CLAUDE.md asks for them: a single hardening pass runs all of those once the whole build is done. Report back exactly as your task file says, then stop."]
+env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0", "MNGR_AGENT_ROLE=shared_folder_worker"]
+append_system_prompt__extend = ["You are one of several workers launched by an orchestrating agent. The other workers are working in this same folder at the same time. Only create or edit the files your task assigns to you, and never touch another worker's files. Do not run git commit, git add, git stash, git checkout or any other command that changes git state; the orchestrator commits. Verify only your own piece with a quick check (it runs, it serves, it renders). Do not run the full test suite, coverage, ratchets, /autofix or any review gate, even where CLAUDE.md asks for them: a single hardening pass runs all of those once the whole job is done. Report back exactly as your task file says, then stop."]
 
 # Shims for agents created before roles moved to create templates: their persisted
 # `type` is re-resolved from this file on every load, so dropping these sections
