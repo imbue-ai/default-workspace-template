@@ -1,0 +1,1 @@
+Documents in the workspace app model contracts (section 8) that a shell client treats nothing as missing before its first non-empty `apps_updated`, alongside the system interface fix for restored tabs reading "This tab's app no longer lists it." while the app list had not arrived yet.
