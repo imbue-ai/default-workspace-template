@@ -1921,42 +1921,30 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
   void openAddressWhenListed(address, targetGroup);
 }
 
-/** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
- *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
-function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<boolean> {
-  if (findInstance(address) !== null) return Promise.resolve(true);
-  return new Promise<boolean>((resolve) => {
-    const settle = (isListed: boolean): void => {
-      removeAppsUpdatedListener(listener);
-      clearTimeout(timer);
-      resolve(isListed);
-    };
-    const listener = (): void => {
-      if (findInstance(address) !== null) settle(true);
-    };
-    const timer = setTimeout(() => settle(false), timeoutMs);
-    addAppsUpdatedListener(listener);
-  });
-}
-
-/** Resolve to the address of the instance keyed ``key``: at once, when a later list carries it,
- *  or null once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
-function whenInstanceKeyed(key: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<string | null> {
-  const listed = addressOfInstanceKeyed(key);
+/** Resolve to what ``lookup`` finds in the inventory: at once, when a later app list carries
+ *  it, or null once ``timeoutMs`` passes without it. */
+function whenInventoryLists<T>(lookup: () => T | null, timeoutMs: number): Promise<T | null> {
+  const listed = lookup();
   if (listed !== null) return Promise.resolve(listed);
-  return new Promise<string | null>((resolve) => {
-    const settle = (address: string | null): void => {
+  return new Promise<T | null>((resolve) => {
+    const settle = (found: T | null): void => {
       removeAppsUpdatedListener(listener);
       clearTimeout(timer);
-      resolve(address);
+      resolve(found);
     };
     const listener = (): void => {
-      const found = addressOfInstanceKeyed(key);
+      const found = lookup();
       if (found !== null) settle(found);
     };
     const timer = setTimeout(() => settle(null), timeoutMs);
     addAppsUpdatedListener(listener);
   });
+}
+
+/** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
+ *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
+async function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<boolean> {
+  return (await whenInventoryLists(() => findInstance(address), timeoutMs)) !== null;
 }
 
 /** Dock ``address`` once the inventory lists it. */
@@ -2173,7 +2161,7 @@ function focusChatFromEmbedder(message: Record<string, unknown>): void {
 }
 
 async function focusChat(agentId: string): Promise<void> {
-  const address = await whenInstanceKeyed(agentId);
+  const address = await whenInventoryLists(() => addressOfInstanceKeyed(agentId), AWAIT_ADDRESS_TIMEOUT_MS);
   if (address === null) {
     console.warn(`[si] focus-chat ignored: nothing lists an instance keyed ${agentId}`);
     return;
