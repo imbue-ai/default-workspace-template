@@ -16,6 +16,10 @@ vi.hoisted(() => {
 
 const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 
 // The stub just marks where the terminal iframe would mount.
 vi.mock("./TerminalFrame", () => ({

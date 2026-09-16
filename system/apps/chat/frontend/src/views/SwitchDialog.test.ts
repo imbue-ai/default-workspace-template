@@ -28,6 +28,10 @@ vi.mock("../models/Chats", () => ({
   addChatsUpdatedListener: () => undefined,
   addActiveAgentChangedListener: () => undefined,
 }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 vi.mock("../models/Providers", () => ({
   accountForAgent: (id?: string) => state.accounts.find((account) => account.id === id) ?? null,
 }));
@@ -171,7 +175,7 @@ describe("the switch dialog", () => {
     render();
     expect(ROOT().textContent).toContain("Switch to Codex?");
     expect(ROOT().textContent).toContain(
-      "Claude wraps up what it is doing and hands the conversation to OpenAI (Codex)",
+      "Claude Code wraps up what it is doing and hands the conversation to OpenAI (Codex)",
     );
     expect(ROOT().textContent).toContain("Loading models…");
     await flush();

@@ -18,6 +18,10 @@ const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
 }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
@@ -281,7 +285,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     agentState.activity_state = "THINKING";
     handoffState.handoff = handoffStateFixture({ phase: "summarizing" });
     const strip = render();
-    expect(labelTextOf(strip)).toBe("Claude is writing a summary…");
+    expect(labelTextOf(strip)).toBe("Claude Code is writing a summary…");
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("HANDOFF_summarizing");
     // The failed phase has its own notice over the composer; the strip goes back to the agent.
     handoffState.handoff = handoffStateFixture({ phase: "failed" });

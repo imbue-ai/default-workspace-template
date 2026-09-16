@@ -898,7 +898,7 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
 
         # The switch completes against the fake mngr: the node closes live, and the chat is on Codex.
         expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
-            "Handed off from Claude to Codex", timeout=30000
+            "Handed off from Claude Code to Codex", timeout=30000
         )
         snapshot = _settled_chat_snapshot(server)
         # The typed message rode inside the successor's prompt, so the switch marker shows it as the
@@ -1042,7 +1042,7 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         notice.locator(".handoff-retry-button").click()
 
         expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
-            "Handed off from Claude to Antigravity", timeout=30000
+            "Handed off from Claude Code to Antigravity CLI", timeout=30000
         )
         expect(chat.locator(".handoff-failed-notice")).to_have_count(0)
         settled = _settled_chat_snapshot(server)

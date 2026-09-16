@@ -1,14 +1,9 @@
-/** The user-facing names of the harnesses (`HarnessType` on the backend). */
+/** The user-facing name of a harness, read off its catalog (`HarnessCatalog.label`). */
 
-// An unknown harness shows its raw name rather than nothing.
-const HARNESS_LABEL_BY_NAME: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  "pi-coding": "Pi",
-  opencode: "OpenCode",
-  antigravity: "Antigravity",
-};
+import { getHarnessCatalog } from "../models/HarnessCatalog";
 
+// Before the catalogs have loaded, or for a harness the backend does not list, the raw name
+// shows rather than nothing; the load's redraw replaces it.
 export function harnessLabel(harness: string): string {
-  return HARNESS_LABEL_BY_NAME[harness] ?? harness;
+  return getHarnessCatalog(harness)?.label ?? harness;
 }

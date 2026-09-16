@@ -131,7 +131,7 @@ While the chat converges the held messages render from the snapshot's
 `handoff.held_sends` (the message the user switched with stands down once the
 `agent_switch` marker carrying it is on the transcript, where it renders as the
 successor's opening bubble), one handoff node in the transcript shows the switch's
-progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
+progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed; a fresh start, which asked for no summary and sent
 no prompt, leaves no node once it has landed), the activity strip and the placeholder say

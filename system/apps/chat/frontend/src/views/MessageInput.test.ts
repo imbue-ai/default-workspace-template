@@ -119,14 +119,19 @@ vi.mock("../models/ModelSettings", () => ({
 // matcher itself is reimplemented here minimally; the real one is covered by
 // HarnessCatalog.test.ts).
 vi.mock("../models/HarnessCatalog", () => {
-  const catalogs: Record<string, { popups: { trigger: string; commands: string[]; action: string }[] }> = {
+  const catalogs: Record<
+    string,
+    { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
+  > = {
     claude: {
+      label: "Claude Code",
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
       ],
     },
     codex: {
+      label: "Codex",
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },

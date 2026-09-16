@@ -19,6 +19,10 @@ vi.mock("../shell", () => ({
   },
 }));
 vi.mock("../models/Chats", () => ({ getChatById: () => state.chat ?? undefined }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 vi.mock("../models/Providers", () => ({ getAccounts: () => state.accounts }));
 vi.mock("../models/Handoffs", () => ({
   retryHandoff: (chatId: string, accountId: string) => {
@@ -126,7 +130,7 @@ describe("the failed-switch notice", () => {
       handoff: rebindStateFixture({ phase: "failed", error: "mngr start exited with code 1" }),
     });
     render();
-    expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not restart Claude");
+    expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not restart Claude Code");
     const select = ROOT().querySelector<HTMLSelectElement>("select.handoff-retry-account");
     expect([...(select?.options ?? [])].map((option) => option.value)).toEqual(["acct-anthropic", "acct-anthropic-2"]);
     expect(select?.value).toBe("acct-anthropic-2");

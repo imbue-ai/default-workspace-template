@@ -5,6 +5,10 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: (id: string) => chats.get(id),
 }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 
 import type { ChatSnapshot } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
@@ -17,9 +21,11 @@ const chats = new Map<string, ChatSnapshot>();
 
 describe("the words for a chat switching harness", () => {
   it("follows the phase, naming the harness each phase is about", () => {
-    expect(handoffPhaseText(handoffStateFixture({ phase: "draining" }), "claude")).toBe("Wrapping up with Claude…");
+    expect(handoffPhaseText(handoffStateFixture({ phase: "draining" }), "claude")).toBe(
+      "Wrapping up with Claude Code…",
+    );
     expect(handoffPhaseText(handoffStateFixture({ phase: "summarizing" }), "claude")).toBe(
-      "Claude is writing a summary…",
+      "Claude Code is writing a summary…",
     );
     expect(handoffPhaseText(handoffStateFixture({ phase: "switching" }), "claude")).toBe("Starting Codex…");
     expect(handoffPhaseText(handoffStateFixture({ phase: "failed" }), "claude")).toBe("Could not start Codex");
@@ -44,12 +50,14 @@ describe("the words for a chat switching harness", () => {
 
 describe("the words for a chat changing account in place", () => {
   it("keeps the harness and names the account the agent restarts on", () => {
-    expect(handoffPhaseText(rebindStateFixture({ phase: "draining" }), "claude")).toBe("Wrapping up with Claude…");
+    expect(handoffPhaseText(rebindStateFixture({ phase: "draining" }), "claude")).toBe(
+      "Wrapping up with Claude Code…",
+    );
     expect(handoffPhaseText(rebindStateFixture({ phase: "restarting" }), "claude")).toBe(
-      "Restarting Claude on Anthropic 2 (Claude Code)…",
+      "Restarting Claude Code on Anthropic 2 (Claude Code)…",
     );
     expect(handoffPhaseText(rebindStateFixture({ phase: "failed" }), "claude")).toBe(
-      "Could not restart Claude on Anthropic 2 (Claude Code)",
+      "Could not restart Claude Code on Anthropic 2 (Claude Code)",
     );
     expect(handoffComposerPlaceholder(rebindStateFixture())).toBe(
       "Type a message; it is delivered once Anthropic 2 (Claude Code) is ready…",
@@ -84,7 +92,7 @@ describe("the held-send bubbles", () => {
     expect(text).toContain("and this");
     // The switch's progress is the handoff node's to tell, not the bubbles'.
     expect(text).toContain("Sending…");
-    expect(text).not.toContain("Claude is writing a summary…");
+    expect(text).not.toContain("Claude Code is writing a summary…");
   });
 
   it("stands the confirming message down once the switch marker carrying it is on the transcript", () => {

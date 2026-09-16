@@ -62,6 +62,7 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.claude import auth_endpoints
 from imbue.chat.harnesses.interrupt import restart_drain
+from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
@@ -587,8 +588,8 @@ def _get_harnesses_endpoint() -> Response:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
     One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability); the
-    frontend keys in by an agent's harness.
+    switch mode, picker mode, powered-by label, shoulder-tap capability, plus the
+    harness's popups and user-facing name); the frontend keys in by an agent's harness.
 
     Every harness is always included, deliberately: what the user has signed in to
     decides what they can LAUNCH, not what the app can render. A codex or pi agent that
@@ -610,6 +611,9 @@ def _get_harnesses_endpoint() -> Response:
         # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        # The harness's user-facing name, from the same table the account labels and the
+        # handoff prompt use, so the page names a harness the way the backend does.
+        catalog["label"] = HARNESS_LABEL[harness]
         catalogs[harness.value] = catalog
     return json_response(catalogs)
 
