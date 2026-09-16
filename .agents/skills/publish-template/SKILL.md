@@ -1238,10 +1238,10 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   that exits 1), and resolve its date/version/sha from that commit itself.
   **Use `git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION"`
   (reachability), NEVER `git tag --points-at`** -- no tag is ever *on* a
-  template base (an `Initial workspace commit` sits on top of the cloned
-  template; the `minds-v*` tag is always on an ancestor), so a pointing-at
-  lookup comes up empty and the line would silently degrade to the unnamed
-  `created from the workspace template` fallback. Insert `- <date>  created from <version or
+  workspace's own creation commit (bootstrap writes `Initial workspace commit`
+  on top of the cloned template, so the `minds-v*` tag is on an ancestor), so a
+  pointing-at lookup comes up empty and the line would silently degrade to the
+  unnamed `created from the workspace template` fallback. Insert `- <date>  created from <version or
   "the workspace template">  <7-char sha>`, note padded to width 26 but never
   fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
   26 chars, so a bare pad-to-26 would land the sha flush). (This is the

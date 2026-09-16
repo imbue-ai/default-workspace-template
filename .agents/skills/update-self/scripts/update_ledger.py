@@ -89,7 +89,8 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     *now* from the same log, which is the newest marker of either kind and
     resolves a merge to its upstream parent; this wants where the mind started.)
     The version uses ``git describe`` (reachability), never ``--points-at``: no
-    tag is ever *on* a template base, only on an ancestor of it.
+    tag is ever *on* an ``Initial workspace commit`` -- bootstrap writes it on
+    top of the cloned template, so the tag is on an ancestor of it.
 
     The rule is spelled out here rather than imported from
     ``.agents/shared/scripts/resolve_template_base.py`` (whose ``--origin`` is the
