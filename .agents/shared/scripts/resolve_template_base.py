@@ -97,10 +97,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="print the workspace's own creation commit instead of its template base",
     )
     args = parser.parse_args(argv)
+    # stderr is left alone rather than captured: when git itself fails (not a
+    # repo, unborn HEAD) its own message is the only thing that says why, and
+    # the caller is an agent reading this script's stderr.
     log = subprocess.run(
         ["git", "-C", str(args.repo), *FIRST_PARENT_LOG_ARGS],
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
     ).stdout
     lines = log.splitlines()
