@@ -367,9 +367,10 @@ class HarnessModelResolver(ABC):
         """The options this agent was last offered, read from disk without reaching its daemon, or None
         for a static catalog.
 
-        What an account-level picker shows for an agent that does not exist yet: the switch
-        dialog offering a handoff's successor its models reads them off an existing agent of
-        the same account. The default, for a static harness, is None (the catalog is the offer).
+        What an account-level picker shows for an agent not yet running on that account: the
+        switch dialog offering a handoff's successor or a rebound agent its models reads them off
+        an existing agent of the same account. The default, for a static harness, is None (the
+        catalog is the offer).
         """
         return None
 

@@ -133,7 +133,7 @@ def is_picker_dynamic(harness: HarnessType) -> bool:
 
 
 def account_model_options(account_id: str) -> Response:
-    """The models a NEW agent on ``account_id`` could run on: what the switch dialog offers a handoff's successor.
+    """The models a switch onto ``account_id`` can pick from: the switch dialog's offer for a handoff or a rebind.
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
     catalog (``models`` null). A harness whose set is per agent (codex) has no catalog to offer,
