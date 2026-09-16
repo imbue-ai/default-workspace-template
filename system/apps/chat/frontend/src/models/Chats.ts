@@ -9,7 +9,7 @@ import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
-import type { ModelChoice } from "./ModelSettings";
+import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -56,6 +56,9 @@ export interface HeldSend {
 export interface HandoffState {
   kind: TransitionKind;
   phase: HandoffPhase;
+  // When the switch was confirmed (ISO 8601): a summary request on the transcript from before it
+  // belongs to an earlier switch that was called off, not to this one.
+  started_at: string;
   target_lane: string;
   target_account_id: string;
   // The harness the chat is moving to (a rebind keeps its own), for the phase text.
@@ -64,8 +67,10 @@ export interface HandoffState {
   target_label: string;
   // The messages held for after the switch, the confirming one first.
   held_sends: HeldSend[];
-  // Why the agent could not be started, in the failed phase; null otherwise.
+  // Why the switch failed, in the failed phase; null otherwise.
   error: string | null;
+  // Which step failed, in the failed phase: the agent's start, or the model picked for it.
+  failed_step: "start" | "model" | null;
 }
 
 /** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
@@ -414,9 +419,14 @@ export interface CreatedChat {
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
  * Throws with the server's detail on rejection.
  */
-export function createChat(projectId: string, accountId: string = "", message: string = ""): Promise<CreatedChat> {
+export function createChat(
+  projectId: string,
+  accountId: string = "",
+  message: string = "",
+  pick: ModelIdentity | null = null,
+): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId, message });
+  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
 }
 
 /**
@@ -427,7 +437,7 @@ export function launchChat(chatId: string, accountId: string): Promise<CreatedCh
   return postCreateChat({ chat_id: chatId, account_id: accountId });
 }
 
-async function postCreateChat(body: Record<string, string>): Promise<CreatedChat> {
+async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {
   const response = await fetch(apiUrl("/api/chats/create"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -60,11 +60,20 @@ vi.mock("../shell", () => ({
   openSubagentTab: vi.fn(),
 }));
 
+// A press on another account hands the chat to the switch dialog (or an immediate switch); the
+// armed card's Model row reopens it. Both recorded by account id.
+const begun: string[] = [];
+const reopened: string[] = [];
+vi.mock("./SwitchDialog", () => ({
+  beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
+}));
+
 import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
-import { getPendingAccountId, setPendingAccount } from "../models/PendingLane";
+import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
@@ -119,6 +128,8 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   picks.length = 0;
   started.length = 0;
+  begun.length = 0;
+  reopened.length = 0;
   pins.length = 0;
   providerState.defaultId = null;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
@@ -329,8 +340,9 @@ describe("the combo card", () => {
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
   });
 
-  it("makes an account on another harness the pending lane, shown as next, and takes it back on a second press", () => {
-    // The chat's next send switches it there (spec 5.1); nothing happens until then.
+  it("hands a press on another harness's account to the switch dialog, and takes an armed choice back on a second press", () => {
+    // The dialog (or, for a chat with no user turn, an immediate switch) decides what happens;
+    // the card itself arms nothing and closes so the dialog has the screen.
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", label: "Google (Antigravity CLI)" },
@@ -342,16 +354,17 @@ describe("the combo card", () => {
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    expect(getPendingAccountId("a1")).toBe("acct-2");
+    expect(begun).toEqual(["acct-2"]);
+    expect(getPendingAccountId("a1")).toBeNull();
     expect(started).toEqual([]);
-    expect(screenText()).not.toContain("Launch a new chat?");
-    // The menu closes on the choice, and the Provider row names what comes next.
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain(
-      "next: Google (Antigravity CLI)",
-    );
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
 
-    // Reopened, the pending row wears its badge; pressing it again takes the choice back.
+    // Armed (what the dialog's "Switch this chat" does), the row wears its badge and pressing it
+    // again takes the choice back without a second dialog.
+    setPendingAccount("a1", "acct-2");
+    render();
+    click(".model-selector-trigger");
     click('[data-card-row="providers"]');
     const flyout = document.querySelector('[data-model-popover="flyout"]');
     const badged = [...(flyout?.querySelectorAll("button") ?? [])].find((b) =>
@@ -361,7 +374,7 @@ describe("the combo card", () => {
     badged?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
     expect(getPendingAccountId("a1")).toBeNull();
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).not.toContain("next:");
+    expect(begun).toEqual(["acct-2"]);
 
     // So does pressing the account the chat already runs on: staying put is the choice then.
     setPendingAccount("a1", "acct-2");
@@ -377,7 +390,7 @@ describe("the combo card", () => {
     expect(started).toEqual([]);
   });
 
-  it("makes an account on the chat's own harness the pending lane too, now that a chat can change account in place", () => {
+  it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" },
@@ -389,13 +402,40 @@ describe("the combo card", () => {
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    expect(getPendingAccountId("a1")).toBe("acct-2");
+    expect(begun).toEqual(["acct-2"]);
     expect(started).toEqual([]);
-    expect(screenText()).not.toContain("Launch a new chat?");
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain(
-      "next: Anthropic 2 (Claude Code)",
-    );
+  });
+
+  it("reads as the target while a switch is armed, and its Model row reopens the dialog", () => {
+    const google = {
+      ...ACCOUNT,
+      id: "acct-2",
+      provider: "Google",
+      harness: "antigravity",
+      harness_label: "Antigravity CLI",
+      label: "Google (Antigravity CLI)",
+    };
+    providerState.accounts = [ACCOUNT, google];
+    setPendingSwitch("a1", "acct-2", {
+      identity: { model_id: "gemini", effort: "high", fast: false },
+      label: "Gemini · High",
+    });
+    render();
+    // The chip states the pick with a "next" mark rather than the current agent's model.
+    expect(ROOT().textContent).toContain("Gemini · High");
+    expect(ROOT().textContent).toContain("next");
+    expect(ROOT().textContent).not.toContain("Opus");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("Google");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
+    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Gemini · High");
+    // The current agent's effort and fast rows are not the target's: they are not offered.
+    expect(document.querySelector('[data-card-row="effort"]')).toBeNull();
+    click('[data-card-row="model"]');
+    expect(reopened).toEqual(["acct-2"]);
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    setPendingAccount("a1", null);
   });
 
   it("stars the default account and pins another on a press of its star", () => {

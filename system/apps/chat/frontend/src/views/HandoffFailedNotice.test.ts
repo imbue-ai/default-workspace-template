@@ -84,6 +84,16 @@ describe("the failed-switch notice", () => {
     expect(state.retries).toEqual([["agent-1", "acct-openai"]]);
   });
 
+  it("names the model pick when that is the step that failed", () => {
+    state.chat = chatSnapshotFixture("agent-1", {
+      handoff: handoffStateFixture({ phase: "failed", error: "Unknown model 'gpt-6-astra'", failed_step: "model" }),
+    });
+    render();
+    expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not set the model on Codex");
+    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toContain("Unknown model 'gpt-6-astra'");
+    expect(ROOT().querySelector(".handoff-retry-button")).not.toBeNull();
+  });
+
   it("retries on the account the user picks, and shows a refusal without losing the notice", async () => {
     state.retryRejects = true;
     render();

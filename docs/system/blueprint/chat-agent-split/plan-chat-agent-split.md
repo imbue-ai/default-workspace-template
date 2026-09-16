@@ -121,7 +121,7 @@ Each decision below was settled during design, with the rationale given at the t
     The rule has no exceptions: a worker and an automation agent are chats under the own-chat rule, so a lead's reply to a worker goes through the chat app too.
     Worker skills need no instructions about the handoff window because the chat app holds sends during it.
     Where mngr itself is the target (`mngr rsync`, `mngr transcript`), the lead is named by its agent id, which a rename does not change.
-16. **The new agent receives as much context as could be relevant**, through `mngr create --message`: the summary path or the note that none exists, the archived agent's identity and transcript locations, the closed steps, and the user's message.
+16. **The new agent receives as much context as could be relevant**, through `mngr create --message`: the summary in full with its path, or the note that none exists, the archived agent's identity and transcript locations, the closed steps, and the user's message.
 17. **The archival name sorts and reads correctly**: `archived-<seq>-<canonical>-<agent-id>`, and the archived agent carries the `archived_at` label (`mngr archive`).
 18. **A failed create after the old agent was archived leaves the chat in a failed-next-agent state** with retry on any lane, and every retry passes the same summary message.
 19. **Cancel is possible until the old agent is stopped.**
@@ -372,7 +372,7 @@ A chat's transcript is its segments in agent order.
 - Every event on the wire carries `agent_id`.
   The detail endpoint resolves the segment by event id and re-reads the payload from that segment's files.
   The SSE stream carries only the active agent's events.
-- A chat-app-synthesized handoff marker event (`agent_switch`) sits between segments, rendered as a chip ("Switched from Claude to Codex").
+- A chat-app-synthesized handoff marker event (`agent_switch`) sits between segments, rendered as a chip ("Switched from Claude to Codex"); since phase 8 it carries the message the user switched with, when the handoff folded that message into the successor's prompt, and the page opens the successor's segment on it as the user's own bubble.
   It is a chat-level event type, not a harness `SpecialEventKind`, because harnesses declare their own kinds and this one belongs to none of them.
   Its `event_id` is derived from the chat id and the retiring agent's sequence number, so it is stable across reloads and restarts, as the event-id rule in `harnesses/events.py` requires.
 - The subagent endpoints resolve the agent from the three-part key and read its files the same way.
@@ -416,6 +416,16 @@ As landed in phase 5:
 - The failed page (5.10) is a notice over the composer: "Could not start Codex", mngr's reason, a picker of every signed-in account defaulting to the failed target, and "Try again"; a refused retry shows its reason under the picker.
 - The controls a converging chat refuses (the Stop agent row, the shoulder tap, the model picker, and the shell's stop, start, and rename) stay live and show the 409's detail through their existing alerts and notices (4.4).
 - An optimistic model pick made for the old agent is forgotten when the chat's active agent changes, so the bar shows the new harness's own choice (5.12).
+
+As landed in phase 8, which revised the flow above after use:
+
+- Pressing an account opens the switch dialog at once rather than arming a "next" lane behind the menu: "Switch to Codex?" for a handoff (with a model picker for the successor, fed by `GET /api/accounts/<account_id>/model-options`), one line for a rebind (no picker: the agent keeps its settings).
+  "Switch this chat" is the primary action and arms the switch; "Start a new chat" is secondary and opens a chat on that account and model with the composer's draft moved over; Cancel leaves everything as it was.
+- Armed, the composer shows a strip ("Your next message switches this chat to OpenAI (Codex), GPT-6 Astra · High") with Change and Cancel, the model bar's chip and card read as the target, and Switch and send carries the switch out with no second confirmation.
+- A chat with no genuine user turn (by the rule `has_user_turn` shares with the summary freshness check) gets no dialog: the switch runs at once as a fresh start (5.5, 5.8), with the draft left in the composer.
+- The handoff is one node in the transcript rather than a chip and a write: "Handing off to Codex…" while it runs (from the snapshot until the summary request is on the stream, then anchored on it), "Handed off from Claude to Codex" once the `agent_switch` event lands, expandable to the summary turn and the successor's handoff prompt, "Handoff called off" for a cancelled one. A landed switch draws a rule under the node, so the boundary between the two agents' segments reads at a glance. The held bubbles read "Sending…" like any send.
+- The failed page names the step: "Could not start Codex" or "Could not set the model on Codex".
+- The handoff prompt, now a user message in the successor's transcript (it arrives through the send path), renders as a collapsed "Handoff prompt" chip inside the handoff node, after the summary turn, rather than as the first item of the successor's segment; it still counts as a genuine user turn for the fresh-start rule, since it carries the message the user switched with and the summary. The message the user switched with, folded into that prompt, is shown as the successor's opening bubble from the `agent_switch` marker (4.7), and its held "Sending…" bubble stands down once the marker is on the stream; the prompt's own arrival does not count as a sent message's.
 
 ### 5.2 Trigger and preconditions
 
@@ -474,8 +484,9 @@ Step 3 fails into **failed** (5.10) when the create fails.
 - No addendum is requested for user turns that land after the summary is written: only a direct `mngr message` bypass can add one, since the chat app holds its own sends, and the successor has the transcript and the `AGENTS.md` backstop for the rest.
 - A stopped active agent is started for the request, by the same send path a message takes.
   Only when it cannot be started at all does the handoff proceed without a summary.
-- The request renders as a chip ("Asked for a handoff summary") rather than a hidden line, so the pause reads as one.
+- The request renders as a chip ("Asked for a handoff summary") rather than a hidden line, so the pause reads as one; since phase 8 the page folds it into the handoff node.
 - Whether a summary was produced, reused, or missing is recorded on the record's `handoff` entry and told to the new agent.
+- Since phase 8, a retiring agent that never received a genuine user turn (`has_user_turn`) is not asked at all: the outcome is `skipped`, no prompt is built, and the confirming message (if any) reaches the successor as an ordinary held send. There is no context to carry, so the successor starts as a new chat would.
 
 ### 5.6 Cancel
 
@@ -504,9 +515,12 @@ Cancel is refused with 409 in `switching` and later.
   `--message` delivers after the harness signals readiness, the path `/welcome` already takes.
   The `--type` and the binding args are always explicit, never left to config: `.mngr/settings.local.toml` supplies the workspace's *default* account to a create that names none, and the handoff's target is usually not the default; CLI list flags append after the file's, so an explicit `--type` and `--env` win for the same variable or path.
   `require_create_account.py` gates every in-workspace create, this one included, on the local file naming a type: a handoff on a workspace whose last account was just removed is refused by the gate rather than by the chat app, and that verdict is what the failed-next-agent state shows (5.10).
-- The handoff prompt is built once, stored on the `handoff` entry, and resent verbatim on every retry, whatever lane the retry uses.
-  It contains: the summary path, or the statement that the predecessor did not produce one; the predecessor's archived mngr name, agent id, and state dir, plus the same for every earlier member, so `mngr transcript` and the find-transcripts skill reach them; a note that the open steps carry over (5.9); the lanes involved; and then the user's message.
-  Its text is a reference document in this template (`.agents/shared/references/continue-chat.md`) that the chat app fills in, so it stays harness-neutral and editable; the create takes it through `--message-file` from a file beside the record (`handoff-prompt-<seq>.md`), since a prompt is too long for an argv and a file is inspectable.
+- The handoff prompt is built once, stored on the `handoff` entry, and delivered verbatim by whichever attempt lands the successor, whatever lane the retry uses.
+  It contains: the summary's text, with the path it is kept at, or the statement that the predecessor did not produce one (the text travels inside the prompt so the successor has its context before its first tool call); the predecessor's archived mngr name, agent id, and state dir, plus the same for every earlier member, so `mngr transcript` and the find-transcripts skill reach them; a note that the open steps carry over (5.9); the lanes involved; and then the user's message.
+  Its text is a reference document in this template (`.agents/shared/references/continue-chat.md`) that the chat app fills in, so it stays harness-neutral and editable.
+- Since phase 8 the create is silent (no `--message`): the successor is tracked the moment its create returns, the model the user picked in the dialog is applied through the harness's own switch path (validated against the successor's option set exactly as the model bar's pick is), the successor is then appended to the record and the chip emitted, and only then does the prompt go to it through the send path, followed by the held sends. The record notes the prompt's delivery so a resume does not repeat it.
+  This replaces principle 24's reset to the harness default with "the user's pick, else the default", and is what lets the pick govern the successor's whole segment.
+  A pick the successor cannot take (an unknown model, a daemon that refuses) fails the switch at that step (`failed_step: model`): the chat still lists its retiring agent, the page reads "Could not set the model on Codex", and a retry on the same account adopts the successor under its pre-minted id and reruns only the pick and the deliveries. A retry on another account destroys that successor first and creates afresh under the same id; one on another harness drops the pick, which named a model of the harness it was made for.
 - The first-chat claim is never taken for a successor: the claim is only attempted for a create with an empty message, and a handoff always passes one, so the `first` template and `/welcome` stay with the workspace's first chat.
 
 ### 5.9 tk steps, workers, subagents
@@ -624,7 +638,7 @@ Where the minds repo is touched, the paired branch is named.
 - Multi-segment transcript reads (4.7): each harness's watcher is split into a `TranscriptLoader` (the read side: discovery, incremental reads, payload re-parsing) and the watcher over it (the watch loop, the queue feed, the model-bar write), registered as `HarnessSpec.loader_class` beside `watcher_class`; an archived segment is read through its loader, built on the first read that reaches into it and cached on the app state beside the watchers.
   `ChatTranscript` (`chat_transcript.py`) reads across the segments: chat-global totals and offsets from the recorded counts (the parsed count wins once a segment is loaded, with a warning on disagreement), the tail, backfill, forward, and offset reads crossing segment boundaries, the detail read resolved by event id, and every event stamped with its `agent_id` at ingest (the live stream included).
   Loading is lazy and sequential: no thread pool, since a segment loads only when a read reaches back that far and the goal is to keep archived history out of memory.
-- The switch chip is the chat-level `agent_switch` event, synthesized between two segments with an id derived from the chat id and the retiring agent's sequence number; it carries `from_agent_id`, `to_agent_id`, `from_harness`, `to_harness`, and `seq`, counts toward the chat's total, and renders as a centered chip that opens the new agent's first section.
+- The switch chip is the chat-level `agent_switch` event, synthesized between two segments with an id derived from the chat id and the retiring agent's sequence number; it carries `from_agent_id`, `to_agent_id`, `from_harness`, `to_harness`, and `seq`, plus `message_id` and `message` (the message the user switched with, kept on the successor's record entry as `opening_message` when the handoff folded it into the prompt; null for a fresh start, whose message is delivered as a turn of its own), counts toward the chat's total, and renders as a centered chip that opens the new agent's first section, on that message as the user's bubble when there is one.
 - The subagent routes resolve any member of the chat, archived ones through their loaders; the page reads a subagent view's key off the `/_instances` create response.
 - Codex's few position-derived fallback event ids (a message, call, result, or turn marker codex gave no id) became content-derived, so two codex agents of one chat cannot mint one id from one line number; a repeat across segments is logged, and the earlier segment's event wins.
 - Nothing writes a record except tests and the destroy verb's delete.

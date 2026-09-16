@@ -57,12 +57,17 @@ vi.mock("../models/Providers", () => ({
 }));
 
 vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTab: vi.fn() }));
+const begun: string[] = [];
+vi.mock("./SwitchDialog", () => ({
+  beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  openSwitchDialog: vi.fn(),
+}));
 
 import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
-import { getPendingAccountId, setPendingAccount } from "../models/PendingLane";
+import { getPendingAccountId } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const OPUS = {
@@ -302,7 +307,7 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
   });
 
-  it("makes a press on another harness's account the pending lane and closes the menu, keeping the card", async () => {
+  it("hands a press on another harness's account to the switch dialog and closes the whole stack", async () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
@@ -315,10 +320,10 @@ describe("the card without a hand-cranked redraw", () => {
     other.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(getPendingAccountId("a1")).toBe("acct-2");
+    expect(begun).toEqual(["acct-2"]);
+    expect(getPendingAccountId("a1")).toBeNull();
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
-    expect(document.querySelector('[data-model-popover="card"]')).not.toBeNull();
-    setPendingAccount("a1", null);
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {

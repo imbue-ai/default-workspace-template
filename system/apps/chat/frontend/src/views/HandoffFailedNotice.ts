@@ -49,7 +49,9 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
       const title =
         handoff.kind === "rebind"
           ? `Could not restart ${harnessLabel(chat.active_agent.harness)}`
-          : `Could not start ${harnessLabel(handoff.target_harness)}`;
+          : handoff.failed_step === "model"
+            ? `Could not set the model on ${harnessLabel(handoff.target_harness)}`
+            : `Could not start ${harnessLabel(handoff.target_harness)}`;
 
       async function retry(): Promise<void> {
         if (isRetrying) return;
@@ -84,7 +86,8 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
                 "handoff-failed-reason max-h-40 overflow-auto font-mono text-(length:--font-size-helper) " +
                 "whitespace-pre-wrap text-primary",
             },
-            handoff.error ?? "The agent could not be started.",
+            handoff.error ??
+              (handoff.failed_step === "model" ? "The model could not be set." : "The agent could not be started."),
           ),
           m("div", { class: "flex flex-wrap items-center gap-2" }, [
             m(

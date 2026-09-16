@@ -15,9 +15,9 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
-import { startChatOnAccount } from "../shell";
+import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
+import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { openProviderChooser } from "../models/Providers";
@@ -91,6 +91,20 @@ export function raiseFailureNotice(chatId: string, notice: PendingFailureNotice)
   pendingFailureNotices.clear();
   pendingFailureNotices.set(chatId, notice);
   m.redraw();
+}
+
+// Chats whose draft was taken out of the composer by a sibling view (the switch dialog's "Start a
+// new chat" moves it to the new chat); the mounted composer clears its own text on its next pass.
+const pendingComposerClears = new Set<string>();
+
+/** Take ``chatId``'s draft out of the composer, leaving it empty: what a new chat started from the
+ *  switch dialog begins with. The persisted copy goes too, so a reload does not bring it back. */
+export function takeComposerDraft(chatId: string): string {
+  const draft = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  localStorage.removeItem(messageTextKey(chatId));
+  pendingComposerClears.add(chatId);
+  m.redraw();
+  return draft;
 }
 
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view. */
@@ -174,12 +188,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
   let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
-  // The switch to the pending lane (spec 5.1): the confirm is up, the handoff request is out, or
-  // the cancel of a running switch is out. One notice instance, like the others above.
-  let isSwitchConfirmOpen = false;
+  // The switch to the pending lane (spec 5.1): the handoff request is out, or the cancel of a
+  // running switch is out.
   let isSwitchInFlight = false;
   let isCancelSwitchInFlight = false;
-  const switchConfirmDialog = makeNoticeDialog();
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -276,7 +288,6 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         isInterruptInFlight = false;
-        isSwitchConfirmOpen = false;
         isSwitchInFlight = false;
         isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
@@ -309,6 +320,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
+      }
+      if (pendingComposerClears.delete(chatId)) {
+        messageText = "";
       }
 
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
@@ -455,10 +469,11 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       /**
-       * The confirmed switch (spec 5.1): the typed message becomes the new agent's first, through
-       * the handoff route. The bubble painted here carries the send-time id, so the held-send
-       * rendering the next snapshot brings replaces it exactly; the queued text draining took
-       * off the old agent comes back for the composer.
+       * The armed switch, carried out (spec 5.1): the typed message becomes the new agent's first,
+       * through the handoff route, with the model picked in the dialog. The choice was made in the
+       * dialog, so nothing asks again here. The bubble painted here carries the send-time id, so
+       * the held-send rendering the next snapshot brings replaces it exactly; the queued text
+       * draining took off the old agent comes back for the composer.
        */
       async function handleSwitchAndSend(target: ProviderAccount): Promise<void> {
         if (!chatId || isSwitchInFlight) {
@@ -469,7 +484,6 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         const prepared = await prepareSend();
         if (prepared === null) {
           isSwitchInFlight = false;
-          isSwitchConfirmOpen = false;
           m.redraw();
           return;
         }
@@ -479,7 +493,8 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
         try {
           await whenChatRegistered(chatId);
-          const { returned_block } = await switchChat(chatId, target.id, finalText, messageId);
+          const pick = getPendingPick(chatId)?.identity ?? null;
+          const { returned_block } = await switchChat(chatId, target.id, finalText, messageId, pick);
           prependToComposer(chatId, returned_block);
         } catch (err) {
           const detail = describeRequestError(err);
@@ -493,37 +508,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           }
         } finally {
           isSwitchInFlight = false;
-          isSwitchConfirmOpen = false;
           m.redraw();
         }
         refocusAfterSend();
-      }
-
-      /**
-       * The confirm's other way out: leave this chat as it is and open a new one on the pending
-       * account, with the typed message as its first. The pending lane is spent either way; a
-       * create the shell could not make puts the message back so nothing typed is lost.
-       */
-      async function handleStartNewChatInstead(target: ProviderAccount): Promise<void> {
-        if (!chatId || isSwitchInFlight) {
-          return;
-        }
-        isSwitchInFlight = true;
-        m.redraw();
-        const prepared = await prepareSend();
-        isSwitchInFlight = false;
-        isSwitchConfirmOpen = false;
-        if (prepared === null) {
-          m.redraw();
-          return;
-        }
-        setPendingAccount(chatId, null);
-        m.redraw();
-        const isStarted = await startChatOnAccount(target.id, prepared.finalText);
-        if (!isStarted) {
-          restoreFailedMessageToComposer(chatId, prepared.text, prepared.attachments);
-          m.redraw();
-        }
       }
 
       /** Call a running switch off (spec 5.6): the confirming message comes back to the composer, and
@@ -610,14 +597,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         }
       }
 
-      /** Enter and the send button do the same thing: send, or ask to switch when a lane is pending. */
+      /** Enter and the send button do the same thing: send, or carry the armed switch out. */
       function handleSubmit(): Promise<void> {
         if (switchTarget !== null) {
-          if (chatId && canSend) {
-            isSwitchConfirmOpen = true;
-            m.redraw();
-          }
-          return Promise.resolve();
+          return chatId && canSend ? handleSwitchAndSend(switchTarget) : Promise.resolve();
         }
         return handleSend();
       }
@@ -920,47 +903,53 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       /**
-       * The confirm a switch asks for (spec 5.1, 6): two lines for a handoff (the agent stops, a
-       * new one continues), one for a rebind (the same agent restarts on the new account). Cancel
-       * keeps the pending lane; "Start a new chat instead" opens a new chat on the account with
-       * the typed message and leaves this chat alone.
+       * What the armed switch will do, above the composer (spec 5.1): the account the next message
+       * moves the chat to and the model picked for it, with a way back into the dialog and a way
+       * to call the choice off.
        */
-      function renderSwitchConfirm(target: ProviderAccount, currentHarness: string): m.Children {
-        const chat = chatId ? getChatById(chatId) : undefined;
-        const kind = chat === undefined ? "handoff" : switchKind(chat, target);
-        const from = harnessLabel(currentHarness);
-        const isRebind = kind === "rebind";
-        return m(switchConfirmDialog, {
-          title: isRebind ? `Switch to ${target.label}?` : `Switch to ${harnessLabel(target.harness)}?`,
-          body: isRebind
-            ? [`${from} restarts on ${target.label} and keeps this conversation.`]
-            : [
-                `${from} wraps up what it is doing and stops.`,
-                `The conversation continues on ${target.label}, starting with your message.`,
-              ],
-          dismissLabel: "Cancel",
-          isDismissable: !isSwitchInFlight,
-          onDismiss: () => {
-            isSwitchConfirmOpen = false;
-            m.redraw();
+      function renderSwitchStrip(target: ProviderAccount): m.Children {
+        const pick = chatId ? getPendingPick(chatId) : null;
+        const destination = pick === null ? target.label : `${target.label}, ${pick.label}`;
+        return m(
+          "div",
+          {
+            class:
+              "message-input-switch-strip mx-1 mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 " +
+              "text-(length:--font-size-helper) text-secondary",
+            role: "status",
           },
-          actions: [
-            {
-              label: "Start a new chat instead",
-              tooltip: `Leaves this chat as it is and opens a new one on ${target.label} with your message`,
-              isDisabled: isSwitchInFlight,
-              run: () => void handleStartNewChatInstead(target),
-            },
-            {
-              label: isSwitchInFlight ? "Switching…" : "Switch and send",
-              tooltip: isRebind
-                ? `Restarts ${from} on ${target.label} and sends your message`
-                : `Stops ${from} and continues this chat on ${target.label}`,
-              isDisabled: isSwitchInFlight,
-              run: () => void handleSwitchAndSend(target),
-            },
+          [
+            m(
+              "span",
+              { class: "message-input-switch-strip-text" },
+              `Your next message switches this chat to ${destination}`,
+            ),
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "message-input-switch-change",
+                onclick: () => {
+                  if (chatId) openSwitchDialog(chatId, target);
+                },
+              },
+              "Change",
+            ),
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "message-input-switch-cancel",
+                onclick: () => {
+                  if (chatId) setPendingAccount(chatId, null);
+                },
+              },
+              "Cancel",
+            ),
           ],
-        });
+        );
       }
 
       function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Children {
@@ -1003,7 +992,6 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       // Nothing is pending once a switch is running: the lane was applied by confirming it.
       const handoff = chat?.handoff ?? null;
       const switchTarget = handoff === null ? pendingSwitchTarget(chatId) : null;
-      const activeHarness = chat?.active_agent.harness ?? "";
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
@@ -1026,7 +1014,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-          isSwitchConfirmOpen && switchTarget !== null ? renderSwitchConfirm(switchTarget, activeHarness) : null,
+          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
           m("input", {
             type: "file",
             multiple: true,

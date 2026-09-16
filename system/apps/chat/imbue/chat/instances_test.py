@@ -35,6 +35,7 @@ from imbue.chat.instances import parse_subagent_key
 from imbue.chat.instances import subagent_instance_key
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
@@ -327,6 +328,7 @@ class _LandingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         landed_id = _agent_id()
         _seed_agent(self, landed_id, "Chat-1")
@@ -344,6 +346,7 @@ class _VanishingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         return CreatedChat(chat_id=ChatId(_agent_id()), name="Chat-1", display_name="Chat 1")
 

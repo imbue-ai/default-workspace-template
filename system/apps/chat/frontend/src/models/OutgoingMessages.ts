@@ -158,9 +158,12 @@ interface HeldSnapshot {
  * reach the transcript, so they come back as bubbles here and drop by the arrivals that follow.
  * The successor's items that landed before then (the backend delivers the held sends before it
  * clears the switch) consume them at that point instead. A cancelled switch returns its
- * confirming message to the composer, so that one is skipped.
+ * confirming message to the composer, so that one is skipped; so is a confirming message the
+ * switch marker already shows (``isCarriedBySwitch``), whose turn is the marker itself.
  */
-export function trackBackendArrivals(): void {
+export function trackBackendArrivals(
+  isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
+): void {
   const heldByChat = new Map<string, HeldSnapshot>();
   addChatsUpdatedListener((chats) => {
     for (const chat of chats) {
@@ -196,6 +199,7 @@ export function trackBackendArrivals(): void {
           isHandoffCancellable(previous.handoff) && previous.retiringAgentId === chat.active_agent.agent_id;
         const returning = previous.handoff.held_sends;
         for (const held of isCancelled ? returning.slice(1) : returning) {
+          if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
           addOutgoing(chat.chat_id, held.text, held.message_id);
         }
         for (let i = 0; i < consumedBySuccessor; i++) {

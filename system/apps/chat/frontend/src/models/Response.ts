@@ -6,7 +6,8 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import { noteBackendArrivals } from "./OutgoingMessages";
+import { isHandoffPromptChip } from "./handoffPrompt";
+import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -199,6 +200,12 @@ export interface AgentSwitchEvent extends BaseTranscriptEvent {
   to_harness: string;
   // The retiring agent's position in the chat.
   seq: number;
+  // The message the user switched with, when the handoff folded it into the successor's
+  // prompt: it is no event of the successor's own, so the switch carries it (with its
+  // send-time id) and the page shows it as the successor's opening turn. Null when the
+  // message arrived as a turn of its own (a fresh start) or there was none.
+  message_id: string | null;
+  message: string | null;
 }
 
 /**
@@ -587,6 +594,12 @@ export function getEventsForChat(chatId: string): TranscriptEvent[] {
   return storeByChat[chatId]?.events ?? [];
 }
 
+/** Whether a switch marker on the chat's loaded transcript carries the message sent under ``messageId``:
+ *  the handoff folded it into the successor's prompt, and the marker is where the page shows it. */
+export function isMessageCarriedBySwitch(chatId: string, messageId: string): boolean {
+  return getEventsForChat(chatId).some((event) => event.type === "agent_switch" && event.message_id === messageId);
+}
+
 export function getEventCount(chatId: string): number {
   return storeByChat[chatId]?.eventCount ?? 0;
 }
@@ -643,10 +656,22 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
   // event is harmless. Only the live tail feeds this -- paging/backfill of old
   // history goes through the other append paths and must not drop live bubbles.
-  const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
+  // A successor's handoff prompt is the chat app's own message, not the real form of
+  // anything the page sent: the message it folds in is the switch marker's to show.
+  const userEventIds = newEvents
+    .filter((event) => event.type === "user_message" && !isHandoffPromptChip(event))
+    .map((event) => event.event_id);
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  // A switch marker is the real form of the message it carries (the successor's opening
+  // bubble), so it stands that message's bubble down by id: a bubble the switch's end
+  // brought back before the marker landed goes here, and one the marker preceded is
+  // never brought back (``trackBackendArrivals``).
+  const carriedMessageIds = newEvents.flatMap((event) =>
+    event.type === "agent_switch" && event.message_id !== null ? [event.message_id] : [],
+  );
+  dropOutgoingByMessageId(chatId, carriedMessageIds);
 }
 
 export function prependEvents(chatId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {

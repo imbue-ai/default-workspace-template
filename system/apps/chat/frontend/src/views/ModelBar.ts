@@ -21,8 +21,15 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { getPendingAccountId, isSwitchTarget, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
+import {
+  getPendingAccountId,
+  getPendingPick,
+  isSwitchTarget,
+  pendingSwitchTarget,
+  setPendingAccount,
+} from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
+import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
 import { Portal } from "@imbue/workspace-ui/src/portal";
@@ -442,10 +449,11 @@ export function ModelBar(): m.Component<{ chatId: string }> {
 
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Pressing any account but the chat's own makes it the chat's pending lane, applied by the
-   * next send (a rebind for one on the chat's own harness and lane, a handoff otherwise; the
-   * confirm says which, and offers a new chat instead); pressing it again, or the account the
-   * chat runs on, takes that back. Each row also carries the default toggle: the starred
+   * Pressing any account but the chat's own opens the switch dialog for it (a rebind for one
+   * on the chat's own harness and lane, a handoff otherwise; the dialog says which, takes the
+   * model for a handoff, and offers a new chat instead), or switches a chat with no user turn
+   * yet at once (``beginSwitchTo``); pressing the armed account again, or the account the chat
+   * runs on, takes the choice back. Each row also carries the default toggle: the starred
    * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
    * shortcut, an agent's `layout.py open chat`).
    */
@@ -472,12 +480,13 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
                 ...(isPending ? { badge: "next" } : {}),
                 onSelect: () => {
-                  if (isCurrent || chat === undefined || !isSwitchTarget(chat, row)) {
-                    setPendingAccount(chatId, null);
-                  } else {
-                    setPendingAccount(chatId, isPending ? null : row.id);
-                  }
                   setFlyout(null);
+                  if (isCurrent || isPending || chat === undefined || !isSwitchTarget(chat, row)) {
+                    setPendingAccount(chatId, null);
+                    return;
+                  }
+                  closeCard();
+                  beginSwitchTo(chatId, row);
                 },
                 state: rowState,
               });
@@ -493,8 +502,9 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             openProviderChooser({
               onSignedIn: (accountId) => {
                 // Signed in from inside a chat: the new account is what the user switches this
-                // chat to next (the confirm offers a new chat on it instead).
-                setPendingAccount(chatId, accountId);
+                // chat to next, so the switch dialog opens on it (and offers a new chat instead).
+                const account = accountForAgent(accountId);
+                if (account !== null) beginSwitchTo(chatId, account);
                 m.redraw();
               },
             });
@@ -621,9 +631,15 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
 
+      // The account the next send switches the chat to, and the model picked for it: while a
+      // switch is armed the bar reads as the target, since that is what the next message runs on.
+      const pending = pendingSwitchTarget(chatId);
+      const pendingPick = getPendingPick(chatId);
+
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
-      // the model has one to state, and the bolt only when fast is actually on.
+      // the model has one to state, and the bolt only when fast is actually on. An armed switch
+      // replaces all of it with the target's pick and a "next" mark.
       const trigger = m(
         "button",
         {
@@ -648,20 +664,33 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             }
           },
         },
-        [
-          // Joined by dots between EVERY part, including before the bolt: the three axes are
-          // one reading, and a bolt tacked on without a separator read as a button.
-          m("span", matched?.label ?? account?.provider ?? "Model"),
-          shownEfforts.length > 1 && currentEffort !== null
-            ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
-            : null,
-          currentFast
-            ? [
-                m("span", { class: css.TRIGGER_DOT }, "·"),
-                m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
-              ]
-            : null,
-        ],
+        pending !== null
+          ? [
+              m("span", pendingPick?.label ?? pending.harness_label),
+              m(
+                "span",
+                {
+                  class:
+                    "model-bar-next-badge ml-1.5 rounded-full bg-accent-light px-1.5 " +
+                    "text-(length:--font-size-helper) text-accent",
+                },
+                "next",
+              ),
+            ]
+          : [
+              // Joined by dots between EVERY part, including before the bolt: the three axes are
+              // one reading, and a bolt tacked on without a separator read as a button.
+              m("span", matched?.label ?? account?.provider ?? "Model"),
+              shownEfforts.length > 1 && currentEffort !== null
+                ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
+                : null,
+              currentFast
+                ? [
+                    m("span", { class: css.TRIGGER_DOT }, "·"),
+                    m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
+                  ]
+                : null,
+            ],
       );
 
       if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
@@ -675,13 +704,30 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const dynamic = catalog?.picker_mode === "dynamic";
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
-      // The account the next send switches the chat to, named beside the current one so the
-      // pending choice is visible without opening the menu.
-      const pending = pendingSwitchTarget(chatId);
-      const providerSub =
-        pending !== null
-          ? `${account?.harness_label ?? "not signed in"}, next: ${pending.label}`
-          : account?.harness_label;
+      // While a switch is armed the card describes the target: the account the next send moves
+      // the chat to, and the model picked for it, which opens the dialog again to change.
+      const armedRows: m.Children[] = [
+        menuRow({
+          label: "Provider",
+          value: pending?.provider ?? "",
+          sub: `${pending?.harness_label ?? ""}, after your next message`,
+          which: "providers",
+          openable: true,
+          tooltip: null,
+        }),
+        m("div", { class: css.DIVIDER }),
+        menuRow({
+          label: "Model",
+          value: pendingPick?.label ?? "Default model",
+          which: "model",
+          openable: true,
+          tooltip: "Change the model this chat switches to",
+          onOpen: () => {
+            closeCard();
+            if (pending !== null) openSwitchDialog(chatId, pending);
+          },
+        }),
+      ];
 
       const card = m(
         "div",
@@ -691,16 +737,20 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           style: cardPlacement(cardAnchor),
         },
         m("div", { class: css.CARD_INNER }, [
-          menuRow({
-            label: "Provider",
-            value: account?.provider ?? "Not signed in",
-            ...(providerSub !== undefined ? { sub: providerSub } : {}),
-            which: "providers",
-            openable: true,
-            tooltip: null,
-          }),
-          m("div", { class: css.DIVIDER }),
-          matched !== null
+          ...(pending !== null
+            ? armedRows
+            : [
+                menuRow({
+                  label: "Provider",
+                  value: account?.provider ?? "Not signed in",
+                  ...(account?.harness_label !== undefined ? { sub: account.harness_label } : {}),
+                  which: "providers",
+                  openable: true,
+                  tooltip: null,
+                }),
+                m("div", { class: css.DIVIDER }),
+              ]),
+          pending === null && matched !== null
             ? menuRow({
                 label: "Model",
                 value: matched.label,
@@ -714,7 +764,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                 },
               })
             : null,
-          matched !== null
+          pending === null && matched !== null
             ? effortRow({
                 efforts: matched.efforts,
                 current: currentEffort,
@@ -726,7 +776,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                 },
               })
             : null,
-          matched !== null && matched.supports_fast
+          pending === null && matched !== null && matched.supports_fast
             ? fastRow({
                 on: currentFast,
                 interactive,

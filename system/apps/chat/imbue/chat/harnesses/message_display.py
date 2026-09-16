@@ -59,6 +59,14 @@ _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
 HANDOFF_SUMMARY_COMMAND = "/handoff-summary"
 _HANDOFF_SUMMARY_LABEL = "Asked for a handoff summary"
 
+# The opening words of the prompt a handoff's successor receives as its first message
+# (``.agents/shared/references/continue-chat.md``, filled in by ``chat_handoffs.py``). It goes
+# through the send path, so the successor's transcript records it as a user message; shown as a
+# collapsed chip rather than as the user's own bubble. The words are the contract with the
+# template: an edit to its first sentence has to keep them.
+HANDOFF_PROMPT_PREFIX = 'You are continuing the chat "'
+HANDOFF_PROMPT_LABEL = "Handoff prompt"
+
 # Claude Code wraps the output of ANY local slash command in these. Hiding is keyed on
 # the wrapper alone, not on the text inside it: the wrapper is by construction machine
 # output rather than a human turn, so every command that produces one should be silent.
@@ -197,6 +205,13 @@ def _match_handoff_summary_request(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.CHIP, display_label=_HANDOFF_SUMMARY_LABEL)
 
 
+def _match_handoff_prompt(content: str) -> MessageDisplay | None:
+    """The prompt a handoff's successor was started with; a chip, since the user did not type it."""
+    if not content.lstrip().startswith(HANDOFF_PROMPT_PREFIX):
+        return None
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=HANDOFF_PROMPT_LABEL)
+
+
 def _match_local_command_output(content: str) -> MessageDisplay | None:
     """Any local slash command's captured output -- machine text, never a turn."""
     trimmed = content.lstrip()
@@ -256,6 +271,7 @@ _DETECTORS = (
     _match_browser_fleet,
     _match_composer_command,
     _match_handoff_summary_request,
+    _match_handoff_prompt,
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,
@@ -263,9 +279,7 @@ _DETECTORS = (
 
 
 @pure
-def classify_user_message(
-    content: str, *, is_meta: bool = False
-) -> MessageDisplay | None:
+def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
     """The render decision for one user message, or ``None`` for a genuine human turn.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
@@ -289,9 +303,7 @@ def classify_user_message(
     return decision
 
 
-def stamp_user_message_display(
-    event: dict[str, Any], content: str, *, is_meta: bool = False
-) -> None:
+def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: bool = False) -> None:
     """Stamp the wire's render-decision fields onto one ``user_message`` event.
 
     The ONE call every user-message emit site makes (each harness's normal path AND
@@ -303,7 +315,6 @@ def stamp_user_message_display(
         decision.apply_to(event)
     if is_non_turn_tail(content, is_meta=is_meta):
         event["non_turn_tail"] = True
-
 
 
 @pure

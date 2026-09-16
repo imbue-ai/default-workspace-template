@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../models/Chats", async (importOriginal) => ({
@@ -8,6 +9,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 import type { ChatSnapshot } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
+import { appendEvents } from "../models/Response";
 import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
 import { renderHeldSends } from "./HeldSendView";
 
@@ -62,7 +64,7 @@ describe("the words for a chat changing account in place", () => {
 });
 
 describe("the held-send bubbles", () => {
-  it("renders every held message from the snapshot, captioned with the phase", () => {
+  it("renders every held message from the snapshot, captioned like any send", () => {
     chats.set(
       "agent-1",
       chatSnapshotFixture("agent-1", {
@@ -80,15 +82,52 @@ describe("the held-send bubbles", () => {
     const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on in Codex");
     expect(text).toContain("and this");
-    expect(text).toContain("Claude is writing a summary…");
-    expect(text).not.toContain("Sending…");
+    // The switch's progress is the handoff node's to tell, not the bubbles'.
+    expect(text).toContain("Sending…");
+    expect(text).not.toContain("Claude is writing a summary…");
   });
 
-  it("captions a rebind's held messages with the restart", () => {
+  it("stands the confirming message down once the switch marker carrying it is on the transcript", () => {
+    // The snapshot keeps re-listing the confirming message for as long as the switch lasts, but
+    // the marker lands while it is still converging and is the message's real form: without the
+    // stand-down the page would paint the same text as a bubble and as the opening turn at once.
+    const chat = `agent-carried-${Math.random()}`;
+    chats.set(
+      chat,
+      chatSnapshotFixture(chat, {
+        handoff: handoffStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on in Codex" },
+            { message_id: "m-2", text: "and this" },
+          ],
+        }),
+      }),
+    );
+    expect(renderHeldSends(chat).map((bubble) => bubble.key)).toEqual(["held-trigger-1", "held-m-2"]);
+
+    appendEvents(chat, [
+      {
+        timestamp: "2026-01-01T00:00:00Z",
+        type: "agent_switch",
+        event_id: "sw1",
+        source: "chat",
+        from_agent_id: "agent-old",
+        to_agent_id: "agent-new",
+        from_harness: "claude",
+        to_harness: "codex",
+        seq: 1,
+        message_id: "trigger-1",
+        message: "Carry on in Codex",
+      },
+    ]);
+    expect(renderHeldSends(chat).map((bubble) => bubble.key)).toEqual(["held-m-2"]);
+  });
+
+  it("captions a rebind's held messages the same way", () => {
     chats.set("agent-3", chatSnapshotFixture("agent-3", { handoff: rebindStateFixture() }));
     const text = JSON.stringify(renderHeldSends("agent-3"));
     expect(text).toContain("Carry on on the other account");
-    expect(text).toContain("Restarting Claude on Anthropic 2 (Claude Code)…");
+    expect(text).toContain("Sending…");
   });
 
   it("renders nothing for a chat that is not switching", () => {
