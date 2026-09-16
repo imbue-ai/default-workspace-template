@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { hoverTooltipAttrs, placeTooltip, setHoverTooltip } from "./hoverTooltip";
-import { hoverTooltip, hoverTooltipText, shownTooltipText } from "../testing/tooltip";
+import { hoverTooltip, hoverTooltipText, shownTooltipText, unhoverTooltip } from "../testing/tooltip";
 
 const VIEWPORT = { width: 1000, height: 800 };
 const BUBBLE = { width: 100, height: 20 };
@@ -165,6 +165,20 @@ describe("hoverTooltipAttrs", () => {
 
     // Leaving and coming back does bring it back.
     expect(hoverTooltipText(button)).toBe("Start");
+  });
+
+  it("follows a text change on its trigger while the bubble is up", async () => {
+    vi.useFakeTimers();
+    const button = renderButton("Starting");
+    hoverTooltip(button);
+    expect(shownTooltipText()).toBe("Starting");
+
+    // What the dock's status dot does when an app's status changes under a resting pointer.
+    expect(renderButton("Running")).toBe(button);
+    await Promise.resolve();
+    expect(shownTooltipText()).toBe("Running");
+
+    unhoverTooltip(button);
   });
 
   it("takes the bubble down with an element that leaves the document while it is up", async () => {
