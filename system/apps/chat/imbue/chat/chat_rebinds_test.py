@@ -67,7 +67,7 @@ class _FakeWorkspace(MutableModel):
     evicted: list[str] = Field(default_factory=list)
     revived: list[str] = Field(default_factory=list)
     relabeled: list[tuple[str, dict[str, str]]] = Field(default_factory=list)
-    # Every model pick applied, and every attempt that was not, in order.
+    # The model picks that landed, and how many attempts were made in all.
     applied_picks: list[tuple[str, ModelPick]] = Field(default_factory=list)
     pick_attempt_count: int = 0
     # How many attempts the harness refuses before taking the pick; a rejection refuses every one.
