@@ -31,6 +31,7 @@ from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -71,6 +72,7 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
+
 
 # Several tests in this module spin up real watchdog FSEvents observers
 # (the activity and model-state watchers). On macOS the FSEvents emitter thread
@@ -1374,6 +1376,48 @@ def test_get_chat_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadca
         assert manager.get_chat_ids() == ["chat"]
     finally:
         manager.stop()
+
+
+def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
+    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, state, labels in (
+                ("chat-running", "RUNNING", {"user_created": "true"}),
+                ("chat-waiting", "WAITING", {"user_created": "true"}),
+                ("chat-dead", "DEAD", {"user_created": "true"}),
+                ("chat-stopped", "STOPPED", {"user_created": "true"}),
+                ("worker-running", "RUNNING", {"agent_created": "true"}),
+                ("primary-running", "RUNNING", {"is_primary": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
+                )
+        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+    finally:
+        manager.stop()
+
+
+def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    custom_compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: [],
+        runner=lambda *args, **kwargs: FinishedProcess(
+            command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
+        ),
+    )
+    manager = AgentManager.build(broadcaster, autocompactor=custom_compactor)
+    assert manager._autocompactor is custom_compactor
+    assert manager._autocompactor._thread is None
+
+    manager._autocompactor.start()
+    assert manager._autocompactor._thread is not None
+    assert manager._autocompactor._thread.is_alive()
+
+    manager.stop()
+    assert manager._autocompactor._thread is None
 
 
 def test_observe_argv_accepted_by_live_cli() -> None:
