@@ -20,6 +20,7 @@ import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
+import { getHarnessCatalog } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -134,9 +135,11 @@ export function closeSwitchDialog(): void {
   m.redraw();
 }
 
-/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown. */
+/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown,
+ *  and for a harness whose model the chat app cannot switch, where no pick could be applied. */
 function currentModelIdentity(chat: ChatSnapshot | undefined): ModelIdentity | null {
-  const choice = chat?.active_agent.model_choice ?? null;
+  if (chat === undefined || getHarnessCatalog(chat.active_agent.harness)?.switch_mode === "read_only") return null;
+  const choice = chat.active_agent.model_choice;
   if (choice === null || choice.matched === null) return null;
   return { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
 }
