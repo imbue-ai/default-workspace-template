@@ -18,9 +18,12 @@ interface AccountModelOptionsResponse {
   options?: CatalogModelOption[] | null;
 }
 
-/** The pickable options for a new agent on ``accountId``, in catalog order; empty when nothing is known. */
+/** The pickable options for a new agent on ``accountId``, in catalog order; empty when nothing is known, and
+ *  for a harness whose model the chat app cannot switch (agy's is changed from the agent's terminal). */
 export async function fetchAccountModelOptions(accountId: string): Promise<CatalogModelOption[]> {
   await ensureHarnessCatalogs();
+  const catalog = getHarnessCatalog(accountForAgent(accountId)?.harness);
+  if (catalog?.switch_mode === "read_only") return [];
   const response = await m.request<AccountModelOptionsResponse>({
     method: "GET",
     url: apiUrl("/api/accounts/:accountId/model-options"),
@@ -28,6 +31,5 @@ export async function fetchAccountModelOptions(accountId: string): Promise<Catal
   });
   const options = response.options ?? null;
   if (options !== null) return options.filter((option) => option.in_picker);
-  const catalog = getHarnessCatalog(accountForAgent(accountId)?.harness);
   return (catalog?.options ?? []).filter((option) => option.in_picker);
 }
