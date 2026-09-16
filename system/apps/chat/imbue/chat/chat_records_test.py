@@ -15,7 +15,9 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import RECORD_VERSION
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_two_member_chat_record as two_member_record
+from imbue.imbue_common.model_update import to_update
 
 
 def _agent_id() -> str:
@@ -53,6 +55,35 @@ def test_a_record_refuses_agents_that_contradict_what_it_says_about_them() -> No
     # A converging chat (every agent archived, none active yet) and a single agent are both fine.
     ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(2, second, is_archived=True)))
     ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=False),))
+
+
+def test_a_records_handoff_must_retire_its_last_agent_and_name_a_new_successor() -> None:
+    first, second, third = _agent_id(), _agent_id(), _agent_id()
+    archived_first = make_chat_agent_entry(1, first, is_archived=True)
+    live_second = make_chat_agent_entry(2, second, is_archived=False)
+    handoff = make_chat_handoff_record(retiring_seq=2, next_agent_id=third)
+
+    ChatRecord(chat_id=ChatId(first), agents=(archived_first, live_second), handoff=handoff)
+    with pytest.raises(ValidationError, match="retires seq 1"):
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(archived_first, live_second),
+            handoff=handoff.model_copy_update(to_update(handoff.field_ref().retiring_seq, 1)),
+        )
+    with pytest.raises(ValidationError, match="not the next"):
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(archived_first, live_second),
+            handoff=handoff.model_copy_update(to_update(handoff.field_ref().next_seq, 4)),
+        )
+    with pytest.raises(ValidationError, match="already a member"):
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(archived_first, live_second),
+            handoff=handoff.model_copy_update(to_update(handoff.field_ref().next_agent_id, first)),
+        )
+    assert handoff.held_send_for(handoff.trigger_message_id) is not None
+    assert handoff.held_send_for("no-such-message") is None
 
 
 def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path) -> None:

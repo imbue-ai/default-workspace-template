@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
+from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -100,8 +102,10 @@ class ChatAppState(MutableModel):
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
-                # via the REST /events endpoint, so nothing is buffered for replay.
-                self.event_queues.broadcast_batch(agent_id, events)
+                # via the REST /events endpoint, so nothing is buffered for replay. The
+                # fan-out is keyed by chat, so a page's stream follows the chat across a
+                # handoff rather than the agent it happened to open on.
+                self.event_queues.broadcast_batch(str(self.agent_manager.chat_id_of_agent(agent_id)), events)
                 # Fold the delta into the per-agent activity signals. The tracker is
                 # incremental (seeded with the full backlog below), so it only ever
                 # needs the newly parsed events.
@@ -169,6 +173,36 @@ class ChatAppState(MutableModel):
         """
         with self._watchers_lock:
             return self.loaders.get(agent_id)
+
+    def is_main_session_event(self, event: dict[str, Any]) -> bool:
+        """Whether a streamed event belongs to its agent's own session rather than a subagent's.
+
+        The agent is the one the event names (a chat's stream carries several agents' events
+        across a handoff); an agent with no resident watcher, and a chat-level event such as
+        the switch chip, count as main.
+        """
+        with self._watchers_lock:
+            watcher = self.watchers.get(str(event.get("agent_id", "")))
+        return watcher is None or watcher.is_main_session_event(event)
+
+    def drain_to_composer(self, agent_info: AgentInfo, restart_process: Callable[[], tuple[bool, str]]) -> str:
+        """The stop button's path: interrupt the agent's turn and return its queue as one block.
+
+        Dispatches through the agent's session to the harness's registered interrupt (the
+        base restart-drain, or a native override), binding the watcher, the restart the caller
+        supplies, the activity settle, and the native cancel chord. Shared by the route and
+        the handoff's draining step. Raises ``AgentRestartError`` when the restart fails.
+        """
+        watcher = self.get_or_create_watcher(agent_info)
+        return self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            restart_process,
+            lambda: self.agent_manager.reset_activity_state(agent_info.id),
+            lambda: self.agent_manager.press_key_chord_on_agent(
+                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+            ),
+        )
 
     def stop_and_remove_watcher(self, agent_id: str) -> None:
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,

@@ -113,7 +113,7 @@ def build_production_state(
         chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
-    # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
+    # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)

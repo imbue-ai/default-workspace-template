@@ -109,7 +109,9 @@ Each decision below was settled during design, with the rationale given at the t
     The chat app must be robust to the agent failing to write it, including failing immediately.
 11. **The lane change applies on the next send**, never while a turn is in flight on its own.
     The user can change the pending lane freely; the next send asks for confirmation.
-12. **tk step records are closed at handoff** and their titles handed to the new agent, which decides its own steps.
+12. **tk step records follow the chat, not the agent.**
+    tk scopes step records by creator, and the creator is the chat's id (`MINDS_CHAT_ID`, falling back to the agent's name outside the chat app), so a successor sees its predecessor's open steps as its own and decides which still apply; the handoff closes nothing.
+    Keying on the chat id also fixes the rename bug the name-based scoping had: `mngr rename` changes `MNGR_AGENT_NAME` under a running process, which stranded the steps created after a rename.
 13. **Rebind and handoff are different operations** behind one user-facing gesture ("switch provider").
     Rebind keeps the agent, its transcript, its tk steps, and its model settings; a handoff replaces the agent.
     Where a harness cannot resume a session under a swapped credential, a rebind falls back to a handoff.
@@ -217,9 +219,10 @@ The chat's mngr name is the canonical form of its title ("Chat 2" is the `displa
 Every agent that becomes active takes that name, which keeps the terminal back face, the git commit identity (`agent_rewrite_bash_command.py` reads the live name), and `mngr list` readable.
 Name reuse is not load-bearing for correctness: nothing may depend on reaching the chat by that name (section 4.5).
 
-The retiring agent is renamed to `archived-<seq>-<canonical>-<agent-id>` with `mngr rename`, which also moves its tmux session, and given `display_name="<title> (archived <seq>)"` through the rename's `-l` flag, and then archived with `mngr archive`, which sets `archived_at`.
+The retiring agent is renamed to `archived-<seq>-<canonical>-<agent-id>` with one `mngr rename` whose `-l` flags carry every label in the same atomic write: `display_name="<title> (archived <seq>)"`, `chat_id`, `chat_seq`, and `archived_at` (the label `mngr archive` would set; the rename sets it itself, so the archive is one mngr call rather than three).
 The archival prefix sorts archived agents together and the sequence number orders them; the agent id keeps the name unique for the life of the host.
-`AgentName` allows letters, digits, dashes, and underscores with no length cap, so the name (about 115 characters at most) is valid; whether tmux accepts a session name of that length with the `MNGR_PREFIX` is to be verified in phase 4.
+`AgentName` allows letters, digits, dashes, and underscores with no length cap, so the name (about 115 characters at most) is valid.
+The rename happens after `mngr stop`, so no tmux session carries the archival name, and an archived agent is never started; tmux's acceptance of a name that long only matters to someone starting one by hand.
 
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
@@ -361,17 +364,22 @@ The auto-open reactor fires for an agent that appears carrying an `auto_open` or
 
 ### 5.2 Trigger and preconditions
 
-One switch route takes the chat id, the target account, and the message, and dispatches on the target account's harness: the active agent's own harness means a rebind (section 6), any other harness means a handoff.
+One switch route (`POST /api/chats/<chat_id>/handoff`, body `account_id`, `message`, `message_id`, and the client fields a send carries) takes the chat id, the target account, and the message, and dispatches on the target account's harness: the active agent's own harness means a rebind (section 6), any other harness means a handoff.
 Two lanes can share a harness (Opencode Go and OpenRouter both run on pi), which is why the dispatch keys on harness rather than lane.
-The route refuses with 409 when the chat is already converging, and with 400 when the chat has no active agent (a provisional chat, or one in the failed-next-agent state, which retries through its own route), when the target account is unknown, or when the target account is the active agent's own account.
+The route refuses with 409 when the chat is already converging (the failed phase included, which retries through its own route), with 404 when the chat has no active agent (a provisional chat, or an id that names no chat), and with 400 when the target account is unknown or is the active agent's own account.
+Until phase 6 lands the rebind, a target on the active agent's own harness is refused with 400 too.
+The route runs draining on the request's thread and answers 202 with the phase the chat is then in and the queued text draining returned for the composer; the remaining phases run on a thread of the chat app's.
+Cancel is `POST .../handoff/cancel` and the retry of a failed create `POST .../handoff/retry` with an `account_id`.
 
 ### 5.3 Draining
 
 `draining` is the first persisted phase, and it has two jobs.
 First, it waits, bounded, for any send that is in flight to resolve, the same rule the shoulder tap uses: nothing is switched while a message has not reached a real state.
 Second, it returns the queued messages of the active agent to the composer, in send order, on top of whatever is there, exactly as the stop button returns them.
+A confirmed switch is a stop: the queue cannot be taken out of a live turn without ending it (on claude it lives inside the process), so draining is the stop button's own interrupt-to-composer, which also waits out an in-flight send under the message lock, and the summary request then lands on an idle agent at once.
+A stopped agent has nothing to drain.
 The message that triggered the handoff is not returned; it is held as the new agent's first message (section 5.7).
-The queue is returned before anything else so that a later cancel leaves the user's text where it can be seen.
+The queue is returned before anything else so that a later cancel leaves the user's text where it can be seen; the returned text also stays on the record's `handoff` entry (`returned_block`) for a page that reloads.
 
 ### 5.4 Phases
 
@@ -386,8 +394,8 @@ The sequence:
    Otherwise, if the active agent is stopped, start it.
    Then send the summary request through the chat's normal send path and wait (5.5).
    Cancel is still possible here.
-3. **switching**: drain-and-stop the old agent: capture the queue under the message lock as a backstop (only a direct `mngr message`, the backoff path, can have parked anything since draining; whatever it finds rides back to the composer too), close any live connection (codex's app-server session), `mngr stop`.
-   Then close the open tk steps (5.9), rename and archive the old agent (4.3), record its final event count, and create the new agent (5.8).
+3. **switching**: `mngr stop` the old agent (the chat app reaps its session's live state, codex's app-server connection included), then rename and archive it (4.3), record its final event count, and create the new agent (5.8).
+   The queue was already returned in draining (5.3) and the open tk steps carry over (5.9), so nothing else is captured or closed here.
    Entering this phase is the point of no return.
 4. **active**: the record's `handoff` is cleared, the new agent is the last member, the switch chip is emitted, held sends are delivered, and the chat snapshot is pushed.
 
@@ -404,13 +412,14 @@ Step 3 fails into **failed** (5.10) when the create fails.
   The skill's content rules (open steps, decisions taken, files touched, running workers, unanswered questions, what the user is waiting for) live in this template, harness-neutral and editable.
 - The chat app proceeds to switching as soon as any of these holds:
   the file exists and is non-empty;
-  the request's turn settles to idle with no file written;
-  the send itself fails, or the reply is an API error event;
-  a hard timeout elapses (a few minutes, since a summary can take a while).
-  An agent out of tokens, or wedged with a full context window, hits one of the first three within seconds, so the switch is immediate.
-- If the transcript gained user turns after the summary file's mtime (only external senders can add them, because the chat app holds its own sends), one addendum is requested with a shorter bounded wait; the switch proceeds regardless of whether it lands.
-- A stopped active agent is started for the request.
+  the send itself fails;
+  the request's turn ended with no file written, read off the activity tracker as an idle reading after a busy one or after a ten second grace (a turn shorter than one poll);
+  a hard timeout of five minutes elapses (a summary can take a while).
+  An API error, an agent out of tokens, or one wedged with a full context window all end the turn within seconds, so the idle rule catches them and the switch is immediate; no separate error detector is needed.
+- No addendum is requested for user turns that land after the summary is written: only a direct `mngr message` bypass can add one, since the chat app holds its own sends, and the successor has the transcript and the `AGENTS.md` backstop for the rest.
+- A stopped active agent is started for the request, by the same send path a message takes.
   Only when it cannot be started at all does the handoff proceed without a summary.
+- The request renders as a chip ("Asked for a handoff summary") rather than a hidden line, so the pause reads as one.
 - Whether a summary was produced, reused, or missing is recorded on the record's `handoff` entry and told to the new agent.
 
 ### 5.6 Cancel
@@ -422,10 +431,14 @@ Cancel is refused with 409 in `switching` and later.
 
 ### 5.7 Held sends and the trigger message
 
-- From `draining` until the new agent is active, every send to the chat (from the composer, from a worker through the script, from anything else) is held: recorded as "Sending" in the chat app, shown with the phase text, and delivered in order to the new agent right after the handoff prompt.
-  This satisfies the conservation contract: the message is continuously visible and the backend, not the frontend, resolves the placeholder.
+- From `draining` until the new agent is active, every send to the chat (from the composer, from a worker through the script, from anything else) is held: persisted on the record's `handoff` entry and answered 202 with `{"status": "held", "phase": ...}`, so the page keeps its "Sending" placeholder (shown with the phase text) and the script, which treats any 2xx as delivered-or-queued, never backs off around the hold.
+  The held sends are delivered in order to the new agent right after the handoff prompt.
+  This satisfies the conservation contract: the message is continuously visible and the backend, not the frontend, resolves the placeholder, which happens when the turn appears in the new agent's segment on the chat-keyed stream (4.7).
+- A repeated `message_id` while held answers 202 like the first time and holds nothing twice: the delivered-id ledger phase 1 deferred, scoped to held sends.
+- Sends keep being held in the `failed` phase too; they deliver on the retry.
 - The trigger message is the first of the held sends.
-  It rides the new agent's `mngr create --message` together with the handoff prompt (5.8); the others follow through the normal send path once the agent is ready.
+  It rides the new agent's `mngr create --message-file` together with the handoff prompt (5.8); the others follow through the normal send path once the agent is ready.
+- Delivery pops one held send at a time under the same lock the message route appends under, and the `handoff` entry is cleared only once the list is empty, so a send that arrives during delivery is delivered by the same loop rather than overtaking one still held.
 - A cancel returns the trigger message to the composer and delivers the other held sends to the old agent (5.6).
 - Held sends survive a chat-app restart because they are persisted on the record's `handoff` entry.
 
@@ -437,16 +450,14 @@ Cancel is refused with 409 in `switching` and later.
   The `--type` and the binding args are always explicit, never left to config: `.mngr/settings.local.toml` supplies the workspace's *default* account to a create that names none, and the handoff's target is usually not the default; CLI list flags append after the file's, so an explicit `--type` and `--env` win for the same variable or path.
   `require_create_account.py` gates every in-workspace create, this one included, on the local file naming a type: a handoff on a workspace whose last account was just removed is refused by the gate rather than by the chat app, and that verdict is what the failed-next-agent state shows (5.10).
 - The handoff prompt is built once, stored on the `handoff` entry, and resent verbatim on every retry, whatever lane the retry uses.
-  It contains: the summary path, or the statement that the predecessor did not produce one; the predecessor's archived mngr name, agent id, and state dir, plus the same for every earlier member, so `mngr transcript` and the find-transcripts skill reach them; the titles of the steps closed at handoff; the lanes involved; and then the user's message.
-  Its text is a reference document in this template that the chat app fills in, so it stays harness-neutral and editable.
+  It contains: the summary path, or the statement that the predecessor did not produce one; the predecessor's archived mngr name, agent id, and state dir, plus the same for every earlier member, so `mngr transcript` and the find-transcripts skill reach them; a note that the open steps carry over (5.9); the lanes involved; and then the user's message.
+  Its text is a reference document in this template (`.agents/shared/references/continue-chat.md`) that the chat app fills in, so it stays harness-neutral and editable; the create takes it through `--message-file` from a file beside the record (`handoff-prompt-<seq>.md`), since a prompt is too long for an argv and a file is inspectable.
 - The first-chat claim is never taken for a successor: the claim is only attempted for a create with an empty message, and a handoff always passes one, so the `first` template and `/welcome` stay with the workspace's first chat.
 
 ### 5.9 tk steps, workers, subagents
 
-- Open step records of the retiring agent are closed during switching with a summary saying the conversation moved to a new harness.
-  tk scopes step records by creator (`MNGR_AGENT_NAME`), so the chat app runs `tk` with that variable set to the retiring agent's pre-archive name and `TICKETS_DIR` set as the agents have it, and does so before or after the rename indifferently, since the name comes from the environment rather than from mngr.
-  Their titles ride the handoff prompt; the new agent creates whatever steps still apply.
-  Adopting steps across agents would need tk changes (creator scoping is by agent name) and is not done.
+- Open step records carry over untouched (principle 12): tk scopes them by the chat id, so the successor sees them as its own, continues the ones that still apply, and closes the rest, as the prompt and `AGENTS.md` tell it to.
+  The chat app closes nothing at handoff.
 - Workers keep running.
   They report by writing into the shared work dir and messaging the chat through the script (4.5), so their messages are held during converging and reach the new agent.
   Nothing revives the archived agent, because nothing addresses it.
@@ -468,7 +479,7 @@ The record's `handoff` entry persists the phase, the target, the pre-minted id, 
 
 - `draining` resumes by re-checking the queue.
 - `summarizing` resumes by re-checking the summary's freshness, then the proceed conditions.
-- `switching` resumes by checking, in order: is the old agent stopped (else stop it); does an agent with the archival name exist (else rename); does it carry `archived_at` (else archive); are its steps closed; is `final_event_count` recorded; does an agent with the pre-minted id exist.
+- `switching` resumes by checking, in order: is the old agent stopped (else stop it); does it carry the archival name (else the one rename that also sets its labels); is `final_event_count` recorded; does an agent with the pre-minted id exist.
 - If an agent with the pre-minted id exists and is running or stopped, it is adopted as the new active agent and the handoff completes.
   If the create left something mngr refuses to reuse (`mngr create --id` raises `DuplicateAgentIdOnHostError` for an id present on the host), the partial agent is destroyed and the create rerun under the same id.
 - `failed` resumes as failed.
@@ -495,9 +506,9 @@ A rebind is the same gesture applied to an account on the active agent's own har
 
 ## 7. The template's side: AGENTS.md and the summary skill
 
-- `AGENTS.md` gains a section every agent reads: when `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, the agent is a successor in an existing chat; if its first message carries no summary pointer, it gathers its own context by listing its predecessors (`mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'`) and reading their transcripts (`mngr transcript`, or the find-transcripts skill).
+- `AGENTS.md` gains a section every agent reads ("Continuing a chat that moved to you"): when `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, the agent is a successor in an existing chat; it reads the summary its first message names, or gathers its own context by listing its predecessors (`mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'`) and reading their transcripts (`mngr transcript`, or the find-transcripts skill); it checks `tk steps`; it never touches a predecessor; and it tells the user none of this unless asked.
   This is the backstop for every failure mode of the summary, and it costs nothing when the summary exists.
-- A `handoff-summary` skill for the retiring side: the slash command the chat app sends, naming the output path; the skill writes the summary and stops.
+- A `handoff-summary` skill for the retiring side: the slash command the chat app sends, naming the output path; the skill writes the summary and stops, without replying to the user.
   It is harness-neutral (every harness in this template expands slash commands or is told to).
 - A `continue-chat` reference document: the handoff prompt template the chat app fills in (5.8).
 - The find-transcripts skill learns the `chat_id` label and the archival name shape.
@@ -559,11 +570,19 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 4: the handoff, backend
 
-- The handoff route, the phases, draining, the summary request and its proceed conditions, freshness reuse, starting a stopped agent, the addendum, closing steps, the archive rename and label, the pre-minted id and create, the stored prompt, the failed state with retry, held sends, cancel, refused verbs, and resumption (section 5).
+- The handoff (`chat_handoffs.py`, a runner the manager hands bound callables to, the shape the harness sessions take): the switch route and its preconditions (5.2), draining as the stop button's interrupt (5.3), the four phases on the record's `handoff` entry (5.4), the summary request with reuse of a fresh summary and the three proceed conditions (5.5), cancel (5.6), held sends answered 202 and delivered under the record lock (5.7), the successor's create under its pre-minted id with the stored prompt through `--message-file` (5.8), the failed phase with a retry route (5.10), and resumption from any phase on the manager's start (5.11).
+  The archive is one `mngr rename` carrying every label (4.3); the addendum and the closing of tk steps were dropped (5.5, 5.9).
+- While a chat converges it keeps listing and reading from its retiring agent (the record's last entry stands in for the active agent), with status `working`, or `error` once the create failed; its title and name come from the handoff entry, since the stand-in may already carry its archival name.
+  Stop, start, rename, interrupt, the queue actions, and the model change answer 409 with the phase (the instances API's stop, start, and rename too); destroy proceeds, and a send is held.
+- The transcript fan-out and the SSE streams are keyed by chat id rather than agent id, so an open page's stream follows the chat through the switch and carries the `agent_switch` chip the moment the successor is active.
+- `HandoffState` on the wire gains `error`; the summary request renders as a chip.
+- tk's creator scoping moved to the chat id (principle 12, 5.9), in the vendored `tk` script and the reminder hooks.
 - The `handoff-summary` skill, the `continue-chat` reference, and the `AGENTS.md` section (section 7).
-- To verify during the phase: tmux's acceptance of the archival session name; latchkey registration of the successor; `DuplicateAgentIdOnHostError` handling on resume.
-- Tests: the conservation suites gain handoff cases (queue returned, trigger held, held sends delivered, cancel during summarizing); the storm test covers restart mid-handoff in every phase; an API-driven e2e with two real accounts on different harnesses.
-- Exit check: a handoff driven through the API completes, resumes after a chat-app kill in each phase, and fails over to the failed state and retries when the create is made to fail.
+- Verified by reading: the minds desktop client registers every newly discovered agent with latchkey, so a successor needs no registration step; the archival rename follows a stop, so tmux never sees the name.
+  `DuplicateAgentIdOnHostError` on a resumed create destroys the half-made agent and reruns the create once.
+- The paired minds branch routes the permission-resolution nudge through the chat app by chat id (4.5).
+- Tests: `chat_handoffs_test.py` drives the runner through every phase against a recording `mngr` (the full switch, a reused summary, a turn ending without one, a busy agent, a refused request, a failed create and its retry, a half-made successor, a cancel mid-summary, a resume mid-switch); `agent_manager_test.py` and `server_test.py` cover the verbs, the 202 hold, the 409 refusals, the cancel, and a chat converging end to end over the fake binary; the two-account e2e is a release test that skips until both accounts are signed in.
+- Exit check: a handoff driven through the API completes against the recording `mngr`, resumes from a record left in each phase, fails over to the failed state when the create is made to fail, and retries.
 
 ### Phase 5: the handoff, UI
 
@@ -597,12 +616,13 @@ Where the minds repo is touched, the paired branch is named.
 
 ## 10. Open questions and things to verify
 
-- Whether tmux accepts a session name of about 120 characters under `MNGR_PREFIX` (phase 4).
-- Whether latchkey's per-agent registration follows a successor automatically on discovery, or the handoff must register it (phase 4).
+- Settled for phase 4 (4.3): the archival rename follows `mngr stop`, so tmux never carries the archival session name; only an archived agent started by hand would test it.
+- Settled for phase 4: the minds desktop client's latchkey auto-registration follows every newly discovered agent, so a successor needs no registration step of the handoff's.
 - Settled for phase 2 (4.5): the minds side treats a permission request's `agent_id` purely as a routing key (the gateway checks its shape, the chrome routes by workspace and matches the card by `request_id`), so the request carries the chat id alone; the resolution nudge moves to the chat in phase 4.
 - Per-harness session resumption under a swapped credential for the rebind (phase 6).
 - Settled for phase 2 (4.5): the report is written into the lead's checkout, `lead_work_dir` when the launcher stamped it and the repo's main worktree otherwise; the id-addressed `mngr rsync` delivery is gone.
-- The exact wording and placement of the `AGENTS.md` section and the summary skill's content rules (phase 4, with the user).
+- Settled for phase 4 (section 7): the `AGENTS.md` section and the summary skill's content rules, as landed.
+- Enabling the two-account e2e in CI: it needs an OpenRouter key beside the Anthropic one in the CI secrets (phase 5).
 
 ## 11. Documents this plan revises
 

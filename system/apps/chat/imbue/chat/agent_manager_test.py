@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from app_instances.data_types import InstanceStatus
 from app_instances.testing import RecordingNudger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
@@ -23,7 +24,9 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
@@ -32,6 +35,7 @@ from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
@@ -41,8 +45,10 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
+from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
@@ -50,15 +56,25 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatConvergingError
+from imbue.chat.models import HandoffError
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import SummaryOutcome
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import write_recording_mngr_binary
+from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
@@ -1004,6 +1020,21 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
     labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
     assert "display_name=Chat 2" in labels
     assert_mngr_argv_valid(argv)
+
+
+def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
+    """A handoff's create adds the chat membership labels after the account args and carries its prompt as
+    ``--message-file`` (last), both of which the vendored mngr has to accept."""
+    argv = _chat_create_argv(
+        account_args=("--label", "account=acct-1"),
+        extra_labels=("chat_id=agent-123", "chat_seq=2"),
+        message_file=Path("/tmp/handoff-prompt-2.md"),
+    )
+    assert_mngr_argv_valid(argv)
+    labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
+    assert labels[-3:] == ["account=acct-1", "chat_id=agent-123", "chat_seq=2"]
+    assert argv[-2:] == ["--message-file", "/tmp/handoff-prompt-2.md"]
+    assert "--message" not in argv
 
 
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
@@ -2752,16 +2783,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
 
 
-# --- Chats that have run on several agents (a hand-built record; nothing writes one yet) ---
-
-
-def _recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
-    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log."""
-    log_path = tmp_path / "mngr-argv.log"
-    script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
-    script.chmod(0o755)
-    return str(script), log_path
+# --- Chats that have run on several agents (a hand-built record) ---
 
 
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
@@ -2858,7 +2880,7 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.stop_chat(ChatId(first))
@@ -2892,7 +2914,7 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
 def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.remove_agent(second)
@@ -2910,7 +2932,7 @@ def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
 ) -> None:
     """The agents are gone but the record would resurrect the chat at the next build, so the verb
     reports the failure through the error its callers handle, not a foreign one."""
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
     try:
         with pytest.raises(AgentDestroyError, match="record could not be removed"):
@@ -3002,5 +3024,294 @@ def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
         assert manager.get_chat_snapshots() == []
         assert manager.get_chat_snapshot(first) is None
         assert manager.get_chat_ids() == []
+    finally:
+        manager.stop()
+
+
+# The handoff: moving a chat to another harness (``chat_handoffs.py`` runs it; these cover the manager's side).
+
+
+def _handoff_capabilities(sent: list[tuple[str, str, str]], is_summary_written: bool = True) -> HandoffCapabilities:
+    """Capabilities whose send records itself and, for the summary request, writes the file at once."""
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        sent.append((agent_info.id, text, message_id))
+        if is_summary_written:
+            write_summary_for_request(text)
+        return SendOutcome.OK
+
+    return HandoffCapabilities(
+        ensure_watcher=lambda agent_info: ListTranscriptReader(["e-1", "e-2", "e-3"]),
+        drain_to_composer=lambda agent_info: "queued text",
+        deliver=deliver,
+    )
+
+
+def _openai_account() -> str:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    return account_id
+
+
+def _handoff_manager(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, sent: list[tuple[str, str, str]]
+) -> tuple[AgentManager, InMemoryChatRecordStore, Path]:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities(sent))
+    return manager, store, argv_log
+
+
+def _wait_until_settled(store: InMemoryChatRecordStore, chat_id: ChatId) -> ChatRecord:
+    wait_for(lambda: (record := store.read(chat_id)) is not None and record.handoff is None, timeout=15.0)
+    record = store.read(chat_id)
+    assert record is not None
+    return record
+
+
+def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    account = _openai_account()
+    try:
+        phase, block = manager.begin_handoff(ChatId(first), account, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        assert (phase, block) == (HandoffPhase.SUMMARIZING, "queued text")
+
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+        successor = record.agents[1].agent_id
+        assert record.agents[0].archived_name == f"archived-1-Chat-1-{first}"
+        assert record.agents[0].final_event_count == 3
+        assert record.agents[1].account_id == account and record.agents[1].lane == "openai"
+
+        # The chat lists once, from its new agent, under its old title and name.
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.agent_ids) == (first, (first, successor))
+        assert snapshot.active_agent.agent_id == successor and snapshot.active_agent.harness is HarnessType.CODEX
+        assert (snapshot.title, snapshot.name, snapshot.handoff) == ("Chat 1", "Chat-1", None)
+        archived = manager.get_agent_by_id(first)
+        assert archived is not None and archived.state == "STOPPED"
+        assert archived.labels["chat_seq"] == "1" and archived.labels["chat_id"] == first
+
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs == ["stop", "rename", "create"]
+        assert sent[0][0] == first and sent[0][1].startswith("/handoff-summary ")
+        assert (tmp_path / "chats" / first / "handoff-prompt-2.md").read_text().endswith("Carry on in Codex\n")
+    finally:
+        manager.stop()
+
+
+def _converging_chat(
+    manager: AgentManager,
+    store: InMemoryChatRecordStore,
+    *,
+    phase: HandoffPhase,
+    is_retiring_archived: bool,
+    target_account_id: str = "acct-openai",
+) -> tuple[str, str]:
+    """A one-agent chat whose record carries a handoff in ``phase``; returns the agent id and the successor's."""
+    first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    entry = make_chat_agent_entry(1, first, is_archived=is_retiring_archived)
+    seed_agent_state(
+        manager,
+        first,
+        name=entry.archived_name if is_retiring_archived and entry.archived_name is not None else "Chat-1",
+        state="STOPPED" if is_retiring_archived else "RUNNING",
+        labels={"display_name": "Chat 1", "account": "acct-anthropic"},
+    )
+    handoff = make_chat_handoff_record(
+        retiring_seq=1, next_agent_id=successor, phase=phase, target_account_id=target_account_id
+    )
+    if phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
+        handoff = handoff.model_copy_update(
+            to_update(handoff.field_ref().held_sends, ()),
+            to_update(handoff.field_ref().prompt, "the stored prompt"),
+            to_update(handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
+            to_update(
+                handoff.field_ref().error, "mngr create exited with code 3" if phase is HandoffPhase.FAILED else None
+            ),
+        )
+    store.write(ChatRecord(chat_id=ChatId(first), agents=(entry,), handoff=handoff))
+    manager.refresh_chat_records()
+    return first, successor
+
+
+def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+    chat_id = ChatId(first)
+    try:
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.SCRIPT) is HandoffPhase.SUMMARIZING
+        # A retried send is not held twice; a chat that is not converging is not held at all.
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.SCRIPT) is HandoffPhase.SUMMARIZING
+        assert manager.hold_send(ChatId(f"agent-{uuid4().hex}"), "m-3", "x", HeldSendOrigin.SCRIPT) is None
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        assert [held.message_id for held in record.handoff.held_sends] == ["trigger-1", "m-2"]
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is InstanceStatus.WORKING
+        assert snapshot.handoff is not None and snapshot.handoff.phase is HandoffPhase.SUMMARIZING
+        assert manager.get_handoff_state(chat_id) == snapshot.handoff
+
+        with pytest.raises(ChatConvergingError):
+            manager.stop_chat(chat_id)
+        with pytest.raises(ChatConvergingError):
+            manager.rename_chat(first, "Other")
+        with pytest.raises(ChatConvergingError):
+            manager.begin_handoff(chat_id, _openai_account(), "again", "m-4", HeldSendOrigin.CLIENT)
+
+        # Cancel: the trigger comes back, the other held send goes to the agent the chat stays on, and a
+        # first-handoff record disappears so the chat is its one agent again.
+        assert manager.cancel_handoff(chat_id) == "Carry on in Codex"
+        assert store.read(chat_id) is None
+        wait_for(lambda: (first, "and this", "m-2") in sent, timeout=5.0)
+        assert manager.get_chat_snapshot(first) is not None and manager.get_handoff_state(chat_id) is None
+        with pytest.raises(HandoffError):
+            manager.cancel_handoff(chat_id)
+        assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=True)
+    chat_id = ChatId(first)
+    try:
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is InstanceStatus.ERROR
+        assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
+        # The stand-in already carries its archival name; the snapshot still says what the chat is called.
+        assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
+        with pytest.raises(ChatConvergingError):
+            manager.cancel_handoff(chat_id)
+        # The trigger already rides the stored prompt: a retried send with its id is not held again.
+        assert (
+            manager.hold_send(chat_id, "trigger-1", "Carry on in Codex", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
+        )
+        failed = store.read(chat_id)
+        assert failed is not None and failed.handoff is not None and failed.handoff.held_sends == ()
+
+        assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
+        record = _wait_until_settled(store, chat_id)
+        assert [entry.agent_id for entry in record.agents] == [first, successor]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs == ["create"]
+        assert f"--id {successor}" in argv_log.read_text()
+        assert manager.get_chat_snapshot(first) is not None
+        with pytest.raises(HandoffError):
+            manager.retry_handoff(chat_id, _openai_account())
+    finally:
+        manager.stop()
+
+
+def test_destroying_one_agent_runs_the_shared_destroy_and_reports_a_refusal(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, false_binary: str
+) -> None:
+    """The handoff's destroy of a half-made successor is the chat destroy's own ``mngr destroy --force``, by id."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    refusing = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    try:
+        manager.destroy_agent_process(agent_id)
+        assert argv_log.read_text().splitlines() == [f"destroy {agent_id} --force"]
+        with pytest.raises(AgentDestroyError, match=f"Failed to destroy agent '{agent_id}'"):
+            refusing.destroy_agent_process(agent_id)
+    finally:
+        manager.stop()
+        refusing.stop()
+
+
+def test_an_unfinished_handoff_resumes_when_the_manager_starts(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(
+        manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True, target_account_id=_openai_account()
+    )
+    try:
+        manager._resume_handoffs()
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.agent_id for entry in record.agents] == [first, successor]
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["create"]
+    finally:
+        manager.stop()
+
+
+def test_a_successor_being_made_is_its_chats_and_not_a_chat_of_its_own(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The observe stream tracks the successor as soon as mngr lists it, before the record appends it;
+    the chat keeps listing once, from the retiring stand-in, the successor resolves to that chat, and
+    destroying the chat takes the successor with it."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
+    seed_agent_state(
+        manager,
+        successor,
+        name="Chat-1",
+        harness=HarnessType.CODEX,
+        labels={"display_name": "Chat 1", "chat_id": first, "chat_seq": "2"},
+    )
+    try:
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.active_agent.agent_id, snapshot.status) == (
+            first,
+            first,
+            InstanceStatus.WORKING,
+        )
+        assert manager.get_chat_snapshot(successor) is None
+        assert manager.get_active_agent_info(ChatId(successor)) is None
+        assert manager.chat_id_of_agent(successor) == ChatId(first)
+
+        manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {successor} --force"]
+        assert manager.get_agent_by_id(successor) is None and store.read(ChatId(first)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    anthropic_id, _ = mint_account_dir()
+    commit_account(anthropic_id, "anthropic", "Anthropic")
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": anthropic_id})
+    try:
+        with pytest.raises(HandoffError, match="already runs on account"):
+            manager.begin_handoff(ChatId(first), anthropic_id, "hi", "m-1", HeldSendOrigin.CLIENT)
+        other_anthropic, _ = mint_account_dir()
+        commit_account(other_anthropic, "anthropic", "Anthropic")
+        with pytest.raises(HandoffError, match="not supported yet"):
+            manager.begin_handoff(ChatId(first), other_anthropic, "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError):
+            manager.begin_handoff(ChatId(first), "acct-missing", "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError, match="no active agent"):
+            manager.begin_handoff(
+                ChatId(f"agent-{uuid4().hex}"), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT
+            )
+        assert sent == []
     finally:
         manager.stop()

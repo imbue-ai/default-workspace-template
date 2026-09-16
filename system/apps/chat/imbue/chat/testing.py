@@ -60,6 +60,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_records import ChatAgentEntry
+from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.config import Config
 from imbue.chat.create_defaults import TYPE_KEY
@@ -68,8 +69,12 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
+from imbue.chat.models import HeldSendOrigin
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -181,6 +186,55 @@ def make_chat_agent_entry(
     )
 
 
+# The repo's own handoff prompt template, so a test renders the real placeholders against the runner's fields.
+CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
+    Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
+)
+
+
+def write_summary_for_request(text: str) -> None:
+    """What a fake ``deliver`` does with a handoff summary request: write a stub summary at the path it names.
+
+    A no-op for any other message, so a fake send can call it on everything it is handed.
+    """
+    if not text.startswith(f"{HANDOFF_SUMMARY_COMMAND} "):
+        return
+    path = Path(text.split(" ", 1)[1])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Summary\n\nThe user wants the tests green.\n")
+
+
+def make_chat_handoff_record(
+    *,
+    retiring_seq: int,
+    next_agent_id: str,
+    phase: HandoffPhase = HandoffPhase.SUMMARIZING,
+    handoff_id: str = "handoff-1",
+    held_sends: tuple[HeldSend, ...] | None = None,
+    target_account_id: str = "acct-openai",
+) -> ChatHandoffRecord:
+    """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
+    started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    trigger = HeldSend(
+        message_id="trigger-1", text="Carry on in Codex", origin=HeldSendOrigin.CLIENT, received_at=started_at
+    )
+    return ChatHandoffRecord(
+        handoff_id=handoff_id,
+        phase=phase,
+        started_at=started_at,
+        target_lane="openai",
+        target_account_id=target_account_id,
+        target_harness=HarnessType.CODEX,
+        retiring_seq=retiring_seq,
+        next_agent_id=next_agent_id,
+        next_seq=retiring_seq + 1,
+        chat_name="Chat-1",
+        chat_title="Chat 1",
+        trigger_message_id=trigger.message_id,
+        held_sends=held_sends if held_sends is not None else (trigger,),
+    )
+
+
 def make_two_member_chat_record(first_id: str, second_id: str, first_event_count: int = 7) -> ChatRecord:
     """A chat that ran on ``first_id`` (claude, archived) and moved to ``second_id`` (codex, active)."""
     return ChatRecord(
@@ -190,6 +244,15 @@ def make_two_member_chat_record(first_id: str, second_id: str, first_event_count
             make_chat_agent_entry(2, second_id, is_archived=False, harness=HarnessType.CODEX),
         ),
     )
+
+
+def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's."""
+    log_path = tmp_path / "mngr-argv.log"
+    script = tmp_path / "fake-mngr"
+    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.chmod(0o755)
+    return str(script), log_path
 
 
 class RecordingMngrMessenger(MngrMessenger):
