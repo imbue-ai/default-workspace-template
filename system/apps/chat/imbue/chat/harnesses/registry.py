@@ -138,7 +138,7 @@ _MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     action=PopupAction.NOTICE,
     notice_body=_MODEL_BAR_NOTICE,
 )
-# For the fast-capable harnesses; pairs with ``_FAST_MODE_LIMIT_POPUP`` on the same spec.
+# For the fast-capable harnesses.
 _MODEL_BAR_POPUP_WITH_FAST: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.COMPOSER_COMMAND,
     commands=_MODEL_BAR_COMMANDS_WITH_FAST,

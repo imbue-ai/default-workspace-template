@@ -650,12 +650,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
     // A new chat starts on fast mode; once it has run the workspace's turn limit,
     // switch it to standard speed. Checked here because this is where the loaded
-    // transcript and the idle flag meet. Re-running it per render is fine: a chat
-    // is switched once, and the cheap gates (harness declared no limit, already
-    // switched, agent mid-reply, fast mode already off) short-circuit ahead of
-    // the one gate that is not cheap -- the turn count, which walks the held
-    // transcript. Which agents the limit applies to is the harness's declaration
-    // (the fast_mode_limit popup on its catalog), not a harness-name check here.
+    // transcript and the idle flag meet.
     maybeApplyFastModeLimit(chat, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire

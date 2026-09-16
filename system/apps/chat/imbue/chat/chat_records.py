@@ -39,8 +39,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 logger = _loguru_logger
 
 # Bumped when the on-disk shape changes. A record whose version is newer than this refuses to
-# load, so an older build never reads a newer record wrong. Version 2 added ``seed_title`` and
-# the seed harness as a first member.
+# load, so an older build never reads a newer record wrong.
 RECORD_VERSION: Final[int] = 2
 
 DEFAULT_CHAT_RECORDS_ROOT: Final[Path] = Path("data/.apps/chat/chats")
