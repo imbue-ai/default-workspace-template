@@ -26,10 +26,9 @@ Do **not** push agent-specific content:
 - Workspace data and runtime state (`data/`)
 - Agent-specific services, settings, or CLAUDE.md sections
 
-Do **not** include changes under `system/vendor/mngr/` -- that is a vendored
-snapshot of the mngr repo, and mngr changes get their own PR on the mngr repo,
-not a template PR. See [references/mngr-changes.md](references/mngr-changes.md)
-for the flow (test in the vendored tree, then prepare the mngr PR from a
+mngr changes are not template changes: mngr is installed here from the commit
+`pyproject.toml` pins, and a change to it gets its own PR on the mngr repo. See
+[references/mngr-changes.md](references/mngr-changes.md) for the flow (a
 standalone checkout at `.external_worktrees/mngr`).
 
 ## PR conventions

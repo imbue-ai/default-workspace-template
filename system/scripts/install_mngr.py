@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the vendored mngr as a uv tool, with the plugins the manifest assigns it.
+"""Install mngr as a uv tool, with the plugins the manifest assigns it.
 
 The base package and its plugins go in ONE ``uv tool install``. Installing the base alone
 rebuilds the tool environment from that package and drops every extra, so an install
@@ -33,16 +33,15 @@ from pathlib import Path
 from typing import Protocol
 
 import tool_env
-from list_mngr_plugins import plugin_paths_for_tool
-
-# The vendored mngr monorepo's installable package. Installing the tree root instead fails
-# with a setuptools flat-layout error.
-MNGR_SOURCE_DIR = "system/vendor/mngr/libs/mngr"
+from list_mngr_plugins import MANIFEST_PATH
+from list_mngr_plugins import PYPROJECT_PATH
+from list_mngr_plugins import MngrSource
+from list_mngr_plugins import base_arguments
+from list_mngr_plugins import plugin_arguments_for_tool
+from list_mngr_plugins import read_mngr_source
 
 # How the plugin manifest names the mngr tool's own plugin set.
 MNGR_PLUGIN_KEY = "mngr"
-
-MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
 
 class NoPluginsListed(Exception):
@@ -68,23 +67,20 @@ class Run(Protocol):
     ) -> object: ...
 
 
-def build_install_command(repo_root: Path, plugin_paths: Sequence[str]) -> list[str]:
-    """The single ``uv tool install`` that lands mngr and its plugins.
+def build_install_command(source: MngrSource, plugin_arguments: Sequence[str]) -> list[str]:
+    """The single ``uv tool install`` that lands mngr and its plugins, all from ``source``.
 
     ``--reinstall`` because a from-scratch rebuild is what the apply does too
     (``_reinstall_tool``), and because an environment carrying extras this run does not
     name should lose them rather than keep them silently.
     """
-    if not plugin_paths:
+    if not plugin_arguments:
         raise NoPluginsListed(
             f"{MANIFEST_PATH} lists no plugins for the '{MNGR_PLUGIN_KEY}' tool. Installing "
             "the base package alone leaves an mngr that cannot parse [agent_types.*], which "
             "breaks `mngr create --template chat` and with it the app's update path."
         )
-    command = ["uv", "tool", "install", "-e", str(repo_root / MNGR_SOURCE_DIR)]
-    for path in plugin_paths:
-        command += ["--with-editable", str(repo_root / path)]
-    return command + ["--reinstall"]
+    return ["uv", "tool", "install", *base_arguments(source), *plugin_arguments, "--reinstall"]
 
 
 def install_environment(base_env: Mapping[str, str]) -> dict[str, str]:
@@ -107,10 +103,9 @@ def install_mngr(
     repo_root: Path, base_env: Mapping[str, str], run: Run = subprocess.run
 ) -> list[str]:
     """Run the install under ``base_env``, pinned; return the command that was run."""
+    source = read_mngr_source((repo_root / PYPROJECT_PATH).read_text(), repo_root)
     manifest = (repo_root / MANIFEST_PATH).read_text()
-    command = build_install_command(
-        repo_root, plugin_paths_for_tool(manifest, MNGR_PLUGIN_KEY)
-    )
+    command = build_install_command(source, plugin_arguments_for_tool(manifest, source, MNGR_PLUGIN_KEY))
     run(command, cwd=repo_root, env=install_environment(base_env), check=True)
     return command
 

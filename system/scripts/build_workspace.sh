@@ -3,7 +3,7 @@
 #
 # Builds the workspace from full source: builds the frontend, installs the mngr
 # tool and one tool per Python app (with their mngr plugins), registers the
-# editable workspace + vendored mngr packages, and exposes the tk ticket tracker. Needs the full repo
+# editable workspace + the pinned mngr packages, and exposes the tk ticket tracker. Needs the full repo
 # present, so the Dockerfile runs it after copying all source and the Lima
 # provider runs it after the repo is synced into the VM. Runs as root and is
 # idempotent.
@@ -45,6 +45,10 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
+# An mngr checkout dropped at system/vendor/mngr (untracked) takes over from the
+# public-repo commit pyproject.toml pins: everything below reads the rewritten file.
+python3 "$REPO_ROOT/system/scripts/use_local_mngr.py" "$REPO_ROOT"
+
 # Build every frontend of the npm workspace (deps installed by install_dependencies.sh): the
 # shell's and the chat app's, each into the static/ directory its backend serves.
 ( cd "$REPO_ROOT/system" && npm run build )
@@ -56,19 +60,18 @@ git config --global --add safe.directory "$REPO_ROOT"
 # pyproject but no manifest runs `uv run <name>` from the root venv, and both
 # forms are supported. Each tool also gets the mngr plugins
 # system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
-# an app's manifest name for that app's -- as editable extras, so it can parse
-# plugin-specific config; the update-self apply reads the same table, so a
-# release adding a plugin registers it in existing workspaces as well as here.
-# mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
+# an app's manifest name for that app's -- as extras, so it can parse
+# plugin-specific config. mngr and every plugin come from wherever pyproject.toml's
+# [tool.uv.sources] points imbue-mngr: the pinned public-repo commit, or the local
+# tree. The update-self apply reads the same table, so a release adding a plugin
+# registers it in existing workspaces as well as here. mngr_modal is intentionally
+# not registered (providers.modal.is_enabled=false).
 python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
     app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
-    APP_PLUGIN_ARGS=()
-    while IFS= read -r plugin_path; do
-        APP_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
-    done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
+    mapfile -t APP_PLUGIN_ARGS < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
     uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 

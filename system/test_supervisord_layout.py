@@ -29,6 +29,8 @@ import subprocess
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 _DROPIN_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
@@ -42,10 +44,11 @@ _SECTION_RE = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILIN
 # The manifest reader looks at ``[program:*]`` alone, so parity with it is stated in those terms.
 _PROGRAM_ONLY_RE = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
 
-# The one cross-repo reader of this config, vendored here as part of every release.
-_VENDORED_EVALS_CAPTURE = (
-    _REPO_ROOT / "system/vendor/mngr/apps/minds_evals/imbue/minds_evals/evidence_collection.py"
-)
+# The one cross-repo reader of this config. It lives in the private part of the mngr repo,
+# so this tree only has it when an mngr checkout sits at system/vendor/mngr (the dev and CI
+# override of the pinned public commit; see system/scripts/use_local_mngr.py).
+_LOCAL_MNGR_TREE = _REPO_ROOT / "system/vendor/mngr"
+_VENDORED_EVALS_CAPTURE = _LOCAL_MNGR_TREE / "apps/minds_evals/imbue/minds_evals/evidence_collection.py"
 
 
 def _expand_include_patterns(parser: configparser.ConfigParser) -> list[Path]:
@@ -214,14 +217,21 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
     Provisioning is tag-pinned and ``update-self`` is ceilinged to the running app's template ref,
     so landing this on ``main`` harms nobody. What binds is the release cut: a ``minds-v<N>``
     template tag must not declare programs in drop-ins unless the mngr commit tagged ``minds-v<N>``
-    carries the include-aware capture. ``system/vendor/mngr`` is synced as part of that same
-    release, so the vendored copy is the artifact this repo can check.
+    carries the include-aware capture.
+
+    The capture's source is private to the mngr repo, so this tree carries it only when an mngr
+    checkout sits at ``system/vendor/mngr`` -- the paired-branch CI harnesses in mngr and the dev
+    loop build workspaces that way -- and that is when this check runs. Against the pinned public
+    commit it cannot run and skips, saying so: there the guarantee is that mngr's own
+    ``evidence_collection_test.py`` pins the include-aware capture on every commit that reaches
+    ``main`` (and so the mirror), and that the template's pin only moves forward from a commit
+    that carries it.
 
     Deliberately a conditional: it says nothing about a template that declares every program in the
     main config, and is a permanent regression guard for one that does not.
 
     Asserts on what the capture *does*, not on how its shell is written: it builds the capture's
-    own shell out of the vendored source and runs it against this repo, so a rewrite of the
+    own shell out of the checkout's source and runs it against this repo, so a rewrite of the
     expansion -- a different ``sed``, an ``awk``, a pipeline -- keeps this green where matching on
     the source text would fail a correct implementation. What it does still depend on is the shape
     of the upstream API: a builder of that name returning a shell string, and the one constant it
@@ -231,12 +241,18 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
     """
     if not list(_DROPIN_DIR.glob("*.conf")):
         return
+    if not (_LOCAL_MNGR_TREE / "libs/mngr/pyproject.toml").is_file():
+        pytest.skip(
+            "no mngr checkout at system/vendor/mngr: the evals capture is private to the mngr repo, "
+            "so this gate runs only in a tree built against a checkout; the pinned commit's capture "
+            "is covered by mngr's own evidence_collection_test.py"
+        )
 
-    # A missing capture -- or a missing vendored subtree around it -- is a failure, not a pass: the
-    # path lives in another repo's tree, so an upstream rename would otherwise retire this gate
-    # silently, leaving the drop-ins unguarded, which is the one outcome it exists to prevent.
+    # With a checkout present, a missing capture is a failure, not a pass: the path lives in
+    # another repo's tree, so an upstream rename would otherwise retire this gate silently,
+    # leaving the drop-ins unguarded, which is the one outcome it exists to prevent.
     assert _VENDORED_EVALS_CAPTURE.is_file(), (
-        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} is not in the vendored mngr subtree, "
+        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} is not in the mngr checkout, "
         "so the release gate below cannot read the evals evidence capture. If it moved upstream, "
         "re-point this test at its new path -- do not drop the check."
     )
@@ -248,7 +264,7 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
         "so it reads the main config alone and would find no program for anything this template "
         f"declares in {_DROPIN_DIR.relative_to(_REPO_ROOT)}.\n\n"
         "This is the release gate, not a broken test: land the include-aware capture in mngr, then "
-        "re-sync system/vendor/mngr. If either name was instead RENAMED upstream, re-point this "
+        "re-sync the checkout at system/vendor/mngr. If either name was instead RENAMED upstream, re-point this "
         "test at the new name -- do not drop the check."
     )
     command = _vendored_capture_command(sources, _REPO_ROOT)
@@ -266,7 +282,7 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
         f"this template declares in {_DROPIN_DIR.relative_to(_REPO_ROOT)}. The evals capture would "
         "find no program for those apps and misgrade every one of them.\n\n"
         "This is the release gate, not a broken test. To satisfy it: land the include-aware "
-        "capture in mngr, then re-sync system/vendor/mngr. Do NOT relax this assertion -- the "
+        "capture in mngr, then re-sync the checkout at system/vendor/mngr. Do NOT relax this assertion -- the "
         "alternative is shipping a template tag that misgrades every eval run on the matching "
         "minds release."
     )

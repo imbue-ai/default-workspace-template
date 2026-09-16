@@ -1,1 +1,0 @@
-The `release-minds` skill's staging rehearsal now starts with the services deploy and bakes after it, the same order as production, and no longer says the order inverts on tiers without an update feed.

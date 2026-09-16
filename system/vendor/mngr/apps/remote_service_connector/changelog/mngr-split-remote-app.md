@@ -1,5 +1,0 @@
-Split the single 7,400-line app.py into a proper package (pure moves, no behavior changes). app.py is now a 200-line Modal-only entrypoint; the FastAPI app is assembled in web.py from per-feature APIRouters (tunnels, hosts, llm_keys, accounts, sync, retention, auth_proxy, and an r2/ subpackage) on top of foundation modules (forwarding, auth, entitlements, litellm_client, cloudflare, naming, http_api, db, errors).
-
-The container now receives the package via a single trailing add_local_python_source image operation (plus the new shared imbue.modal_app_kit), so code changes never invalidate the cached pip image. New guardrails enforce the deployment boundary: shipped modules may import only the stdlib, the pip set declared in deploy_constants.py, and the shipped packages; never the entrypoint; never modal; and runtime seams must be referenced through their owning module (test_project_ratchets.py + an import-linter layers contract).
-
-app_test.py was split into per-module test files alongside the code; shared client factories moved into testing.py. Same 412 tests, unchanged bodies.

@@ -20,8 +20,8 @@ child (`app_instances.sidecar.run_sidecar_app`):
    `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
    terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
    `commands/<key>.sh` with the remaining arguments.
-2. Decompresses the OSC 52-capable ttyd web client vendored with the
-   `mngr_ttyd` plugin (`system/vendor/mngr/libs/mngr_ttyd/`) and serves it via
+2. Decompresses the OSC 52-capable ttyd web client from mngr's `mngr_ttyd`
+   plugin (fetched into `system/vendor/mngr-assets/` at build time) and serves it via
    `ttyd -I`, falling back to the stock client (with a warning) when the asset
    is missing or will not decompress.
 3. Appends the `server_registered` discovery event to
@@ -109,6 +109,11 @@ attach), and re-points the tab through the shell's
 `POST /api/tabs/<tab_id>/instance` (contracts section 5). A rename changes no
 key and no title (the shell tab's title is the record's) and so only nudges.
 Either event nudges the shell, since the instance list may have changed.
+
+The ttyd binary and its OSC 52-capable web client come from mngr's `mngr_ttyd`
+plugin; the client is fetched at build time from the pinned mngr commit into
+`system/vendor/mngr-assets/` (`system/scripts/fetch_mngr_assets.sh`) -- this
+folder is the template-side wiring around them.
 
 `notify_terminal_session.py` at this folder's root is a symlink into `bin/`, for
 a tmux server whose hook commands name that path (a server keeps the hook

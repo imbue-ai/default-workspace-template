@@ -9,7 +9,9 @@
     "apps/chat/frontend"
   ],
   "scripts": {
+    "prebuild": "bash scripts/fetch_mngr_assets.sh",
     "build": "npm run build --workspaces --if-present",
+    "pretest": "bash scripts/fetch_mngr_assets.sh",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "format": "npm run format --workspaces --if-present",

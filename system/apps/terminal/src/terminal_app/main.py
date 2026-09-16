@@ -38,8 +38,9 @@ APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
 INSTANCES_URL: Final[InstancesUrl] = InstancesUrl("http://127.0.0.1:7682")
 STATE_DIR: Final[Path] = Path("data/.state/terminal")
 STORE_PATH: Final[Path] = app_store_path(APP_NAME)
+# Fetched from the pinned mngr commit by system/scripts/fetch_mngr_assets.sh.
 TTYD_WEB_CLIENT_ARCHIVE: Final[Path] = Path(
-    "system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
+    "system/vendor/mngr-assets/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 )
 TTYD_EXECUTABLE: Final[str] = "ttyd"
 # The tagging wrapper every terminal session runs its shell through (the terminal-session band).

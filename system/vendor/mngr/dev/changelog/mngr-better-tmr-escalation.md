@@ -1,3 +1,0 @@
-Added `specs/tmr-escalations-review/`, a review of how TMR escalations behaved on run 20260730085947 (343 tests, 445 escalations). It measures the escalation volume against the number of distinct problems those escalations actually describe, explains why they could not be traced back to the code they concern, why the two escalation kinds carried little information, and how escalations relate to the report's outcome sections. It then records the reworked design that this branch implements, along with its known limits.
-
-Noted in `specs/tmr-bounded-convergence-and-normalization.md` that the outcome schema it describes has been superseded, with a pointer to the new review.

@@ -10,8 +10,9 @@ Internal documentation for the workspace machinery.
   with its contracts and per-phase specs beside it in the same folder.
   The plan that separates chats from agents (so a chat can switch harness) is
   `blueprint/chat-agent-split/plan-chat-agent-split.md`.
-- `style_guide.md` - The code style guide (a symlink into the vendored mngr
-  repo, which is its source of truth).
+- `style_guide.md` - The code style guide, a symlink to the copy
+  `system/scripts/fetch_mngr_assets.sh` fetches from the pinned mngr commit at
+  build time (the mngr repo is its source of truth).
 
 ## The workspace layout migration
 

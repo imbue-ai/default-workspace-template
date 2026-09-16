@@ -1,3 +1,0 @@
-The frps plugin callback route no longer takes the shared secret as a URL path segment (which landed it in the tier's access logs on every relay callback, see issue #616). The new shape is `POST /frps/auth/{relay_id}`, authenticated by the secret in the `Authorization: Basic` header's username position (frps delivers it there from the relay's plugin-`addr` URL userinfo). The legacy `POST /frps/auth/{plugin_secret}/{relay_id}` shape is still accepted (marked CLEANUP) until every relay is redeployed onto the header form and the secret rotated.
-
-`FRPS_AUTH_SECRET` now accepts a comma-separated set of secrets, so a rotation can briefly accept {old, new} while the relay fleet redeploys -- no tunnel downtime.

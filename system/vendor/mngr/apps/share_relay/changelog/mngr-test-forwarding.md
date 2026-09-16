@@ -1,1 +1,0 @@
-Default new share-relay instances to the Debian 13 OVH image (was Debian 12). Freshly provisioned relays now start on the OS we are standardizing on; existing relays are unaffected (the image only applies at provision time), and the deploy path (pinned frps binary, nftables, caddy, python3 healthcheck) is unchanged and compatible with both releases.

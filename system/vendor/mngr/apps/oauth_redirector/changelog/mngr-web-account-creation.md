@@ -1,3 +1,0 @@
-New app: a fixed per-tier OAuth callback redirector deployed as a tiny, secretless Modal Function (`just deploy-oauth-redirector <tier>`). Dev/CI tiers register exactly one redirect URI on their shared Google Web client -- this app's URL -- and it forwards the provider callback to the per-env connector callback carried in the OAuth state JWT's `cb` claim, clamped to the tier's connector hostname pattern so it can never act as an open redirector.
-
-- The redirect function keeps one always-warm container (`min_containers=1`): it sits between Google's consent screen and the connector callback on every Google sign-in, where a scale-to-zero cold boot (4-34s measured) read as "Google is slow".

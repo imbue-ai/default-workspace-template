@@ -1,1 +1,0 @@
-Formatting-only: apply ruff format to `app.py` and `app_sharing_test.py` (line-wrapping of two error-message calls and a test URL literal, inherited unformatted from the base branch). No behavior change.

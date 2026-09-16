@@ -16,7 +16,6 @@ from update_layout import (
     FRONTEND_SOURCE_DIRS,
     FRONTEND_TOOLING_PATHS,
     MANIFEST_FILENAME,
-    MNGR_VENDOR_DIR,
     NPM_MANIFEST_PATHS,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_SCRIPT,
@@ -27,7 +26,6 @@ CLASS_SYSTEM_INTERFACE = "system_interface"
 
 CLASS_SERVICE = "service"
 
-CLASS_EDITABLE_TOOL = "editable_tool"
 
 CLASS_SHARED_RUNTIME = "shared_runtime"
 
@@ -103,7 +101,7 @@ class PathClass(NamedTuple):
     ``classify-merge``'s JSON, which the skill and worker prose read;
     ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
-    ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
+    ``system/apps/system_interface`` and ``system/apps/chat`` run their own suites);
     ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
     """
 
@@ -115,16 +113,14 @@ class PathClass(NamedTuple):
 def _project_for_path(path: str) -> str:
     """Return the pytest project root that owns ``path``.
 
-    Only ``system/apps/system_interface``, ``system/apps/chat`` and ``system/vendor/mngr``
-    carry their own pytest config (the root config ignores them); everything else -- libs,
-    scripts, ``.agents`` -- is covered by the root suite, reported as ``.``.
+    Only ``system/apps/system_interface`` and ``system/apps/chat`` carry their own
+    pytest config (the root config ignores them); everything else -- libs, scripts,
+    ``.agents`` -- is covered by the root suite, reported as ``.``.
     """
     if path.startswith("system/apps/system_interface/"):
         return "system/apps/system_interface"
     if path.startswith("system/apps/chat/"):
         return "system/apps/chat"
-    if path.startswith("system/vendor/mngr/"):
-        return "system/vendor/mngr"
     return "."
 
 
@@ -139,8 +135,6 @@ def classify_path(path: str) -> PathClass:
       on a manifest change (:func:`refresh_backend_dependencies`).
     - ``service`` -- ``system/supervisord.conf``, the per-program drop-ins under
       ``system/supervisord.conf.d/**``, and ``system/libs/bootstrap/**``.
-    - ``editable_tool`` -- ``system/vendor/mngr/**``; a manifest change needs
-      ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
       ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
       a service or a workspace-added skill or app, so it needs the worker's
@@ -187,8 +181,6 @@ def classify_path(path: str) -> PathClass:
         or path.startswith("system/libs/bootstrap/")
     ):
         return PathClass(CLASS_SERVICE, project, is_manifest)
-    if path.startswith("system/vendor/mngr/"):
-        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
     if path == "system/Dockerfile":
         return PathClass(CLASS_DOCKERFILE, project, is_manifest)
     if (
@@ -280,12 +272,11 @@ def classify_merge(
 def _is_backend_manifest(path: str) -> bool:
     """Whether ``path`` can change what the backend's environment resolves to.
 
-    Not just the shell's own manifest: the chat app imports the vendored mngr and
-    shells out to it, both as editable installs, so a vendored package's
-    ``pyproject.toml`` moves their dependency closure exactly as the shell's own
-    does (the chat's own manifest is covered by the lockfile it always moves and
-    by the per-app tool refresh). Both workspace roots count; the vendored root is the one ``uv tool
-    install -e system/vendor/mngr/libs/mngr`` resolves through.
+    Not just the shell's own manifest: the root ``pyproject.toml`` pins the mngr
+    commit every tool and the venv install from, so a move of that pin (and the
+    ``uv.lock`` that follows it) moves the chat app's and the shell's dependency
+    closure exactly as the shell's own manifest does (the chat's own manifest is
+    covered by the lockfile it always moves and by the per-app tool refresh).
 
     The plugin manifest counts for the same reason without being a Python
     manifest: it is what :func:`_manifest_extras` unions into each tool's
@@ -295,20 +286,11 @@ def _is_backend_manifest(path: str) -> bool:
     diverge from a freshly built image -- which is the state the manifest exists
     to prevent.
     """
-    if path in (
+    return path in (
         f"{SYSTEM_INTERFACE_DIR}/pyproject.toml",
         "uv.lock",
         "pyproject.toml",
-        f"{MNGR_VENDOR_DIR}/pyproject.toml",
         PLUGIN_MANIFEST_PATH,
-    ):
-        return True
-    parts = path.split("/")
-    return (
-        len(parts) == 6
-        and parts[:3] == ["system", "vendor", "mngr"]
-        and parts[3] == "libs"
-        and parts[5] == "pyproject.toml"
     )
 
 
@@ -445,7 +427,7 @@ class ApplyPlan(NamedTuple):
     ``app_tools`` are the apps whose tool environment the diff can have moved,
     each reinstalled from the merged tree: the apps whose own directory changed
     (:func:`app_tools_touched_by`), or every app when a shared backend manifest
-    did, since the vendored packages and the plugin table those name are part
+    did, since the pinned mngr packages and the plugin table those name are part
     of every app tool's closure.
     """
 

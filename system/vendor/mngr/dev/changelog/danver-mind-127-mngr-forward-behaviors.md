@@ -1,1 +1,0 @@
-Excluded the `mngr_forward` behavior-corpus guard test (`libs/mngr_forward/imbue/mngr_forward/test_behavior_corpus.py`) from the public mirror: it dev-depends on the internal-only `imbue-mngr-behaviors` tooling, whose dev-group is stripped from the mirrored tree via BEGIN-INTERNAL markers in `libs/mngr_forward/pyproject.toml`.

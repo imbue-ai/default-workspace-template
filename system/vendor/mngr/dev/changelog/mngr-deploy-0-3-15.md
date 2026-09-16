@@ -1,1 +1,0 @@
-Added the committed blueprint plan for the lima legacy-key tunnel fix (`blueprint/lima-legacy-key-tunnel-fix/plan-lima-legacy-key-tunnel-fix.md`), describing the per-host key heal in `mngr_lima`, the explicit `known_hosts_path` threading through host SSH info and the forward tunnel, and the rate-limited tunnel-setup-failed warning that land in this release.
