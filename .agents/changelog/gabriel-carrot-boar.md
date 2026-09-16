@@ -8,7 +8,7 @@ Publishing a template from a workspace that has run update-self no longer ships 
 
 - migrate-workspace's baseline diff uses the same rule. Before, for a source that had run update-self, it left out everything the user built before their last update.
 
-- A data path opted into a template now actually ships in it. The snapshot is committed with `git add -A`, which honours the template's gitignore of all of `data/`, so every `--data-include` path was overlaid, named in the manifest as shipping, and then silently dropped from the commit.
+- A data path opted into a template now actually ships in it. The snapshot was staged with `git add -A`, which honours the template's gitignore of all of `data/`, so every `--data-include` path was overlaid, named in the manifest as shipping, and then silently dropped from the commit. Each opted-in path is now added by force on top of that.
 
 - A workspace's version history now records its own creation. The `created from` line walked back to the oldest bootstrap marker in the history, which in a full-history clone belongs to the template repo or to the mind a template was published from -- a workspace created today read as created a month earlier, from a release it never ran.
 
