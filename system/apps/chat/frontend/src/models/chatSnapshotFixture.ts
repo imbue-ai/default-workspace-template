@@ -38,6 +38,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
   return {
     kind: "handoff",
     phase: "summarizing",
+    started_at: "2026-09-14T12:00:00Z",
     target_lane: "openai",
     target_account_id: "acct-openai",
     target_harness: "codex",
@@ -55,6 +56,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
   return {
     kind: "rebind",
     phase: "restarting",
+    started_at: "2026-09-14T12:00:00Z",
     target_lane: "anthropic",
     target_account_id: "acct-anthropic-2",
     target_harness: "claude",

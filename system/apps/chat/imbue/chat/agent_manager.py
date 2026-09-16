@@ -526,6 +526,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     return HandoffState(
         kind=TransitionKind.REBIND if isinstance(transition, ChatRebindRecord) else TransitionKind.HANDOFF,
         phase=transition.phase,
+        started_at=transition.started_at,
         target_lane=transition.target_lane,
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,

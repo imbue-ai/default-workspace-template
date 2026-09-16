@@ -7,6 +7,7 @@ import type {
   UserMessageEvent,
 } from "../models/Response";
 import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
+import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
 import type { PermissionResolution } from "./message-classification";
 
@@ -1574,15 +1575,27 @@ describe("agent switches", () => {
     const node = handoffNodeOf(sections[0].items[0]);
     expect(node.switch).toBeNull();
     expect(node.events.map((e) => e.event_id)).toEqual(["a-w1"]);
-    expect(hasOpenHandoffRequest(events)).toBe(true);
+    expect(hasOpenHandoffRequest(events, handoffStateFixture())).toBe(true);
     // Once the switch lands, the live segment has no open request.
-    expect(hasOpenHandoffRequest([...events, agentSwitch("t4", "sw1")])).toBe(false);
+    expect(hasOpenHandoffRequest([...events, agentSwitch("t4", "sw1")], handoffStateFixture())).toBe(false);
+    // With nothing converging, an unclosed request is a switch that was called off.
+    expect(hasOpenHandoffRequest(events, null)).toBe(false);
     // A handoff called off leaves the node where it was, and a later turn is its own section.
     const cancelled = [...events, userMsg("t5", "never mind, carry on here"), assistantText("t6", "ok")];
     const after = buildSections(cancelled, new Map(), true);
     expect(after.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", "u-t5"]);
     expect(handoffNodeOf(after[0].items[0]).switch).toBeNull();
     expect(after[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+  });
+
+  it("tells the live switch's request from an earlier one that was called off, by when the switch began", () => {
+    const stale = summaryRequest("2026-09-16T00:43:00.000Z", "u-stale");
+    const live = summaryRequest("2026-09-16T00:44:20.000Z", "u-live");
+    const second = handoffStateFixture({ phase: "summarizing", started_at: "2026-09-16T00:44:10.000Z" });
+    // The second switch confirmed, its request not yet on the stream: the page owes its own node.
+    expect(hasOpenHandoffRequest([userMsg("2026-09-16T00:42:00.000Z", "hi"), stale], second)).toBe(false);
+    // Its request lands: the walk's node takes over.
+    expect(hasOpenHandoffRequest([userMsg("2026-09-16T00:42:00.000Z", "hi"), stale, live], second)).toBe(true);
   });
 
   it("counts a user turn only for a message the user typed", () => {

@@ -96,6 +96,27 @@ describe("the handoff node's words", () => {
       status: "active",
     });
   });
+
+  it("stays called off when a later switch runs, and reads live only for that switch's own request", () => {
+    // Timestamps on a real transcript: the first request predates the second switch's confirmation.
+    const earlier: HandoffNode = {
+      key: "u-req-1",
+      request: { ...REQUEST, timestamp: "2026-09-16T00:43:00.000Z" },
+      events: [],
+      switch: null,
+      prompt: null,
+    };
+    const later: HandoffNode = {
+      key: "u-req-2",
+      request: { ...REQUEST, event_id: "u-req-2", timestamp: "2026-09-16T00:44:20.000Z" },
+      events: [],
+      switch: null,
+      prompt: null,
+    };
+    const second = chatWith(handoffStateFixture({ phase: "summarizing", started_at: "2026-09-16T00:44:10.000Z" }));
+    expect(handoffNodeText(earlier, second)).toEqual({ title: "Handoff called off", status: "cancelled" });
+    expect(handoffNodeText(later, second)).toEqual({ title: "Handing off to Codex…", status: "active" });
+  });
 });
 
 describe("the handoff node", () => {

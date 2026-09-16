@@ -376,6 +376,12 @@ class HandoffState(FrozenModel):
 
     kind: TransitionKind = Field(description="A handoff (another harness) or a rebind (another account, same agent)")
     phase: HandoffPhase = Field(description="Which step of the switch the chat is in")
+    started_at: datetime = Field(
+        description=(
+            "When the switch was confirmed, so the page can tell this switch's summary request in the "
+            "transcript from an earlier one that was called off"
+        )
+    )
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
     target_harness: HarnessType = Field(description="The harness the chat is moving to, for the page's phase text")

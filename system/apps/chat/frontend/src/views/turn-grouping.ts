@@ -74,6 +74,7 @@ import type {
   ToolResultEvent,
   ToolCall,
 } from "../models/Response";
+import type { HandoffState } from "../models/Chats";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
@@ -453,14 +454,25 @@ export function openingTurnOf(event: AgentSwitchEvent): UserMessageEvent | null 
   };
 }
 
-/** Whether the transcript's live segment holds a summary request no switch has closed: the handoff
- *  node the walk builds from it is then the one showing the switch's progress, and the page needs
- *  no node of its own for it. */
-export function hasOpenHandoffRequest(events: readonly TranscriptEvent[]): boolean {
+/** Whether a summary request on the transcript is the chat's live switch's own, rather than one an
+ *  earlier switch sent before it was called off: the live switch asked after it was confirmed. Timestamps
+ *  that do not parse cannot be told apart, and read as the live switch's. */
+export function isLiveHandoffRequest(request: UserMessageEvent, handoff: HandoffState | null): boolean {
+  if (handoff === null) return false;
+  const requestedAt = Date.parse(request.timestamp);
+  const startedAt = Date.parse(handoff.started_at);
+  if (Number.isNaN(requestedAt) || Number.isNaN(startedAt)) return true;
+  return requestedAt >= startedAt;
+}
+
+/** Whether the transcript's live segment holds the live switch's summary request, with no switch
+ *  closing it yet: the handoff node the walk builds from it is then the one showing the switch's
+ *  progress, and the page needs no node of its own for it. */
+export function hasOpenHandoffRequest(events: readonly TranscriptEvent[], handoff: HandoffState | null): boolean {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     if (event.type === "agent_switch") return false;
-    if (event.type === "user_message" && isHandoffSummaryRequest(event)) return true;
+    if (event.type === "user_message" && isHandoffSummaryRequest(event)) return isLiveHandoffRequest(event, handoff);
   }
   return false;
 }

@@ -56,6 +56,9 @@ export interface HeldSend {
 export interface HandoffState {
   kind: TransitionKind;
   phase: HandoffPhase;
+  // When the switch was confirmed (ISO 8601): a summary request on the transcript from before it
+  // belongs to an earlier switch that was called off, not to this one.
+  started_at: string;
   target_lane: string;
   target_account_id: string;
   // The harness the chat is moving to (a rebind keeps its own), for the phase text.

@@ -3608,11 +3608,13 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
             ChatRecord(
                 chat_id=chat_id,
                 agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
-                rebind=make_chat_rebind_record(
-                    agent_id=agent_id,
-                    phase=HandoffPhase.FAILED,
-                    target_account_id=second_account,
-                    error="mngr start exited with code 1",
+                rebind=(
+                    rebind := make_chat_rebind_record(
+                        agent_id=agent_id,
+                        phase=HandoffPhase.FAILED,
+                        target_account_id=second_account,
+                        error="mngr start exited with code 1",
+                    )
                 ),
             )
         )
@@ -3620,6 +3622,7 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         state = manager.get_handoff_state(chat_id)
         assert state is not None and state.kind is TransitionKind.REBIND and state.phase is HandoffPhase.FAILED
         assert state.target_label == "Anthropic 2 (Claude Code)"
+        assert state.started_at == rebind.started_at
         snapshot = manager.get_chat_snapshot(agent_id)
         assert snapshot is not None and snapshot.status.value == "error"
 

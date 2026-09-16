@@ -17,6 +17,7 @@ import type { ToolResultEvent } from "../models/Response";
 import { harnessLabel } from "./agent-switch-chip";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantMessageChildren } from "./message-renderers";
+import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
 
 type HandoffNodeStatus = "active" | "done" | "failed" | "cancelled";
@@ -33,7 +34,10 @@ export function handoffNodeText(
     };
   }
   const handoff = chat?.handoff ?? null;
-  if (handoff === null) return { title: "Handoff called off", status: "cancelled" };
+  // A request from before the live switch was confirmed is an earlier switch's, called off: it must
+  // not read as the live one while that runs.
+  const isLive = node.request === null ? handoff !== null : isLiveHandoffRequest(node.request, handoff);
+  if (!isLive || handoff === null) return { title: "Handoff called off", status: "cancelled" };
   return liveHandoffText(handoff, chat?.active_agent.harness ?? "");
 }
 
