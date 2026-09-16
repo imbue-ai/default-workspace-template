@@ -1,4 +1,4 @@
-"""The chat app's workspace-wide settings: how long a new chat runs fast, and whether the user has been told.
+"""The chat app's workspace-wide settings: the fast mode a new chat starts in, and whether the user has been told.
 
 One small JSON file beside the chat app's other state (``data/.apps/chat/settings.json``),
 read on every use so an edit from another process lands without a restart, and written whole.
@@ -8,6 +8,7 @@ read on every use so an edit from another process lands without a restart, and w
 import json
 import os
 import threading
+from enum import auto
 from pathlib import Path
 from typing import Final
 
@@ -16,24 +17,40 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
 
 DEFAULT_SETTINGS_PATH: Final[Path] = Path("data/.apps/chat/settings.json")
-# How many of the user's turns a new chat runs with fast mode on before the chat app turns
-# it off. Zero means a new chat never launches fast.
+# How many of the user's turns a chat in auto mode runs with fast mode on before the chat app
+# switches it to standard speed.
 DEFAULT_FAST_MODE_TURN_LIMIT: Final[int] = 5
+
+
+class FastModeMode(LowerCaseStrEnum):
+    """The fast-mode setting a chat runs under."""
+
+    # Standard speed for the whole chat.
+    OFF = auto()
+    # Fast for the first turns, then standard speed once the workspace's turn limit is reached.
+    AUTO = auto()
+    # Fast for the whole chat.
+    ON = auto()
 
 
 class ChatSettings(FrozenModel):
     """What the settings file holds. Every field has a default, so an older file reads whole."""
 
+    fast_mode_default: FastModeMode = Field(
+        default=FastModeMode.AUTO,
+        description="The fast mode a new chat starts in",
+    )
     fast_mode_turn_limit: int = Field(
         default=DEFAULT_FAST_MODE_TURN_LIMIT,
-        ge=0,
-        description="User turns a new chat runs fast for before fast mode is turned off; 0 launches every chat at standard speed",
+        ge=1,
+        description="User turns a chat in auto mode runs fast for before it is switched to standard speed",
     )
     is_fast_mode_notice_shown: bool = Field(
         default=False,

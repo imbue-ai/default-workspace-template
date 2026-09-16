@@ -42,6 +42,9 @@ from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_fast_mode import ChatFastModeState
+from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -50,6 +53,9 @@ from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_event_id
+from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -403,20 +409,69 @@ def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
 
 
 @pytest.mark.parametrize(
-    ("message", "fast_mode_turn_limit", "expected"),
+    ("message", "is_fast", "expected"),
     [
-        ("", 5, ("welcome", "fast")),
-        ("", 0, ("welcome",)),
-        ("Teach me about Mind", 5, ("fast",)),
-        ("Teach me about Mind", 0, ()),
+        ("", True, ("welcome", "fast")),
+        ("", False, ("welcome",)),
+        ("Teach me about Mind", True, ("fast",)),
+        ("Teach me about Mind", False, ()),
     ],
 )
-def test_launch_role_templates_follow_the_message_and_the_fast_mode_limit(
-    message: str, fast_mode_turn_limit: int, expected: tuple[str, ...]
+def test_launch_role_templates_follow_the_message_and_the_chats_fast_mode(
+    message: str, is_fast: bool, expected: tuple[str, ...]
 ) -> None:
-    """Every chat that starts silent is greeted; every chat starts fast unless the workspace's
-    limit is zero, which is what "fast mode entirely off" means."""
-    assert launch_role_templates(message, fast_mode_turn_limit) == expected
+    """Every chat that starts silent is greeted; a chat starts fast when its fast mode calls for it."""
+    assert launch_role_templates(message, is_fast) == expected
+
+
+def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default decides the launch and is written as the chat's own mode, so a later change to
+    the default leaves this chat where it was."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(fast_mode_default=FastModeMode.OFF))
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats", chat_settings=settings
+    )
+    try:
+        created = manager.create_chat("", message="hello")
+        assert wait_until(lambda: manager.get_provisional_chat(created.chat_id) is None, timeout_seconds=10)
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--template fast" not in argv_line
+    assert read_fast_mode_state(tmp_path / "chats" / created.chat_id) == ChatFastModeState(mode=FastModeMode.OFF)
+    assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
+
+
+def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        chat_id = ChatId("agent-fastchat")
+        spec = SuccessorCreateSpec(
+            name="Chat 1",
+            chat_id=chat_id,
+            agent_id="agent-next",
+            harness=HarnessType.CLAUDE,
+            project_id="",
+            account_id="acct-1",
+            extra_labels=(),
+        )
+        # No mode of its own: the workspace default (auto) launches fast.
+        assert "fast" in manager._build_successor_create_command(spec)
+        manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.AUTO, is_switched=True))
+        assert "fast" not in manager._build_successor_create_command(spec)
+        manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+        assert "fast" in manager._build_successor_create_command(spec)
+    finally:
+        manager.stop()
 
 
 def _seed_turns() -> tuple[SeedTurn, ...]:

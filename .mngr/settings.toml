@@ -148,10 +148,10 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
 # A chat launches fast through the `agent_types.claude.settings_overrides.fastMode=true`
-# setting that `[create_templates.fast]` (below) stacks on its create while the
-# workspace's fast-mode turn limit is above zero; the chat app turns it off after
-# that many turns, and a running chat toggles it with `/fast`, which the chat
-# app's harnesses/claude/model.py writes into that agent's own settings file.
+# setting that `[create_templates.fast]` (below) stacks on its create when the
+# chat's fast mode (off, auto or on; the chat app's data/.apps/chat/chats/<id>/fast_mode.json)
+# calls for it; a running chat's speed follows the mode through the chat app's
+# harnesses/claude/model.py, which writes into that agent's own settings file.
 #
 # That setting targets `claude` rather than `chat` because a create-time setting
 # (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
@@ -1657,9 +1657,9 @@ output_style = "Engineering Subordinate"
 message = "/welcome"
 
 # Fast: launches the fast-capable harnesses in fast mode so a new conversation
-# feels responsive. The chat app stacks it on every chat while the workspace's
-# fast-mode turn limit (the chat app's settings, `data/.apps/chat/settings.json`)
-# is above zero, and turns fast mode off after that many of the user's turns.
+# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
+# auto with its fast turns still to run (a new chat's mode is the workspace's
+# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
 #
 # The two fast settings are deliberately asymmetric: claude's
 # `settings_overrides` is a SettingsPatchField (deep-merge marker on the

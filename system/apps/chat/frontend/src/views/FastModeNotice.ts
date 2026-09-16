@@ -1,7 +1,7 @@
 /**
- * The one-time notice over the model bar: the chat app just turned fast mode off after the
- * workspace's turn limit, and the limit is in the model picker. Shown once per workspace (the
- * settings remember it), beside the bar whose fast switch it explains, until dismissed.
+ * The one-time notice over the model bar: auto mode just switched the chat to standard speed
+ * after the workspace's turn limit, and the mode is in the model picker. Shown once per workspace
+ * (the settings remember it), beside the bar whose fast row it explains, until dismissed.
  */
 
 import m from "mithril";
@@ -13,7 +13,7 @@ import { dismissFastModeNotice, getFastModeNoticeChatId } from "./fast-mode-limi
 /** What the notice says for a limit of `turnLimit` turns. */
 export function fastModeNoticeText(turnLimit: number): string {
   const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
-  return `Fast mode is off now: new chats run fast for the first ${turns}. Change how many in the model picker.`;
+  return `Fast mode is off now: this chat ran fast for its first ${turns}. Change the mode in the model picker.`;
 }
 
 export function FastModeNotice(): m.Component<{ chatId: string }> {

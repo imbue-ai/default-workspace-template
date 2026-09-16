@@ -42,6 +42,9 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_fast_mode import ChatFastModeState
+from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_fast_mode import write_fast_mode_state
 from imbue.chat.chat_handoffs import CreationOutputTail
 from imbue.chat.chat_handoffs import DEFAULT_PROMPT_TEMPLATE_PATH
 from imbue.chat.chat_handoffs import HandoffCancelledError
@@ -193,18 +196,18 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 
 # The create templates a chat's launch stacks on ``chat`` (``.mngr/settings.toml``): ``welcome``
 # delivers ``/welcome`` to a chat that starts with nothing to say, and ``fast`` launches the
-# fast-capable harnesses in fast mode while the workspace's turn limit is above zero.
+# fast-capable harnesses in fast mode when the chat's fast mode (``chat_fast_mode.py``) calls for it.
 WELCOME_ROLE_TEMPLATE: Final[str] = "welcome"
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
 
 @pure
-def launch_role_templates(message: str, fast_mode_turn_limit: int) -> tuple[str, ...]:
-    """The templates a chat create stacks beyond the caller's, from what it starts with and the workspace's fast-mode limit."""
+def launch_role_templates(message: str, is_fast: bool) -> tuple[str, ...]:
+    """The templates a chat create stacks beyond the caller's: a greeting for a silent start, fast mode when the chat's mode calls for it."""
     templates: list[str] = []
     if message == "":
         templates.append(WELCOME_ROLE_TEMPLATE)
-    if fast_mode_turn_limit > 0:
+    if is_fast:
         templates.append(FAST_ROLE_TEMPLATE)
     return tuple(templates)
 
@@ -760,7 +763,7 @@ class AgentManager:
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
     _chat_record_by_id: dict[ChatId, ChatRecord]
-    # The workspace-wide chat settings (the fast-mode turn limit), read on every create.
+    # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
@@ -2064,6 +2067,8 @@ class AgentManager:
         with self._lock:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
+        # The chat's fast mode travels with it: a successor starts fast when the chat would.
+        role_templates = (FAST_ROLE_TEMPLATE,) if self.get_fast_mode_state(spec.chat_id).launches_fast else ()
         return _build_chat_create_command(
             self._mngr_binary,
             spec.name,
@@ -2071,7 +2076,7 @@ class AgentManager:
             spec.agent_id,
             primary_labels,
             spec.harness,
-            (),
+            role_templates,
             spec.project_id,
             _account_binding_args(spec.harness, spec.account_id, self._get_agent_state_dir(spec.agent_id)),
             extra_labels=spec.extra_labels,
@@ -2590,6 +2595,33 @@ class AgentManager:
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
+    def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
+        """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
+        state = read_fast_mode_state(self._chat_files_root / chat_id)
+        if state is not None:
+            return state
+        return ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
+
+    def set_fast_mode_state(self, chat_id: ChatId, state: ChatFastModeState) -> None:
+        """Record the chat's fast mode; the page applies the speed itself through the model switch."""
+        write_fast_mode_state(self._chat_files_root / chat_id, state)
+
+    def knows_chat(self, chat_id: ChatId) -> bool:
+        """Whether the id names a chat this manager lists: a running one, a recorded one, or a provisional one."""
+        with self._lock:
+            if chat_id in self._provisional_chats or chat_id in self._chat_record_by_id:
+                return True
+            # A tracked agent is a chat of its own unless a record holds it as a member.
+            return str(chat_id) in self._agents and self._chat_id_of_agent_locked(str(chat_id)) == chat_id
+
+    def _fast_mode_for_launch_locked(self, chat_id: ChatId) -> ChatFastModeState:
+        """The fast mode a launch starts the chat's agent in, written to the chat's folder the first time. Lock held."""
+        state = read_fast_mode_state(self._chat_files_root / chat_id)
+        if state is None:
+            state = ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
+            write_fast_mode_state(self._chat_files_root / chat_id, state)
+        return state
+
     def discard_provisional_chat(self, chat_id: str) -> bool:
         """Drop a provisional chat that is not being created: one awaiting an account, one awaiting
         its first send (its seed goes with it), or one whose create failed. Returns whether
@@ -2737,7 +2769,7 @@ class AgentManager:
                 is_seeded=seed_record is not None,
             )
             self._provisional_chats[launched_chat_id] = provisional
-            fast_mode_turn_limit = self._chat_settings.read().fast_mode_turn_limit
+            fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
         agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
             () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
@@ -2758,7 +2790,7 @@ class AgentManager:
         except AccountError as e:
             _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
-        role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode_turn_limit))
+        role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
 
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.

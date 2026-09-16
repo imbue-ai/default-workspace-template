@@ -1,13 +1,16 @@
 /**
- * The fast-mode turn limit: a new chat runs fast for the workspace's configured number of the
- * user's turns, then the chat app turns fast mode off. This module decides when "then" is.
+ * Fast mode's three settings and the automatic switch behind ``auto``.
  *
- * The check runs per render, where the loaded transcript and the idle flag meet, on a chat
- * whose harness declared the ``fast_mode_limit`` turn check (claude, codex). A chat is switched
- * at most once per browser (remembered in localStorage, so across reloads too): a user who turns
- * fast mode back on afterwards keeps it. The first switch in a workspace also raises a short
- * notice explaining what happened and where the limit lives, recorded on the settings so it
- * shows once.
+ * A chat runs in one of three modes (models/FastMode.ts): ``off``, ``auto`` (fast for the
+ * workspace's configured number of the user's turns, then standard speed) and ``on``. This module
+ * decides when auto's "then" is, and applies a mode the user picks (in the model picker's modal or
+ * with ``/fast on`` and ``/fast off`` in the composer).
+ *
+ * The check runs per render, where the loaded transcript and the idle flag meet, on a chat whose
+ * harness declared the ``fast_mode_limit`` turn check (claude, codex). Auto switches a chat at
+ * most once, recorded on the chat's state, so a user who turns fast mode back on afterwards keeps
+ * it. The first switch in a workspace also raises a short notice explaining what happened and
+ * where the mode lives, recorded on the settings so it shows once.
  *
  * A turn is counted exactly as the transcript view counts one, by reusing the boundary rule the
  * timeline groups on, so "5 turns" means five exchanges the user can see. Permission verdicts
@@ -18,26 +21,19 @@
 
 import m from "mithril";
 import type { ChatSnapshot } from "../models/Chats";
-import { ensureChatSettings, getChatSettings, updateChatSettings } from "../models/ChatSettings";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  ensureChatSettings,
+  getChatSettings,
+  updateChatSettings,
+} from "../models/ChatSettings";
+import type { FastModeMode } from "../models/FastMode";
+import { ensureFastModeState, getFastModeState, updateFastModeState } from "../models/FastMode";
 import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
 import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
-
-// The chats this browser has already switched to standard speed; never switched twice. The page
-// keeps the set, and localStorage keeps it across reloads, so a reload does not switch a chat the
-// user turned fast mode back on afterwards.
-const switchedChatIds = new Set<string>();
-
-function switchedStorageKey(chatId: string): string {
-  return `fast-mode-limit-applied:${chatId}`;
-}
-
-function rememberSwitched(chatId: string): void {
-  switchedChatIds.add(chatId);
-  localStorage.setItem(switchedStorageKey(chatId), "1");
-}
 
 // The chat whose switch raised the notice, or null while none is showing.
 let noticeChatId: string | null = null;
@@ -67,8 +63,7 @@ export function countUserTurns(events: readonly TranscriptEvent[]): number {
  * Whether this conversation has run its fast turns and should be switched to standard speed now.
  *
  * Requires the agent to be idle so the switch lands between turns rather than interrupting a
- * reply, fast mode to still be on (a user who turned it off has nothing to switch), and a limit
- * above zero (zero launches chats at standard speed, so there is nothing to time).
+ * reply, and fast mode to still be on (a user who turned it off has nothing to switch).
  */
 export function isFastModeLimitReached(
   chat: ChatSnapshot | undefined,
@@ -85,11 +80,6 @@ export function isFastModeLimitReached(
   return countUserTurns(events) >= fastModeTurnLimit;
 }
 
-/** Whether this browser already switched the chat off fast mode. */
-export function wasFastModeLimitApplied(chatId: string): boolean {
-  return switchedChatIds.has(chatId) || localStorage.getItem(switchedStorageKey(chatId)) === "1";
-}
-
 /** The chat whose switch raised the one-time notice, or null. */
 export function getFastModeNoticeChatId(): string | null {
   return noticeChatId;
@@ -101,15 +91,16 @@ export function dismissFastModeNotice(): void {
 }
 
 /**
- * Switch the chat to standard speed if it has run its fast turns. Safe to call on every render:
- * the cheap gates run first, the settings load once, and a chat is switched once.
+ * Switch an auto-mode chat to standard speed if it has run its fast turns. Safe to call on every
+ * render: the cheap gates run first, the settings and the chat's mode load once, and a chat is
+ * switched once.
  */
 export function maybeApplyFastModeLimit(
   chat: ChatSnapshot | undefined,
   events: readonly TranscriptEvent[],
   isAgentIdle: boolean,
 ): void {
-  if (chat === undefined || wasFastModeLimitApplied(chat.chat_id) || !hasFastModeLimit(chat.active_agent.harness)) {
+  if (chat === undefined || !hasFastModeLimit(chat.active_agent.harness)) {
     return;
   }
   const settings = getChatSettings();
@@ -117,10 +108,18 @@ export function maybeApplyFastModeLimit(
     void ensureChatSettings();
     return;
   }
+  const state = getFastModeState(chat.chat_id);
+  if (state === null) {
+    void ensureFastModeState(chat.chat_id);
+    return;
+  }
+  if (state.mode !== "auto" || state.is_switched) {
+    return;
+  }
   if (!isFastModeLimitReached(chat, events, isAgentIdle, settings.fast_mode_turn_limit)) {
     return;
   }
-  rememberSwitched(chat.chat_id);
+  void updateFastModeState(chat.chat_id, { mode: "auto", is_switched: true });
   setFastMode(chat.chat_id, false);
   if (!settings.is_fast_mode_notice_shown) {
     noticeChatId = chat.chat_id;
@@ -128,11 +127,31 @@ export function maybeApplyFastModeLimit(
   }
 }
 
-/** Forget every switch and the notice, so a test starts clean. */
-export function resetFastModeLimitForTests(): void {
-  for (const chatId of switchedChatIds) {
-    localStorage.removeItem(switchedStorageKey(chatId));
+/**
+ * Put the chat in a mode the user chose: the mode is recorded on the chat, and the agent's speed
+ * follows it at once (auto counts the turns already taken, so a long chat put on auto is already
+ * past its fast turns).
+ */
+export function chooseFastMode(chatId: string, mode: FastModeMode, events: readonly TranscriptEvent[]): void {
+  const limit = getChatSettings()?.fast_mode_turn_limit ?? DEFAULT_CHAT_SETTINGS.fast_mode_turn_limit;
+  const isSwitched = mode === "auto" && countUserTurns(events) >= limit;
+  void updateFastModeState(chatId, { mode, is_switched: isSwitched });
+  setFastMode(chatId, mode === "on" || (mode === "auto" && !isSwitched));
+}
+
+/** The mode a composer command names: ``/fast on`` or ``/fast off``; null for any other text. */
+export function parseFastModeCommand(text: string): FastModeMode | null {
+  const tokens = text.trim().toLowerCase().split(/\s+/);
+  if (tokens.length !== 2 || tokens[0] !== "/fast") {
+    return null;
   }
-  switchedChatIds.clear();
+  if (tokens[1] === "on" || tokens[1] === "off") {
+    return tokens[1];
+  }
+  return null;
+}
+
+/** Forget the notice, so a test starts clean. */
+export function resetFastModeLimitForTests(): void {
   noticeChatId = null;
 }

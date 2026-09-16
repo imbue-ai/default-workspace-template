@@ -47,6 +47,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
@@ -97,6 +98,7 @@ from imbue.chat.models import CreatedChat
 from imbue.chat.models import DestroyAgentResponse
 from imbue.chat.models import DrainToComposerResponse
 from imbue.chat.models import ErrorResponse
+from imbue.chat.models import FastModeStateResponse
 from imbue.chat.models import HandoffCancelResponse
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffRetryRequest
@@ -717,8 +719,41 @@ def _get_powered_by_endpoint(chat_id: str) -> Response:
 
 
 def _get_settings_endpoint() -> Response:
-    """``GET /api/settings``: the workspace-wide chat settings (the fast-mode turn limit, the notice flag)."""
+    """``GET /api/settings``: the workspace-wide chat settings (the fast mode a new chat starts in, its turn limit, the notice flag)."""
     return json_response(ChatSettingsResponse(settings=get_state().chat_settings.read()).model_dump(mode="json"))
+
+
+def _known_chat_or_not_found(chat_id: str) -> ChatId | Response:
+    """The chat the ref names among the chats this app lists (running, recorded or provisional), else its 404."""
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None or not get_state().agent_manager.knows_chat(parsed):
+        return _chat_not_found_response(chat_id)
+    return parsed
+
+
+def _get_fast_mode_endpoint(chat_id: str) -> Response:
+    """``GET /api/chats/<chat_id>/fast-mode``: the chat's fast mode (off, auto or on, and whether auto has switched)."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    state = get_state().agent_manager.get_fast_mode_state(parsed)
+    return json_response(FastModeStateResponse(state=state).model_dump(mode="json"))
+
+
+def _put_fast_mode_endpoint(chat_id: str) -> Response:
+    """``PUT /api/chats/<chat_id>/fast-mode``: record the chat's fast mode whole; 400 for a body that is not one."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        state = ChatFastModeState.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    get_state().agent_manager.set_fast_mode_state(parsed, state)
+    return json_response(FastModeStateResponse(state=state).model_dump(mode="json"))
 
 
 def _put_settings_endpoint() -> Response:
@@ -1600,6 +1635,13 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
+    application.add_url_rule("/api/chats/<chat_id>/fast-mode", view_func=_get_fast_mode_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/chats/<chat_id>/fast-mode",
+        view_func=_put_fast_mode_endpoint,
+        methods=["PUT"],
+        endpoint="_put_fast_mode_endpoint",
+    )
     application.add_url_rule("/api/settings", view_func=_get_settings_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"

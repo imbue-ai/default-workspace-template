@@ -13,7 +13,7 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
@@ -21,7 +21,13 @@ import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { getSelectedAccount, openProviderChooser } from "../models/Providers";
-import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
+import {
+  ensureHarnessCatalogs,
+  findComposerPopup,
+  getHarnessCatalog,
+  hasFastModeLimit,
+} from "../models/HarnessCatalog";
+import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
   getChatById,
   getProvisionalChat,
@@ -361,6 +367,16 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           const harness = getChatById(chatId)?.active_agent.harness;
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
+          }
+          // ``/fast on`` and ``/fast off`` choose the chat's fast mode (on a harness that has
+          // one) rather than reaching the harness or its notice: the mode is the chat's setting.
+          const fastMode = parseFastModeCommand(messageText);
+          if (fastMode !== null && hasFastModeLimit(harness)) {
+            chooseFastMode(chatId, fastMode, getEventsForChat(chatId));
+            messageText = "";
+            localStorage.removeItem(messageTextKey(chatId));
+            m.redraw();
+            return null;
           }
           const match = findComposerPopup(harness, messageText);
           if (match !== null) {

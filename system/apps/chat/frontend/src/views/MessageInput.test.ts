@@ -63,6 +63,7 @@ const mocks = vi.hoisted(() => {
     isChatRegistered: true,
     provisional: undefined as unknown,
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
+    chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
     listeners,
     agent,
@@ -70,6 +71,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../models/Response", () => ({
+  getEventsForChat: () => [],
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
   interruptAgent: mocks.interruptAgent,
@@ -82,6 +84,10 @@ vi.mock("../models/PendingLane", () => ({
   setPendingAccount: mocks.setPendingAccount,
 }));
 vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
+vi.mock("./fast-mode-limit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fast-mode-limit")>()),
+  chooseFastMode: mocks.chooseFastMode,
+}));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
   getComposerAttachments: mocks.getComposerAttachments,
@@ -129,6 +135,8 @@ vi.mock("../models/HarnessCatalog", () => {
   return {
     ensureHarnessCatalogs: vi.fn(async () => {}),
     getHarnessCatalog,
+    // Both fixture harnesses have fast mode, so ``/fast on`` and ``/fast off`` pick the chat's mode.
+    hasFastModeLimit: (harness?: string) => harness === "claude" || harness === "codex",
     findComposerPopup: (harness: string | undefined, text: string) => {
       const firstToken = text.trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
       for (const popup of getHarnessCatalog(harness)?.popups ?? []) {
@@ -281,6 +289,22 @@ describe("MessageInput send guard", () => {
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
     localStorage.clear();
+  });
+
+  it("puts the chat in the mode /fast on or /fast off names instead of sending it", async () => {
+    mocks.agent.harness = "codex";
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "/fast on");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.chooseFastMode).toHaveBeenCalledWith("agent-1", "on", []);
+    expect(renderedText(after)).not.toContain("can't be sent from chat");
+    // The command was acted on, so the composer is empty again.
+    const textarea = findByTag(after, "textarea");
+    expect(textarea?.attrs?.value).toBe("");
+    // A bare /fast names no mode, so the harness's own notice still explains it.
+    const declined = await typeAndSend(MessageInput(), "agent-1", "/fast");
+    expect(renderedText(declined)).toContain("/fast can't be sent from chat");
+    expect(mocks.chooseFastMode).toHaveBeenCalledTimes(1);
   });
 
   it("does not send /status, and explains why", async () => {

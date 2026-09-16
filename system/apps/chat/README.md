@@ -167,13 +167,20 @@ the record does; discarding the chat before its first send drops both.
 
 Every chat that starts with no message is greeted: the `welcome` create
 template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
-says by how many times it has run (`system/scripts/welcome_count.py`). Every
-chat also starts with fast mode on, through the `fast` create template, for the
-first `fast_mode_turn_limit` of the user's turns (`GET`/`PUT /api/settings`,
-`chat_settings.py`, stored at `data/.apps/chat/settings.json`; default 5, and 0
-launches chats at standard speed instead). The page turns fast mode off once
-the limit is reached, shows a one-time notice explaining the switch, and lets
-the user change the number in the model picker beside the fast toggle.
+says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
+is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
+folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+**off** (standard speed throughout), **auto** (fast for the first
+`fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
+(fast throughout). A new chat starts in the workspace's default mode
+(`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
+at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
+a chat whose mode calls for it launches through the `fast` create template, a
+handoff's successor included. The model picker's fast row states the chat's
+mode and opens a small chooser where the mode, auto's turn limit and the
+default for new chats are set; `/fast on` and `/fast off` typed in the
+composer choose the mode too. The first time auto switches a chat in a
+workspace, a one-time notice over the model bar explains it.
 
 ## Provider accounts
 
