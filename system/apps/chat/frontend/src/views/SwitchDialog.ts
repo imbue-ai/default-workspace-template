@@ -193,10 +193,15 @@ function renderPicker(dialog: OpenDialog): m.Children {
     );
   }
   if (dialog.options.length === 0) {
+    // A harness whose model the chat app cannot switch lands here by having no options at all, so
+    // the usual "change it afterwards" is the one thing it must not say: the bar will refuse too.
+    const isModelReadOnly = getHarnessCatalog(dialog.target.harness)?.switch_mode === "read_only";
     return m(
       "p",
       { class: "switch-dialog-no-models text-(length:--font-size-helper) text-secondary" },
-      `${whenNothingIsPicked}; you can change it once it is running.`,
+      isModelReadOnly
+        ? `${whenNothingIsPicked}, which is changed from the agent's terminal, not from the chat.`
+        : `${whenNothingIsPicked}; you can change it once it is running.`,
     );
   }
   const option = chosenOption(dialog);

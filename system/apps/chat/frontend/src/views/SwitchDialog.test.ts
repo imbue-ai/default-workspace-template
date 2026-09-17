@@ -87,6 +87,9 @@ const OTHER_CLAUDE = {
   lane: "anthropic",
   label: "Anthropic 2 (Claude Code)",
 };
+// agy's model bar is read-only: its model is changed from the agent's terminal, not from the chat.
+const GOOGLE = { id: "acct-google", harness: "antigravity", lane: "google", label: "Google (Antigravity CLI)" };
+const OTHER_GOOGLE = { ...GOOGLE, id: "acct-google-2", label: "Google 2 (Antigravity CLI)" };
 const ASTRA = {
   id: "gpt-6-astra",
   label: "GPT-6 Astra",
@@ -356,14 +359,12 @@ describe("the switch dialog", () => {
   it("starts a rebind's new chat with no pick on a harness whose model the chat app cannot switch", async () => {
     // agy's model is changed from the agent's terminal: carrying the chat's model over would be a pick the
     // new chat could never apply.
-    const google = { id: "acct-google", harness: "antigravity", lane: "google", label: "Google (Antigravity CLI)" };
-    const otherGoogle = { ...google, id: "acct-google-2", label: "Google 2 (Antigravity CLI)" };
-    state.accounts = [google, otherGoogle];
+    state.accounts = [GOOGLE, OTHER_GOOGLE];
     state.options = [];
     state.chat = chatSnapshotFixture("agent-1", {
       active_agent: {
         harness: "antigravity",
-        account_id: google.id,
+        account_id: GOOGLE.id,
         model_choice: {
           identity: { model_id: "gemini-3-pro", effort: null, fast: false },
           matched: { ...ASTRA, id: "gemini-3-pro", label: "Gemini 3 Pro", efforts: [], supports_fast: false },
@@ -371,7 +372,7 @@ describe("the switch dialog", () => {
       },
     });
     state.draft = "a fresh start";
-    openSwitchDialog("agent-1", otherGoogle as ProviderAccount);
+    openSwitchDialog("agent-1", OTHER_GOOGLE as ProviderAccount);
     render();
     await flush();
     render();
@@ -379,6 +380,22 @@ describe("the switch dialog", () => {
     pressButton("Start a new chat");
     await flush();
     expect(state.started).toEqual([["acct-google-2", "a fresh start", null]]);
+  });
+
+  it("points a harness the chat app cannot switch at its terminal rather than at the model bar", async () => {
+    state.accounts = [GOOGLE, OTHER_GOOGLE];
+    state.options = [];
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "antigravity", account_id: GOOGLE.id },
+    });
+    openSwitchDialog("agent-1", OTHER_GOOGLE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    expect(ROOT().querySelector("select")).toBeNull();
+    expect(ROOT().textContent).toContain(
+      "Antigravity CLI keeps its current model, which is changed from the agent's terminal, not from the chat.",
+    );
   });
 
   it("says a rebind keeps its model when the account has none to offer", async () => {
