@@ -549,6 +549,23 @@ def test_a_chat_app_from_before_the_create_fields_hands_the_create_to_mngr(
     assert call["argv"][:2] == ["create", "assist-1a2b3c"]
 
 
+def test_a_backoff_create_that_named_no_chat_says_so(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The JSON line is the caller's only handle on the chat, so an id mngr never named has
+    to be said out loud rather than shipped as an empty string."""
+    fake_chat_app.answers = [(404, {"detail": "not found"})]
+
+    rc, _ = _run_create(
+        "-m", "/assist", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS / 4
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["chat_id"] == ""
+    assert "named no chat" in captured.err
+
+
 def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
     fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
