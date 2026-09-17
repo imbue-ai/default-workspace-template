@@ -5,6 +5,27 @@ you and several other workers into the same folder: a git checkout created for
 this one build. Your task file names your subtask and gives you the reports of
 the nodes you depend on. This document is the rest of your task.
 
+## Do only your subtask
+
+Your subtask is the whole of your job. The rest of the app is other nodes' work:
+some are building it right now beside you, and some start after you report.
+Doing any of it yourself collides with them, or builds a second version of
+something the plan already assigns.
+
+1. **Do exactly what the subtask asks, and stop.** When its hand-back is ready,
+   report. Do not go on to the next thing the app needs, however obvious or
+   quick it looks.
+2. **Leave out everything the subtask does not name.** If it does not say to
+   scaffold, do not scaffold. If it does not say to build the mock, the page,
+   the routes, the storage or the icon, do not build them. Do not wire pieces
+   together, verify the whole app, add tests, or tidy, refactor or restyle files
+   you were not given.
+3. **If something you need is missing, report `stuck`.** An earlier node's output
+   that is not in the folder, or a contract its report does not give, is a
+   problem for the orchestrator. Do not build the missing piece yourself.
+4. **If the subtask looks wrong or incomplete, do it as written** and say in your
+   report what you would change. Do not widen it.
+
 ## The shared folder
 
 Other workers are editing this folder while you work, and nothing warns either of
@@ -31,13 +52,14 @@ you when two of you touch the same file.
 
 ## How to build
 
-`.agents/skills/build-app/SKILL.md` is the reference for how apps are built here:
-the scaffolder, file-path conventions, the `frontend-design` skill before any
-markup, raw-data affordances, verification. Follow its mechanics for the part of
-the build your subtask covers. The steps it assigns to the main agent -- running
-the plan recorder, asking the user questions, showing the mock, surfacing the
-tab, and handing off to `crystallize-creation` -- belong to the orchestrator or
-do not apply, so skip them.
+`.agents/skills/build-app/SKILL.md` describes how a whole app is built here, from
+the first question to the hardening handoff. Use it only as a reference for *how*
+to do your subtask: the scaffolder, file-path conventions, the `frontend-design`
+skill before any markup, raw-data affordances. It never tells you *what* to do.
+Read the parts that cover your subtask and follow their mechanics; ignore its
+order of steps and everything outside your subtask. Its steps for the main agent
+-- running the plan recorder, asking the user questions, showing the mock,
+surfacing the tab, and handing off to `crystallize-creation` -- are never yours.
 
 Where you meet something you would rather ask about (a name, a default, an
 ambiguity), decide, and say what you decided in your report. You never talk to
@@ -81,7 +103,7 @@ The body of a `done` report is the handoff the nodes after you read. Include:
    functions, data shapes, the app name, package folder and port.
 4. **Decisions you made** that were not in your subtask.
 5. **What you left stubbed or undone**, and any change you need outside your
-   boundary.
+   boundary or would make to your subtask.
 6. **How to see it**: the command you used for your quick check.
 
 Use `stuck` when you cannot finish the subtask: say why in one or two sentences
