@@ -101,8 +101,9 @@ matters more than what it costs.
 ### Subtasks
 
 A subtask sets scope, not mechanism. This plan routes the work at a high level.
-Each worker works out the implementation details itself -- which script, which
-port, which command, which flag. Leave all of that out however well you know it.
+Each worker supplies the implementation details itself, from build-app -- which
+script, which port, which command, which flag. Leave all of that out however well
+you know it.
 
 Spend the words on the boundary of the work instead: what this node builds, what
 it deliberately leaves alone, what it should stub rather than finish, and what
@@ -164,8 +165,8 @@ overhead. Below that line the two pieces belong in one node.
 build-app has exactly two user interactions: the mock, then the working site.
 Each gets its own node, marked `interactive` -- its subtask says what to show
 and what to ask, its access list is what the user needs to see, and whatever
-needs the answer lists it. Anything else the user has to do, such as connecting
-an account, is an `interactive` node too, and no other node talks to the user. Where a node meets something it would rather ask about --
+needs the answer lists it. A plan carries those two and no others, and no other
+node talks to the user. Where a node meets something it would rather ask about --
 a name, a default, an ambiguity in the brief -- it decides, and hands the
 decision back with its work.
 
@@ -245,7 +246,7 @@ the whole history, such as a final assembly.
 
 Some nodes are mostly waiting. Connecting an account or granting access to an
 outside service -- the `latchkey` skill -- costs time rather than capability:
-it is an `interactive` node, and everyone who needs the access waits on the user. Put those on an empty access list wherever the
+the request goes up to the user, and everyone waits on them. Put those on an empty access list wherever the
 work allows, so the waiting overlaps the pre-flight, the icon, or the mock.
 
 ## Output

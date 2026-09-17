@@ -1,0 +1,1 @@
+Include `/root/.minds/accounts/*/projects/` in `snapshot_workspace` so Claude session transcripts are captured in trial snapshot archives while avoiding archiving provider credentials (such as `settings.json`).

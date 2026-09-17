@@ -103,7 +103,7 @@ def test_preview_delegates_to_the_shared_script_with_si_specifics(
     # The launch command (after ``--``) is ``uv run system-interface``.
     assert argv[-3:] == ["uv", "run", reveal_mod.TOOL_NAME]
     # System-interface specifics: bind port/host env, neuter layout persistence by
-    # dropping MNGR_AGENT_ID, probe /api/agents, register the inner app + wrapper.
+    # dropping MNGR_AGENT_ID, probe /api/health, register the inner app + wrapper.
     assert _flag(argv, "--port-env") == reveal_mod.PREVIEW_PORT_ENV
     assert _flag(argv, "--host-env") == reveal_mod.PREVIEW_HOST_ENV
     assert _flag(argv, "--unset-env") == reveal_mod.ENV_MNGR_AGENT_ID

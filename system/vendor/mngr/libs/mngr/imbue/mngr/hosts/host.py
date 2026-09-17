@@ -524,6 +524,14 @@ _SIGWINCH_MODE_NUDGE: Final[str] = "nudge"
 _AGENT_LAUNCH_SCRIPT_NAME: Final[str] = "launch_agent.sh"
 
 
+def parse_certified_host_data(data_path: Path, content: str) -> CertifiedHostData:
+    """Parse the contents of a host's data.json, read from ``data_path``."""
+    try:
+        return CertifiedHostData(**json.loads(content))
+    except ValidationError as e:
+        raise HostDataSchemaError(str(data_path), str(e)) from e
+
+
 class Host(OuterHost, BaseHost, OnlineHostInterface):
     """Host implementation that proxies operations through a pyinfra connector.
 
@@ -1247,8 +1255,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         data_path = self.host_dir / "data.json"
         try:
             content = self.read_text_file(data_path)
-            data = json.loads(content)
-            return CertifiedHostData(**data)
+            return parse_certified_host_data(data_path, content)
         except FileNotFoundError:
             now = datetime.now(timezone.utc)
             # FIXME: this is suss--we should probably just explode if data.json is missing
@@ -1261,8 +1268,6 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 created_at=now,
                 updated_at=now,
             )
-        except ValidationError as e:
-            raise HostDataSchemaError(str(data_path), str(e)) from e
 
     def set_certified_data(self, data: CertifiedHostData) -> None:
         """Save certified data to data.json and notify the provider."""
@@ -3948,11 +3953,14 @@ def _build_agent_launch_steps(
     on disk exactly what ran.
 
     This makes the POSIX ``.`` a requirement on the agent window's shell (the user's login shell).
-    That is not a new constraint in practice: mngr's generated launch chains are already POSIX
-    shell -- they use ``$(...)``, ``export``, and ``{ ... } || { ... }`` -- so a shell that cannot
-    handle ``.`` could not have run them typed either. Commands for *additional* windows are still
-    typed directly, because those windows inherit the user's tmux ``default-command``, which need
-    not be a POSIX shell at all.
+    That is not a new constraint in practice: mngr's generated launch chains already use
+    ``$(...)``, ``export``, and ``{ ... } || { ... }``, so a shell that cannot handle ``.`` could
+    not have run them typed either. The interactive harness plugins go one step further and use
+    process substitution (``2> >(tee ...)``, see ``build_stderr_tee_redirect``), which is a
+    bash/zsh/ksh feature rather than POSIX -- so the agent window's shell must be one of those,
+    which covers macOS (zsh), Linux desktops (bash), and every container image mngr ships.
+    Commands for *additional* windows are still typed directly, because those windows inherit
+    the user's tmux ``default-command``, which need not be a POSIX shell at all.
     """
     quoted_script_path = shlex.quote(str(launch_script_path))
     # printf '%s' rather than a heredoc so each step stays a single && chain link, and

@@ -1,4 +1,4 @@
-"""End-to-end manual-trigger test for minds.app launch -> first message
+"""End-to-end manual-trigger test for Mind.app launch -> first message
 -> slack permission flow. ONE Python script that replaces:
 
   apps/minds/scripts/launch-and-verify.sh
@@ -12,7 +12,7 @@ Invoked from .github/workflows/minds-launch-to-msg.yml as the single
 test step. NOT a pytest test (no markers, no collection).
 
 Flow:
-  1. Launch minds.app via Playwright Electron, UI auth via
+  1. Launch Mind.app via Playwright Electron, UI auth via
      /authenticate?one_time_code=... (minted on disk)
   2. Workspace 1 (W1): click Create, fill form with HOST_NAME, wait for
      agent DONE, send first message ("pong"), wait for reply (screenshots
@@ -84,7 +84,7 @@ from typing import Any
 from loguru import logger
 
 # Playwright-Python has no Electron binding (only Node has _electron.launch).
-# Attach via CDP instead: launch minds.app ourselves with
+# Attach via CDP instead: launch Mind.app ourselves with
 # `--remote-debugging-port=<N>` so its Chromium DevTools endpoint is reachable,
 # then `chromium.connect_over_cdp()`. Same API for pages, locators, etc.
 from playwright.sync_api import BrowserContext
@@ -114,9 +114,9 @@ class E2EFailure(Exception):
     """
 
 
-# --- knobs (override via env) ---
+# knobs (override via env)
 
-MINDS_APP_PATH = Path(os.environ.get("MINDS_APP_PATH", "/Applications/Minds.app/Contents/MacOS/Minds"))
+MINDS_APP_PATH = Path(os.environ.get("MINDS_APP_PATH", "/Applications/Mind.app/Contents/MacOS/Mind"))
 
 
 def _bundled_root_name() -> str:
@@ -169,7 +169,7 @@ HOST_NAME = os.environ.get("HOST_NAME") or f"e2e{time.strftime('%H%M%S')}"
 HOST_NAME_2 = os.environ.get("HOST_NAME_2") or f"{HOST_NAME}-b"
 # WORKSPACE_COUNT=1 (default) preserves the single-workspace flow for local
 # repro; CI sets =2 to drive the second workspace + cross-workspace follow-up
-# pings as an end-to-end isolation check on the same minds.app session.
+# pings as an end-to-end isolation check on the same Mind.app session.
 WORKSPACE_COUNT = int(os.environ.get("WORKSPACE_COUNT", "1"))
 
 FIRST_PROMPT = "Reply with exactly the four characters: pong"
@@ -185,6 +185,15 @@ FOLLOWUP_W2_EXPECT = "bong"
 
 CREATE_TIMEOUT = 900
 REPLY_TIMEOUT = 480
+# A fresh workspace opens on the welcome chat the creation page seeded with the onboarding
+# conversation. The chat's page renders in its own frame at the chat app's origin, whose URL
+# path is the chat's id; the shell docks it once its app list has arrived, so the frame can
+# still be on its way when the dockview is first visible.
+CHAT_FRAME_TIMEOUT = 60
+CHAT_PAGE_URL_RE = re.compile(r"/agent-[a-f0-9]+/?$")
+# The in-chat permission card's opener. Matched by label, not by class: the card's classes
+# are DEFAULT_WORKSPACE_TEMPLATE styling internals, its label is what the user is shown.
+PERMISSION_REVIEW_BUTTON_LABEL = "Review & respond"
 DRIVE_SLACK_TIMEOUT = 360
 LAUNCH_BACKEND_TIMEOUT = 120
 
@@ -222,7 +231,7 @@ SKIP_SLACK_FLOW = os.environ.get("SKIP_SLACK_FLOW", "0") == "1"
 # form -- useful when the failure is upstream of the form.
 SKIP_FIRST_MESSAGE = os.environ.get("SKIP_FIRST_MESSAGE", "0") == "1"
 
-# --- snap helpers ---
+# snap helpers
 
 if SCREENSHOT_DIR.exists():
     # Self-hosted runner persists /tmp; stale shots from past runs would
@@ -237,7 +246,7 @@ def _activate_minds() -> None:
     """Bring the Minds window forward before snapping so screencapture
     sees the app, not just the wallpaper. Best-effort; silent on failure."""
     subprocess.run(
-        ["osascript", "-e", 'tell application "Minds" to activate'],
+        ["osascript", "-e", 'tell application "Mind" to activate'],
         check=False,
         capture_output=True,
         timeout=5,
@@ -303,7 +312,7 @@ def snap_page(target: Page | Frame, name: str) -> None:
     Raise this page's BrowserWindow to the top of the macOS z-order
     BEFORE the screencapture; otherwise the full-desktop shot just
     captures whatever Minds window the WindowServer has at front
-    (usually still the original /welcome window because Playwright
+    (usually still the original /start window because Playwright
     routes UI events through CDP, never through a real mouse click
     that would update WindowServer focus).
     """
@@ -323,7 +332,7 @@ def snap_page(target: Page | Frame, name: str) -> None:
     snap(name)
 
 
-# --- HTTP slack mock (stdlib only) ---
+# HTTP slack mock (stdlib only)
 
 
 def _json_body(payload: dict[str, Any]) -> bytes:
@@ -440,7 +449,7 @@ def start_mock() -> _ThreadedHTTP:
     raise E2EFailure(f"slack mock failed to bind {SLACK_MOCK_PORT}")
 
 
-# --- cert + /etc/hosts + socat + latchkey wiring ---
+# cert + /etc/hosts + socat + latchkey wiring
 
 
 def ensure_cert() -> Path:
@@ -604,7 +613,7 @@ def latchkey_clear_slack() -> None:
     )
 
 
-# --- minds.app launcher + auth ---
+# Mind.app launcher + auth
 
 
 def wait_backend_url(since_offset: int = 0) -> str:
@@ -653,7 +662,7 @@ def _sleep(seconds: float) -> None:
 
 
 def _free_port() -> int:
-    """Reserve an ephemeral port for minds.app's CDP endpoint."""
+    """Reserve an ephemeral port for Mind.app's CDP endpoint."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -675,7 +684,7 @@ def _wait_cdp(port: int, timeout: float = 60.0) -> str:
 
 
 def dismiss_consent_if_present(page: Page, *, timeout: float = 8_000) -> bool:
-    """Answer the "Help improve Minds" consent screen if it is up. True if dismissed.
+    """Answer the "Help improve Mind" consent screen if it is up. True if dismissed.
 
     The SPA consent screen (ConsentPage) takes over the page while
     ``error_reporting_consent_given`` is False, which it always is on a wiped
@@ -769,7 +778,7 @@ def live_url(target: Page | Frame) -> str:
     the CDP navigation events its ``connect_over_cdp`` session receives. main.js
     drives these WebContentsViews from the Electron MAIN process
     (``webContents.loadURL`` / ``loadFile``), and such a commit does not reliably
-    reach an attached CDP client: a view can sit on ``/welcome`` while Playwright
+    reach an attached CDP client: a view can sit on ``/start`` while Playwright
     still reports the ``shell.html`` it saw at attach time, permanently. The
     session itself stays healthy -- evaluating in the live document reports the
     real URL -- so every match against a URL the harness did not itself navigate
@@ -841,6 +850,70 @@ def find_chat_window(ctx: BrowserContext, host: str | None = None) -> Frame | No
                 if pat.search(live_url(f)):
                     return f
     return None
+
+
+def _iframe_srcs(frame: Frame) -> list[str]:
+    """The ``src`` of every iframe in ``frame``'s own DOM.
+
+    Read alongside the frames Playwright enumerates: an iframe the shell mounted
+    but Playwright never surfaced separates a docking failure from a lookup one.
+    """
+    try:
+        return frame.evaluate("() => [...document.querySelectorAll('iframe')].map((f) => f.src)")
+    except PlaywrightError as exc:
+        return [f"<unreadable: {exc}>"]
+
+
+def find_chat_frame(workspace: Frame, host: str | None = None) -> Frame | None:
+    """The chat page's frame inside the workspace frame, or None while none is docked.
+
+    Pass ``host`` (e.g. ``agent-1f90…``) to pin the match to one workspace. The frame
+    list lags a navigation, so the workspace being left behind is still listed here --
+    and briefly still usable, which no liveness check can tell from the one arriving.
+    """
+    for frame in workspace.child_frames:
+        if frame.is_detached():
+            continue
+        url = live_url(frame)
+        if not CHAT_PAGE_URL_RE.search(url.split("?", 1)[0]):
+            continue
+        if host is not None and f"{host}.localhost" not in url:
+            continue
+        return frame
+    return None
+
+
+def wait_for_chat_frame(
+    workspace: Frame, *, label: str, timeout: float = CHAT_FRAME_TIMEOUT, host: str | None = None
+) -> Frame:
+    """Return the chat page's frame once the shell has docked one inside ``workspace``."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        chat = find_chat_frame(workspace, host)
+        if chat is not None:
+            return chat
+        # Playwright, attached to Electron over CDP, surfaces a nested cross-origin
+        # target only once something reaches into its parent: ``child_frames`` alone
+        # stays stale for the whole wait while the chat is already docked and running.
+        _iframe_srcs(workspace)
+        _sleep(0.5)
+    raise E2EFailure(
+        f"[{label}] no chat frame opened inside the workspace within {timeout}s; "
+        f"workspace={live_url(workspace)!r}; "
+        f"child frames: {[live_url(f) for f in workspace.child_frames]}; "
+        f"iframes in the workspace DOM: {_iframe_srcs(workspace)}"
+    )
+
+
+def find_docked_chat(ctx: BrowserContext, host: str | None = None) -> Frame | None:
+    """The chat page's frame docked inside the open workspace (see ``find_chat_window``), or None.
+
+    For flows that outlive a remount of the workspace iframe: the app can tear
+    it down under the harness, which detaches the chat frame with it, so the
+    chat is re-resolved from the context rather than from a held handle.
+    """
+    workspace = find_chat_window(ctx, host)
+    return find_chat_frame(workspace) if workspace is not None else None
 
 
 def find_inbox_frame(ctx: BrowserContext) -> tuple[Page, Frame] | None:
@@ -955,7 +1028,7 @@ def agent_id_for_workspace_coordinate(win: Page, coordinate: str) -> str:
     raise E2EFailure(f"No workspace row with host_id {coordinate!r} to translate to an agent id")
 
 
-# --- per-workspace helpers ---
+# per-workspace helpers
 
 
 class _SnapPrefixes(BaseModel):
@@ -1000,16 +1073,17 @@ class _WorkspaceResult(BaseModel):
 
 
 def _sign_in_via_provider_chooser(chat: Frame, *, api_key: SecretStr, label: str) -> None:
-    """Drive the workspace's provider chooser through the Anthropic API-key path.
+    """Drive the provider chooser in the welcome chat's own frame through the Anthropic API-key path.
 
-    A freshly created workspace has no provider accounts, so the chooser opens
-    on its own -- the designed first-boot step. Signing in mints a provider
-    account holding the key rather than writing a shared settings block, so
-    nothing is restarted and the success state is the harness's own probe
-    answering (which is why the success wait is generous). Selectors mirror
-    ``test_snapshot_resume._sign_in_with_api_key_via_modal``.
+    A freshly created workspace has no provider accounts, so the first message sent in
+    its welcome chat (the conversation the creation page seeded) opens the chooser in
+    that chat's page -- the designed first-boot step. Signing in mints a provider account
+    holding the key rather than writing a shared settings block, and launches the chat on
+    it with the message that was sent, so nothing is restarted and the success state is
+    the harness's own probe answering (which is why the success wait is generous).
+    Selectors mirror ``test_snapshot_resume._sign_in_with_api_key_via_modal``.
     """
-    logger.info("[{}] waiting for the provider chooser to auto-appear", label)
+    logger.info("[{}] waiting for the provider chooser to appear in the welcome chat's frame", label)
     chat.wait_for_selector("[data-e2e=provider-chooser]", timeout=120_000)
     # Anthropic's lane, then its API-key method under "Other ways to sign in" --
     # the lane's primary method is the browser sign-in, which needs a human.
@@ -1022,7 +1096,7 @@ def _sign_in_via_provider_chooser(chat: Frame, *, api_key: SecretStr, label: str
     chat.click("[data-e2e=save-key]")
     chat.wait_for_selector("[data-e2e=status-success]", timeout=300_000)
     chat.click("[data-e2e=done]")
-    chat.wait_for_selector(".claude-login-overlay", state="detached", timeout=10_000)
+    chat.wait_for_selector("[data-e2e=provider-chooser]", state="detached", timeout=10_000)
     logger.info("[{}] signed in via the chooser", label)
 
 
@@ -1041,19 +1115,22 @@ def _create_workspace_and_first_message(
 
     Steps: navigate to /create, fill the form for `host_name`, submit,
     poll /api/v1/workspaces/operations/create/<id> until DONE, wait for the
-    app to open the workspace, sign in through the workspace's provider chooser
-    (API_KEY mode only -- the create flow injects no AI credentials, so the
-    workspace boots unauthenticated), send FIRST_PROMPT, wait for a
-    >=2-occurrence reply of FIRST_EXPECT. Snaps each milestone with names
-    from `snaps`.
+    app to open the workspace on the welcome chat the creation page seeded,
+    send FIRST_PROMPT there, sign in through the provider chooser that first
+    send opens in the chat's frame (API_KEY mode only -- the create flow
+    injects no AI credentials, so the workspace boots unauthenticated), wait
+    for a >=2-occurrence reply of FIRST_EXPECT. Snaps each milestone with
+    names from `snaps`.
 
     One page, two surfaces. `chrome` is the window's page and stays on local
     routes throughout -- the create form, then /creating/<id>, then
-    /workspace/<agent_id> once the app enters the workspace. The chat runs in
-    the workspace iframe the Shell mounts inside that page, which this returns
-    alongside the result; only that frame holds agent content (see
-    ``wait_for_chat_window``). `chrome` is reusable for a second workspace,
-    which is why it is never navigated to a chat URL.
+    /workspace/<agent_id> once the app enters the workspace. The workspace
+    iframe the Shell mounts inside that page is the only frame that holds agent
+    content (see ``wait_for_chat_window``); this returns it alongside the
+    result, and the chat renders in its own frame docked inside it, which
+    callers re-resolve after navigating or reloading the workspace (see
+    ``wait_for_chat_frame``). `chrome` is reusable for a second workspace,
+    which is why it is never navigated to a workspace URL.
 
     `label` appears in log lines so two sequential workspaces are
     distinguishable in CI logs (e.g. "w1" vs "w2").
@@ -1184,22 +1261,23 @@ def _create_workspace_and_first_message(
     created_host_match = re.search(r"((?:agent|host)-[a-f0-9]+)", done_redirect_url)
     created_host = created_host_match.group(1) if created_host_match else None
     logger.info("[{}] create attempt DONE; waiting for the app to open {}", label, created_host or "the workspace")
-    chat = wait_for_chat_window(ctx, label=label, host=created_host)
-    chat_url = live_url(chat)
-    logger.info("[{}] agent DONE; chat URL={}", label, chat_url)
-    snap_page(chat, snaps.done)
+    workspace = wait_for_chat_window(ctx, label=label, host=created_host)
+    chat_url = live_url(workspace)
+    logger.info("[{}] agent DONE; workspace URL={}", label, chat_url)
+    snap_page(workspace, snaps.done)
 
-    # The create flow injects no AI credentials, so a fresh workspace boots
-    # unauthenticated and its provider chooser auto-appears on the chat page
-    # (the template's first-run rule). In API_KEY mode, sign in through the
-    # chooser before the first message; in SUBSCRIPTION mode the synced Claude
-    # credentials keep the workspace authenticated and no chooser appears.
-    if ai_provider == "API_KEY":
-        _sign_in_via_provider_chooser(chat, api_key=anthropic_key, label=label)
-
+    # A fresh workspace opens on the welcome chat the creation page seeded, docked in its own
+    # frame at the chat app's origin, with a composer under the seeded turns before any agent
+    # exists; the first message sent there is what launches the chat's first agent. The create
+    # flow injects no AI credentials, so in API_KEY mode that send opens the provider chooser,
+    # which signs in and launches the chat with the message; in SUBSCRIPTION mode the synced
+    # Claude credentials are already an account and it launches at once.
+    chat = wait_for_chat_frame(workspace, label=label)
     inp = chat.wait_for_selector('textarea, [contenteditable="true"]', timeout=180_000)
     inp.fill(FIRST_PROMPT)
     inp.press("Enter")
+    if ai_provider == "API_KEY":
+        _sign_in_via_provider_chooser(chat, api_key=anthropic_key, label=label)
     with contextlib.suppress(Exception):
         chat.wait_for_function(
             _wait_for_chat_text_js(f"document.body.innerText.includes({FIRST_PROMPT!r})"),
@@ -1219,11 +1297,11 @@ def _create_workspace_and_first_message(
         phase_durations=phase_durations,
         total_create_s=total_create_s,
     )
-    return result, chat
+    return result, workspace
 
 
 def _send_followup_and_verify(
-    chat: Frame,
+    workspace: Frame,
     *,
     chat_url: str,
     prompt: str,
@@ -1232,19 +1310,31 @@ def _send_followup_and_verify(
     snap_reply: str,
     label: str,
 ) -> None:
-    """Navigate `chat` to `chat_url`, send `prompt`, wait for >=2 occurrences of `expect_token`.
+    """Navigate `workspace` to `chat_url`, send `prompt`, wait for >=2 occurrences of `expect_token`.
 
-    `chat` is the workspace iframe: the only surface that may load agent
-    content at all, and hopping it between two workspaces' chat URLs is
-    what proves each agent's backend stays responsive after the frame has
-    been navigated away and back. Caller
-    picks a token that isn't already in the chat body so the count
-    check actually proves a NEW reply landed (not carryover from
+    `workspace` is the workspace iframe: the only surface that may load agent
+    content at all, and hopping it between two workspaces' URLs is what proves
+    each agent's backend stays responsive after the frame has been navigated
+    away and back. Caller picks a token that isn't already in the chat body so
+    the count check actually proves a NEW reply landed (not carryover from
     earlier turns).
     """
     logger.info("[{}] navigating back to {}", label, chat_url)
-    chat.goto(chat_url)
-    inp = chat.wait_for_selector('textarea, [contenteditable="true"]', timeout=30_000)
+    workspace.goto(chat_url)
+    # The workspace's layout holds the chat, so the shell docks its frame again on load.
+    # Pinned to the workspace being hopped to, because the chat left behind matches
+    # CHAT_PAGE_URL_RE just as well and outlives the navigation in the frame list: an
+    # unpinned match sends this follow-up to the previous workspace, whose agent answers
+    # with the token being waited on, and the hop passes without ever being made.
+    host = _workspace_coordinate(chat_url, label=label)
+    inp = None
+    deadline = time.time() + CHAT_FRAME_TIMEOUT
+    while inp is None and time.time() < deadline:
+        chat = wait_for_chat_frame(workspace, label=label, timeout=max(deadline - time.time(), 0.0), host=host)
+        with contextlib.suppress(PlaywrightError):
+            inp = chat.wait_for_selector('textarea, [contenteditable="true"]', timeout=5_000)
+    if inp is None:
+        raise E2EFailure(f"[{label}] the chat docked at {host} never showed a composer within {CHAT_FRAME_TIMEOUT}s")
     inp.fill(prompt)
     inp.press("Enter")
     with contextlib.suppress(Exception):
@@ -1252,17 +1342,17 @@ def _send_followup_and_verify(
             _wait_for_chat_text_js(f"document.body.innerText.includes({prompt!r})"),
             timeout=10_000,
         )
-    snap_page(chat, snap_sent)
+    snap_page(workspace, snap_sent)
     chat.wait_for_function(
         _wait_for_chat_text_js(f"(document.body.innerText.toLowerCase().match(/{expect_token}/g) || []).length >= 2"),
         timeout=REPLY_TIMEOUT * 1000,
     )
     _sleep(1)
-    snap_page(chat, snap_reply)
+    snap_page(workspace, snap_reply)
     logger.info("[{}] follow-up reply confirmed", label)
 
 
-# --- main flow ---
+# main flow
 
 
 def _kill_pgrep(pgrep_pattern: str, label: str, *, sudo: bool = False) -> None:
@@ -1303,9 +1393,9 @@ def pre_run_sweep() -> None:
     The sweep is idempotent and safe to call when there's nothing to clean.
     """
     logger.info("=== pre-run runner sweep ===")
-    # mac-runner-reset.sh already kills every /Applications/Minds.app/...
+    # mac-runner-reset.sh already kills every /Applications/Mind.app/...
     # process, wipes ~/.minds, and removes the .app entirely BEFORE we run.
-    # So orphan mngr forward / mngr event / Minds.app processes can't exist
+    # So orphan mngr forward / mngr event / Mind.app processes can't exist
     # by the time we get here. The state below is what mac-runner-reset.sh
     # does NOT cover: host-side mocking residue and a stray caffeinate.
     revert_etc_hosts()
@@ -1333,7 +1423,7 @@ def pre_run_sweep() -> None:
 
 def run_e2e() -> int:
     # Idempotent reset before any state mutation. Anything we leak (socat
-    # holding :443, /etc/hosts entry, orphan Minds.app/mngr children,
+    # holding :443, /etc/hosts entry, orphan Mind.app/mngr children,
     # latchkey creds, /tmp scratch dirs) is reverted here on the *next*
     # run's startup, so a mid-run crash never biases the following run.
     # The post-run teardown blocks below still handle the success path.
@@ -1356,7 +1446,7 @@ def run_e2e() -> int:
     ca_bundle = ensure_combined_cert_bundle(cert)
     logger.info("brew curl: {}; ca_bundle: {}", brew_curl, ca_bundle)
 
-    # 1. Launch minds.app ourselves with --remote-debugging-port so Playwright
+    # 1. Launch Mind.app ourselves with --remote-debugging-port so Playwright
     # can attach via CDP. Use a free port to avoid clashes.
     cdp_port = _free_port()
     env = {
@@ -1417,7 +1507,7 @@ def run_e2e() -> int:
         win.goto(origin + "/")
         snap_page(win, "02-home-after-auth")
 
-        # The post-login "Help improve Minds" error-reporting consent screen
+        # The post-login "Help improve Mind" error-reporting consent screen
         # (the SPA ConsentPage, shown while error_reporting_consent_given is False --
         # always here, since the runner's ~/.minds is wiped each run) sits on
         # the home page until answered. Dismiss it once via Continue; the
@@ -1427,9 +1517,9 @@ def run_e2e() -> int:
 
         # 4-6. Create agent via UI click and drive to first message. Mirrors
         # what a user does (Configure panel, launch_mode field, host_name fill,
-        # submit, poll until DONE, navigate to chat, sign in through the
-        # workspace's provider chooser in API_KEY mode, send FIRST_PROMPT, wait
-        # for >=2 occurrences of FIRST_EXPECT in body).
+        # submit, poll until DONE, send FIRST_PROMPT in the welcome chat the
+        # workspace opens on, sign in through the provider chooser that send
+        # opens in API_KEY mode, wait for >=2 occurrences of FIRST_EXPECT in body).
         # See _create_workspace_and_first_message for the exact step list.
         ai_provider = os.environ.get("MINDS_AI_PROVIDER", "API_KEY").upper()
         if ai_provider not in ("API_KEY", "SUBSCRIPTION"):
@@ -1444,8 +1534,9 @@ def run_e2e() -> int:
         all_timings: dict[str, Any] = {}
 
         w1_result: _WorkspaceResult | None = None
-        # The frame showing the workspace under test. Every chat interaction
-        # goes here; ``win`` stays on the local-page surface.
+        # The frame showing the workspace under test; chat interactions go to
+        # the chat frame docked inside it (``wait_for_chat_frame``). ``win``
+        # stays on the local-page surface.
         chat: Frame | None = None
         if not SKIP_FIRST_MESSAGE:
             w1_result, chat = _create_workspace_and_first_message(
@@ -1480,10 +1571,13 @@ def run_e2e() -> int:
                 label="w1-after-reload",
                 host=_workspace_coordinate(w1_result.chat_url, label="w1-after-reload"),
             )
+            # The transcript lives in the chat's own frame, which the shell docks again from
+            # the workspace's saved layout.
+            reloaded_chat = wait_for_chat_frame(chat, label="w1-after-reload")
             _sleep(2)
             with contextlib.suppress(Exception):
-                chat.evaluate(f"() => {{ {_SCROLL_CHAT_TO_TAIL_JS} }}")
-            body_after_reload = chat.evaluate("document.body.innerText")
+                reloaded_chat.evaluate(f"() => {{ {_SCROLL_CHAT_TO_TAIL_JS} }}")
+            body_after_reload = reloaded_chat.evaluate("document.body.innerText")
             pong_count = body_after_reload.lower().count(FIRST_EXPECT.lower())
             if pong_count < 2:
                 raise E2EFailure(
@@ -1509,13 +1603,16 @@ def run_e2e() -> int:
             time.sleep(2)
             try:
                 latchkey_set_slack()
-                # 8. Send slack prompt
-                inp = chat.wait_for_selector('textarea, [contenteditable="true"]', timeout=180_000)
+                # 8. Send slack prompt. The composer, the transcript, and the in-chat
+                # permission card all live in the chat's own frame docked inside the
+                # workspace frame.
+                chat_frame = wait_for_chat_frame(chat, label="slack")
+                inp = chat_frame.wait_for_selector('textarea, [contenteditable="true"]', timeout=180_000)
                 inp.fill(SLACK_PROMPT)
                 inp.press("Enter")
-                snap_page(chat, "07-slack-prompt-sent")
+                snap_page(chat_frame, "07-slack-prompt-sent")
 
-                # === Iter 10 Phase A: drive the FIRST permission request to DENY ===
+                # Phase A: drive the FIRST permission request to DENY
                 # Real users sometimes click Deny by accident or change their
                 # mind. Drive the 3-stage state machine with decision="deny".
                 logger.info("=== Phase A: drive permission request -> DENY ===")
@@ -1526,15 +1623,15 @@ def run_e2e() -> int:
                     # The app can tear the workspace iframe down under us (a
                     # route change remounts it), so re-resolve the chat frame
                     # each pass.
-                    chat_now = find_chat_window(ctx)
+                    chat_now = find_docked_chat(ctx)
                     if chat_now is not None:
-                        chat = chat_now
+                        chat_frame = chat_now
                     if deny_stage >= 3:
                         logger.info("[deny-phase] PASS: Deny click landed")
                         break
                     _advance_approval(
                         ctx,
-                        chat,
+                        chat_frame,
                         deny_stage,
                         deny_clicked,
                         decision="deny",
@@ -1548,12 +1645,14 @@ def run_e2e() -> int:
                     deny_stage = deny_clicked.get("stage", deny_stage)
                     _sleep(2)
                 else:
-                    snap_page(chat, "99-TIMEOUT-no-deny-click")
+                    snap_page(chat_frame, "99-TIMEOUT-no-deny-click")
                     raise E2EFailure(
-                        f"[deny-phase] Deny click did not land after {DRIVE_SLACK_TIMEOUT}s (stage={deny_stage})"
+                        f"[deny-phase] Deny click did not land after {DRIVE_SLACK_TIMEOUT}s "
+                        f"(stage={deny_stage}); buttons in the chat frame: "
+                        f"{_visible_button_labels(chat_frame)}"
                     )
 
-                # === Iter 10 Phase B: snapshot latchkey pending requests state ===
+                # Phase B: snapshot latchkey pending requests state
                 # The latchkey gateway extension stores each pending request
                 # as a single JSON file. Right after Deny, the previous
                 # request's file should be gone. Read directly from disk
@@ -1565,14 +1664,14 @@ def run_e2e() -> int:
                     [f.name for f in files_post_deny],
                 )
 
-                # === Iter 10 Phase C: kick the agent to re-request ===
+                # Phase C: kick the agent to re-request
                 # The latchkey skill (DEFAULT_WORKSPACE_TEMPLATE) says to re-POST /permission-requests
                 # when a previous request was denied. The kick gives Claude
                 # the explicit user-side signal; without a follow-up the
                 # agent's slack tool sits on its polling loop until the
                 # request times out instead of self-triggering a re-ask.
                 logger.info("=== Phase C: kick agent to re-request after deny ===")
-                target = find_chat_window(ctx) or chat
+                target = find_docked_chat(ctx) or chat_frame
                 retry_msg = (
                     "I just denied that request by mistake -- please send a fresh "
                     "Slack permission request via the latchkey skill (POST to "
@@ -1583,7 +1682,7 @@ def run_e2e() -> int:
                 retry_inp.press("Enter")
                 snap_page(target, "07e-retry-after-deny-sent")
 
-                # === Iter 10 Phase D: wait for Claude to submit a NEW request ===
+                # Phase D: wait for Claude to submit a NEW request
                 # Poll the latchkey dir directly. If a new file appears,
                 # Claude re-submitted -- proceed to the APPROVE phase. If
                 # nothing appears within 120s, surface that as the failure
@@ -1613,7 +1712,7 @@ def run_e2e() -> int:
                         f"after deny. Chat tail: ...{chat_body[-400:]!r}"
                     )
 
-                # === Iter 10 Phase E: drive APPROVE on the new request ===
+                # Phase E: drive APPROVE on the new request
                 logger.info("=== Phase E: APPROVE the re-submitted request ===")
                 approval_stage = 0
                 deadline = time.time() + DRIVE_SLACK_TIMEOUT
@@ -1629,23 +1728,23 @@ def run_e2e() -> int:
                     "07j-approve-stage2-post",
                 )
                 while time.time() < deadline:
-                    chat_now = find_chat_window(ctx)
+                    chat_now = find_docked_chat(ctx)
                     if chat_now is not None:
-                        chat = chat_now
+                        chat_frame = chat_now
                     # Scroll the transcript to the live tail before reading it.
                     with contextlib.suppress(Exception):
-                        chat.evaluate(f"() => {{ {_SCROLL_CHAT_TO_TAIL_JS} }}")
+                        chat_frame.evaluate(f"() => {{ {_SCROLL_CHAT_TO_TAIL_JS} }}")
                     # Check for canned body in chat (PASS).
-                    body = chat.evaluate("document.body.innerText")
+                    body = chat_frame.evaluate("document.body.innerText")
                     if CANNED_BODY.lower() in body.lower() and approval_stage >= 3:
                         logger.info("PASS: canned body in reply")
-                        snap_page(chat, "08-PASS-canned-body")
+                        snap_page(chat_frame, "08-PASS-canned-body")
                         break
 
                     if approval_stage < 3:
                         _advance_approval(
                             ctx,
-                            chat,
+                            chat_frame,
                             approval_stage,
                             clicked_at,
                             decision="approve",
@@ -1681,7 +1780,7 @@ def run_e2e() -> int:
                         KICK_INTERVAL = 30
                         now = time.monotonic()
                         if now - first_approve_at >= KICK_DELAY and now - last_kick_at >= KICK_INTERVAL:
-                            target = find_chat_window(ctx)
+                            target = find_docked_chat(ctx)
                             if target is not None:
                                 kick_msg = (
                                     "Slack permission is now granted -- please retry the "
@@ -1699,7 +1798,7 @@ def run_e2e() -> int:
 
                     _sleep(2)
                 else:
-                    snap_page(chat, "99-TIMEOUT-no-canned-body")
+                    snap_page(chat_frame, "99-TIMEOUT-no-canned-body")
                     # Dump every page's URL + first 200 chars of body so we
                     # can tell whether the chat panel was alive somewhere.
                     for p in all_pages(ctx):
@@ -1707,7 +1806,9 @@ def run_e2e() -> int:
                             preview = (p.evaluate("document.body.innerText"))[:200].replace("\n", " ")
                             logger.error("  page url={} body=...{!r}", live_url(p), preview)
                     raise E2EFailure(
-                        f"canned body not in chat after {DRIVE_SLACK_TIMEOUT}s (approval_stage={approval_stage})"
+                        f"canned body not in chat after {DRIVE_SLACK_TIMEOUT}s "
+                        f"(approval_stage={approval_stage}); buttons in the chat frame: "
+                        f"{_visible_button_labels(chat_frame)}"
                     )
             finally:
                 logger.info("=== slack teardown ===")
@@ -1719,7 +1820,7 @@ def run_e2e() -> int:
 
         # 10-14. Second workspace + cross-workspace follow-up. Drives a
         # FRESH host (HOST_NAME_2) through create + first-message on the
-        # same minds.app session, then navigates back to W1's chat URL and
+        # same Mind.app session, then navigates back to W1's chat URL and
         # to W2's chat URL in turn, sending a unique-token follow-up to
         # each. Proves: state isolation between workspaces, both agents
         # survive cross-workspace navigation, mngr_forward + latchkey
@@ -1997,7 +2098,7 @@ def run_e2e() -> int:
                 # mngr's lima provider shells out to ``limactl list --json``
                 # without going through the bundled-binary env vars (those
                 # are minds-side ergonomics). The packaged binary's PATH
-                # doesn't include /Applications/Minds.app/.../Resources/lima/bin,
+                # doesn't include /Applications/Mind.app/.../Resources/lima/bin,
                 # so we prepend it here -- otherwise the discovery hits
                 # "No such file or directory: 'limactl'" and the agents
                 # array comes back empty even though the host_dir has W1.
@@ -2016,7 +2117,7 @@ def run_e2e() -> int:
                 # discovered by providers that DID work, which is what we
                 # actually check. So: parse stdout regardless of exit code;
                 # only fail if the JSON itself is unusable.
-                # Run from $HOME, exactly as minds.app spawns mngr (see
+                # Run from $HOME, exactly as Mind.app spawns mngr (see
                 # forward_cli.py and laptop_agent_types_seed.py). mngr's project
                 # config is discovered by walking up from cwd to a git worktree
                 # root and reading `<root>/.mngr/settings.toml`. Without this the
@@ -2052,7 +2153,7 @@ def run_e2e() -> int:
                 # lifecycle keeps a metadata record for ``destroyed_host_
                 # persisted_seconds`` after destroy completes (so historical
                 # state survives) -- so W2's agent stays in the data.json /
-                # mngr list for a grace period even though minds.app's
+                # mngr list for a grace period even though Mind.app's
                 # discovery has already dropped its landing-page tile.
                 # Iter 5's home-page screenshot 20 is the canonical proof
                 # that destroy reached the user-visible state; this CLI
@@ -2205,6 +2306,20 @@ def _list_permission_request_files() -> list[Path]:
     return sorted(p for p in PERMISSION_REQUESTS_DIR.iterdir() if p.suffix == ".json")
 
 
+def _visible_button_labels(frame: Frame) -> list[str]:
+    """The labels of every visible button in ``frame``."""
+    # checkVisibility, not offsetParent: the review popup floats, and offsetParent is
+    # null for everything inside a fixed subtree however plainly it is painted.
+    try:
+        return frame.evaluate(
+            "() => [...document.querySelectorAll('button')]"
+            ".filter((b) => b.checkVisibility())"
+            ".map((b) => b.innerText.trim())"
+        )
+    except PlaywrightError as exc:
+        return [f"<unreadable: {exc}>"]
+
+
 def _advance_approval(
     ctx: BrowserContext,
     chat: Frame,
@@ -2243,12 +2358,13 @@ def _advance_approval(
             state["stage"] = 1
             snap_page(owner, snap_stage0)
             return
-        # The in-chat card is rendered by the system_interface app inside the
-        # workspace iframe, and carries this button only while the request is
-        # pending (a resolved request renders as a one-line receipt). Clicking
-        # it posts OPEN_REQUEST_MODAL to the embedder, which floats /inbox.
+        # The in-chat card is part of the chat's transcript, so it renders in
+        # ``chat`` (the chat's own frame, docked inside the workspace iframe),
+        # and carries this button only while the request is pending (a resolved
+        # request renders as a one-line receipt). Clicking it posts
+        # OPEN_REQUEST_MODAL to the embedder, which floats /inbox.
         try:
-            trigger = chat.locator("button.permission-request-button")
+            trigger = chat.get_by_role("button", name=PERMISSION_REVIEW_BUTTON_LABEL)
             if trigger.count() > 0 and trigger.first.is_visible():
                 logger.info("clicking the in-chat 'Review & respond' button")
                 snap_page(chat, snap_stage0)

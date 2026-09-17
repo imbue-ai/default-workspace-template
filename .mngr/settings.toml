@@ -12,20 +12,25 @@ agent_ready_timeout = 45.0
 
 # --- Command defaults ---
 
-# Default create command settings -- apply to all mngr create from this repo
+# Default create command settings -- apply to all mngr create from this repo.
+#
+# No default `type` here, on purpose. The agent type a create resolves to when it
+# names none -- and the provider account it runs on -- come from the git-ignored
+# `.mngr/settings.local.toml`, which the chat app writes from the account store
+# (system/apps/chat/imbue/chat/create_defaults.py): the pinned default account,
+# else the most recently used one, as `type` plus its binding (`env__extend` for
+# claude, an `extra_provision_command__extend` credential link for the others)
+# plus an `account=<id>` label. That file is the one place a workspace's default
+# harness lives, so a create with no account fails rather than launching a claude
+# that cannot take a turn; see [pre_command_scripts] below for the message it fails
+# with. Every creator that wants a specific harness says so with `--type`.
 [commands.create]
-type = "claude"
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
     "IS_AUTONOMOUS=1",
-    # Vestigial: fast mode for Opus 4.7 was deprecated 2026-06-25 and removed
-    # 2026-07-24, and this workspace runs Opus 4.8 (agent_types.claude model
-    # below), so this gates nothing. Kept only so a pinned Claude Code older
-    # than the removal keeps behaving as before; drop it on the next version bump.
-    "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1",
     # Skip Claude Code's org-level fast-mode eligibility check. Agents sign in
     # with a Claude Max subscription that supports fast mode, but the session
     # resolves under an organization whose org check otherwise reports fast
@@ -91,6 +96,27 @@ worktree_base_folder = "/home/user/worktrees/"
 disable_plugin__extend = ["recursive", "ttyd", "claude_subagent_proxy"]
 yes = true
 
+# Runs before every `mngr create` from this project root. Inside the workspace,
+# with no provider account signed in, there is no settings.local.toml naming a
+# default type, and mngr's own refusal ("No agent type provided", with a hint to
+# set one in config) sends the user after the wrong fix; the script refuses with
+# "sign in first" instead. It gates on the create's project root being the work
+# dir of the agent running it, so the create of the workspace itself -- run on the
+# user's machine from a clone of this template that is nobody's work dir -- is
+# never refused. The shell test in front spares a plain user shell the python3
+# (macOS's stub would prompt to install the Command Line Tools), but not an mngr
+# agent on that machine, which has MNGR_AGENT_ID like any other; see the script's
+# docstring for what that means when working on this repo from a Mac.
+[pre_command_scripts]
+create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_account.py"]
+
+# A worker's worktree carries no settings.local.toml of its own (the file is
+# git-ignored), so a create run from inside one -- a worker launching a worker --
+# would name no type and no account. Sharing the workspace's copy by symlink keeps
+# every checkout of the workspace on the same default account.
+[work_dir_extra_paths]
+".mngr/settings.local.toml" = "SHARE"
+
 # --- Agent types ---
 
 # Agent type defaults -- apply to all claude agents created from this repo
@@ -121,18 +147,20 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
-# User-facing chat agents override it per create:
-# the system interface and the bootstrap both pass
-# `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
-# workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+# A chat launches fast through the `agent_types.claude.settings_overrides.fastMode=true`
+# setting that `[create_templates.fast]` (below) stacks on its create when the
+# chat's fast mode (off, auto or on; the chat app's data/.apps/chat/chats/<id>/fast_mode.json)
+# calls for it; a running chat's speed follows the mode through the chat app's
+# harnesses/claude/model.py, which writes into that agent's own settings file.
 #
-# That override targets `claude` rather than `chat` because a `-S` is parsed as
-# its own config layer, without the `parent_type = "claude"` this file gives
-# `chat` -- so `chat` resolves against the base agent config, which has no
+# That setting targets `claude` rather than `chat` because a create-time setting
+# (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
+# config layer, without the `parent_type = "claude"` this file gives `chat` --
+# so `chat` resolves against the base agent config, which has no
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
-# This is the canonical explanation; the two create paths and the CLI-contract
+# This is the canonical explanation; the `fast` template and the CLI-contract
 # test point here rather than repeating it.
 #
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
@@ -140,6 +168,9 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
+# feedbackSurveyRate = 0 and feedbackDrafts = "off" silence Claude Code's session quality
+# survey and feedback drafts: both prompt a human mid-session, which garbles an unattended
+# chat's automated input and output. Same overlay reasoning as skipDangerousModePermissionPrompt.
 # tui = "fullscreen" pins the input bar and any dialog to the pane instead of letting them
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
@@ -156,7 +187,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -173,14 +204,13 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.227"
-# Do not provision a per-agent Claude config dir: every claude in the workspace
-# shares one config dir so auth, plugins, marketplaces, and sessions are
-# configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
-# everywhere (no agent env, no host env), so every claude -- mngr-launched
-# agents and a bare `claude` in a workspace terminal alike -- resolves claude's
-# own default: ~/.claude for the config dir and ~/.claude.json for the global
-# config beside it.
+version = "2.1.269"
+# Do not provision a per-agent Claude config dir. A claude is bound to a
+# provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
+# account's folder under ~/.minds/accounts (the chat app's own creates, and the
+# [commands.create] env default in .mngr/settings.local.toml for every other
+# create), so auth and sessions live per account; nothing sets the variable in
+# the host env, and ~/.claude holds no credential.
 isolate_local_config_dir = false
 # Claude-only instructions, appended to every claude agent's system prompt.
 append_system_prompt__extend = ["""# Claude-specific instructions
@@ -188,8 +218,6 @@ append_system_prompt__extend = ["""# Claude-specific instructions
 Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`tk create --step "..."`) are the replacement for `TodoWrite`. Do not use any other built-in memory or task-planning tools; `tk` is the only task tracker in this workspace.
 
 `.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
-
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to the Bash tool timeout.
 
 Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`)."""]
 
@@ -203,8 +231,9 @@ Use your built-in memory system. Your memory directory is `data/memories/` (conf
 # Because it is not a claude agent, mngr does no claude provisioning for it --
 # in particular it gets no per-agent CLAUDE_CONFIG_DIR in its env, so
 # supervisord services (and any `mngr create` they run) inherit an environment
-# with the var unset and every claude in the workspace lands on the shared
-# ~/.claude (see [agent_types.claude] above). Nothing from the invoking user's
+# with the var unset, and a create they run binds through the workspace's
+# create defaults in .mngr/settings.local.toml (see [commands.create] above)
+# rather than through anything inherited. Nothing from the invoking user's
 # ~/.claude/ or ~/.mngr/ leaks into the workspace: the repo at the requested
 # git ref is the canonical workspace definition, and command agents sync no
 # user-local claude state at all.
@@ -213,8 +242,8 @@ parent_type = "command"
 command = "sleep infinity"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
-# its own base type (registered by the vendored imbue-mngr-codex plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. Auto-approve
+# its own base type (registered by the vendored imbue-mngr-codex plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
 # approval_policy="never"). The codex binary is baked into the image
@@ -275,7 +304,7 @@ check_installation = false
 #   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
 #   silently ignored (verified -- the bypass still worked). With this flag the model reports
 #   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
-#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Mind does not use.
 #   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
@@ -283,25 +312,15 @@ check_installation = false
 #   so they never appear in the transcript.
 config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 # Codex-only instructions, appended to every codex agent's system prompt.
+# The `/welcome` entry is what claude gets from its slash-command expansion: codex does not
+# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
-
 Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
-If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
-
-### Welcome to Minds
-
-I'm an AI operating system built to extend *you* — so you can do your best work.
-
-I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
-
-**Let's get started**
-
-Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
@@ -336,25 +355,17 @@ share_home_npm_dir = true
 auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
+# The `/welcome` entry is what claude gets from its slash-command expansion: pi does not
+# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
 
-If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
-
-### Welcome to Minds
-
-I'm an AI operating system built to extend *you* — so you can do your best work.
-
-I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
-
-**Let's get started**
-
-Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
-# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
@@ -385,7 +396,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
-# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
@@ -447,6 +458,13 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
+# Publish each workspace container's sshd on loopback only. The minds desktop
+# client always talks to a local daemon and connects to 127.0.0.1, so nothing
+# needs the container reachable from the machine's LAN. This is also mngr's
+# default for a local daemon; it is pinned here so the workspace's exposure does
+# not depend on that default. (Requires the vendored mngr to know the field:
+# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -461,8 +479,10 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
-# aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
+# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
+# by the aws-<region> provider start args and by the imbue_cloud slice bake's
+# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
+# slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
@@ -495,9 +515,13 @@ host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
 # so setup_system.sh provisions an identical toolchain everywhere. Set here
 # (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep.
-default_image_url_aarch64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+# mngr users keep. Served from imbue's artifact mirror rather than
+# cloud.debian.org, which prunes old releases: the same image release the
+# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
+# is the manifest; bump both together, uploading the new release with
+# `minds-admin artifacts upload` before landing the bump here).
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
@@ -558,13 +582,13 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
-# creates a separate chat agent on first boot and passes `--message /welcome`
-# to it instead.
+# `/welcome` is NOT set here: the services agent's window 0 sleeps forever
+# (see `[agent_types.main] command`) and never reaches claude. Chats are
+# separate agents the chat app creates on demand; the ones that start with
+# nothing to say get `/welcome` through `[create_templates.welcome]` below.
 #
-# bootstrap is the only extra_window now. It runs first-boot setup (git config,
-# initial chat agent) and then launches
+# bootstrap is the only extra_window now. It runs first-boot setup (git config)
+# and then launches
 # supervisord, which runs every background service (system_interface, web,
 # share-gateway, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
@@ -1622,11 +1646,20 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 
-# First chat: the one agent per workspace that greets the user (/welcome) and
-# opens in fast mode so the first conversation feels responsive. Stacked on top
-# of `chat` (`-t first -t chat --type <harness>`) by the bootstrap and by the
-# flag-gated "New first ..." launchers. The `first=true` label is what scopes
-# the fast-mode grace-period prompt to this agent.
+# Welcome: the greeting a chat that starts with nothing to say gets. The chat app
+# stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
+# a first message -- the New Tab page's plain "New Chat", a rail shortcut -- so
+# `/welcome` runs each time, and the skill (.agents/skills/welcome) varies what it
+# says by how many times it has run in this workspace. A chat that starts with a
+# message (a seeded prompt, the onboarding chat's first send) gets its message
+# instead.
+[create_templates.welcome]
+message = "/welcome"
+
+# Fast: launches the fast-capable harnesses in fast mode so a new conversation
+# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
+# auto with its fast turns still to run (a new chat's mode is the workspace's
+# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
 #
 # The two fast settings are deliberately asymmetric: claude's
 # `settings_overrides` is a SettingsPatchField (deep-merge marker on the
@@ -1636,9 +1669,7 @@ output_style = "Engineering Subordinate"
 # the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
 # inconsistency in either direction. Settings for whichever harness is not
 # resolved are inert, so this template is safe to stack with any --type.
-[create_templates.first]
-message = "/welcome"
-label__extend = ["first=true"]
+[create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
@@ -1665,7 +1696,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"chat:$MNGR_AGENT_NAME\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
@@ -1685,16 +1716,26 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # the stop hook must never auto-create PRs or push to origin (the repo-level
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
 #
-# install_worker_skills.sh installs the single generic worker sub-skill from
-# .agents/shared/worker/ into the worker's .agents/skills/ tree as
-# `harden-worker`, which the crystallize / update / heal creation lifecycle
-# relies on. (The venv converge that used to sit here now runs for every agent
+# Nothing worker-specific is installed into the worker's skill tree: the harden
+# worker is followed in place, from the checkout every worker already has at
+# .agents/shared/worker/SKILL.md, because a lead's task file names that path
+# outright. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
+#
+# claude_update_plugin.sh installs the code-guardian plugin (and the other
+# .claude/settings.json plugins) for the worker's worktree path BEFORE its
+# claude starts. Claude Code resolves the plugin set at session startup, so the
+# SessionStart-hook install that chat agents rely on lands too late for a
+# worker's single session -- it would start with no /autofix or
+# /verify-architecture at all, and the harden contract mandates both. It runs
+# WITHOUT --strict on purpose: a plugin or marketplace outage must never make a
+# worker undeployable, so an install failure is a warning in the provision
+# output (and the worker reports the missing gate) rather than a failed launch.
 [create_templates.worker]
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Converge the venv for worker agents, ahead of the skill install so deps are ready
+# Converge the venv for worker agents, ahead of the plugin install so deps are ready
 # first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
 # (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
 # lazily, with root-closure scope rather than --all-packages, racing whatever the agent
@@ -1703,7 +1744,7 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shared-folder worker: one of several workers an orchestrating agent runs in parallel

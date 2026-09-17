@@ -16,6 +16,7 @@ import {
 import type { UpdateActionResult } from "../../models/updates";
 import { Button } from "./Button";
 import { Modal, DialogCloseButton } from "./Modal";
+import { machineVerdict } from "./MachineVerdict";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
 
@@ -31,6 +32,8 @@ interface UpdateModalState {
   /** The action in flight, so its button can say so and the rest can't be pressed. */
   pendingAction: "now" | "schedule" | "cancel" | "dismiss" | null;
   error: string;
+  /** The refusing machine's own words, shown under `error` when it had any. */
+  errorDetail: string;
   /** Which press is held for the go-ahead-without-backups confirmation. */
   noBackupConfirm: "now" | "schedule" | null;
 }
@@ -81,7 +84,7 @@ function modalTitle(update: UiWorkspaceUpdate, workspaceName: string): string {
     // every machine; titling it after this one invites a hunt for a fault in it.
     return update.unknown_reason === "NO_APP_VERSION" ? "This build can't compare versions" : `${workspaceName}'s version`;
   }
-  if (update.availability === "APP_BEHIND") return `${workspaceName} is ahead of Minds`;
+  if (update.availability === "APP_BEHIND") return `${workspaceName} is ahead of Mind`;
   if (isRecreationRequired(update)) return `${workspaceName} needs a new machine`;
   return `Update ${workspaceName}`;
 }
@@ -128,6 +131,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
   const state: UpdateModalState = {
     pendingAction: null,
     error: "",
+    errorDetail: "",
     noBackupConfirm: null,
   };
 
@@ -138,12 +142,14 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
   ): void {
     state.pendingAction = action;
     state.error = "";
+    state.errorDetail = "";
     void call().then((result) => {
       state.pendingAction = null;
       if (result.isOk) {
         onOk();
       } else {
         state.error = result.error;
+        state.errorDetail = result.detail;
       }
       m.redraw();
     });
@@ -169,7 +175,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
       m(
         "p",
         { class: "type-body text-secondary" },
-        "Minds can't detect the version of this machine.",
+        "Mind can't detect the version of this machine.",
       ),
       m(
         "p",
@@ -188,17 +194,17 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
       m(
         "p",
         { class: "type-body text-secondary" },
-        "This build of Minds tracks a branch rather than a released version, so it has nothing to " +
+        "This build of Mind tracks a branch rather than a released version, so it has nothing to " +
           "compare machines against. Every machine reads as unknown here, whatever version it is on.",
       ),
       m("div", { class: "flex flex-col gap-1" }, [
         updateVersionRow("This machine", update.current_version),
-        updateVersionRow("This build of Minds", update.supported_version),
+        updateVersionRow("This build of Mind", update.supported_version),
       ]),
       m(
         "p",
         { class: "type-helper text-tertiary" },
-        "A released Minds compares each machine against the template version it ships with. You can still " +
+        "A released Mind compares each machine against the template version it ships with. You can still " +
           "run the update: the agent inside the machine reads its own upstream, and may find there's nothing to do.",
       ),
       // Dev-loop instructions in product copy: a released build is pinned to a
@@ -226,7 +232,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
       m(
         "p",
         { class: "type-body text-secondary" },
-        "This machine is running a version of Minds too old to update in place. " +
+        "This machine is running a version of Mind too old to update in place. " +
           "To get it up to date, create a new machine and move your work across.",
       ),
       m("ol", { class: "type-helper text-secondary list-decimal pl-5 flex flex-col gap-1" }, [
@@ -244,7 +250,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
     return m(
       "p",
       { class: "type-body text-secondary" },
-      `This machine (${update.current_version}) is newer than this copy of Minds ` +
+      `This machine (${update.current_version}) is newer than this copy of Mind ` +
         `(${update.supported_version}). Update the app to catch up — there's nothing to run here.`,
     );
   }
@@ -269,7 +275,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
         body.push(
           m("div", { class: "flex flex-col gap-1" }, [
             updateVersionRow("This machine", update.current_version),
-            updateVersionRow("Supported by Minds", update.supported_version),
+            updateVersionRow("Supported by Mind", update.supported_version),
           ]),
         );
         const labelNote = update.is_version_from_label
@@ -342,7 +348,7 @@ export function UpdateModal(): m.Component<UpdateModalAttrs> {
         );
       }
 
-      if (state.error) body.push(m(Notice, { variant: "error" }, state.error));
+      if (state.error) body.push(m(Notice, { variant: "error" }, [state.error, machineVerdict(state.errorDetail)]));
 
       const actions: m.Children[] = [];
       if (isRecreationRequired(update)) {

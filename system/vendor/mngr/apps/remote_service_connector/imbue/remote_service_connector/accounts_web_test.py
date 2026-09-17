@@ -67,9 +67,7 @@ def _authorize_query(redirect_uri: str = "http://127.0.0.1:8123/callback", verif
     }
 
 
-# ---------------------------------------------------------------------------
 # Pages + config
-# ---------------------------------------------------------------------------
 
 
 def test_login_page_serves_placeholder_without_a_built_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,9 +158,7 @@ def test_config_reports_turnstile_and_google_availability(monkeypatch: pytest.Mo
     assert after == {"turnstile_site_key": "site-key-1", "google_enabled": True}
 
 
-# ---------------------------------------------------------------------------
 # Browser session APIs
-# ---------------------------------------------------------------------------
 
 
 def test_me_reports_signed_out_then_identity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,9 +403,7 @@ def test_send_verification_sends_for_unverified_and_skips_verified(monkeypatch: 
     assert len(st_backend.sent_verification_emails) == 1
 
 
-# ---------------------------------------------------------------------------
 # Device handoff: authorize + token exchange
-# ---------------------------------------------------------------------------
 
 
 def test_loopback_redirect_uri_validation() -> None:
@@ -556,9 +550,7 @@ def test_mark_next_confirmed_only_touches_authorize_paths() -> None:
     assert _mark_next_confirmed("/") == "/"
 
 
-# ---------------------------------------------------------------------------
 # Browser Google OAuth on the merged surface
-# ---------------------------------------------------------------------------
 
 
 def _make_oauth_client(
@@ -870,9 +862,7 @@ def test_oauth_callback_refuses_an_email_registered_with_a_password(monkeypatch:
     assert st_backend.last_browser_session is None
 
 
-# ---------------------------------------------------------------------------
 # Signup plan choice + terms agreement + the static doc pages
-# ---------------------------------------------------------------------------
 
 
 def test_browser_signup_records_the_selected_plan(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -991,9 +981,7 @@ def test_terms_conduct_and_privacy_pages_serve_from_the_bundle(
         assert title in served.text
 
 
-# ---------------------------------------------------------------------------
 # Marketing attribution (signup capture + the /download redirect)
-# ---------------------------------------------------------------------------
 
 
 def _plant_attribution_cookie(client: TestClient) -> None:

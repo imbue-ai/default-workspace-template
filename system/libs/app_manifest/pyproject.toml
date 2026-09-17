@@ -1,0 +1,28 @@
+[project]
+name = "app-manifest"
+version = "0.1.0"
+description = "The app manifest (app.toml) and app registry (data/.state/apps.toml) models every workspace app is described by"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "imbue-common",
+    "loguru>=0.7",
+    # gitignore-style matching for a footprint's exclude globs. The standard library's
+    # PurePath.full_match arrived in 3.13 and does not implement gitignore's "**", and CI
+    # runs 3.12, so the matching comes from a library rather than the interpreter. The floor
+    # is 1.1 because that is where the "gitignore" pattern factory replaced the now-deprecated
+    # "gitwildmatch" one; the two match identically.
+    "pathspec>=1.1",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+app-manifest = "app_manifest.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app_manifest"]

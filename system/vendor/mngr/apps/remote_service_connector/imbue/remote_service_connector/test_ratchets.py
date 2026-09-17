@@ -10,7 +10,7 @@ _DIR = Path(__file__).parent.parent.parent
 pytestmark = pytest.mark.xdist_group(name="ratchets")
 
 
-# --- Code safety ---
+# Code safety
 
 
 def test_prevent_todos() -> None:
@@ -50,7 +50,7 @@ def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(0))
 
 
-# --- Exception handling ---
+# Exception handling
 
 
 def test_prevent_bare_except() -> None:
@@ -77,7 +77,7 @@ def test_prevent_silent_decode_error_catches() -> None:
     rc.check_silent_decode_error_catches(_DIR, snapshot(0))
 
 
-# --- Import style ---
+# Import style
 
 
 def test_prevent_inline_imports() -> None:
@@ -104,7 +104,7 @@ def test_prevent_setattr() -> None:
     rc.check_setattr(_DIR, snapshot(0))
 
 
-# --- Banned libraries and patterns ---
+# Banned libraries and patterns
 
 
 def test_prevent_asyncio_import() -> None:
@@ -129,7 +129,9 @@ def test_prevent_yaml_usage() -> None:
     # box_scripts_test staging that file to stand in for a lima instance. The
     # rest is ``accounts_web`` reading electron-updater's channel manifest,
     # whose ``.yml`` extension and YAML body are fixed by the shipped binary
-    # that consumes it. The connector configures nothing in YAML.
+    # that consumes it. The gen-2 cloud-init material (YAML by external
+    # contract) is rendered by the shared ``mngr_imbue_cloud.slices.gen2_scripts``
+    # subpackage, outside this tree. The connector configures nothing in YAML.
     rc.check_yaml_usage(_DIR, snapshot(17))
 
 
@@ -141,14 +143,14 @@ def test_prevent_async_await() -> None:
     rc.check_async_await(_DIR, snapshot(18))
 
 
-# --- Naming conventions ---
+# Naming conventions
 
 
 def test_prevent_num_prefix() -> None:
     rc.check_num_prefix(_DIR, snapshot(0))
 
 
-# --- Documentation ---
+# Documentation
 
 
 def test_prevent_trailing_comments() -> None:
@@ -169,7 +171,7 @@ def test_prevent_returns_in_docstrings() -> None:
     rc.check_returns_in_docstrings(_DIR, snapshot(0))
 
 
-# --- Type safety ---
+# Type safety
 
 
 def test_prevent_literal_with_multiple_options() -> None:
@@ -188,14 +190,14 @@ def test_prevent_short_uuid_ids() -> None:
     rc.check_short_uuid_ids(_DIR, snapshot(0))
 
 
-# --- Pydantic / models ---
+# Pydantic / models
 
 
 def test_prevent_model_copy() -> None:
     rc.check_model_copy(_DIR, snapshot(0))
 
 
-# --- Logging ---
+# Logging
 
 
 def test_prevent_fstring_logging() -> None:
@@ -210,7 +212,7 @@ def test_prevent_logger_exception() -> None:
     rc.check_logger_exception(_DIR, snapshot(0))
 
 
-# --- Testing conventions ---
+# Testing conventions
 
 
 def test_prevent_unittest_mock_imports() -> None:
@@ -229,7 +231,7 @@ def test_prevent_pytest_mark_integration() -> None:
     rc.check_pytest_mark_integration(_DIR, snapshot(0))
 
 
-# --- Process management ---
+# Process management
 
 
 def test_prevent_os_fork() -> None:
@@ -244,7 +246,7 @@ def test_prevent_bare_tmux_targets() -> None:
     rc.check_bare_tmux_targets(_DIR, snapshot(0))
 
 
-# --- AST-based ratchets ---
+# AST-based ratchets
 
 
 def test_prevent_if_elif_without_else() -> None:
@@ -275,7 +277,7 @@ def test_prevent_per_file_host_upload() -> None:
     rc.check_per_file_host_upload(_DIR, snapshot(0))
 
 
-# --- Project-level checks ---
+# Project-level checks
 
 
 def test_prevent_code_in_init_files() -> None:
@@ -298,7 +300,7 @@ def test_prevent_bare_urwid_tty_signal_keys() -> None:
     rc.check_bare_urwid_tty_signal_keys(_DIR, snapshot(0))
 
 
-# --- Modal images ---
+# Modal images
 
 
 def test_prevent_unpinned_modal_pip_install() -> None:

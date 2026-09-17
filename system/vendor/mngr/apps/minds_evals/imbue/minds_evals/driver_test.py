@@ -2,6 +2,8 @@ import asyncio
 import json
 import re
 import subprocess
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -22,12 +24,18 @@ from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import GoalEntry
+from imbue.minds_evals.data_types import HarnessConfig
+from imbue.minds_evals.data_types import HarnessLane
+from imbue.minds_evals.data_types import ObservedHarnessModels
 from imbue.minds_evals.data_types import PromptEntry
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepPosition
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.data_types import Transcript
+from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerState
@@ -35,9 +43,12 @@ from imbue.minds_evals.data_types import cross_step_lifetime_seconds
 from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.driver import DRIVER_LOG_FILENAME
 from imbue.minds_evals.driver import Done
+from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
 from imbue.minds_evals.driver import FALLBACK_ENTRY_DETAIL
 from imbue.minds_evals.driver import GoalTurnSource
 from imbue.minds_evals.driver import LiteralTurnSource
+from imbue.minds_evals.driver import MODEL_SWITCH_APPLIED
+from imbue.minds_evals.driver import MODEL_SWITCH_SKIPPED
 from imbue.minds_evals.driver import MindsPersonaDriver
 from imbue.minds_evals.driver import PROXY_TUNNEL_GRACE_SECONDS
 from imbue.minds_evals.driver import PersonaLLMTurnSource
@@ -49,6 +60,8 @@ from imbue.minds_evals.driver import TIMEOUT_DIAGNOSTICS_FILENAME
 from imbue.minds_evals.driver import TRAJECTORY_FILENAME
 from imbue.minds_evals.driver import TurnAction
 from imbue.minds_evals.driver import TurnSource
+from imbue.minds_evals.driver import USER_ID_MAX_LENGTH
+from imbue.minds_evals.driver import USER_ID_PREFIX_MAX_LENGTH
 from imbue.minds_evals.driver import WORKSPACE_READINESS_TIMEOUT_SECONDS
 from imbue.minds_evals.driver import _DRIVER_LOG_TRIAL_KEY
 from imbue.minds_evals.driver import _case_clone_dir
@@ -59,12 +72,21 @@ from imbue.minds_evals.driver import build_case_clone_command
 from imbue.minds_evals.driver import build_clone_probe_command
 from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import build_eval_case_commit_command
+from imbue.minds_evals.driver import build_turn_record
 from imbue.minds_evals.driver import build_vendor_mngr_command
+from imbue.minds_evals.driver import conversation_seconds
+from imbue.minds_evals.driver import derive_key_env
 from imbue.minds_evals.driver import derive_user_id
+from imbue.minds_evals.driver import derive_workspace_host_name
+from imbue.minds_evals.driver import is_model_confirmed
+from imbue.minds_evals.driver import is_proxy_model_confirmed
 from imbue.minds_evals.driver import is_snapshot_wanted
+from imbue.minds_evals.driver import observed_harness_models
 from imbue.minds_evals.driver import parse_agent_flag
 from imbue.minds_evals.driver import parse_case_config
+from imbue.minds_evals.driver import parse_harness_config
 from imbue.minds_evals.driver import parse_snapshot_mode
+from imbue.minds_evals.driver import parse_user_id_prefix
 from imbue.minds_evals.driver import resolve_turn_sources
 from imbue.minds_evals.driver import sanitize_user_id
 from imbue.minds_evals.driver import workspace_readiness_deadline
@@ -123,7 +145,6 @@ def _case_config(
         dwt_repo="https://example.invalid/dwt.git",
         dwt_branch="main",
         dwt_sha="c" * 40,
-        avg_word_count_baseline=100.0,
         step=None,
         expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,
@@ -179,10 +200,86 @@ def test_sanitize_user_id_lowercases_and_collapses_dashes() -> None:
 
 
 def test_derive_user_id_appends_salt_and_bounds_length() -> None:
-    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234")
+    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234", "")
 
+    assert user_id.startswith(EVAL_USER_ID_NAMESPACE)
     assert user_id.endswith("-cafe1234")
-    assert len(user_id) <= 40
+    assert len(user_id) <= USER_ID_MAX_LENGTH
+
+
+def test_derive_user_id_squeezes_the_trial_name_rather_than_the_prefix_or_the_salt() -> None:
+    prefix = "ci-20260901t120000z-"
+    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234", prefix)
+
+    assert user_id.startswith(EVAL_USER_ID_NAMESPACE + prefix)
+    assert user_id.endswith("-cafe1234")
+    assert len(user_id) <= USER_ID_MAX_LENGTH
+    # The trial name is what shrank, and enough of it survives to still name the trial.
+    trial_name_part = user_id[len(EVAL_USER_ID_NAMESPACE) + len(prefix) : -len("-cafe1234")]
+    assert trial_name_part == "a-very-long-t"
+
+
+def test_derive_user_id_falls_back_when_the_trial_name_sanitizes_away() -> None:
+    assert derive_user_id("!!!", "cafe1234", "") == "evals-trial-cafe1234"
+
+
+def test_derive_workspace_host_name_keeps_the_salt_whole_however_long_the_trial_name_is() -> None:
+    """The salt is the only part that tells two attempts of one case apart, so a name too long for
+    its budget has to lose trial name rather than salt."""
+    host_name = derive_workspace_host_name("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234")
+
+    assert host_name == "EVAL-a-very-long-trial-name-th-cafe1234"
+    assert host_name.endswith("-cafe1234")
+
+
+def test_derive_workspace_host_name_ignores_what_the_whole_run_shares() -> None:
+    """Two trials of one case under one scheduled run share the eval namespace and the run's user id
+    prefix; only the trial name and the salt say which trial a workspace is. So the host name is
+    built from those two alone, and the contrast with the user id -- same trial, same salt, same run
+    -- is what the budget buys: the id spends 26 of its 48 characters on what the run shares and
+    truncates the trial name to pay for it, where the name keeps it whole."""
+    prefix = "ci-20260901t120000z-"
+    first = derive_workspace_host_name("weather-dashboard__aaaaaaa", "cafe1234")
+    second = derive_workspace_host_name("weather-dashboard__aaaaaaa", "beef5678")
+    user_id = derive_user_id("weather-dashboard__aaaaaaa", "cafe1234", prefix)
+
+    assert first == "EVAL-weather-dashboard-aaaaaaa-cafe1234"
+    # Only the salt differs, and it is what tells two attempts of one case apart.
+    assert first != second
+    assert user_id == "evals-ci-20260901t120000z-weather-dashb-cafe1234"
+    assert prefix in user_id and prefix not in first
+
+
+def test_the_longest_user_id_fits_the_modal_environment_name_untruncated() -> None:
+    """mngr truncates a long environment name with a lossy left-slice and no disambiguating hash, so
+    an id this app records would stop being the one Modal holds. The budget has to leave room under
+    the longest MNGR_PREFIX minds activates."""
+    longest_user_id = derive_user_id("x" * 200, "cafe1234", "c" * USER_ID_PREFIX_MAX_LENGTH)
+
+    assert len(longest_user_id) == USER_ID_MAX_LENGTH
+    environment_name = minds_bridge.derive_modal_environment_name({"MNGR_PREFIX": "minds-staging-"}, longest_user_id)
+    assert len(environment_name) <= minds_bridge.MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+
+
+def test_parse_user_id_prefix_accepts_the_stamp_a_scheduled_run_passes() -> None:
+    assert parse_user_id_prefix("ci-20260901t120000z-") == "ci-20260901t120000z-"
+    assert parse_user_id_prefix("") == ""
+    assert parse_user_id_prefix(None) == ""
+
+
+@pytest.mark.parametrize(
+    "raw_prefix",
+    [
+        "CI-20260901T120000Z-",
+        "ci_20260901t120000z-",
+        "-ci-20260901t120000z",
+        "ci-2026/09/01-",
+        "c" * (USER_ID_PREFIX_MAX_LENGTH + 1),
+    ],
+)
+def test_parse_user_id_prefix_rejects_what_modal_would_refuse_or_what_will_not_fit(raw_prefix: str) -> None:
+    with pytest.raises(AgentKwargError, match="user_id_prefix"):
+        parse_user_id_prefix(raw_prefix)
 
 
 def test_parse_snapshot_mode_accepts_cli_spellings() -> None:
@@ -263,6 +360,94 @@ def test_new_agent_reply_texts_reads_atif_agent_steps() -> None:
 
     assert _new_agent_reply_texts(events, 1) == ["new reply"]
     assert _new_agent_reply_texts(events, 6) == []
+
+
+def _turn_usage(output_tokens: int) -> dict[str, int]:
+    """The usage block the workspace stamps on a metered agent message."""
+    return {"input_tokens": 10, "output_tokens": output_tokens, "cache_read_tokens": 0, "cache_write_tokens": 0}
+
+
+def _turn_record(index: int, sent_at: str, replied_at: str) -> TurnRecord:
+    """A turn record with only its times filled in, for the tests that are about the span alone."""
+    return TurnRecord(
+        index=index,
+        entry_index=0,
+        exchange=index - 1,
+        sent_at=sent_at,
+        replied_at=replied_at,
+        reply_seconds=0.0,
+        agent_message_count=1,
+        message_count=0,
+        tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
+        cost_usd=None,
+    )
+
+
+def test_build_turn_record_times_the_turn_and_prices_only_its_own_slice() -> None:
+    events = [
+        {"type": "assistant_message", "text": "an earlier turn", "model": "claude-opus-4-8", "usage": _turn_usage(7)},
+        {"type": "user_message", "content": "our turn"},
+        {"type": "assistant_message", "text": "working on it"},
+        {"type": "assistant_message", "text": "done", "model": "claude-opus-4-8", "usage": _turn_usage(50)},
+    ]
+
+    record = build_turn_record(
+        message_index=2,
+        entry_index=1,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 3, 20, tzinfo=timezone.utc),
+        agent_message_count=2,
+        events=events,
+        baseline_event_count=1,
+    )
+
+    assert record.index == 2
+    assert record.entry_index == 1
+    assert record.sent_at == "2026-09-14T12:00:00+00:00"
+    assert record.replied_at == "2026-09-14T12:03:20+00:00"
+    assert record.reply_seconds == 200.0
+    # The empty-usage message is one of the two the reply was made of, and is not one of the messages
+    # the spend is derived from.
+    assert record.agent_message_count == 2
+    assert record.message_count == 1
+    # The earlier turn's 7 output tokens are before the baseline and stay out of this turn's cost.
+    assert record.tokens.output == 50
+    assert record.cost_usd is not None and record.cost_usd > 0
+
+
+def test_build_turn_record_of_a_turn_nobody_metered_reports_unknown_cost() -> None:
+    record = build_turn_record(
+        message_index=1,
+        entry_index=0,
+        exchange_index=0,
+        sent_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc),
+        replied_at=datetime(2026, 9, 14, 12, 0, 12, tzinfo=timezone.utc),
+        agent_message_count=1,
+        events=[{"type": "assistant_message", "text": "done"}],
+        baseline_event_count=0,
+    )
+
+    assert record.reply_seconds == 12.0
+    assert record.agent_message_count == 1
+    assert record.message_count == 0
+    # A turn whose stream reported no usage did not cost nothing -- we do not know what it cost.
+    assert record.cost_usd is None
+
+
+def test_conversation_seconds_spans_the_first_message_to_the_last_reply() -> None:
+    records = [
+        _turn_record(1, "2026-09-14T12:00:00+00:00", "2026-09-14T12:04:00+00:00"),
+        _turn_record(2, "2026-09-14T12:05:00+00:00", "2026-09-14T12:11:30+00:00"),
+    ]
+
+    # The whole conversation, gaps included -- not the sum of the two replies (630s).
+    assert conversation_seconds(records) == 690.0
+
+
+def test_conversation_seconds_is_zero_until_a_turn_has_been_answered() -> None:
+    """A trial that died during preparation, or on its first reply, has no conversation to span."""
+    assert conversation_seconds([]) == 0.0
 
 
 def _git_output(repo_dir: Path, *args: str) -> str:
@@ -562,6 +747,9 @@ def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
 
 # The key the driver signs the workspace in with, supplied the way harbor supplies it.
 _TRIAL_API_KEY: Final[str] = "sk-eval-test"
+# The openai lane's own key, kept distinct from the one above so a test on that lane can tell which
+# variable the derivation read.
+_OPENAI_TRIAL_API_KEY: Final[str] = "sk-eval-test-openai"
 
 
 def _driver_kwargs(
@@ -570,6 +758,8 @@ def _driver_kwargs(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The kwargs every driver in this file is built with.
 
@@ -577,7 +767,8 @@ def _driver_kwargs(
     part of the suite exercises without failing anything, since the sites serve disjoint sets of
     tests. `logs_dir` follows harbor's `jobs/<job>/<trial>/agent` layout, which the driver derives
     the trial's user id from. Pass `extra_env` only to vary the environment a test is about -- an
-    empty mapping is a trial with no key to sign in with.
+    empty mapping is a trial with no key to sign in with -- and `harness_kwargs` only to run the
+    trial on a harness config other than the default one, which asks the workspace for nothing.
     """
     logs_dir = tmp_path / "jobs" / trial_name / "agent"
     logs_dir.mkdir(parents=True)
@@ -587,7 +778,9 @@ def _driver_kwargs(
         "poll_seconds": 0.01,
         "proxy": is_proxy_enabled,
         "snapshot_mode": snapshot_mode,
+        "user_id_prefix": user_id_prefix,
         "extra_env": {"ANTHROPIC_API_KEY": _TRIAL_API_KEY} if extra_env is None else extra_env,
+        **(harness_kwargs or {}),
     }
 
 
@@ -597,9 +790,15 @@ def _make_driver(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> MindsPersonaDriver:
     """The production driver, for tests that let it resolve its own turn sources."""
-    return MindsPersonaDriver(**_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env))
+    return MindsPersonaDriver(
+        **_driver_kwargs(
+            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs
+        )
+    )
 
 
 def _make_scripted_driver(
@@ -609,10 +808,15 @@ def _make_scripted_driver(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> ScriptedSourceDriver:
     """The same driver with its turn sources supplied, so the loop runs without any model call."""
     return ScriptedSourceDriver(
-        scripted_sources, **_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env)
+        scripted_sources,
+        **_driver_kwargs(
+            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs
+        ),
     )
 
 
@@ -628,13 +832,31 @@ def _run_driver(
     downloadable_content_by_source: dict[str, str] | None = None,
     rejected_upload_content_substring: str = "",
     scripted_sources: list[TurnSource] | None = None,
+    user_id_prefix: str = "",
     snapshot_mode: str = "per-turn",
+    harness_kwargs: dict[str, Any] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     driver = (
-        _make_driver(tmp_path, trial_name, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode)
+        _make_driver(
+            tmp_path,
+            trial_name,
+            is_proxy_enabled=is_proxy_enabled,
+            snapshot_mode=snapshot_mode,
+            harness_kwargs=harness_kwargs,
+            user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
+        )
         if scripted_sources is None
         else _make_scripted_driver(
-            tmp_path, trial_name, scripted_sources, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode
+            tmp_path,
+            trial_name,
+            scripted_sources,
+            is_proxy_enabled=is_proxy_enabled,
+            snapshot_mode=snapshot_mode,
+            harness_kwargs=harness_kwargs,
+            user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
         )
     )
     environment = MockBoxEnvironment(
@@ -695,7 +917,7 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     # The per-trial box env carried the Modal token pair, the salted user id, and the key manifest.
     backend_env = next(env for env in environment.exec_envs if env and "MINDS_BOX_MNGR_REF" in env)
     assert backend_env["MODAL_TOKEN_ID"] == "ak-test"
-    assert backend_env["MNGR__PROVIDERS__MODAL__USER_ID"].startswith("todo-app-abc123-")
+    assert backend_env["MNGR__PROVIDERS__MODAL__USER_ID"].startswith("evals-todo-app-abc123-")
     assert backend_env["MINDS_BOX_MNGR_REF"] == "b" * 40
 
     # Per-turn snapshots ran and cleanup destroyed the trial's workspaces.
@@ -748,7 +970,9 @@ def test_driver_creates_the_chat_only_after_the_workspace_is_signed_in(tmp_path:
     sign_in_index = next(
         index for index, command in enumerate(environment.exec_commands) if "submit-credentials" in command
     )
-    create_index = next(index for index, command in enumerate(environment.exec_commands) if "create-chat" in command)
+    create_index = next(
+        index for index, command in enumerate(environment.exec_commands) if minds_bridge.CREATE_CHAT_PATH in command
+    )
     assert sign_in_index < create_index
     # The chat is named after the workspace host and bound to the account the sign-in minted.
     assert len(conversation.create_chat_commands) == 1
@@ -876,6 +1100,50 @@ def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path:
     assert not (driver.logs_dir / "trajectory.json").exists()
 
 
+def test_driver_records_the_modal_environment_it_leaks_before_the_first_turn(tmp_path: Path) -> None:
+    """A trial never destroys the Modal environment it creates, so the record of WHICH one it made
+    has to already be in state.json by the time a trial that dies before its first turn stops."""
+    conversation = _one_turn_conversation()
+    conversation.is_auth_endpoint_up = False
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__envrec",
+        timeout_seconds=0.3,
+        user_id_prefix="ci-20260901t120000z-",
+    )
+
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    # minds-staging- is the MNGR_PREFIX the scripted activation exports.
+    assert state["modal_environment_name"] == "minds-staging-" + context.metadata["modal_user_id"]
+    assert state["modal_environment_name"].startswith("minds-staging-evals-ci-20260901t120000z-todo-app")
+    assert context.metadata["modal_environment_name"] == state["modal_environment_name"]
+
+
+def test_driver_names_the_workspace_after_the_trial_even_under_a_run_wide_prefix(tmp_path: Path) -> None:
+    """The host name is what says which trial a workspace belongs to. The eval namespace and the
+    run's prefix are shared by every trial in the run, so a name built from the user id would spend
+    its budget on them and squeeze out what is distinctive -- leaving two attempts of one case
+    indistinguishable."""
+    conversation = _one_turn_conversation()
+    _driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__hostname",
+        timeout_seconds=30.0,
+        user_id_prefix="ci-20260901t120000z-",
+    )
+
+    assert context.metadata is not None
+    # The chat is named after the workspace host, so the create command carries the host name.
+    salt = context.metadata["modal_user_id"].rsplit("-", 1)[-1]
+    assert '"name": "EVAL-todo-app-hostname-{}"'.format(salt) in conversation.create_chat_commands[0]
+
+
 def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separate(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
@@ -928,6 +1196,73 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
     trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
     assert trajectory["final_metrics"]["total_cached_tokens"] == 11_000
     assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
+
+
+def test_driver_records_each_answered_turns_wall_clock_and_spend(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("Building it now.", usage=_turn_usage(100)),
+            _reply_events("All done.", usage=_turn_usage(50)),
+        ],
+    )
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__turns1",
+        timeout_seconds=1800.0,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    turns = state["turns"]
+    assert [(turn["index"], turn["entry_index"], turn["exchange"]) for turn in turns] == [(1, 0, 0), (2, 1, 0)]
+    # Each turn is priced over its own slice of the stream, so the second one carries its own reply's
+    # tokens rather than the conversation's running total.
+    assert [turn["tokens"]["output"] for turn in turns] == [100, 50]
+    assert [turn["message_count"] for turn in turns] == [1, 1]
+    assert all(turn["cost_usd"] > 0 for turn in turns)
+    assert turns[0]["sent_at"] < turns[0]["replied_at"] <= turns[1]["sent_at"]
+
+    # The trial's elapsed time also holds workspace bring-up, so it bounds the conversation's span.
+    assert state["conversation_seconds"] == conversation_seconds([TurnRecord.model_validate(turn) for turn in turns])
+    assert state["conversation_seconds"] <= state["elapsed_seconds"]
+
+    assert context.metadata is not None
+    assert context.metadata["turns"] == turns
+    assert context.metadata["conversation_seconds"] == state["conversation_seconds"]
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["per_turn"] == turns
+    # A floor on the trial's spend rather than a partition of it: the welcome turn is before the
+    # first record, turn-end work that lands after a record was taken is in no record, and a
+    # worker's spend is never in one.
+    assert sum(turn["tokens"]["output"] for turn in turns) <= usage_artifact["workspace_agent"]["tokens"]["output"]
+
+
+def test_driver_records_no_turn_for_a_message_that_never_drew_a_reply(tmp_path: Path) -> None:
+    """A turn earns a record only once its reply is in, so a trial that timed out waiting accounts
+    for fewer turns than it sent -- the same rule the per-entry records follow."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__turns2",
+        timeout_seconds=0.3,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["timed_out"] is True
+    # The client's message did go out -- the trajectory carries it -- and drew no reply.
+    assert [(step["source"], step["message"]) for step in _box_trajectory(environment)["steps"]] == [
+        ("user", "Build it")
+    ]
+    assert state["turns"] == []
+    # Nothing was ever answered, so there is no conversation to span.
+    assert state["conversation_seconds"] == 0.0
 
 
 def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_trial(tmp_path: Path) -> None:
@@ -1181,7 +1516,7 @@ def _worker_rules(capture_output: str, listing_json: str = worker_listing_json("
         ScriptedExecRule(
             "MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(worker_listing_output(listing_json)))]
         ),
-        ScriptedExecRule("mngr transcript {}".format(WORKER_NAME), [ok_result(mngr_exec_json(capture_output))]),
+        ScriptedExecRule("mngr transcript {}".format(WORKER_AGENT_ID), [ok_result(mngr_exec_json(capture_output))]),
         *_setup_rules(),
     ]
 
@@ -1193,7 +1528,7 @@ def test_driver_embeds_a_launched_worker_under_its_launching_call(tmp_path: Path
         _one_turn_conversation(),
         trial_name="todo-app__worker1",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=worker_trial_downloads(),
     )
 
@@ -1242,7 +1577,7 @@ def test_driver_builds_a_listed_workers_trajectory_from_its_stream_as_its_own_ty
         trial_name="todo-app__worker2",
         timeout_seconds=1800.0,
         rules=_worker_rules(
-            worker_capture_output("1", "0", "", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
+            worker_capture_output("1", "0", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
         ),
         downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
     )
@@ -1269,7 +1604,7 @@ def test_driver_rebuilds_an_invalid_worker_document_from_its_stream_and_keeps_th
         _one_turn_conversation(),
         trial_name="todo-app__worker3",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=downloads,
     )
 
@@ -1319,7 +1654,9 @@ def test_settled_worker_count_counts_only_settled_workers_whose_streams_were_rea
     assert _settled_worker_count(captures, records_by_name) == 2
 
 
-def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_embedded(tmp_path: Path) -> None:
+def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_embedded(
+    tmp_path: Path, captured_log_messages: list[str]
+) -> None:
     # The lead's document and stream both failed to come out; its own worker's document is sound,
     # and so is that worker's worker's, but a nested worker embeds inside its lead's document, so
     # neither has anywhere to go -- and each is said to be left out, the deeper one included, whose
@@ -1362,15 +1699,11 @@ def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_em
             report=uncaptured,
         ),
     ]
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="WARNING")
-    try:
-        embedded = _embedded_workers(captures, tmp_path)
-    finally:
-        logger.remove(handler_id)
+
+    embedded = _embedded_workers(captures, tmp_path)
 
     assert embedded == []
-    assert [line for line in logged if "is not embedded" in line] == [
+    assert [line for line in captured_log_messages if "is not embedded" in line] == [
         "Worker lead is not embedded in the trajectory: its stream was not captured",
         "Worker nested is not embedded in the trajectory: its lead lead was not",
         "Worker deeper is not embedded in the trajectory: its lead nested was not",
@@ -1646,7 +1979,7 @@ def test_parse_agent_flag_accepts_every_form_harbor_can_deliver() -> None:
 
 def test_parse_agent_flag_rejects_a_value_it_cannot_read() -> None:
     # A flag that silently means "off" whenever it cannot be understood turns a typo into a trial
-    # that ran one arm and reported the other. An empty value is included deliberately: `--ak
+    # that ran one harness config and reported another. An empty value is included deliberately: `--ak
     # flag=` and `--ak flag=null` are mistakes, not a way to spell False.
     for raw_value in ("maybe", "", None, 2):
         with pytest.raises(AgentKwargError, match="flag"):
@@ -1773,8 +2106,15 @@ def test_driver_honours_the_verifier_model_override(tmp_path: Path) -> None:
     assert driver._decider_model != "claude-haiku-4-5"
 
 
-def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path) -> None:
-    driver = MindsPersonaDriver(logs_dir=tmp_path / "agent", extra_env={})
+def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The flow agent is harness spend and always calls the Anthropic API, whatever lane the
+    # workspace runs on -- so a run on another lane's key can get as far as building one and find
+    # there is nothing to build it with. The runner's own shell may carry the key (it does whenever
+    # evals are launched from it), so it is taken away here.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    driver = MindsPersonaDriver(
+        logs_dir=tmp_path / "agent", extra_env={"OPENROUTER_API_KEY": "sk-or-test"}, lane="openrouter"
+    )
 
     assert driver._build_verification_agent() is None
 
@@ -1827,12 +2167,16 @@ def _run_goal_driver(
     snapshot_mode: str = "per-turn",
     timeout_seconds: float = 1800.0,
     refused_send_index: int | None = None,
+    events_poll_failing_after_message: int | None = None,
 ) -> tuple[ScriptedTurnSource, MockBoxEnvironment, AgentContext]:
     """Drive a two-entry case -- the opening literal ask, then one scripted goal entry -- through the
     real conversation loop, and hand back the goal source so a test can assert on what it was asked.
 
-    A tiny `timeout_seconds` plus a short `replies` (or a `refused_send_index`) is how the timing-out
-    paths are reached: the trial's budget expires on a reply or a send that never lands.
+    The timing-out paths each have their own knob. A `refused_send_index` plus a tiny `timeout_seconds`
+    reaches the send that never lands: the trial's budget expires retrying it. An
+    `events_poll_failing_after_message` reaches the message that went out and drew no reply with no
+    budget in play: the events poll stops answering once that message went out, and the driver gives
+    up on the reply after a run of failed polls.
     """
     goal_source = ScriptedTurnSource(
         actions=actions,
@@ -1843,6 +2187,7 @@ def _run_goal_driver(
     sources: list[TurnSource] = [LiteralTurnSource(prompt=_OPENING_PROMPT), goal_source]
     conversation = _goal_conversation(replies)
     conversation.refused_send_index = refused_send_index
+    conversation.events_poll_failing_after_message = events_poll_failing_after_message
     _driver, environment, context = _run_driver(
         tmp_path,
         (_OPENING_PROMPT, GoalEntry(goal=goal, max_exchanges=max_exchanges)),
@@ -1887,9 +2232,26 @@ def test_driver_keeps_exchanging_within_one_goal_entry_until_the_client_is_satis
     # send several; the ported schema key carries the entry count.
     assert state["waits_done"] == 3
     assert state["num_turns"] == 2
+    # The satisfying reply is the last one the client saw, and the goal record points at it.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""},
-        {"index": 1, "kind": "goal", "exchange_count": 2, "outcome": "satisfied", "detail": "It is running."},
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        },
+        {
+            "index": 1,
+            "kind": "goal",
+            "exchange_count": 2,
+            "outcome": "satisfied",
+            "detail": "It is running.",
+            "satisfied_at": state["turns"][-1]["replied_at"],
+            "satisfied_at_turn": 3,
+        },
     ]
     # The client decided each exchange from the conversation alone, and each decision saw the reply
     # to the message before it -- nothing here reaches into the environment.
@@ -1925,6 +2287,8 @@ def test_driver_stops_a_goal_entry_at_its_budget_and_records_it_as_exhausted(tmp
         "exchange_count": 2,
         "outcome": "budget_exhausted",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -1949,6 +2313,8 @@ def test_driver_records_a_degraded_goal_entry_as_a_fallback(tmp_path: Path) -> N
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": "",
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
     assert state["waits_done"] == 2
 
@@ -1991,11 +2357,11 @@ def test_driver_audits_a_message_that_went_out_but_drew_no_reply_as_sent(tmp_pat
         goal="See it running",
         max_exchanges=3,
         actions=[say("Where is it?")],
-        # One reply for the opening ask and nothing for the goal entry's message, so the trial's tiny
-        # budget expires waiting for a reply that never comes.
+        # One reply for the opening ask and nothing for the goal entry's message: once that message
+        # has gone out the events poll stops answering, so the wait for its reply gives up.
         replies=("Building it.",),
         is_decider_call_simulated=True,
-        timeout_seconds=0.3,
+        events_poll_failing_after_message=2,
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -2004,7 +2370,15 @@ def test_driver_audits_a_message_that_went_out_but_drew_no_reply_as_sent(tmp_pat
     # The entry the trial died in earns no record, so the records account for one of the two
     # messages sent. Only a finished trial's two views of the conversation agree.
     assert state["entries"] == [
-        {"index": 0, "kind": "literal", "exchange_count": 1, "outcome": "completed", "detail": ""}
+        {
+            "index": 0,
+            "kind": "literal",
+            "exchange_count": 1,
+            "outcome": "completed",
+            "detail": "",
+            "satisfied_at": "",
+            "satisfied_at_turn": None,
+        }
     ]
     assert _client_messages(environment) == ["Build it", "Where is it?"]
     assert [event["turn"] for event in _decider_audit_events(environment)] == [2]
@@ -2055,6 +2429,8 @@ def test_driver_records_the_clients_own_reason_for_ending_a_goal_entry(tmp_path:
         "exchange_count": 1,
         "outcome": "satisfied",
         "detail": "The agent gave me a working link.",
+        "satisfied_at": state["turns"][-1]["replied_at"],
+        "satisfied_at_turn": 2,
     }
     assert context.metadata is not None
     assert context.metadata["entries"] == state["entries"]
@@ -2062,9 +2438,9 @@ def test_driver_records_the_clients_own_reason_for_ending_a_goal_entry(tmp_path:
 
 # What one bridged curl in the recorded exec commands is, by the URL it carries. The state poll is
 # the bare `/api/agents` listing, which ends the quoted inner command; the sends and the event
-# fetches all address a path under it.
+# fetches address `/api/chats/<chat_id>/...`.
 _CALL_KIND_BY_URL_MARKER: Final[tuple[tuple[str, str], ...]] = (
-    ("/api/agents/chat-1/message", "send"),
+    ("/api/chats/chat-1/message", "send"),
     ("/api/agents'", "state"),
 )
 
@@ -2118,6 +2494,30 @@ def test_driver_snapshots_the_final_entry_even_when_its_client_was_satisfied_wit
     assert state["entries"][1]["exchange_count"] == 0
     assert state["waits_done"] == 1
     assert any("post_message_1" in command for command in environment.exec_commands)
+
+
+def test_driver_points_a_goal_satisfied_without_speaking_at_the_previous_entrys_reply(
+    tmp_path: Path,
+) -> None:
+    """The client rules on the conversation as it stands, so a goal the opening ask's reply already
+    met is satisfied by a turn that is not one of the goal entry's own exchanges. That shape is the
+    common one in a live run, and it is what the timing class measures from."""
+    _goal_source, environment, _context = _run_goal_driver(
+        tmp_path,
+        trial_name="todo-app__goal12",
+        goal="See it running",
+        max_exchanges=3,
+        actions=[done(TurnOutcome.SATISFIED, "The first reply already answered me.")],
+        replies=("Building it; here is the link.",),
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    goal_record = state["entries"][1]
+    assert goal_record["exchange_count"] == 0
+    # The run's one turn belongs to the entry before it, and that is the reply the client ruled on.
+    assert [turn["entry_index"] for turn in state["turns"]] == [0]
+    assert goal_record["satisfied_at"] == state["turns"][0]["replied_at"]
+    assert goal_record["satisfied_at_turn"] == 1
 
 
 def test_is_snapshot_wanted_takes_the_final_cadences_one_snapshot_after_the_entry_not_per_exchange() -> None:
@@ -2220,6 +2620,8 @@ def test_driver_explains_a_fallback_the_budget_stopped_before_the_client_could_r
         "exchange_count": 1,
         "outcome": "fallback",
         "detail": FALLBACK_ENTRY_DETAIL,
+        "satisfied_at": "",
+        "satisfied_at_turn": None,
     }
 
 
@@ -2269,13 +2671,16 @@ def _run_stepped_driver(
     timeout_seconds: float = 900.0,
     is_proxy_enabled: bool = False,
     downloadable_content_by_source: dict[str, str] | None = None,
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, list[AgentContext]]:
     """Drive the driver the way MultiStepTrial does: one setup, then one run() per step, against the
     same driver instance and a fresh AgentContext each time.
 
     An all-literal stepped case is the common shape, so a caller that names no turn sources gets one
     LiteralTurnSource per prompt; pass them only to script a goal entry."""
-    driver = _make_scripted_driver(tmp_path, trial_name, [], is_proxy_enabled=is_proxy_enabled)
+    driver = _make_scripted_driver(
+        tmp_path, trial_name, [], is_proxy_enabled=is_proxy_enabled, harness_kwargs=harness_kwargs
+    )
     environment = MockBoxEnvironment(
         tmp_path, rules if rules is not None else _setup_rules(), conversation=conversation
     )
@@ -2491,6 +2896,38 @@ def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Pat
     # figure here, and the two would be equal.
     assert state["elapsed_seconds"] > 0.0
     assert state["step_elapsed_seconds"] < state["elapsed_seconds"]
+
+
+def test_a_later_steps_turn_records_still_carry_the_earlier_steps(tmp_path: Path) -> None:
+    """The turn records accumulate across steps, the way the entry records do, so the last step's
+    state.json describes the whole case and its `conversation_seconds` is the case's span rather
+    than the step's."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("On it.", usage=_turn_usage(40)),
+            _reply_events("Done.", usage=_turn_usage(60)),
+        ],
+    )
+    _driver, environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__turns3",
+    )
+
+    assert contexts[0].metadata is not None and contexts[1].metadata is not None
+    assert [turn["index"] for turn in contexts[0].metadata["turns"]] == [1]
+    assert [turn["index"] for turn in contexts[1].metadata["turns"]] == [1, 2]
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["step_name"] == "step-2"
+    assert [(turn["index"], turn["entry_index"]) for turn in state["turns"]] == [(1, 0), (2, 1)]
+    # Each step's messages are priced over their own slice even though the records accumulate.
+    assert [turn["tokens"]["output"] for turn in state["turns"]] == [40, 60]
+    # And the span is measured over every record, so it starts at the first step's message.
+    turn_records = [TurnRecord.model_validate(turn) for turn in state["turns"]]
+    assert state["conversation_seconds"] == conversation_seconds(turn_records)
 
 
 def test_a_flat_case_measures_the_step_and_the_trial_over_the_same_span(tmp_path: Path) -> None:
@@ -2891,7 +3328,7 @@ def test_driver_records_why_it_gave_up_on_a_workspace_that_never_became_usable(t
     # silent for the whole budget.
     driver_log = (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
     assert "Still waiting for the workspace's create-chat endpoint to answer" in driver_log
-    assert "nothing readable from /api/agents/create-chat" in driver_log
+    assert "nothing readable from /api/chats/create" in driver_log
 
 
 def test_driver_records_a_welcome_that_never_arrived_as_a_preparation_failure(tmp_path: Path) -> None:
@@ -2915,23 +3352,17 @@ def test_driver_records_a_welcome_that_never_arrived_as_a_preparation_failure(tm
     assert "Still waiting for the workspace chat to answer its welcome" in driver_log
 
 
-def test_driver_does_not_blame_a_budget_for_a_sign_in_it_could_never_have_attempted(tmp_path: Path) -> None:
-    """The reason is the first thing a reader of a failed trial looks at. A missing key is known
-    before any endpoint is polled, so quoting the preparation ceiling would send them after
-    infrastructure timing when the answer is an environment variable."""
-    driver = _make_driver(tmp_path, "todo-app__nokey1", extra_env={})
-    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=_one_turn_conversation())
+def test_driver_refuses_a_run_with_no_key_to_sign_a_workspace_in_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing key is knowable before any box boots, and every trial of the run would hit it, so
+    the run is refused at construction rather than spending a workspace per trial to say so. The
+    refusal names the variable and the lane, which is the whole answer."""
+    # The runner's own shell may carry the key (it does whenever evals are launched from it).
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    async def _drive() -> None:
-        await driver.setup(environment)
-        await driver.run(
-            _instruction_for(_case_config(("Build it",), timeout_seconds=900.0)), environment, AgentContext()
-        )
-
-    asyncio.run(_drive())
-
-    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
-    assert state["timed_out_reason"] == "no ANTHROPIC_API_KEY to sign the workspace in with"
+    with pytest.raises(AgentKwargError, match="no ANTHROPIC_API_KEY to sign the workspace in on lane anthropic"):
+        _make_driver(tmp_path, "todo-app__nokey1", extra_env={})
 
 
 def test_driver_leaves_the_timeout_reason_empty_while_the_trial_is_going_well(tmp_path: Path) -> None:
@@ -3221,3 +3652,904 @@ def test_an_unparsable_instruction_is_still_written_for_a_reader(tmp_path: Path)
         asyncio.run(driver.run("no fenced json here", environment, AgentContext()))
 
     assert (driver.logs_dir / "instruction.md").read_text() == "no fenced json here"
+
+
+def test_parse_harness_config_defaults_to_the_lane_and_credentials_every_run_used_before_arms() -> None:
+    harness_config = parse_harness_config(lane="anthropic", key_provider="", key_env="", model="", effort="", fast="")
+
+    assert harness_config == HarnessConfig(
+        lane=HarnessLane.ANTHROPIC, key_provider="", key_env="ANTHROPIC_API_KEY", model="", effort="", is_fast=False
+    )
+    # A config that names no model asks the workspace for nothing at all, so the chat runs exactly
+    # as the product ships it.
+    assert not harness_config.is_switch_requested
+
+
+def test_parse_harness_config_reads_the_openai_lane_the_workspace_runs_codex_on() -> None:
+    """The lane is named on the command line the way the workspace's accounts API spells it, and it
+    needs no key_provider: it serves one provider, whose key variable it derives on its own."""
+    harness_config = parse_harness_config(
+        lane="openai", key_provider="", key_env="", model="gpt-5.5", effort="medium", fast=""
+    )
+
+    assert harness_config == HarnessConfig(
+        lane=HarnessLane.OPENAI,
+        key_provider="",
+        key_env="OPENAI_API_KEY",
+        model="gpt-5.5",
+        effort="medium",
+        is_fast=False,
+    )
+
+
+def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_command_line() -> None:
+    # harbor JSON-parses every `--ak key=value`, so `fast=false` reaches the driver as a bool and
+    # never as the string the CLI syntax suggests.
+    harness_config = parse_harness_config(
+        lane="", key_provider="", key_env="", model="haiku", effort="medium", fast=False
+    )
+
+    assert (
+        harness_config.model,
+        harness_config.effort,
+        harness_config.is_fast,
+        harness_config.is_switch_requested,
+    ) == ("haiku", "medium", False, True)
+    assert parse_harness_config(
+        lane="", key_provider="", key_env="", model="haiku", effort="medium", fast=True
+    ).is_fast
+    # A model with no tier named runs standard, which is what arms compared on cost must all do.
+    assert not parse_harness_config(
+        lane="", key_provider="", key_env="", model="haiku", effort="medium", fast=""
+    ).is_fast
+
+
+@pytest.mark.parametrize(
+    ("harness_kwargs", "expected_message"),
+    [
+        ({"model": "haiku"}, "needs an effort"),
+        ({"effort": "medium"}, "needs a model"),
+        ({"fast": False}, "needs a model"),
+        ({"lane": "openrouter", "key_provider": "anthropic"}, "belongs to the api-key lane"),
+        # A lane serving one provider has no use for the field, and the openai lane is one of them.
+        ({"lane": "openai", "key_provider": "openai"}, "belongs to the api-key lane"),
+        ({"lane": "api-key"}, "needs a key_provider"),
+        ({"lane": "gemini"}, "is not a provider lane"),
+        ({"lane": "opencode-go"}, "has no default key variable"),
+    ],
+)
+def test_parse_harness_config_refuses_a_config_the_workspace_could_never_honour(
+    harness_kwargs: dict[str, Any], expected_message: str
+) -> None:
+    """Each of these is knowable from the kwargs alone, and a run that learned it five minutes in
+    would have spent a workspace to be told what it was asked for."""
+    kwargs: dict[str, Any] = {"lane": "", "key_provider": "", "key_env": "", "model": "", "effort": "", "fast": ""}
+
+    with pytest.raises(AgentKwargError, match=expected_message):
+        parse_harness_config(**{**kwargs, **harness_kwargs})
+
+
+@pytest.mark.parametrize(
+    ("lane", "key_provider", "expected_key_env"),
+    [
+        (HarnessLane.ANTHROPIC, "", "ANTHROPIC_API_KEY"),
+        (HarnessLane.OPENAI, "", "OPENAI_API_KEY"),
+        (HarnessLane.OPENROUTER, "", "OPENROUTER_API_KEY"),
+        (HarnessLane.API_KEY, "openai", "OPENAI_API_KEY"),
+        (HarnessLane.API_KEY, "openrouter", "OPENROUTER_API_KEY"),
+        # A provider spelled with a dash still names a variable, which cannot carry one.
+        (HarnessLane.API_KEY, "z-ai", "Z_AI_API_KEY"),
+        (HarnessLane.OPENCODE_GO, "", ""),
+    ],
+)
+def test_derive_key_env_names_the_variable_each_lane_reads_its_key_from(
+    lane: HarnessLane, key_provider: str, expected_key_env: str
+) -> None:
+    assert derive_key_env(lane, key_provider) == expected_key_env
+
+
+def test_parse_harness_config_takes_the_key_variable_the_run_names_over_the_derived_one() -> None:
+    """The derivation is a convenience, not a contract with the workspace template: the template
+    names the variable per provider and does not always follow the pattern (`google` reads
+    `GEMINI_API_KEY`), and the opencode-go lane derives nothing at all."""
+    named = parse_harness_config(
+        lane="api-key", key_provider="google", key_env="GEMINI_API_KEY", model="", effort="", fast=""
+    )
+    assert named.key_env == "GEMINI_API_KEY"
+
+    assert (
+        parse_harness_config(
+            lane="opencode-go", key_provider="", key_env="OPENCODE_TOKEN", model="", effort="", fast=""
+        ).key_env
+        == "OPENCODE_TOKEN"
+    )
+
+
+def test_driver_refuses_a_proxied_run_on_a_lane_the_proxy_cannot_meter(tmp_path: Path) -> None:
+    """The proxy's address only reaches the workspace through the claude sign-in's base-URL line and
+    its model list is Anthropic-only, so a proxy on another lane would meter nothing while the run
+    reported that it had."""
+    with pytest.raises(AgentKwargError, match="meters the anthropic lane only"):
+        _make_driver(
+            tmp_path,
+            "todo-app__armproxy",
+            is_proxy_enabled=True,
+            extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "OPENROUTER_API_KEY": "sk-or-test"},
+            harness_kwargs={"lane": "openrouter"},
+        )
+
+
+# The steps a claude trajectory carries around the greeting: the create template's welcome skill
+# arrives as a `system` step and the greeting itself is the first agent step.
+_CLAUDE_WELCOME_STEPS: Final[list[dict[str, Any]]] = [
+    {"step_id": 1, "source": "system", "message": "<the welcome skill>"},
+    {"step_id": 2, "source": "agent", "message": "Hi! What shall we build?", "model_name": "claude-opus-4-8"},
+]
+# On pi the greeting's own prompt is recorded as a client turn instead, so the two harnesses put the
+# greeting on either side of the one shape a client turn has.
+_PI_WELCOME_STEPS: Final[list[dict[str, Any]]] = [
+    {"step_id": 1, "source": "user", "message": "/welcome"},
+    {"step_id": 2, "source": "agent", "message": "Hi! What shall we build?", "model_name": "claude-opus-4-8"},
+]
+# The turn the driver sends once the greeting has been answered, which is where the conversation the
+# harness answered begins.
+_FIRST_CLIENT_MESSAGE: Final[str] = "Build it"
+
+
+def _conversation_steps(*model_names: str) -> list[dict[str, Any]]:
+    """One client turn and one agent step per model that answered it."""
+    return [
+        {"step_id": 0, "source": "user", "message": _FIRST_CLIENT_MESSAGE},
+        *(
+            {"step_id": 0, "source": "agent", "message": "Working.", "model_name": model_name}
+            for model_name in model_names
+        ),
+    ]
+
+
+@pytest.mark.parametrize("welcome_steps", [_CLAUDE_WELCOME_STEPS, _PI_WELCOME_STEPS])
+def test_observed_harness_models_separates_the_greeting_from_the_conversation(
+    welcome_steps: list[dict[str, Any]],
+) -> None:
+    """The greeting always runs on the workspace's default, because the create template delivers it
+    before any switch can be applied -- so attributing it to the conversation would report every
+    switched trial as having run on two models."""
+    observed = observed_harness_models(
+        [*welcome_steps, *_conversation_steps("claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001")],
+        _FIRST_CLIENT_MESSAGE,
+    )
+
+    assert observed == ObservedHarnessModels(models=("claude-haiku-4-5-20251001",), welcome_model="claude-opus-4-8")
+
+
+def test_observed_harness_models_does_not_read_a_synthetic_message_as_a_model_the_chat_ran_on() -> None:
+    """Claude Code files its own notices under a `<synthetic>` pseudo-model that no inference
+    answered. Counted, it makes a switched trial look like one that ran on two models, which is the
+    one reading `is_model_confirmed` reserves for a trial that ran on the wrong one."""
+    synthetic_step = {"step_id": 0, "source": "agent", "message": "Not logged in", "model_name": "<synthetic>"}
+
+    observed = observed_harness_models(
+        [
+            *_CLAUDE_WELCOME_STEPS,
+            synthetic_step,
+            *_conversation_steps("claude-haiku-4-5-20251001"),
+            synthetic_step,
+        ],
+        _FIRST_CLIENT_MESSAGE,
+    )
+
+    assert observed == ObservedHarnessModels(models=("claude-haiku-4-5-20251001",), welcome_model="claude-opus-4-8")
+
+
+@pytest.mark.parametrize(
+    ("document_text", "expected"),
+    [
+        pytest.param(
+            json.dumps(
+                {
+                    "steps": [
+                        "not a step",
+                        {"source": "user", "message": "Build it"},
+                        {"source": "agent", "model_name": "haiku-1"},
+                    ]
+                }
+            ),
+            ObservedHarnessModels(models=("haiku-1",)),
+            id="steps a reader has to pick its way through",
+        ),
+        pytest.param(
+            json.dumps({"steps": [{"source": "user", "message": "Build something else"}]}),
+            ObservedHarnessModels(),
+            id="a document that does not carry the turn the trial sent",
+        ),
+        pytest.param("{ not json at all", ObservedHarnessModels(), id="a document that does not parse"),
+        pytest.param(
+            json.dumps([{"source": "agent", "model_name": "haiku-1"}]),
+            ObservedHarnessModels(),
+            id="a list where a document belongs",
+        ),
+        pytest.param(None, ObservedHarnessModels(), id="a path the capture named and never wrote"),
+    ],
+)
+def test_a_document_that_cannot_say_which_model_answered_costs_the_harness_config_that_field_alone(
+    tmp_path: Path, document_text: str | None, expected: ObservedHarnessModels
+) -> None:
+    """The models are read inside the publish every trial ends on, so a document that cannot say
+    which model answered has to cost the trial that field rather than its whole record."""
+    document_path = tmp_path / "trajectory.json"
+    if document_text is not None:
+        document_path.write_text(document_text)
+    driver = _make_driver(tmp_path, "todo-app__malformed")
+    driver._conversation.append({"role": "user", "text": _FIRST_CLIENT_MESSAGE})
+    driver._transcript_capture = TranscriptCapture(
+        stream=CapturedFile(host_path=None, failure_reason="not_attempted", failure_detail=""),
+        document=CapturedFile(host_path=document_path, failure_reason="", failure_detail=""),
+    )
+
+    assert driver._read_observed_harness_models() == expected
+
+
+@pytest.mark.parametrize(
+    ("steps", "first_client_message"),
+    [
+        pytest.param(_CLAUDE_WELCOME_STEPS, _FIRST_CLIENT_MESSAGE, id="a trial that gave up before turn 1"),
+        pytest.param(
+            [*_CLAUDE_WELCOME_STEPS, *_conversation_steps("claude-haiku-4-5-20251001")],
+            "Build something else",
+            id="a document whose client turns say something else",
+        ),
+        pytest.param([], "", id="no document and no turn"),
+    ],
+)
+def test_observed_harness_models_attributes_nothing_when_the_first_turn_is_not_in_the_document(
+    steps: list[dict[str, Any]], first_client_message: str
+) -> None:
+    """The greeting and the conversation are told apart by the turn the driver itself sent, so a
+    document that does not carry it leaves every step unattributable -- and reading the greeting's
+    model as one the conversation ran on would be worse than reading nothing."""
+    assert observed_harness_models(steps, first_client_message) is None
+
+
+def _harness_config(model: str, lane: str = "anthropic") -> HarnessConfig:
+    """A config on the given lane that asks for the given catalog id, or for no switch at all when it
+    is empty. Effort comes with the model because the parser refuses one without the other."""
+    return parse_harness_config(
+        lane=lane, key_provider="", key_env="", model=model, effort="medium" if model else "", fast=""
+    )
+
+
+@pytest.mark.parametrize(
+    ("lane", "model", "observed_models", "expected"),
+    [
+        # A claude catalog id reports as a model name carrying a release date, which is not part of
+        # the id.
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), True),
+        ("anthropic", "opus[1m]", ("claude-opus-5-20260401",), True),
+        ("anthropic", "haiku", ("claude-opus-5-20260401",), False),
+        # pi tags a model with the provider whose key serves it and reports the model alone.
+        ("openrouter", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), True),
+        # Two models after turn 1 is a trial that did not stay on the one it asked for.
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), False),
+        # A trial whose transcript was never captured observed nothing, which is silence rather
+        # than evidence of a wrong model.
+        ("anthropic", "haiku", (), None),
+        # A claude-shaped id the naming table does not carry cannot be translated into a reported
+        # name, and an untranslatable id is silence too: the model that answered may well be it.
+        ("anthropic", "claude-mythos-5", ("claude-mythos-5",), None),
+        # The two inputs that say the rule is picked by lane rather than guessed from the id's
+        # shape. A provider tag is untranslatable on claude's lane, which reads ids through the
+        # table alone, and a table alias is untranslatable on a pi lane, which reads them by
+        # dropping a first segment that is not there.
+        ("anthropic", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), None),
+        ("openrouter", "haiku", ("claude-haiku-4-5-20251001",), None),
+        # A gateway tag keeps the vendor it routes to: pi reports everything after the first segment.
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-vendor/some-model",), True),
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-model",), False),
+        # codex reports back the very id it was switched to, so its catalog ids need no table and
+        # nothing about them is ever untranslatable.
+        ("openai", "gpt-5.5", ("gpt-5.5",), True),
+        ("openai", "gpt-5.5", ("gpt-5.2",), False),
+        ("openai", "gpt-5.5", (), None),
+        # Nothing decorates a codex name, so the match is exact: an id that merely starts with the
+        # requested one is a different model out of the same catalog, which is the confusion worth
+        # catching.
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), False),
+        ("openai", "gpt-5.5-mini", ("gpt-5.5-mini",), True),
+        # A config that requested no switch has nothing to confirm.
+        ("anthropic", "", ("claude-opus-4-8",), None),
+    ],
+)
+def test_is_model_confirmed_reads_the_harnesss_own_naming(
+    lane: str, model: str, observed_models: tuple[str, ...], expected: bool | None
+) -> None:
+    assert is_model_confirmed(_harness_config(model, lane), observed_models) is expected
+
+
+@pytest.mark.parametrize(
+    ("lane", "model", "metered_models", "welcome_model", "expected"),
+    [
+        # The proxy cannot tell which turn served which request, so the requested model has to be there
+        # and every other model has to be the one that answered the greeting.
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-sonnet-5"), "claude-opus-4-8", False),
+        ("anthropic", "haiku", ("claude-opus-4-8",), "claude-opus-4-8", False),
+        # A greeting whose model is unknown leaves a second model unattributable, which is not the
+        # same claim as a trial that switched away.
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "", None),
+        # Both confirmations name a metered or observed model through one lane-aware predicate, so
+        # codex's exact match holds here too, wherever a proxy comes to meter that lane.
+        ("openai", "gpt-5.5", ("gpt-5.5", "gpt-5.2"), "gpt-5.2", True),
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), "gpt-5.2", False),
+    ],
+)
+def test_is_proxy_model_confirmed_reads_the_account_the_proxy_metered(
+    lane: str, model: str, metered_models: tuple[str, ...], welcome_model: str, expected: bool | None
+) -> None:
+    assert is_proxy_model_confirmed(_harness_config(model, lane), metered_models, welcome_model) is expected
+
+
+def _arm_block(environment: MockBoxEnvironment) -> dict[str, Any]:
+    """The arm block of the state.json the box holds, which is the copy a run's summary reads."""
+    return json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])["arm"]
+
+
+def _harness_config_block(environment: MockBoxEnvironment) -> dict[str, Any]:
+    """The harness half of that arm: what the run asked the workspace for, and what answered."""
+    return _arm_block(environment)["harness_config"]
+
+
+def _switched_transcript_downloads(
+    conversation_model_name: str,
+    welcome_model_name: str = "claude-opus-4-8",
+    is_metrics_written: bool = True,
+    agent_name: str = "",
+) -> dict[str, str]:
+    """A captured transcript whose greeting ran on the workspace's default and whose one client turn
+    was answered on another model -- the shape every switched trial has, since the create template
+    delivers the greeting before any switch can be applied.
+
+    An emitter that stamps no model on a step, or no token metrics, leaves the key out rather than
+    writing an empty one, so an empty name and `is_metrics_written=False` produce a step without it.
+
+    `agent_name` is the harness the document says wrote it, which is what decides whether the
+    claude-shaped `harness_quality` criteria are scored against the trial; empty keeps the one the
+    shared document carries.
+    """
+    welcome_model = {"model_name": welcome_model_name} if welcome_model_name else {}
+    answer_model = {"model_name": conversation_model_name} if conversation_model_name else {}
+    metrics: dict[str, Any] = (
+        {"metrics": {"prompt_tokens": 1_200, "completion_tokens": 40, "cached_tokens": 1_000}}
+        if is_metrics_written
+        else {}
+    )
+    base_document = atif_document()
+    document = {
+        **base_document,
+        "agent": {**base_document["agent"], "name": agent_name or base_document["agent"]["name"]},
+        "steps": [
+            {"step_id": 1, "timestamp": "2026-09-01T00:00:00Z", "source": "system", "message": "<welcome skill>"},
+            {
+                "step_id": 2,
+                "timestamp": "2026-09-01T00:00:01Z",
+                "source": "agent",
+                "message": "Hi! What shall we build?",
+                **welcome_model,
+            },
+            {"step_id": 3, "timestamp": "2026-09-01T00:00:02Z", "source": "user", "message": "Build it"},
+            {
+                "step_id": 4,
+                "timestamp": "2026-09-01T00:00:05Z",
+                "source": "agent",
+                "message": "Building it now.",
+                **answer_model,
+                **metrics,
+            },
+        ],
+        "subagent_trajectories": None,
+    }
+    return {
+        BOX_COMMON_TRANSCRIPT_PATH: atif_stream_jsonl(),
+        BOX_WORKSPACE_TRAJECTORY_PATH: json.dumps(document, indent=2),
+    }
+
+
+def test_driver_records_the_default_harness_config_without_asking_the_workspace_for_anything(
+    tmp_path: Path,
+) -> None:
+    """The default config makes no switch and changes no setting, so the chat runs exactly as the
+    product ships it -- and it still records the lane it signed in on and the harness the workspace
+    put that account on, which is the only reading of the harness the eval gets."""
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(),
+        trial_name="todo-app__arm1",
+        timeout_seconds=1800.0,
+    )
+
+    assert _harness_config_block(environment) == {
+        "lane": "anthropic",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "claude",
+        "model": "",
+        "effort": "",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_SKIPPED,
+        "observed_models": [],
+        "welcome_model": "",
+        "is_model_confirmed": None,
+    }
+    assert not any("/model" in command for command in environment.exec_commands)
+    # The arm is the pinned pair plus that config, and it repeats the pair the state file already
+    # carries at its top level so the block stands on its own wherever it travels.
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert (state["arm"]["mngr_sha"], state["arm"]["dwt_sha"]) == (state["mngr_sha"], state["dwt_sha"])
+    assert (state["arm"]["mngr_sha"], state["arm"]["dwt_sha"]) == ("b" * 40, "c" * 40)
+    assert context.metadata is not None
+    assert context.metadata["arm"] == _arm_block(environment)
+
+
+def test_driver_switches_the_chat_to_the_requested_model_before_the_first_turn(tmp_path: Path) -> None:
+    """The switch is applied once the welcome has been answered and before turn 1: the create
+    template delivers that greeting the moment the agent is ready, and a switch typed into that
+    window would race the delivery."""
+    conversation = _one_turn_conversation()
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm2",
+        timeout_seconds=1800.0,
+        downloadable_content_by_source=_switched_transcript_downloads("claude-haiku-4-5-20251001"),
+        harness_kwargs={"model": "haiku", "effort": "medium", "fast": False},
+    )
+
+    # All three axes ride on the one call the endpoint applies them from.
+    (switch_command,) = conversation.model_choice_commands
+    assert '"model_id": "haiku"' in switch_command
+    assert '"effort": "medium"' in switch_command
+    assert '"fast": false' in switch_command
+    switch_index = environment.exec_commands.index(switch_command)
+    welcome_index = next(
+        index for index, command in enumerate(environment.exec_commands) if "/events?offset=0" in command
+    )
+    send_index = next(index for index, command in enumerate(environment.exec_commands) if "/message" in command)
+    assert welcome_index < switch_index < send_index
+
+    # The greeting ran on the workspace's default, the turn on the requested model, and the two are
+    # recorded apart so a switched trial does not read as one that ran on two models.
+    expected_harness_config = {
+        "lane": "anthropic",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "claude",
+        "model": "haiku",
+        "effort": "medium",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_APPLIED,
+        "observed_models": ["claude-haiku-4-5-20251001"],
+        "welcome_model": "claude-opus-4-8",
+        "is_model_confirmed": True,
+    }
+    assert _harness_config_block(environment) == expected_harness_config
+    published_arm = _box_trajectory(environment)["extra"]["minds_evals"]["arm"]
+    assert published_arm["harness_config"] == expected_harness_config
+    assert (published_arm["mngr_sha"], published_arm["dwt_sha"]) == ("b" * 40, "c" * 40)
+    assert context.metadata is not None
+    assert context.metadata["arm"] == _arm_block(environment)
+    assert json.loads((driver.logs_dir / STATE_FILENAME).read_text())["arm"] == _arm_block(environment)
+
+
+def test_driver_reports_a_trial_that_ran_on_a_model_it_did_not_ask_for(tmp_path: Path) -> None:
+    """A trial that silently ran on the wrong model is the failure worth catching, and the only way
+    to catch it is the transcript: no workspace endpoint reads a chat's live choice back."""
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(),
+        trial_name="todo-app__arm3",
+        timeout_seconds=1800.0,
+        downloadable_content_by_source=_switched_transcript_downloads("claude-opus-4-8"),
+        harness_kwargs={"model": "haiku", "effort": "medium"},
+    )
+
+    harness_config = _harness_config_block(environment)
+    assert harness_config["model_choice_switch"] == MODEL_SWITCH_APPLIED
+    assert harness_config["observed_models"] == ["claude-opus-4-8"]
+    assert harness_config["is_model_confirmed"] is False
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_reason"),
+    [
+        (400, "the workspace refused the requested model choice: no such model 'hiaku'"),
+        (500, "the workspace could not apply the requested model choice: no such model 'hiaku'"),
+    ],
+)
+def test_driver_gives_up_on_a_model_choice_the_workspace_would_not_take(
+    tmp_path: Path, status: int, expected_reason: str
+) -> None:
+    """A 400 is a configuration error and never a workspace fault, so the trial stops rather than
+    running the case on whatever model the chat was already on -- and quotes the endpoint, which is
+    what makes a mistyped catalog id legible from the trial listing."""
+    conversation = _one_turn_conversation()
+    conversation.model_choice_status = status
+    conversation.model_choice_detail = "no such model 'hiaku'"
+
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm{}".format(status),
+        timeout_seconds=1800.0,
+        harness_kwargs={"model": "hiaku", "effort": "medium"},
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert state["timed_out_reason"] == expected_reason
+    # The block a timed-out trial leaves says which arm it was and how far it got.
+    assert state["arm"]["harness_config"]["model_choice_switch"] == expected_reason
+    assert state["arm"]["harness_config"]["model"] == "hiaku"
+    assert not any("/message" in command for command in environment.exec_commands)
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+
+
+def test_driver_gives_up_when_the_chat_never_settles_after_the_switch(tmp_path: Path) -> None:
+    """On claude the switch is typed into the session as slash commands, so the agent is briefly
+    busy answering them; turn 1 sent into that window would be answered behind them."""
+    conversation = _one_turn_conversation()
+    conversation.chat_state_after_model_choice = "RUNNING"
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm5",
+        timeout_seconds=2.0,
+        harness_kwargs={"model": "haiku", "effort": "medium"},
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "the workspace chat never settled after the model switch" in state["timed_out_reason"]
+    assert _PREPARATION_CEILING_TEXT in state["timed_out_reason"]
+    assert (
+        state["arm"]["harness_config"]["model_choice_switch"]
+        == "the workspace chat never settled after the model switch"
+    )
+    assert not any("/message" in command for command in environment.exec_commands)
+
+
+def test_driver_signs_a_non_claude_lane_in_through_the_accounts_flow(tmp_path: Path) -> None:
+    """The lane decides the harness, because a chat runs on the harness of the lane its account was
+    minted on -- so signing in on another lane is how a run measures another harness at all."""
+    conversation = _one_turn_conversation()
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm6",
+        timeout_seconds=1800.0,
+        harness_kwargs={"lane": "api-key", "key_provider": "anthropic"},
+    )
+
+    # The claude-auth path is not taken at all on another lane, and the key is submitted against the
+    # flow the start call answered, with the provider it belongs to.
+    assert conversation.submitted_credential_commands == []
+    start_command = next(
+        command
+        for command in environment.exec_commands
+        if "/api/accounts" in command and "/flow/" not in command and "lane_id" in command
+    )
+    assert '"lane_id": "api-key"' in start_command
+    submit_command = next(command for command in environment.exec_commands if "/api/accounts/flow/" in command)
+    assert '"key_provider": "anthropic"' in submit_command
+    # The lane takes the key itself, not the credential paste the claude endpoint parses env lines
+    # out of.
+    assert '"api_key": "{}"'.format(_TRIAL_API_KEY) in submit_command
+
+    harness_config = _harness_config_block(environment)
+    assert (harness_config["lane"], harness_config["key_provider"], harness_config["harness"]) == (
+        "api-key",
+        "anthropic",
+        "pi-coding",
+    )
+    assert harness_config["account_id"] == MOCK_ACCOUNT_ID
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
+def test_a_pi_lane_config_is_confirmed_against_the_name_pi_reports_its_model_under(tmp_path: Path) -> None:
+    """The matrix cell the whole feature is for: a lane that decides the harness, and a switch
+    applied on top of it. pi tags a model with the provider whose key serves it and reports
+    everything after that provider, so a config naming `anthropic/claude-haiku-4-5` has to be
+    confirmed against a transcript that says `claude-haiku-4-5`."""
+    conversation = _one_turn_conversation()
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm8",
+        timeout_seconds=1800.0,
+        downloadable_content_by_source=_switched_transcript_downloads("claude-haiku-4-5"),
+        harness_kwargs={
+            "lane": "api-key",
+            "key_provider": "anthropic",
+            "model": "anthropic/claude-haiku-4-5",
+            "effort": "medium",
+        },
+    )
+
+    (switch_command,) = conversation.model_choice_commands
+    assert '"model_id": "anthropic/claude-haiku-4-5"' in switch_command
+    assert _harness_config_block(environment) == {
+        "lane": "api-key",
+        "key_provider": "anthropic",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "pi-coding",
+        "model": "anthropic/claude-haiku-4-5",
+        "effort": "medium",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_APPLIED,
+        "observed_models": ["claude-haiku-4-5"],
+        "welcome_model": "claude-opus-4-8",
+        "is_model_confirmed": True,
+    }
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
+def _codex_transcript_downloads() -> dict[str, str]:
+    """A captured transcript in the shape mngr's codex emitter writes: a document naming codex as the
+    harness that wrote it, whose agent steps carry neither the model that answered them nor token
+    metrics.
+
+    The steps are otherwise the shape every switched trial has, so a reading that goes empty here
+    goes empty because the emitter says nothing, not because the trial's turns are missing.
+    """
+    return _switched_transcript_downloads("", welcome_model_name="", is_metrics_written=False, agent_name="codex")
+
+
+def _codex_turn_events() -> list[dict]:
+    """One turn's events in the shape the workspace's chat app reports a codex turn: the model it ran
+    on is named, and the token count beside it is null, where a claude turn carries a usage block.
+
+    The model is named for fidelity with that feed rather than because the accounting reads it: a
+    turn reporting no usage is skipped before its model is looked at, so this event and one naming
+    no model at all sum to the same empty account.
+    """
+    events = _reply_events("Building it now.")
+    return [*events[:-1], {**events[-1], "model": "gpt-5.5", "usage": None}]
+
+
+def test_the_openai_lane_runs_a_trial_on_codex_and_reads_its_harness_back(tmp_path: Path) -> None:
+    """The openai lane takes a pasted key like the other single-provider lanes, so the accounts flow
+    drives it unchanged, and the workspace answers `codex` for the harness the account runs.
+
+    The observed half stays empty because mngr's codex transcript emitter writes no per-step model,
+    which leaves the confirmation None -- silence about the model, never evidence of a wrong one.
+    The trial's spend is silence too, for its own reason: the workspace names the model a codex turn
+    ran on but reports no token count for it, and a turn that reports none is skipped rather than
+    priced at zero.
+    """
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_codex_turn_events()])
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__armcodex",
+        timeout_seconds=1800.0,
+        extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "OPENAI_API_KEY": _OPENAI_TRIAL_API_KEY},
+        downloadable_content_by_source=_codex_transcript_downloads(),
+        harness_kwargs={"lane": "openai", "model": "gpt-5.5", "effort": "medium"},
+    )
+
+    start_command = next(
+        command
+        for command in environment.exec_commands
+        if "/api/accounts" in command and "/flow/" not in command and "lane_id" in command
+    )
+    assert '"lane_id": "openai"' in start_command
+    # A lane that serves one provider is sent no key_provider; the workspace refuses the field there.
+    submit_command = next(command for command in environment.exec_commands if "/api/accounts/flow/" in command)
+    assert "key_provider" not in submit_command
+    # The key the lane derives, not the one every trial needs for the decider and the judges: the two
+    # are distinct here so that a derivation falling back to ANTHROPIC_API_KEY fails this test.
+    assert '"api_key": "{}"'.format(_OPENAI_TRIAL_API_KEY) in submit_command
+
+    (switch_command,) = conversation.model_choice_commands
+    assert '"model_id": "gpt-5.5"' in switch_command
+    assert _harness_config_block(environment) == {
+        "lane": "openai",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "codex",
+        "model": "gpt-5.5",
+        "effort": "medium",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_APPLIED,
+        "observed_models": [],
+        "welcome_model": "",
+        "is_model_confirmed": None,
+    }
+    # Unknown rather than free: a cost of zero would average into an arm comparison as if the trial
+    # had been measured, which is the one reading of a codex trial that would mislead.
+    workspace_usage = json.loads((driver.logs_dir / "usage.json").read_text())["workspace_agent"]
+    assert workspace_usage["cost_usd"] is None
+    assert workspace_usage["message_count"] == 0
+    # is_cost_complete asks only whether delegated and worker traffic is accounted for, so it stays
+    # true on a trial that accounted for nothing at all. A filter reading it alone takes this trial
+    # for a measurement, which is why `cost_usd` is the field that has to be read.
+    assert workspace_usage["is_cost_complete"] is True
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
+def test_a_lane_that_signs_in_without_naming_an_account_leaves_the_harness_unrecorded(
+    tmp_path: Path,
+) -> None:
+    """A flow may settle signed in without naming the account it minted, and the accounts listing is
+    only ever read for an account the sign-in named. The trial runs on -- the workspace creates the
+    chat against an account of its own choosing -- and simply records no harness, which grading
+    falls back to `claude` for when it also has no captured document to read one off."""
+    conversation = _one_turn_conversation()
+    conversation.is_signed_in_account_named = False
+
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm9",
+        timeout_seconds=1800.0,
+        harness_kwargs={"lane": "api-key", "key_provider": "anthropic"},
+    )
+
+    harness_config = _harness_config_block(environment)
+    assert (harness_config["account_id"], harness_config["harness"]) == ("", "")
+    assert harness_config["lane"] == "api-key"
+    # The listing is the GET on the bare accounts path, as against the POST that starts a flow and
+    # the one that submits the key against it; there is no account to look up, so it is not made.
+    assert not any(
+        "/api/accounts" in command and "/flow/" not in command and "lane_id" not in command
+        for command in environment.exec_commands
+    )
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
+def test_driver_gives_up_when_the_lane_will_not_take_the_key(tmp_path: Path) -> None:
+    """The workspace probes the harness with the key before it answers, so a key that does not work
+    for the lane is caught here rather than a turn later, as an agent replying that it is not logged
+    in -- which a judge would grade as the agent's own behaviour."""
+    conversation = _one_turn_conversation()
+    conversation.account_flow_failure_detail = "anthropic rejected the key"
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__arm7",
+        timeout_seconds=1800.0,
+        harness_kwargs={"lane": "api-key", "key_provider": "anthropic", "model": "haiku", "effort": "medium"},
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert state["timed_out_reason"] == "the workspace rejected the key for lane api-key: anthropic rejected the key"
+    # The trial never got as far as the switch, which is not the same record as a config that asked
+    # for no model.
+    assert state["arm"]["harness_config"]["model_choice_switch"] == ""
+    assert state["arm"]["harness_config"]["model"] == "haiku"
+    # A refusal the workspace could tell immediately, so the preparation ceiling is not quoted at a
+    # reader whose answer is a credential.
+    assert _PREPARATION_CEILING_TEXT not in state["timed_out_reason"]
+    assert not conversation.is_chat_created
+
+
+def test_a_stepped_case_applies_its_harness_config_once_and_records_it_on_every_step(tmp_path: Path) -> None:
+    """A stepped case prepares its workspace once, on its first step, so the config is applied once
+    -- and every step's state.json still has to say which arm produced it."""
+    conversation = _goal_conversation(("On it.", "Shipped."))
+    _driver, environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Now ship it.",)),
+        conversation,
+        trial_name="project-roadmap__arm1",
+        harness_kwargs={"model": "haiku", "effort": "medium"},
+    )
+
+    assert len(conversation.model_choice_commands) == 1
+    for context in contexts:
+        assert context.metadata is not None
+        assert context.metadata["arm"]["harness_config"]["model"] == "haiku"
+        assert context.metadata["arm"]["harness_config"]["model_choice_switch"] == MODEL_SWITCH_APPLIED
+    assert _harness_config_block(environment)["model_choice_switch"] == MODEL_SWITCH_APPLIED
+
+
+def test_a_proxied_trial_confirms_its_model_against_what_the_proxy_metered(tmp_path: Path) -> None:
+    """The proxy is the boundary every call crosses, delegated ones included, so wherever one
+    metered the trial it -- not the transcript -- is the ground truth for what actually served the
+    conversation. It cannot tell which turn served which request, so the greeting's own model is
+    what the extra row has to be.
+
+    The two accounts are made to disagree, since a trial they agree on is confirmed either way and
+    would leave the proxy branch untested: the transcript here names only the greeting's model,
+    which on its own reads as a switch that never took."""
+    conversation = _one_turn_conversation()
+    conversation.expected_auth_mode = minds_bridge.AUTH_MODE_IMBUE
+    proxy_log = "\n".join(
+        json.dumps(
+            {
+                "model": model,
+                "input_tokens": 10,
+                "output_tokens": 100,
+                "cache_read_tokens": 1_000,
+                "cache_write_tokens": 0,
+                "speed": None,
+            }
+        )
+        # The greeting ran on the workspace's default before the switch could be applied; every
+        # later request is the switched chat's.
+        for model in ("claude-opus-4-8", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001")
+    )
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__armproxy2",
+        timeout_seconds=1800.0,
+        rules=_proxy_rules(proxy_log) + _setup_rules(),
+        is_proxy_enabled=True,
+        downloadable_content_by_source=_switched_transcript_downloads("claude-opus-4-8"),
+        harness_kwargs={"model": "haiku", "effort": "medium"},
+    )
+
+    harness_config = _harness_config_block(environment)
+    assert harness_config["welcome_model"] == "claude-opus-4-8"
+    assert harness_config["observed_models"] == ["claude-opus-4-8"]
+    assert is_model_confirmed(_harness_config("haiku"), harness_config["observed_models"]) is False
+    assert harness_config["is_model_confirmed"] is True
+
+
+def test_driver_embeds_an_unidentified_worker_built_from_its_stream(tmp_path: Path) -> None:
+    # Neither the listing nor the captured document names the worker, so no mngr agent id is in
+    # hand. Its stream still is, so the worker is embedded under a launch-derived stand-in rather
+    # than dropped from the trajectory.
+    listing = json.loads(worker_listing_json("WAITING"))
+    listing["agents"] = listing["agents"][:1]
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(),
+        trial_name="todo-app__worker4",
+        timeout_seconds=1800.0,
+        rules=[
+            ScriptedExecRule(
+                "MINDS_EVALS_SECTION:list_exit",
+                [ok_result(mngr_exec_json(worker_listing_output(json.dumps(listing))))],
+            ),
+            ScriptedExecRule(
+                "mngr transcript {}".format(WORKER_NAME),
+                [ok_result(mngr_exec_json(worker_capture_output("1", "0", WORKER_TASK_FILE, "no document")))],
+            ),
+            *_setup_rules(),
+        ],
+        downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
+    )
+
+    worker = _box_trajectory(environment)["subagent_trajectories"][1]
+    assert worker["trajectory_id"] == "worker-{}".format(WORKER_NAME)
+    # The stand-in is only what the evidence is filed under; the block that names the worker
+    # reports that no mngr agent id was resolved.
+    assert worker["extra"]["worker"]["agent_id"] == ""
+    assert worker["extra"]["worker"]["name"] == WORKER_NAME
+    assert [step["message"] for step in worker["steps"]] == [
+        "Harden the todo app and report back.",
+        "Hardened; report pushed.",
+    ]

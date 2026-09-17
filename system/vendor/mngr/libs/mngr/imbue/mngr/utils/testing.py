@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import typing
 from collections.abc import Callable
@@ -17,7 +18,6 @@ from collections.abc import Generator
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from enum import auto
 from io import StringIO
@@ -26,13 +26,17 @@ from typing import Any
 from typing import Final
 from typing import IO
 from typing import TypeVar
-from typing import assert_never
 from uuid import uuid4
 
+import paramiko
 import pluggy
 import pytest
 from click.testing import CliRunner
 from loguru import logger
+from paramiko.common import AUTH_FAILED
+from paramiko.common import AUTH_SUCCESSFUL
+from paramiko.common import OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+from paramiko.common import OPEN_SUCCEEDED
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -68,9 +72,11 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.providers.registry import load_local_backend_only
+from imbue.mngr.providers.ssh.instance import SSHHostConfig
+from imbue.mngr.providers.ssh.instance import SSHProviderInstance
 from imbue.mngr.utils.deps import CLAUDE
-from imbue.mngr.utils.env_utils import TEST_ENV_PATTERN
 from imbue.mngr.utils.env_utils import TEST_ENV_PREFIX
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 
 # =============================================================================
@@ -887,6 +893,12 @@ def make_local_host_of_class(
     )
 
 
+def record_host_name(host: Host, name: str) -> None:
+    """Stamp the host record's name the way the provider that built a host dir does."""
+    recorded = host.get_certified_data()
+    host.set_certified_data(recorded.model_copy_update(to_update(recorded.field_ref().host_name, name)))
+
+
 def make_local_provider(
     host_dir: Path,
     config: MngrConfig,
@@ -1205,280 +1217,6 @@ def setup_claude_trust_config_for_subprocess(
 
 
 # =============================================================================
-# Modal test environment cleanup utilities
-# =============================================================================
-
-
-def _parse_test_env_timestamp(env_name: str) -> datetime | None:
-    """Parse the timestamp from a test environment name.
-
-    Returns the datetime if the name matches the test environment pattern,
-    otherwise returns None.
-    """
-    match = TEST_ENV_PATTERN.match(env_name)
-    if not match:
-        return None
-
-    year, month, day, hour, minute, second = match.groups()
-    return datetime(
-        int(year),
-        int(month),
-        int(day),
-        int(hour),
-        int(minute),
-        int(second),
-        tzinfo=timezone.utc,
-    )
-
-
-def list_modal_test_environments() -> list[str]:
-    """List all Modal test environments.
-
-    Returns a list of environment names that match the test environment pattern
-    (mngr_test-YYYY-MM-DD-HH-MM-SS*).
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "run", "modal", "environment", "list", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            logger.warning("Failed to list Modal environments: {}", result.stderr)
-            return []
-
-        environments = json.loads(result.stdout)
-        test_envs: list[str] = []
-
-        for env in environments:
-            env_name = env.get("name", "")
-            if env_name.startswith(TEST_ENV_PREFIX):
-                test_envs.append(env_name)
-
-        return test_envs
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError, json.JSONDecodeError) as e:
-        logger.warning("Error listing Modal environments: {}", e)
-        return []
-
-
-def find_old_test_environments(
-    max_age: timedelta,
-) -> list[str]:
-    """Find Modal test environments older than the specified age.
-
-    Returns a list of environment names that are older than max_age.
-    The age is determined by parsing the timestamp from the environment name.
-    """
-    now = datetime.now(timezone.utc)
-    cutoff = now - max_age
-    old_envs: list[str] = []
-
-    for env_name in list_modal_test_environments():
-        timestamp = _parse_test_env_timestamp(env_name)
-        if timestamp is not None and timestamp < cutoff:
-            old_envs.append(env_name)
-
-    return old_envs
-
-
-def delete_modal_apps_in_environment(environment_name: str) -> None:
-    """Stop all Modal apps in the specified environment.
-
-    This is robust to concurrent deletion - failures result in warnings, not errors.
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "run", "modal", "app", "list", "--env", environment_name, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            # Environment may not exist or may have been deleted concurrently
-            logger.warning("Failed to list apps in environment {}: {}", environment_name, result.stderr)
-            return
-
-        apps = json.loads(result.stdout)
-        for app in apps:
-            app_id = app.get("App ID", "")
-            app_name = app.get("Description", "")
-            if app_id:
-                try:
-                    stop_result = subprocess.run(
-                        # --yes: skip the interactive confirmation, which otherwise aborts the
-                        # stop in non-interactive runs (CI / release tests) so the app is never
-                        # stopped and only the environment deletion reaps it.
-                        ["uv", "run", "modal", "app", "stop", app_id, "--yes"],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    if stop_result.returncode != 0:
-                        logger.warning(
-                            "Modal app stop returned non-zero for {} ({}): {}",
-                            app_name,
-                            app_id,
-                            stop_result.stderr or stop_result.stdout,
-                        )
-                    else:
-                        logger.debug("Stopped Modal app {} ({})", app_name, app_id)
-                except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-                    logger.warning("Failed to stop Modal app {} ({}): {}", app_name, app_id, e)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError, json.JSONDecodeError) as e:
-        logger.warning("Failed to list/delete Modal apps in environment {}: {}", environment_name, e)
-
-
-def delete_modal_volumes_in_environment(environment_name: str) -> None:
-    """Delete all Modal volumes in the specified environment.
-
-    This is robust to concurrent deletion - failures result in warnings, not errors.
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "run", "modal", "volume", "list", "--env", environment_name, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            # Environment may not exist or may have been deleted concurrently
-            logger.warning("Failed to list volumes in environment {}: {}", environment_name, result.stderr)
-            return
-
-        volumes = json.loads(result.stdout)
-        for volume in volumes:
-            volume_name = volume.get("Name", "")
-            if volume_name:
-                try:
-                    del_result = subprocess.run(
-                        ["uv", "run", "modal", "volume", "delete", volume_name, "--env", environment_name, "--yes"],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    if del_result.returncode != 0:
-                        logger.warning(
-                            "Modal volume delete returned non-zero for {} in env {}: {}",
-                            volume_name,
-                            environment_name,
-                            del_result.stderr or del_result.stdout,
-                        )
-                    else:
-                        logger.debug("Deleted Modal volume {} in environment {}", volume_name, environment_name)
-                except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-                    logger.warning(
-                        "Failed to delete Modal volume {} in environment {}: {}", volume_name, environment_name, e
-                    )
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError, json.JSONDecodeError) as e:
-        logger.warning("Failed to list/delete Modal volumes in environment {}: {}", environment_name, e)
-
-
-def delete_modal_environment(environment_name: str) -> ModalCleanupOutcome:
-    """Delete a Modal environment.
-
-    Robust to concurrent deletion: returns a ModalCleanupOutcome instead of
-    raising. Callers should treat DELETED and NOT_FOUND as success (the env
-    is gone, whether we did the deleting or someone else did) and only
-    FAILED as a reason to keep the env tracked for leak detection.
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "run", "modal", "environment", "delete", environment_name, "--yes"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            logger.debug("Deleted Modal environment {}", environment_name)
-            return ModalCleanupOutcome.DELETED
-        stderr = result.stderr or result.stdout
-        # Require the env name to appear alongside "not found" so unrelated
-        # errors (e.g. "credentials not found", "config file not found") do
-        # NOT get misclassified as NOT_FOUND. NOT_FOUND lets the caller drop
-        # the env from leak tracking; misclassifying a real FAILED here would
-        # silently defeat the session-end leak detector for that env.
-        stderr_lower = stderr.lower()
-        if "not found" in stderr_lower and environment_name.lower() in stderr_lower:
-            logger.debug("Modal environment {} already gone: {}", environment_name, stderr.strip())
-            return ModalCleanupOutcome.NOT_FOUND
-        logger.warning(
-            "Modal environment delete returned non-zero for {}: {}",
-            environment_name,
-            stderr,
-        )
-        return ModalCleanupOutcome.FAILED
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-        logger.warning("Failed to delete Modal environment {}: {}", environment_name, e)
-        return ModalCleanupOutcome.FAILED
-
-
-def cleanup_old_modal_test_environments(
-    max_age_hours: float = 1.0,
-) -> int:
-    """Clean up Modal test environments older than the specified age.
-
-    This function finds all Modal test environments with names matching the pattern
-    mngr_test-YYYY-MM-DD-HH-MM-SS*, parses the timestamp from the name, and deletes
-    those that are older than max_age_hours.
-
-    For each old environment, it:
-    1. Stops all apps in the environment
-    2. Deletes all volumes in the environment
-    3. Deletes the environment itself
-
-    This function is designed to be robust to concurrent deletion: it never raises
-    on a failed delete, so the loop always processes every old environment. App
-    and volume failures log at warning level. A FAILED environment delete logs at
-    error level so a stuck safety-net run is greppable in the cron/CI logs that
-    drive this script (DELETED and NOT_FOUND are silent successes).
-
-    Warning vs error rationale: `modal environment delete` cascades and "deletes
-    all apps in the selected environment" (per Modal CLI docs), so individual
-    app/volume delete failures are best-effort and not real leaks as long as the
-    env-level delete succeeds. Reserving error level for the env-level FAILED
-    keeps CI logs free of false-positive noise.
-
-    Returns the number of environments that were processed (attempted deletion).
-    """
-    max_age = timedelta(hours=max_age_hours)
-    old_envs = find_old_test_environments(max_age)
-
-    if not old_envs:
-        logger.info("No old Modal test environments found (older than {} hours)", max_age_hours)
-        return 0
-
-    logger.info("Found {} old Modal test environments to clean up", len(old_envs))
-
-    for env_name in old_envs:
-        logger.info("Cleaning up old test environment: {}", env_name)
-
-        # Delete all apps in the environment first
-        delete_modal_apps_in_environment(env_name)
-
-        # Then delete all volumes
-        delete_modal_volumes_in_environment(env_name)
-
-        # Finally delete the environment itself. `delete_modal_environment`
-        # already logs at debug/warning for individual outcomes; surface
-        # FAILED at error level here so a stuck safety-net run is greppable
-        # in the CI logs that drive this script.
-        outcome = delete_modal_environment(env_name)
-        match outcome:
-            case ModalCleanupOutcome.DELETED | ModalCleanupOutcome.NOT_FOUND:
-                pass
-            case ModalCleanupOutcome.FAILED:
-                logger.error(
-                    "Safety-net cleanup failed to delete Modal environment {}; leaving it for the next cleanup run.",
-                    env_name,
-                )
-            case _ as unreachable:
-                assert_never(unreachable)
-
-    return len(old_envs)
-
-
-# =============================================================================
 # SSH test utilities
 # =============================================================================
 
@@ -1523,6 +1261,21 @@ def generate_ssh_keypair(base_path: Path) -> tuple[Path, Path]:
         check=True,
     )
     return key_path, Path(f"{key_path}.pub")
+
+
+def generate_ssh_keypair_with_paramiko(base_path: Path) -> tuple[Path, Path]:
+    """Like ``generate_ssh_keypair`` but needing no ssh-keygen binary: an ECDSA key written by paramiko.
+
+    Returns (private_key_path, public_key_path) tuple.
+    """
+    key_dir = base_path / "ssh_keys"
+    key_dir.mkdir()
+    key_path = key_dir / "id_ecdsa"
+    key = paramiko.ECDSAKey.generate()
+    key.write_private_key_file(str(key_path))
+    public_key_path = Path(f"{key_path}.pub")
+    public_key_path.write_text(f"{key.get_name()} {key.get_base64()}\n")
+    return key_path, public_key_path
 
 
 def _sftp_server_path() -> str:
@@ -1657,6 +1410,144 @@ def build_test_known_hosts_file(host_key_path: Path, port: int, output_path: Pat
     return output_path
 
 
+def make_local_ssh_host_factory(
+    port: int,
+    host_key_path: Path,
+    private_key_path: Path,
+    host_dir: Path,
+    mngr_ctx: MngrContext,
+    tmp_path: Path,
+) -> Callable[[str], Host]:
+    """Build a factory of SSH hosts that all reach the SSH server on ``port`` as the current user with ``private_key_path``."""
+    known_hosts_path = build_test_known_hosts_file(host_key_path, port, tmp_path / "known_hosts")
+    current_user = os.environ.get("USER", "root")
+    ssh_config = SSHHostConfig(
+        address="127.0.0.1",
+        port=port,
+        user=current_user,
+        key_file=private_key_path,
+        known_hosts_file=known_hosts_path,
+    )
+
+    def create_ssh_host(name: str) -> Host:
+        provider = SSHProviderInstance(
+            name=ProviderInstanceName(f"ssh-{name}"),
+            host_dir=host_dir,
+            mngr_ctx=mngr_ctx,
+            hosts={name: ssh_config},
+        )
+        return provider.get_host(HostName(name))
+
+    return create_ssh_host
+
+
+# In-process SSH server, for driving the SSH code paths without an sshd binary.
+
+
+class ExecOnlyParamikoServer(paramiko.ServerInterface):
+    """A paramiko server that accepts one public key and runs each ``exec`` request through the local shell.
+
+    Stands in for an sshd on machines without one: the SSH protocol is real
+    (paramiko on both ends), only the commands run in this process rather than
+    in a login session. Every command it is asked to run is recorded. Like the
+    ``authorized_keys`` of ``local_sshd``, only ``authorized_key`` may log in:
+    the port is open to every local process for as long as the server runs.
+    """
+
+    def __init__(self, authorized_key: paramiko.PKey) -> None:
+        super().__init__()
+        self.authorized_key = authorized_key
+        self.exec_commands: list[str] = []
+
+    def check_auth_publickey(self, username: str, key: paramiko.PKey) -> int:
+        if key == self.authorized_key:
+            return AUTH_SUCCESSFUL
+        return AUTH_FAILED
+
+    def get_allowed_auths(self, username: str) -> str:
+        return "publickey"
+
+    def check_channel_request(self, kind: str, chanid: int) -> int:
+        if kind == "session":
+            return OPEN_SUCCEEDED
+        return OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+
+    def check_channel_exec_request(self, channel: paramiko.Channel, command: bytes) -> bool:
+        decoded_command = command.decode("utf-8")
+        self.exec_commands.append(decoded_command)
+        threading.Thread(
+            target=_run_exec_request_through_local_shell, args=(channel, decoded_command), daemon=True
+        ).start()
+        return True
+
+
+def _run_exec_request_through_local_shell(channel: paramiko.Channel, command: str) -> None:
+    """Feed the channel's stdin to ``sh -c command`` and report its output and exit status on the channel."""
+    stdin_bytes = channel.makefile("rb").read()
+    finished = subprocess.run(["sh", "-c", command], input=stdin_bytes, capture_output=True)
+    if finished.stdout:
+        channel.sendall(finished.stdout)
+    if finished.stderr:
+        channel.sendall_stderr(finished.stderr)
+    channel.send_exit_status(finished.returncode)
+    channel.close()
+
+
+def _accept_ssh_connections_until_stopped(
+    listener: socket.socket,
+    host_key: paramiko.PKey,
+    server: ExecOnlyParamikoServer,
+    is_stopping: threading.Event,
+    transports: list[paramiko.Transport],
+) -> None:
+    """Turn every connection that arrives on ``listener`` into a server transport, until told to stop."""
+    while not is_stopping.is_set():
+        try:
+            client_socket, _address = listener.accept()
+        except TimeoutError:
+            continue
+        transport = paramiko.Transport(client_socket)
+        transport.add_server_key(host_key)
+        transport.start_server(event=threading.Event(), server=server)
+        transports.append(transport)
+
+
+@contextmanager
+def in_process_paramiko_sshd(
+    host_key_path: Path, authorized_key_path: Path
+) -> Generator[tuple[int, ExecOnlyParamikoServer], None, None]:
+    """Serve SSH on a free localhost port from this process, running exec requests through the local shell.
+
+    Yields (port, server). Unlike ``local_sshd`` this needs no sshd binary, and
+    the server records every command it was asked to run. Only the key at
+    ``authorized_key_path`` (a private key file; its public half is what is
+    compared) can log in.
+    """
+    host_key = paramiko.PKey.from_path(host_key_path)
+    server = ExecOnlyParamikoServer(paramiko.PKey.from_path(authorized_key_path))
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.2)
+    port = listener.getsockname()[1]
+    is_stopping = threading.Event()
+    transports: list[paramiko.Transport] = []
+    accept_thread = threading.Thread(
+        target=_accept_ssh_connections_until_stopped,
+        args=(listener, host_key, server, is_stopping, transports),
+        daemon=True,
+    )
+    accept_thread.start()
+    try:
+        yield port, server
+    finally:
+        is_stopping.set()
+        accept_thread.join(timeout=5.0)
+        for transport in transports:
+            transport.close()
+        listener.close()
+
+
 # =============================================================================
 # Discovery event test factories
 # =============================================================================
@@ -1769,3 +1660,12 @@ def assert_init_first_param_is_provider_name(subclass: type) -> None:
         f"{subclass.__name__}.__init__ provider_name annotation is {provider_name_hint!r}, "
         f"expected ProviderInstanceName"
     )
+
+
+def poll_until_file_contains(path: Path, text: str, timeout: float = 5.0) -> bool:
+    """Poll until ``path`` exists and contains ``text``, returning False on timeout.
+
+    For files written behind a shell process substitution (``2> >(tee ...)``): the shell
+    does not wait for the substitution, so the file can trail the command's exit.
+    """
+    return poll_until(lambda: path.exists() and text in path.read_text(), timeout=timeout)

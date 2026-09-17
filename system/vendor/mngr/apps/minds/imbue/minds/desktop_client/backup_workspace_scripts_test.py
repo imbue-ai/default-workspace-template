@@ -21,6 +21,7 @@ from imbue.minds.desktop_client.backup_workspace_scripts import BACKUP_GATE_PROB
 from imbue.minds.desktop_client.backup_workspace_scripts import BACKUP_RESTORE_SCRIPT
 from imbue.minds.desktop_client.backup_workspace_scripts import CHECK_RESULT_MARKER
 from imbue.minds.desktop_client.backup_workspace_scripts import GATE_RESULT_MARKER
+from imbue.minds.desktop_client.backup_workspace_scripts import OFFICIAL_REMOTE_NAME
 from imbue.minds.desktop_client.backup_workspace_scripts import OFFICIAL_REMOTE_URL
 from imbue.minds.desktop_client.backup_workspace_scripts import RESTORE_RESULT_MARKER
 from imbue.minds.desktop_client.backup_workspace_scripts import UPDATE_RESULT_MARKER
@@ -65,6 +66,9 @@ def _run_script(
     if extra_path is not None:
         env["PATH"] = f"{extra_path}:{env['PATH']}"
     env.pop("MNGR_AGENT_STATE_DIR", None)
+    # Dropped so a developer who exports it cannot make the tolerance tests pass
+    # on their machine and fail everywhere else.
+    env.pop("MNGR_ALLOW_UNKNOWN_CONFIG", None)
     if env_overrides:
         env.update(env_overrides)
     result = subprocess.run(
@@ -80,6 +84,7 @@ def _make_stub_bin(
     restart_ok: bool = True,
     sync_ok: bool = True,
     list_ok: bool = True,
+    is_unknown_config_fatal: bool = False,
     supervisorctl_call_log: Path | None = None,
     supervisorctl_status_lines: tuple[str, ...] | None = None,
     supervisorctl_status_lines_after_restart: tuple[str, ...] | None = None,
@@ -88,9 +93,12 @@ def _make_stub_bin(
 
     ``sync_ok=False`` fails `uv sync` (a post-restore failpoint for the
     restore script); ``list_ok=False`` fails `uv run mngr list` (a broken
-    machine whose chat gate cannot answer); ``supervisorctl_call_log`` and the
-    ``supervisorctl_status_lines*`` rosters are forwarded to the supervisorctl
-    stub for lifecycle-order and differential-verification assertions.
+    machine whose chat gate cannot answer); ``is_unknown_config_fatal=True``
+    fails every `uv run mngr` at config parse unless the tolerance is set (a
+    machine whose settings.toml names config its own mngr does not know);
+    ``supervisorctl_call_log`` and the ``supervisorctl_status_lines*`` rosters
+    are forwarded to the supervisorctl stub for lifecycle-order and
+    differential-verification assertions.
     """
     stub_bin = tmp_path / "stub-bin"
     stub_bin.mkdir(exist_ok=True)
@@ -98,9 +106,16 @@ def _make_stub_bin(
     list_response = (
         f"  echo '{agents_json}'\n  exit 0\n" if list_ok else '  echo "injected mngr list failure" >&2\n  exit 1\n'
     )
+    strict_config_response = (
+        'if [ "$1" = "run" ] && [ "$2" = "mngr" ] && [ "${MNGR_ALLOW_UNKNOWN_CONFIG:-}" != "1" ]; then\n'
+        "  echo \"Error: Unknown fields in agent_types.opencode: ['auto_allow_permissions']\" >&2\n"
+        "  exit 1\n"
+        "fi\n"
+    )
     uv_stub.write_text(
         "#!/bin/bash\n"
-        'if [ "$1" = "run" ] && [ "$2" = "mngr" ] && [ "$3" = "list" ]; then\n'
+        + (strict_config_response if is_unknown_config_fatal else "")
+        + 'if [ "$1" = "run" ] && [ "$2" = "mngr" ] && [ "$3" = "list" ]; then\n'
         + list_response
         + "fi\n"
         + ("" if sync_ok else 'if [ "$1" = "sync" ]; then echo "injected uv sync failure" >&2; exit 1; fi\n')
@@ -129,10 +144,12 @@ def _running_chat_agents_json(repo: Path) -> str:
 # --- marker/command plumbing ---
 
 
-def test_module_official_url_constant_matches_the_script_default() -> None:
-    # The module-level constant (used for display / docs) and the default baked
-    # into the script preamble must never drift apart.
+def test_the_module_official_remote_constants_match_the_script_defaults() -> None:
+    # The module-level constants (used for display / docs, and by the desktop
+    # client's version read) and the values baked into the script preamble must
+    # never drift apart.
     assert f'DEFAULT_OFFICIAL_REMOTE_URL = "{OFFICIAL_REMOTE_URL}"' in BACKUP_CHECK_SCRIPT
+    assert f'OFFICIAL_REMOTE_NAME = "{OFFICIAL_REMOTE_NAME}"' in BACKUP_CHECK_SCRIPT
 
 
 def test_update_and_restore_scripts_sync_with_all_packages() -> None:
@@ -403,6 +420,19 @@ def test_gate_probe_reports_running_chats_excluding_main_and_worktrees(tmp_path:
     assert payload is not None, run
     assert payload["running_chats"] == ["chat-1"]
     assert payload["backup_tick_in_flight"] is False
+
+
+def test_gate_probe_answers_in_a_machine_whose_own_mngr_config_it_cannot_parse(tmp_path: Path) -> None:
+    """An unanswerable gate reads as "chats running", which declines the update that would fix it."""
+    repo = _make_workspace_repo(tmp_path)
+    stub_bin = _make_stub_bin(tmp_path, agents_json=_running_chat_agents_json(repo), is_unknown_config_fatal=True)
+
+    run = _run_script(repo, BACKUP_GATE_PROBE_SCRIPT, ("--agent-id", "agent-x"), extra_path=stub_bin)
+
+    payload = extract_marker_json(run["stdout"], GATE_RESULT_MARKER)
+    assert payload is not None, run
+    assert "gate_error" not in payload, payload
+    assert payload["running_chats"] == ["chat-1"]
 
 
 def test_gate_probe_detects_in_flight_backup_tick(tmp_path: Path) -> None:

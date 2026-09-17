@@ -1,4 +1,4 @@
-// Playwright fixture: launches the installed /Applications/Minds.app.
+// Playwright fixture: launches the installed /Applications/Mind.app.
 //
 // Note on isolation: the signed bundle's `getMindsRootName()` reads the
 // baked-in `resources/pyproject/imbue/minds/config/envs/_bundled/root_name`
@@ -8,7 +8,7 @@
 // Specs are responsible for cleaning up any workspaces they create
 // (`mngr destroy` or the destroy button) before exiting.
 //
-// To run cleanly, quit any user-launched minds.app first -- Playwright's
+// To run cleanly, quit any user-launched Mind.app first -- Playwright's
 // `electron.launch()` will deadlock-exit silently on Electron's
 // requestSingleInstanceLock if a prior Minds is still alive (we hit this
 // in early iterations: PID 28024 lingered after Cmd-Q).
@@ -18,7 +18,7 @@ const fs = require('fs');
 const { _electron: electron } = require('playwright');
 const base = require('@playwright/test');
 
-const DEFAULT_APP_PATH = '/Applications/Minds.app/Contents/MacOS/Minds';
+const DEFAULT_APP_PATH = '/Applications/Mind.app/Contents/MacOS/Mind';
 
 // Each Minds window is a single web context now (the chrome page, which hosts
 // hub pages, the sandboxed workspace iframe, and the in-DOM modals), so
@@ -32,7 +32,7 @@ const _BACKEND_ORIGIN_RE = /^http:\/\/localhost:\d+(?:\/|$)/;
 // `page.url()` is Playwright's own bookkeeping, updated from the CDP navigation
 // events its session receives. main.js drives these WebContentsViews from the
 // Electron MAIN process (`webContents.loadURL` / `loadFile`), and such a commit
-// does not reliably reach an attached client: a view can sit on `/welcome`
+// does not reliably reach an attached client: a view can sit on `/start`
 // while Playwright still reports the `shell.html` it saw at attach time, for the
 // rest of the run. The session stays healthy -- evaluating in the live document
 // reports the real URL.
@@ -69,7 +69,7 @@ const test = base.test.extend({
     const execPath = process.env.MINDS_APP_PATH || DEFAULT_APP_PATH;
     if (!fs.existsSync(execPath)) {
       throw new Error(
-        `minds.app binary not found at ${execPath}. Install it to /Applications/ or ` +
+        `Mind.app binary not found at ${execPath}. Install it to /Applications/ or ` +
           `set MINDS_APP_PATH to a downloaded build.`
       );
     }
@@ -84,20 +84,24 @@ const test = base.test.extend({
 
     await use({ app, mainWindow, pickContentWindow });
 
-    // Save minds.log snapshot on failure for postmortem. Be defensive --
+    // Save log snapshots on failure for postmortem: minds.log carries the
+    // backend's output, electron.log the main process's startup milestones and
+    // its unhandled rejections, which reach no other stream. Be defensive --
     // the outputDir may not exist if the test failed before any Playwright
     // assertion fired (e.g. fixture-level setup error).
     if (testInfo.status !== 'passed') {
-      try {
-        const mainLog = path.join(process.env.HOME, '.minds', 'logs', 'minds.log');
-        if (fs.existsSync(mainLog)) {
-          fs.mkdirSync(testInfo.outputDir, { recursive: true });
-          const content = fs.readFileSync(mainLog, 'utf-8');
-          const tail = content.split('\n').slice(-500).join('\n');
-          fs.writeFileSync(path.join(testInfo.outputDir, 'minds.log.tail'), tail);
+      for (const name of ['minds.log', 'electron.log']) {
+        try {
+          const logPath = path.join(process.env.HOME, '.minds', 'logs', name);
+          if (fs.existsSync(logPath)) {
+            fs.mkdirSync(testInfo.outputDir, { recursive: true });
+            const content = fs.readFileSync(logPath, 'utf-8');
+            const tail = content.split('\n').slice(-500).join('\n');
+            fs.writeFileSync(path.join(testInfo.outputDir, `${name}.tail`), tail);
+          }
+        } catch (e) {
+          console.error(`[fixture] failed to capture ${name}:`, e.message);
         }
-      } catch (e) {
-        console.error('[fixture] failed to capture minds.log:', e.message);
       }
     }
 
@@ -129,7 +133,7 @@ const test = base.test.extend({
     // timeout on a cold GHA mac. The `timeout` caps it. (macos-launch runs on an
     // ephemeral GHA Mac, so a broad minds-scoped pkill is safe.)
     try {
-      execSync('pkill -9 -if "minds\\.app|/\\.minds/|mngr latchkey|mngr observe|Minds/Crashpad" 2>/dev/null || true', {
+      execSync('pkill -9 -if "minds?\\.app|/\\.minds/|mngr latchkey|mngr observe|Minds?/Crashpad" 2>/dev/null || true', {
         stdio: 'ignore',
         timeout: 10000,
       });

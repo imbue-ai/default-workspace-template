@@ -3,7 +3,8 @@
 You are one node of a plan for building an app. An orchestrating agent launched
 you and several other workers into the same folder: a git checkout created for
 this one build. Your task file names your subtask and gives you the reports of
-the nodes you depend on. This document is the rest of your task.
+the nodes you depend on, and its frontmatter names its own path and where your
+report goes. This document is the rest of your task.
 
 ## Do only your subtask
 
@@ -89,14 +90,11 @@ whole app is built.
 
 ## Reporting back
 
-Your task file's frontmatter holds `finish_report_path`, and the launcher added
-`lead_agent`. Follow `.agents/shared/references/worker-reporting.md` to write and
-deliver your report, with these substitutions:
-
-- `<TASK_FILE_GLOB>` -> the exact task file path named at the top of your task
-  (not a glob: every node's task file is in this folder)
-- `<RUNTIME_REPORTS_DIR>` -> `dirname "$FINISH_REPORT_PATH"`
-- Valid `name:` values: `done` or `stuck`, with `type: status`.
+Follow `.agents/shared/references/worker-reporting.md`: read your task file's
+stamped paths, write your report body to a file, and hand that file to the
+launcher's `report` subcommand, which delivers it to the orchestrator. Your
+flow's only report values are `--type status` with `--name done` or
+`--name stuck`.
 
 The body of a `done` report is the handoff the nodes after you read. Include:
 

@@ -379,15 +379,15 @@ def admin_unsuspend_account(request: Request, email: str) -> dict[str, object]:
 
     The flag is cleared first so a partial restore never leaves the user
     locked out of sign-in; re-running retries any failed restore step.
-    Workspaces stay stopped (the user starts them), and no sessions are
-    restored (the user signs in fresh). Suspended shares return to active,
+    Workspaces stay stopped but their stops become ``idle`` so the user may
+    start them, and no sessions are restored (the user signs in fresh). Suspended shares return to active,
     and the workspace's retained relay token makes the tunnel come back on
     its own once the workspace runs again.
     """
     with handle_endpoint_errors():
         require_admin_key(request)
         require_supertokens_configured()
-        user_id, _user_id_prefix = _resolve_account(email)
+        user_id, user_id_prefix = _resolve_account(email)
 
         store = entitlements_module.get_entitlements_store()
         existing = store.get_entitlements(user_id)
@@ -402,6 +402,14 @@ def admin_unsuspend_account(request: Request, email: str) -> dict[str, object]:
         steps = {
             "llm_keys": _run_step("llm_keys", lambda: _block_llm_keys_step(user_id, is_blocking=False)),
             "storage_keys": _run_step("storage_keys", lambda: _restore_storage_keys_step(ops, key_store, user_id)),
+            # The stops the suspension made become ordinary operator stops the
+            # user may start; the workspaces themselves stay stopped.
+            "workspaces": _run_step(
+                "workspaces",
+                lambda: workspaces_module.restamp_user_stop_kind(
+                    user_id_prefix, workspaces_module.STOP_KIND_SUSPENSION, workspaces_module.STOP_KIND_IDLE
+                ),
+            ),
             "shares": _run_step(
                 "shares",
                 lambda: {"reactivated_count": shares_module.get_share_store().unsuspend_shares_for_user(user_label)},

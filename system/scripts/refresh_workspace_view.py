@@ -4,7 +4,7 @@
 Run this after anything that makes the running UI stale -- above all
 ``mngr start --restart system-services``, which bounces the system-interface
 backend underneath whatever the user currently has open. Nothing else reloads
-that view: the Minds app only intervenes when a workspace looks *unreachable*
+that view: the Mind app only intervenes when a workspace looks *unreachable*
 for a sustained stretch, and a services restart that comes back quickly never
 crosses that bar.
 
@@ -18,11 +18,11 @@ Two channels, because neither reaches every viewer:
     often nobody -- browsers reconnect on exponential backoff -- so treat it as
     a bonus rather than the guarantee.
 
-``POST /api/v1/agents/<primary>/refresh`` (the Minds app, via the gateway)
+``POST /api/v1/agents/<primary>/refresh`` (the Mind app, via the gateway)
     Reaches only the desktop app, but does not go through the workspace server
     at all, so it works while that server is still coming back. This is the
     channel that actually covers the common case: a user looking at the
-    workspace in the Minds app.
+    workspace in the Mind app.
 
 Every outcome is reported on stderr and the exit code is always 0. The change
 has already landed on disk; failing a reveal because the user had the window
@@ -37,11 +37,9 @@ Usage:
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
                                 (default http://127.0.0.1:8000).
-    MNGR_AGENT_ID               This agent's id. Sent for telemetry on the
-                                broadcast.
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
     LATCHKEY_GATEWAY_PASSWORD   agent environment. Both must be present to reach
-                                the Minds app; the broadcast still runs without
+                                the Mind app; the broadcast still runs without
                                 them.
     LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
                                 The per-agent authorization JWT, forwarded when
@@ -62,8 +60,6 @@ from typing import Callable, Sequence
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
-ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
@@ -85,7 +81,7 @@ _TIMEOUT_SECONDS = 10.0
 # app channel, not a wrong window.
 _PRIMARY_LOOKUP_TIMEOUT_SECONDS = 30.0
 
-# The Minds app identifies a *workspace* by its primary agent id, not by whoever
+# The Mind app identifies a *workspace* by its primary agent id, not by whoever
 # is calling: a sub-agent (an /assist chat, a launch-task worker) has its own
 # MNGR_AGENT_ID, and refreshing under that addresses no window at all. Only this
 # workspace's agents are visible from here, so exactly one carries ``is_primary``.
@@ -138,7 +134,7 @@ def resolve_primary_agent_id(runner: Runner) -> str:
     def unresolved(reason: str) -> str:
         sys.stderr.write(
             f"refresh: could not resolve this workspace's primary agent id ({reason}); "
-            "skipping the Minds app refresh.\n"
+            "skipping the Mind app refresh.\n"
         )
         return ""
 
@@ -164,7 +160,9 @@ def resolve_primary_agent_id(runner: Runner) -> str:
         if candidate:
             return candidate
     if completed.returncode != 0:
-        return unresolved(f"mngr ls exited {completed.returncode} and listed no primary agent")
+        return unresolved(
+            f"mngr ls exited {completed.returncode} and listed no primary agent"
+        )
     return unresolved("mngr ls listed no primary agent")
 
 
@@ -174,11 +172,10 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
     Returns whether the broadcast was accepted. A non-200 does not mean no
     browser reloaded -- only that the workspace server did not take the op.
     """
-    agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
     status = http.post_json(
         f"{base_url}/api/layout/broadcast",
-        {"op": RELOAD_OP, "args": {}, "agent_id": agent_id},
-        {"Content-Type": "application/json", MNGR_AGENT_ID_HEADER: agent_id},
+        {"op": RELOAD_OP, "args": {}},
+        {"Content-Type": "application/json"},
         timeout=_TIMEOUT_SECONDS,
     )
     if status == 200:
@@ -192,10 +189,10 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
 
 
 def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
-    """Ask the Minds app to rebuild its view of this workspace.
+    """Ask the Mind app to rebuild its view of this workspace.
 
     Returns whether the app accepted the request. No gateway URL or password
-    means we are not running under a Minds desktop app at all (a bare ``mngr``
+    means we are not running under a Mind desktop app at all (a bare ``mngr``
     workspace, a test harness), which is not a failure -- the broadcast alone is
     the whole story there.
 
@@ -207,7 +204,7 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     password = os.environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:
         sys.stderr.write(
-            "refresh: latchkey gateway env not set; skipping the Minds app refresh.\n"
+            "refresh: latchkey gateway env not set; skipping the Mind app refresh.\n"
         )
         return False
     primary_agent_id = resolve_primary_agent_id(runner)
@@ -237,7 +234,7 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     if status == 200:
         return True
     sys.stderr.write(
-        f"refresh: Minds app refresh {_describe(status)}; if the app has this "
+        f"refresh: Mind app refresh {_describe(status)}; if the app has this "
         "workspace open it may still be showing the previous build.\n"
     )
     return False
@@ -281,7 +278,7 @@ def refresh(
         "the reload broadcast", lambda: broadcast_reload(http, resolved_base)
     )
     app_ok = _run_channel(
-        "the Minds app refresh", lambda: request_app_refresh(http, runner)
+        "the Mind app refresh", lambda: request_app_refresh(http, runner)
     )
     if broadcast_ok or app_ok:
         sys.stderr.write("refresh: requested a reload of this workspace's view.\n")

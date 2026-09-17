@@ -239,7 +239,6 @@ def find_ready_nodes(
 def render_node_task(
     plan: dict[str, object],
     node_idx: int,
-    task_path: Path,
     finish_report_path: Path,
     report_by_node_idx: dict[int, str],
 ) -> str:
@@ -272,7 +271,6 @@ def render_node_task(
     return (
         f"---\nfinish_report_path: {finish_report_path}\n---\n\n"
         f"# Task: node {node_idx} of an app build\n\n"
-        f"This task file: `{task_path}`\n\n"
         f"Follow `{WORKER_RULES_REFERENCE}` for how to work in the shared build "
         "folder and how to report back. It is part of this task.\n\n"
         f"## Your subtask\n\n{node['subtask']}\n\n"
@@ -339,7 +337,6 @@ def _run_write_task(run_dir: Path, node_idx: int) -> int:
     task_text = render_node_task(
         plan=plan,
         node_idx=node_idx,
-        task_path=task_path,
         finish_report_path=node_report_path(run_dir, node_idx),
         report_by_node_idx=report_by_node_idx,
     )

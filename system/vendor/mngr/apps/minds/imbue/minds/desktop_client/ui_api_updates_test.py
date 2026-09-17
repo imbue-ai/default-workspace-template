@@ -21,14 +21,18 @@ from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import RefusingSpawnMngrCaller
+from imbue.minds.desktop_client.testing import SIGNED_IN_ACCOUNT_DIR
 from imbue.minds.desktop_client.testing import blocking_release_wait_body
 from imbue.minds.desktop_client.testing import landed_verdict
+from imbue.minds.desktop_client.testing import ready_machine_probe_stdout
 from imbue.minds.desktop_client.testing import update_run_probe_stdout
 from imbue.minds.desktop_client.testing import write_stub_mngr
 from imbue.minds.desktop_client.ui_api_updates import build_workspace_updates_message
 from imbue.minds.desktop_client.ui_api_updates import format_update_window
 from imbue.minds.desktop_client.ui_api_updates import run_bulk_dispatch
 from imbue.minds.desktop_client.update_chat import build_update_chat_message
+from imbue.minds.desktop_client.update_service import UpdateDispatch
 from imbue.minds.desktop_client.update_service import UpdateDispatchOutcome
 from imbue.minds.desktop_client.update_service import WorkspaceUpdateService
 from imbue.minds.desktop_client.update_status import UpdateActivity
@@ -47,6 +51,9 @@ from imbue.mngr.utils.polling import poll_until
 
 _SKILL_PRESENT_STDOUT = "MNGR_UPDATE_SELF_SKILL_PRESENT\n"
 _SKILL_ABSENT_STDOUT = "MNGR_UPDATE_SELF_SKILL_ABSENT\n"
+
+# The machine every dispatch test that is not about the binding runs against.
+_DISPATCH_READY_STDOUT = ready_machine_probe_stdout(_SKILL_PRESENT_STDOUT)
 
 
 class _SystemServicesResolver(StaticBackendResolver):
@@ -152,7 +159,7 @@ def test_a_machine_with_no_readable_version_is_still_sent_its_update_agent(
 ) -> None:
     """Both unknowns dispatch: the machine's own agent reads its upstream."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _service(app).state_store.record_detection(
         agent_id,
@@ -181,7 +188,7 @@ def test_a_machine_read_as_having_nothing_to_run_is_refused(
 ) -> None:
     """The readings that are positive answers rather than missing ones, the too-old machine included."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _service(app).state_store.record_detection(
         agent_id,
@@ -202,7 +209,7 @@ def test_an_explicit_ref_dispatches_a_machine_the_gate_would_refuse(
 ) -> None:
     """The override reaches the spawned chat's seed prompt."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     service.state_store.record_detection(
@@ -229,7 +236,7 @@ def test_a_ref_that_could_read_as_a_flag_or_shell_text_is_refused(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
 
@@ -274,7 +281,7 @@ def test_a_dispatched_update_marks_the_run_in_flight(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
 
@@ -424,7 +431,7 @@ def test_a_stopped_machine_is_started_before_its_update_runs(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     """A start no-ops on a running host, so the dispatch issues it unconditionally."""
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT))
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT))
     client, app = _build_client(tmp_path, root_concurrency_group, mngr_caller=caller)
     _mark_out_of_date(app, agent_id)
 
@@ -446,7 +453,7 @@ def test_a_machine_the_app_stopped_may_be_recovered_again_once_an_update_starts_
     that exclusion only bites once it is already broken.
     """
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     with app.app_context():
         tracker = get_state().system_interface_health_tracker
@@ -464,7 +471,7 @@ def test_a_second_dispatch_loses_to_the_run_already_in_flight(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
     _post(client, f"/ui/api/updates/{agent_id}/now")
@@ -479,7 +486,7 @@ def test_scheduling_arms_the_intent_without_any_handshake(
 ) -> None:
     """The no-backups confirmation is the SPA's to ask; the route takes a bare press."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
 
@@ -495,7 +502,7 @@ def test_the_frame_says_whether_each_machine_has_backups(
 ) -> None:
     """A machine without a canonical restic env reads as unbacked."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
 
@@ -511,7 +518,7 @@ def test_a_dispatch_carries_the_go_ahead_only_when_the_machine_has_no_backups(
 ) -> None:
     """The app collected that answer at the button, and a machine still on the older skill stops to ask for it."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     _mark_out_of_date(app, agent_id)
@@ -534,7 +541,7 @@ def test_cancelling_disarms_the_intent(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
     _post(client, f"/ui/api/updates/{agent_id}/schedule")
@@ -551,7 +558,7 @@ def test_a_scheduled_update_may_name_its_target_and_the_run_carries_it(
 ) -> None:
     """Pressing the version field is the confirmation; scheduling only changes when the run happens."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     # No availability gate: an up-to-date machine may still be pointed at a named ref.
@@ -577,7 +584,7 @@ def test_a_press_that_names_no_target_keeps_the_one_the_schedule_is_armed_with(
 ) -> None:
     """The plain buttons sit under "Scheduled to update to X"; they must not retarget the machine."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     _mark_out_of_date(app, agent_id)
@@ -597,7 +604,7 @@ def test_a_bulk_schedule_leaves_an_armed_machines_named_target_alone(
 ) -> None:
     """A blanket schedule-all says nothing about versions, so it must not reset one."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     _mark_out_of_date(app, agent_id)
@@ -615,7 +622,7 @@ def test_a_scheduled_target_is_refused_on_the_same_terms_as_a_now_target(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, _app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
 
     response = _post(client, f"/ui/api/updates/{agent_id}/schedule", {"target_ref": "--flag"})
@@ -629,7 +636,7 @@ def test_a_bulk_action_filters_the_requested_list_against_live_state(
 ) -> None:
     """An unknown machine is passed over here even though the single-machine route would take it."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     stale_id = AgentId.generate()
     unknown_id = AgentId.generate()
@@ -653,7 +660,7 @@ def test_bulk_now_answers_with_the_machines_it_accepted_and_passes_over_the_rest
 ) -> None:
     """The route's own work, as distinct from the thread it starts."""
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     stale_id = AgentId.generate()
     unknown_id = AgentId.generate()
@@ -680,7 +687,7 @@ def test_a_bulk_now_run_goes_through_the_schedule_gate_rather_than_dispatching_b
     _client, app = _build_client(
         tmp_path,
         root_concurrency_group,
-        mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT),
+        mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT),
         is_host_running=True,
     )
     _mark_out_of_date(app, agent_id)
@@ -738,7 +745,7 @@ def test_a_spawn_that_raises_leaves_no_run_locked_behind_it(
         tmp_path,
         root_concurrency_group,
         mngr_caller=_RaisingOnSpawnMngrCaller(
-            result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT), raised_type=raised_type
+            result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT), raised_type=raised_type
         ),
     )
     _mark_out_of_date(app, agent_id)
@@ -756,7 +763,7 @@ def test_a_second_dispatch_loses_while_the_first_is_still_starting_the_machine(
 ) -> None:
     """The run slot is claimed before the slow start, so concurrent dispatchers cannot both land a run."""
     release_path = tmp_path / "release_start"
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT))
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT))
     _client, app = _build_client(
         tmp_path,
         root_concurrency_group,
@@ -767,7 +774,7 @@ def test_a_second_dispatch_loses_while_the_first_is_still_starting_the_machine(
     )
     _mark_out_of_date(app, agent_id)
     service = _service(app)
-    outcomes: list[UpdateDispatchOutcome] = []
+    outcomes: list[UpdateDispatch] = []
 
     first = threading.Thread(
         target=lambda: outcomes.append(service.dispatch_update(agent_id)),
@@ -783,8 +790,8 @@ def test_a_second_dispatch_loses_while_the_first_is_still_starting_the_machine(
         release_path.touch()
         first.join(timeout=10.0)
 
-    assert second is UpdateDispatchOutcome.ALREADY_RUNNING
-    assert outcomes == [UpdateDispatchOutcome.DISPATCHED]
+    assert second.outcome is UpdateDispatchOutcome.ALREADY_RUNNING
+    assert [dispatch.outcome for dispatch in outcomes] == [UpdateDispatchOutcome.DISPATCHED]
     assert _host_actions(tmp_path) == [f"start {agent_id} --quiet"]
     assert len([call for call in caller.calls if any("mngr create" in arg for arg in call)]) == 1
 
@@ -811,7 +818,7 @@ def test_a_machine_whose_start_fails_hands_the_run_slot_back(
     client, app = _build_client(
         tmp_path,
         root_concurrency_group,
-        mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT),
+        mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT),
         mngr_binary=_write_recording_stub(tmp_path, "failing_stub_mngr", exit_code=1),
     )
     _mark_out_of_date(app, agent_id)
@@ -857,7 +864,7 @@ def test_the_update_state_rides_the_bootstrap_document_into_first_paint(
     """The badge must show on first paint, not a frame later."""
     monkeypatch.setenv("MINDS_UI_MANIFEST_PATH", str(_write_ui_manifest(tmp_path)))
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     _mark_out_of_date(app, agent_id)
 
@@ -894,7 +901,7 @@ def test_the_updates_frame_carries_which_side_had_no_version(
 ) -> None:
     """The modal cannot tell the two unknowns apart if the frame flattens them."""
     _client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     service = _service(app)
     service.state_store.record_detection(
@@ -921,7 +928,7 @@ def test_dismissing_the_updated_note_leaves_a_failure_verdict_standing(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
 ) -> None:
     client, app = _build_client(
-        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_SKILL_PRESENT_STDOUT)
+        tmp_path, root_concurrency_group, mngr_result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT)
     )
     state_store = _service(app).state_store
     state_store.set_activity(agent_id, UpdateActivity.RUNNING)
@@ -938,3 +945,156 @@ def test_dismissing_the_updated_note_leaves_a_failure_verdict_standing(
     assert _post(client, f"/ui/api/updates/{agent_id}/dismiss").status_code == 200
 
     assert state_store.get(agent_id).verdict is None
+
+
+def test_a_refused_spawn_tells_the_user_what_the_machine_said(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """A refusal the user cannot see the reason for is one they can only retry."""
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_caller=RefusingSpawnMngrCaller(
+            result=MngrCallResult(returncode=0, stdout=_DISPATCH_READY_STDOUT),
+            refusal_stderr=(
+                "WARNING: outer SSH unreachable for host host-other: Host not found: host-other\n"
+                "Error: Unknown fields in agent_types.opencode: ['auto_allow_permissions']\n"
+                "ERROR: Command failed on agent system-services\n"
+            ),
+        ),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 502
+    body = response.get_json()
+    assert body["error"] == "Couldn't start the update agent in this machine."
+    assert body["detail"].startswith("Error: Unknown fields in agent_types.opencode")
+    # The unrelated unreachable host is what the user would otherwise blame.
+    assert "outer SSH unreachable" not in body["detail"]
+
+
+def test_an_outcome_with_nothing_to_add_carries_no_detail(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """An empty detail key would render as an empty block under every ordinary refusal."""
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_result=MngrCallResult(returncode=0, stdout="MNGR_UPDATE_SELF_SKILL_ABSENT\n"),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 409
+    assert "detail" not in response.get_json()
+
+
+def test_the_dispatched_update_chat_is_bound_to_the_machines_signed_in_account(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """On a machine that writes no create defaults (minds-v0.5.0 through v0.5.2), the app still asks its
+    resolver and splices the answer in: unbound, the chat would answer every turn "Not logged in"."""
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_result=MngrCallResult(returncode=0, stdout=ready_machine_probe_stdout(_SKILL_PRESENT_STDOUT)),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 200
+    caller = _service(app).mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    spawn = [call for call in caller.calls if any("mngr create" in arg for arg in call)]
+    assert len(spawn) == 1
+    assert f"CLAUDE_CONFIG_DIR={SIGNED_IN_ACCOUNT_DIR}" in spawn[0][3]
+
+
+def test_a_machine_whose_template_keeps_no_accounts_is_dispatched_unbound(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """Before the account store one shared config dir held the credential, so a binding would point at nothing."""
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_result=MngrCallResult(
+            returncode=0, stdout=ready_machine_probe_stdout(_SKILL_PRESENT_STDOUT, account_dir=None)
+        ),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 200
+    caller = _service(app).mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    spawn = [call for call in caller.calls if any("mngr create" in arg for arg in call)]
+    assert len(spawn) == 1
+    assert "CLAUDE_CONFIG_DIR" not in spawn[0][3]
+
+
+def test_a_machine_that_writes_its_create_defaults_gets_one_probe_and_a_bare_create(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """The machine's own mngr resolves the account and harness, so the app asks nothing and names nothing."""
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_result=MngrCallResult(
+            returncode=0, stdout=ready_machine_probe_stdout(_SKILL_PRESENT_STDOUT, is_local_settings_present=True)
+        ),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 200
+    caller = _service(app).mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    execs = [call for call in caller.calls if call[0] == "exec"]
+    assert len(execs) == 2
+    assert not any("default_account_args.py" in call[3] for call in execs)
+    create = execs[1][3]
+    assert "mngr create" in create
+    assert "CLAUDE_CONFIG_DIR" not in create and "--type" not in create
+    assert "agent_types.claude.check_installation=false" in create
+    assert "user_created=true" in create
+
+
+@pytest.mark.witnesses("workspace-updates.workspace-refuses-the-agent")
+def test_a_machine_that_refuses_the_agent_has_its_refusal_shown_and_the_run_slot_released(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup, agent_id: AgentId
+) -> None:
+    """A machine with no provider account signed in refuses the create in its own words; the app shows them
+    and gives the run slot back, so signing in and pressing Update again works."""
+    refusal = "No provider account is signed in on this machine. Sign in from a chat tab, then try again."
+    client, app = _build_client(
+        tmp_path,
+        root_concurrency_group,
+        mngr_caller=RefusingSpawnMngrCaller(
+            result=MngrCallResult(
+                returncode=0, stdout=ready_machine_probe_stdout(_SKILL_PRESENT_STDOUT, account_dir="")
+            ),
+            refusal_stderr=(
+                "Error: Pre-command script(s) failed for 'create':\n"
+                "  Script: python3 system/scripts/require_create_account.py\n"
+                "  Exit code: 1\n"
+                f"  Stderr: {refusal}\n"
+                "ERROR: Command failed on agent system-services\n"
+            ),
+        ),
+    )
+    _mark_out_of_date(app, agent_id)
+
+    response = _post(client, f"/ui/api/updates/{agent_id}/now")
+
+    assert response.status_code == 502
+    body = response.get_json()
+    assert body["error"] == "Couldn't start the update agent in this machine."
+    assert refusal in body["detail"]
+    # The run slot must come back, or a retry after signing in would be refused as already running.
+    assert _service(app).state_store.get(agent_id).activity is UpdateActivity.IDLE

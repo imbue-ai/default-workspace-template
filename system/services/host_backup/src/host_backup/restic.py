@@ -113,16 +113,27 @@ def forget(
     keep_monthly: int,
     env_overrides: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """`restic forget --keep-* ... --keep-tag <restore-marker>...` (does not prune).
+    """`restic forget --group-by '' --keep-* ... --keep-tag <restore-marker>...` (does not prune).
+
+    Restic applies the keep-* policy once per *group*, and its default grouping
+    (`host,paths`) puts every one of our snapshots in a group of its own: the
+    outer_trigger method reads each tick from a uniquely-named snapshot path
+    (`<mount>/snapshots/<timestamp>/home`). "Keep one hourly" then keeps one out
+    of one, forever, and the repository grows without bound. Every snapshot in
+    the repository belongs to this one workspace, so grouping is disabled
+    outright rather than narrowed to `host` -- a container rebuild changes the
+    hostname restic records, which would restart the same unbounded growth.
 
     The `--keep-tag` flags keep every snapshot carrying a restore-marker tag so
     the time-bucketed thinning above cannot drop a recent restore's timeline
-    entry (the markers otherwise share host+paths+hour with the ordinary hourly
-    backups and lose the keep-hourly bucket). The runner ages the old markers
-    out separately so they stay bounded.
+    entry (the markers otherwise share the hour with the ordinary hourly backups
+    and lose the keep-hourly bucket). The runner ages the old markers out
+    separately so they stay bounded.
     """
     args = [
         "forget",
+        "--group-by",
+        "",
         "--keep-hourly",
         str(keep_hourly),
         "--keep-daily",

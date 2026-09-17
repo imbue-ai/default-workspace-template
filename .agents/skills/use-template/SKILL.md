@@ -41,7 +41,7 @@ the published repo ships its own template-specific `/welcome` skill
 (generated into the snapshot by the publish flow, replacing the template's
 generic welcome), so the booting agent's first response is a custom welcome
 naming the template's title and one-line description (instead of the generic
-"Welcome to Minds" message), followed in the same turn — without waiting to be
+"Welcome to Mind" message), followed in the same turn — without waiting to be
 asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
 A v2 repo has exactly one `template.md`, so there is nothing to choose:
@@ -134,6 +134,11 @@ git worktree add -q "$WT" HEAD
       sys.exit(0)  # supervisor lib unavailable -- skip the check
   o = ServerOptions(); o.configfile = "system/supervisord.conf"
   o.realize(args=[]); o.process_config(do_usage=False)
+  # Every program lives in a supervisord.conf.d drop-in, so a config that
+  # realizes cleanly but yields nothing means the [include] matched no files.
+  # That parses as a valid config and runs no services at all.
+  if not o.configroot.supervisord.process_group_configs:
+      sys.exit("system/supervisord.conf realized zero programs -- the [include] glob matched no drop-ins")
   PYEOF
   )
   ```

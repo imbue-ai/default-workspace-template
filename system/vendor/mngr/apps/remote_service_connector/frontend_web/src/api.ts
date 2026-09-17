@@ -97,7 +97,9 @@ export class ApiError extends Error {
     // Structured refusals (quota_exceeded, email_not_verified, ...) carry a
     // human-readable `message` -- surface that prose directly instead of the
     // raw JSON blob, since these strings end up in user-facing error banners.
-    super(`API error ${status}: ${structuredDetailMessage(detail) ?? JSON.stringify(detail)}`);
+    super(
+      `API error ${status}: ${structuredDetailMessage(detail) ?? JSON.stringify(detail)}`,
+    );
   }
 }
 
@@ -205,6 +207,9 @@ export async function claimHost(args: {
   sshPublicKey: string;
   hostName: string;
   displayName: string;
+  // The release channel whose published web pin selects the template tag
+  // the connector leases (see channel.ts).
+  channel: string;
   region?: string;
 }): Promise<ClaimResult> {
   return requestJson<ClaimResult>(
@@ -213,6 +218,7 @@ export async function claimHost(args: {
       ssh_public_key: args.sshPublicKey,
       host_name: args.hostName,
       display_name: args.displayName,
+      channel: args.channel,
       region: args.region ?? null,
     }),
   );
@@ -294,7 +300,10 @@ export async function putKeyBundle(bundle: KeyBundle): Promise<void> {
 // wins server-side; the loser gets KeyBundleExistsError and must not keep
 // its freshly minted DEK (the stored bundle can never recover it).
 export async function putKeyBundleIfAbsent(bundle: KeyBundle): Promise<void> {
-  const resp = await request("/sync/bundle?if_absent=true", jsonInit("PUT", bundle));
+  const resp = await request(
+    "/sync/bundle?if_absent=true",
+    jsonInit("PUT", bundle),
+  );
   if (resp.status === 409) throw new KeyBundleExistsError();
   if (!resp.ok) {
     const body = await resp.json().catch(() => null);

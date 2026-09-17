@@ -262,3 +262,10 @@ class MapReduceRecipe(ABC):
         written report, or None to skip rendering this tick; if non-None,
         the framework best-effort-uploads it.
         """
+
+
+class SnapshotHost(FrozenModel):
+    """A snapshot taken from a freshly provisioned host, together with that host."""
+
+    snapshot: SnapshotName = Field(description="The snapshot other hosts are created from")
+    host: OnlineHostInterface = Field(description="The host the snapshot was taken from; still exists, agent stopped")

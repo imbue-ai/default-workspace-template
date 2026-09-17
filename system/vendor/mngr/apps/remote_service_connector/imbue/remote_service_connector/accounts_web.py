@@ -178,7 +178,7 @@ _MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
 _DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
     # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
     _MAC_ARM64_PLATFORM: (
-        "https://download.todesktop.com/26032588hqdzk/Minds%200.4.2%20-%20Build%20260825un55i8ix7-arm64.dmg"
+        "https://download.todesktop.com/26032588hqdzk/Minds%200.6.1%20-%20Build%20260915wjcyd06bp-arm64.dmg"
     ),
     "source": "https://github.com/imbue-ai/mngr",
 }
@@ -212,6 +212,12 @@ _MANIFEST_PARSE_FAILURES: Final[tuple[type[Exception], ...]] = (
 _TODESKTOP_DOWNLOAD_PREFIX: Final[str] = "https://download.todesktop.com/"
 
 
+# CLEANUP: ``web_template_channel.py`` reads the release feed's
+# ``<channel>-web.json`` with its own copy of this fetch/retry/cache shape,
+# written apart from this reader so it neither depends on the per-platform
+# rewrite of it on mngr/linux-packaging (imbue-ai/mngr-internal#943) nor
+# conflicts with it textually. Consolidate the two into one feed reader once
+# both branches are on main -- owed by whichever merges second.
 @retry(
     retry=retry_if_exception_type(_MANIFEST_FETCH_FAILURES),
     stop=stop_after_attempt(_STABLE_CHANNEL_FETCH_ATTEMPTS),
@@ -285,9 +291,7 @@ _OAUTH_STATE_MAX_PAGE_PATH_CHARS: Final[int] = 256
 _OAUTH_STATE_MAX_PLAN_CHARS: Final[int] = 32
 
 
-# ---------------------------------------------------------------------------
 # SuperTokens seams (patched by tests; see FakeSuperTokensBackend)
-# ---------------------------------------------------------------------------
 
 
 def _new_browser_session_access_token_payload() -> dict[str, Any]:
@@ -437,9 +441,7 @@ def resolve_web_user_identity(
     return user, user_id
 
 
-# ---------------------------------------------------------------------------
 # Frontend bundle serving
-# ---------------------------------------------------------------------------
 
 
 def frontend_dist_dir() -> Path:
@@ -639,8 +641,8 @@ def web_chrome_dist_dir() -> Path:
 
 
 _WEB_CHROME_PLACEHOLDER_PAGE = (
-    "<!doctype html><html><head><title>minds</title></head><body>"
-    "<h1>The minds web client is not built</h1>"
+    "<!doctype html><html><head><title>Mind</title></head><body>"
+    "<h1>The Mind web client is not built</h1>"
     "<p>The web-chrome bundle was not found on this server. Build it with "
     "<code>pnpm -C apps/remote_service_connector/frontend_web build</code> (normally done "
     "by <code>minds-admin env deploy</code>) or point WEB_CHROME_FRONTEND_DIST at a build.</p>"
@@ -681,9 +683,7 @@ def web_chrome_page(page_path: str = "") -> HTMLResponse | FileResponse:
     return _serve_web_chrome_index()
 
 
-# ---------------------------------------------------------------------------
 # JSON API for the hosted pages
-# ---------------------------------------------------------------------------
 
 
 def _reject_cross_site_post(request: Request) -> None:
@@ -907,8 +907,6 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
                 )
             if not isinstance(result, EPSignUpOkResult):
                 return BrowserAuthResponse(status="ERROR", message="Sign-up failed")
-            # Defensive: a just-created account has no suspension row, but every
-            # session-creation path carries the gate so none can be missed.
             if suspension_module.is_user_suspended_at_gate(result.user.id, gate="browser_signup"):
                 return BrowserAuthResponse(
                     status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
@@ -1084,9 +1082,7 @@ def accounts_send_verification(request: Request) -> dict[str, object]:
         return {"status": "OK", "sent": is_sent, "already_verified": False}
 
 
-# ---------------------------------------------------------------------------
 # Device handoff: authorize (mint one-time code) + token exchange
-# ---------------------------------------------------------------------------
 
 
 class DeviceAuthCodeStore(Protocol):
@@ -1256,9 +1252,7 @@ def device_token_exchange(body: DeviceTokenRequest) -> dict[str, object]:
         }
 
 
-# ---------------------------------------------------------------------------
 # Browser Google OAuth (Continue with Google on the hosted pages)
-# ---------------------------------------------------------------------------
 
 
 def accounts_signing_key() -> rsa.RSAPrivateKey:
@@ -1628,9 +1622,7 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
         return response
 
 
-# ---------------------------------------------------------------------------
 # Download redirect (the campaign -> download funnel denominator)
-# ---------------------------------------------------------------------------
 
 
 @router.get("/download")

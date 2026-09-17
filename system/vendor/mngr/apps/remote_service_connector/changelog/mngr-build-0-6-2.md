@@ -1,0 +1,1 @@
+- The 0.4.0 wire-compat snapshot now also covers the minds 0.6.2 client (its strictly-parsed connector surface is unchanged since 0.6.1), so its support window extends to 2026-10-16.

@@ -256,3 +256,20 @@ silent hang -- they only fire if reads yield. A real wall bound would need a wor
 wrapper plus forced disconnect (or replacing pyinfra exec); deferred until a failure mode
 that needs it is actually observed, since keepalives + open bounds cover every mechanism
 in evidence.
+
+## Implemented (follow-up branch: sleep/wake)
+
+- **A suspension watchdog on every host connection mngr runs commands over**
+  (`libs/mngr/imbue/mngr/utils/suspension_watchdog.py`). Every transport built at the
+  `_ensure_connected` chokepoint is stamped with both clocks; when the wall clock has
+  outrun the monotonic one, the transport is closed, which wakes every blocked channel and
+  lets the existing transient-SSH retry reconnect. Nothing above the socket could reach
+  this: the deadlines are monotonic, keepalives never wait for a reply, and the pyinfra
+  timer starves with the hub (that finding stands unfixed and no longer needs fixing here).
+- **Item 5, sleep/blip awareness, on the minds side.** `mngr forward` retires an SSH
+  connection that outlived a suspension, and its accept loop, before handing it traffic;
+  a probe-failure run opening just after a wake is held to a grace window rather than the
+  stuck threshold; and an in-flight `HostRecoveryKind.START` is handed back to the probe
+  loop at the wake.
+- The shared clock comparison is `libs/imbue_common/imbue/imbue_common/suspension.py`,
+  usable from a short-lived `mngr` process as well as the long-lived forward.

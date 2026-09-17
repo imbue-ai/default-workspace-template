@@ -101,6 +101,8 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.testing import capture_loguru
 from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
 from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
+from imbue.mngr_imbue_cloud.errors import WORKSPACE_HELD_MESSAGE
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
 
 # Long enough that only a genuinely broken run reaches it. The wait ends the
 # instant the command turns up, so this bounds a failure, not a passing test --
@@ -384,6 +386,27 @@ def test_run_mngr_narrows_a_nonzero_exit_error_to_mngrs_verdict(tmp_path: Path) 
     assert str(caught) == "exited 1: Error: the real failure\n  [try it the other way]"
     assert len(str(caught)) <= len("exited 1: ") + OUTPUT_TAIL_MAX_CHARS
     assert "DEBUG step 499" in (caught.output_tail or "")
+
+
+def test_run_mngr_reports_the_verdict_a_command_died_on_not_one_it_walked_past(tmp_path: Path) -> None:
+    """The mirror of the nested case: for an un-nested command the LAST marker is the verdict.
+
+    A step mngr logged at ERROR and then carried on past is not why the command
+    died, and letting it stand as the message would both tell the user the wrong
+    thing and hand the wrong text to the substring consumers -- reporting a
+    command that died of something else as this machine's backend going down.
+    ``in_workspace_mngr`` reads the same stderr from the other end, so nothing
+    but the argument separates the two, and this pins the un-nested end.
+    """
+    with ConcurrencyGroup(name="test-verdict-direction") as cg:
+        caught = _run_failing_mngr_stub(
+            cg,
+            tmp_path / "failing_mngr_two_markers",
+            "echo 'ERROR: could not reach provider imbue_cloud_someone; skipping it' >&2\n"
+            "echo 'Error: Agent agent-x not found' >&2\n",
+        )
+
+    assert str(caught) == "exited 1: Error: Agent agent-x not found"
 
 
 def test_run_mngr_keeps_a_tolerated_provider_skip_out_of_the_verdict(tmp_path: Path) -> None:
@@ -751,6 +774,55 @@ def test_run_host_recovery_sequence_skips_stop_for_start_only_dispatch(tmp_path:
     assert not any(line.startswith("stop ") for line in invocations)
 
 
+@pytest.mark.witnesses(
+    "machine-lifecycle.held-start-refused-plainly",
+    partial="witnesses the recovery sequence's plain outcome and the withheld failure report; the shown sentence is witnessed by the SPA's own suite",
+)
+def test_run_host_recovery_sequence_ends_plainly_when_the_connector_holds_the_machine(tmp_path: Path) -> None:
+    """A start the connector refuses as an operator hold is neither the machine's nor this device's failure.
+
+    The episode ends with the connector's own sentence in the operation log,
+    the operation declined with that sentence rather than done (nothing
+    started, so the machine is not answering) or failed, and the machine
+    marked as stopped on purpose; nothing reaches error reporting.
+    """
+    tracker = SystemInterfaceHealthTracker()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    tracker.mark_recovering(workspace_agent, HostRecoveryKind.START)
+    resolver = build_resolver_with_system_services(workspace_agent, services_agent)
+    mngr_binary = _write_mngr_stub(
+        tmp_path / "held_mngr",
+        f"  start) echo 'ERROR: host x failed to start: {WORKSPACE_HELD_MESSAGE}' >&2; exit 1 ;;\n",
+    )
+    registry = _started_registry(workspace_agent)
+    with capture_loguru(level="WARNING") as log_output, ConcurrencyGroup(name="test-held") as cg:
+        run_host_recovery_sequence(
+            workspace_agent_id=workspace_agent,
+            tracker=tracker,
+            backend_resolver=resolver,
+            mngr_binary=mngr_binary,
+            mngr_host_dir=tmp_path,
+            concurrency_group=cg,
+            mngr_forward_port=0,
+            mngr_forward_preauth_cookie=None,
+            registry=registry,
+            kind=HostRecoveryKind.START,
+        )
+
+    record = registry.get(workspace_agent)
+    assert record is not None and record.status == WorkspaceOperationStatus.DECLINED
+    assert record.error is None
+    assert record.warning == WORKSPACE_HELD_MESSAGE
+    # Back to STUCK, not left RECOVERING: the probe loop stands off a RECOVERING
+    # agent, so only a probe target can be noticed answering again after the
+    # operator's start.
+    assert tracker.get_health(workspace_agent) == AgentHealth.STUCK
+    assert workspace_agent in tracker.snapshot_probe_targets()
+    assert tracker.is_unattended_recovery_suppressed(workspace_agent)
+    assert log_output.getvalue() == ""
+
+
 def test_run_host_recovery_sequence_stops_before_start_for_a_restart(tmp_path: Path) -> None:
     """``HostRecoveryKind.RESTART`` stops the host before starting it."""
     tracker = SystemInterfaceHealthTracker()
@@ -934,6 +1006,7 @@ def _dispatcher(
     mngr_host_dir: Path,
     connectivity_detector: ConnectivityDetector | None = None,
     should_decline_dispatch: Callable[[AgentId], bool] | None = None,
+    read_cloud_lifecycle: Callable[[AgentId], WorkspaceStatus | None] | None = None,
 ) -> UnattendedRecoveryDispatcher:
     """The tracker callback wired in ``app.py``, built against test doubles."""
     return UnattendedRecoveryDispatcher(
@@ -947,7 +1020,140 @@ def _dispatcher(
         mngr_forward_preauth_cookie=None,
         connectivity_detector=connectivity_detector,
         should_decline_dispatch=should_decline_dispatch,
+        read_cloud_lifecycle=read_cloud_lifecycle,
     )
+
+
+@pytest.mark.witnesses("machine-lifecycle.no-unattended-start-of-a-requested-stop")
+@pytest.mark.parametrize(
+    "requested_status", [WorkspaceStatus.STOPPING, WorkspaceStatus.STOPPED, WorkspaceStatus.STARTING]
+)
+def test_unattended_recovery_leaves_a_remote_machine_alone_when_the_connector_says_its_stop_was_requested(
+    tmp_path: Path, requested_status: WorkspaceStatus
+) -> None:
+    """A stop someone asked for (another device, an operator, a migration) is not a wedge.
+
+    The connector is asked live, at dispatch time: discovery's cadence can lag
+    the STUCK edge, so its last reading is not enough. The machine is marked the
+    way an in-app stop marks it, so nothing starts it until a probe finds it
+    answering again.
+    """
+    tracker = SystemInterfaceHealthTracker()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    resolver = _resolver_for_a_remote_machine(workspace_agent, services_agent)
+    mngr_binary = _write_fake_mngr(tmp_path)
+    registry = InMemoryWorkspaceOperationRegistry()
+    asked: list[AgentId] = []
+
+    def read_cloud_lifecycle(agent_id: AgentId) -> WorkspaceStatus | None:
+        asked.append(agent_id)
+        return requested_status
+
+    with ConcurrencyGroup(name="test-unattended") as cg:
+        dispatch = _dispatcher(
+            tracker, resolver, registry, cg, mngr_binary, tmp_path, read_cloud_lifecycle=read_cloud_lifecycle
+        )
+        dispatch(workspace_agent)
+        is_marked = poll_until(
+            lambda: tracker.is_unattended_recovery_suppressed(workspace_agent),
+            timeout=_DISPATCH_WAIT_SECONDS,
+            poll_interval=0.02,
+        )
+
+    assert is_marked, "the declined dispatch must mark the machine as stopped on purpose"
+    assert asked == [workspace_agent]
+    assert _read_fake_mngr_invocations(mngr_binary) == []
+    assert tracker.get_health(workspace_agent) != AgentHealth.RECOVERING
+
+
+@pytest.mark.parametrize("live_status", [WorkspaceStatus.RUNNING, None])
+def test_unattended_recovery_starts_a_remote_machine_the_connector_calls_running_or_cannot_describe(
+    tmp_path: Path, live_status: WorkspaceStatus | None
+) -> None:
+    """Running per the connector, yet not answering: a wedge, started as before; an unreadable answer changes nothing."""
+    tracker = SystemInterfaceHealthTracker()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    resolver = _resolver_for_a_remote_machine(workspace_agent, services_agent)
+    mngr_binary = _write_fake_mngr(tmp_path)
+    registry = InMemoryWorkspaceOperationRegistry()
+    tracker.mark_stuck(workspace_agent)
+
+    with ConcurrencyGroup(name="test-unattended") as cg:
+        dispatch = _dispatcher(
+            tracker, resolver, registry, cg, mngr_binary, tmp_path, read_cloud_lifecycle=lambda agent_id: live_status
+        )
+        dispatch(workspace_agent)
+        is_started = _wait_for_mngr_invocation(mngr_binary, "start ")
+
+    assert is_started, "a machine the connector calls running (or cannot describe) is started as before"
+    assert not tracker.is_unattended_recovery_suppressed(workspace_agent)
+
+
+def test_unattended_recovery_starts_a_remote_machine_when_the_live_read_raises(tmp_path: Path) -> None:
+    """A read that blows up below the CLI wrapper (a dead warm process, a broken pipe) is no evidence either."""
+    tracker = SystemInterfaceHealthTracker()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    resolver = _resolver_for_a_remote_machine(workspace_agent, services_agent)
+    mngr_binary = _write_fake_mngr(tmp_path)
+    registry = InMemoryWorkspaceOperationRegistry()
+    tracker.mark_stuck(workspace_agent)
+
+    def read_cloud_lifecycle_over_a_broken_pipe(agent_id: AgentId) -> WorkspaceStatus | None:
+        raise BrokenPipeError("the warm mngr process is gone")
+
+    with ConcurrencyGroup(name="test-unattended") as cg:
+        dispatch = _dispatcher(
+            tracker,
+            resolver,
+            registry,
+            cg,
+            mngr_binary,
+            tmp_path,
+            read_cloud_lifecycle=read_cloud_lifecycle_over_a_broken_pipe,
+        )
+        dispatch(workspace_agent)
+        is_started = _wait_for_mngr_invocation(mngr_binary, "start ")
+
+    assert is_started, "a machine whose lifecycle read raised is started as before"
+    assert not tracker.is_unattended_recovery_suppressed(workspace_agent)
+
+
+def test_unattended_recovery_drops_the_start_of_a_machine_that_answers_during_the_live_read(tmp_path: Path) -> None:
+    """The connector read takes seconds; a machine that came back meanwhile is not started over its own head."""
+    tracker = SystemInterfaceHealthTracker()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    resolver = _resolver_for_a_remote_machine(workspace_agent, services_agent)
+    mngr_binary = _write_fake_mngr(tmp_path)
+    registry = InMemoryWorkspaceOperationRegistry()
+    tracker.mark_stuck(workspace_agent)
+    read_count = 0
+
+    def read_cloud_lifecycle_while_the_machine_answers(agent_id: AgentId) -> WorkspaceStatus | None:
+        nonlocal read_count
+        read_count += 1
+        tracker.record_probe_success(agent_id)
+        return WorkspaceStatus.RUNNING
+
+    with ConcurrencyGroup(name="test-unattended") as cg:
+        dispatch = _dispatcher(
+            tracker,
+            resolver,
+            registry,
+            cg,
+            mngr_binary,
+            tmp_path,
+            read_cloud_lifecycle=read_cloud_lifecycle_while_the_machine_answers,
+        )
+        dispatch(workspace_agent)
+        assert poll_until(lambda: read_count == 1, timeout=_DISPATCH_WAIT_SECONDS, poll_interval=0.02)
+
+    # The group's exit joined the worker: whatever it dispatched has run.
+    assert _read_fake_mngr_invocations(mngr_binary) == [], "a machine that answered during the read needs no start"
+    assert tracker.get_health(workspace_agent) is AgentHealth.HEALTHY
 
 
 def test_unattended_recovery_starts_a_wedged_machine_without_bouncing_it(tmp_path: Path) -> None:
@@ -1685,6 +1891,46 @@ def test_a_start_that_really_booted_the_host_keeps_the_restart_framing(tmp_path:
 
     assert tracker.get_health(workspace_agent) == AgentHealth.RECOVERY_FAILED
     assert tracker.is_recovery_a_no_op(workspace_agent) is False
+
+
+def test_a_failure_the_probe_outranked_ends_the_operation_as_a_caveat(tmp_path: Path) -> None:
+    """The card and the operations endpoint read different stores, and must not disagree about one recovery.
+
+    A start that a sleep left blocked can error long after a probe found the
+    machine answering. The tracker declines that failure, so failing the
+    operation too would leave the workspace on a recovery-failed record while
+    the card says the machine is healthy.
+    """
+    workspace_agent = AgentId.generate()
+    tracker = SystemInterfaceHealthTracker()
+    tracker.mark_recovering(workspace_agent, HostRecoveryKind.START)
+    # The wake handed the start back to the probe loop, and the probe answered.
+    tracker.record_probe_success(workspace_agent)
+    resolver = build_resolver_with_system_services(workspace_agent, AgentId.generate())
+    registry = _started_registry(workspace_agent)
+
+    with ConcurrencyGroup(name="test-restart") as cg, capture_error_logs():
+        run_host_recovery_sequence(
+            workspace_agent_id=workspace_agent,
+            tracker=tracker,
+            backend_resolver=resolver,
+            mngr_binary=_write_fake_mngr(tmp_path, was_host_started=True),
+            mngr_host_dir=tmp_path,
+            concurrency_group=cg,
+            mngr_forward_port=1,
+            mngr_forward_preauth_cookie="cookie",
+            registry=registry,
+            kind=HostRecoveryKind.START,
+            startup_wait_seconds=0.1,
+        )
+
+    assert tracker.get_health(workspace_agent) == AgentHealth.HEALTHY
+    assert tracker.get_last_recovery_error(workspace_agent) is None
+    record = registry.get(workspace_agent)
+    assert record is not None
+    assert record.status == WorkspaceOperationStatus.DONE
+    assert record.error is None
+    assert record.warning is not None
 
 
 # -- post-recovery readiness wait --

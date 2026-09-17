@@ -24,10 +24,14 @@ deliberately project-scoped and cannot create projects), and since all
 three databases share one role/password/endpoint, one copied connection
 string yields the other two by swapping the database name. Only the dev
 tiers' auto-provisioning path genuinely needs an org-capable key. The
-collection loop additionally rides the tier's existing `pool-ssh` Vault
-entry (the deploy pushes it as its own Modal Secret, which the
-`collection_poll` function attaches) -- every real tier already has it;
-nothing analytics-specific to provision there.
+collection loop additionally rides the tier's existing management SSH
+credentials: on gen-2 workspaces the `analytics` certificate the connector's
+`ssh_cert_refresh` cron stores in the shared `ssh-management-certs` Modal
+Dict (the collector reads the Dict directly; a workspace is skipped, never
+hopped with a static key, while no fresh certificate is stored), and on gen-1
+workspaces the tier's existing `pool-ssh` Vault entry (the deploy pushes it as
+its own Modal Secret, which the `collection_poll` function attaches). Every
+real tier already has both; nothing analytics-specific to provision there.
 
 ## 1. Neon project
 

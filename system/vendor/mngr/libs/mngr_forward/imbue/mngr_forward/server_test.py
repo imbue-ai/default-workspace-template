@@ -48,7 +48,6 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr.primitives import HostId
-from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_forward.auth import FileAuthStore
 from imbue.mngr_forward.cookie import _COOKIE_SALT
 from imbue.mngr_forward.cookie import _SESSION_PAYLOAD
@@ -185,6 +184,10 @@ def http2_app_setup(tmp_path: Path) -> Iterator[tuple[TestClient, FileAuthStore,
 
 
 @pytest.mark.witnesses("authentication.signed-out-home")
+@pytest.mark.witnesses(
+    "no-data-without-session",
+    partial="witnesses only that a signed-out bare-origin request observes no agent data (which agents the proxy knows about); the 'any byte of any backend response' facet and the every-surface/interleaving quantifier stay open",
+)
 def test_bare_origin_unauthenticated_returns_login_page(
     app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
 ) -> None:
@@ -269,10 +272,11 @@ def test_authenticate_consumes_otp_and_sets_cookie(
     assert response.status_code == 307
     assert response.headers["location"] == "/"
     assert MNGR_FORWARD_SESSION_COOKIE_NAME in response.cookies
-    # Code is single-use: re-presenting the now-spent code is refused (403) and
-    # establishes no session -- the refusal must not hand out a session cookie.
+    # Code is single-use: re-presenting the now-spent code is refused (the step
+    # leaves the exact status open) and establishes no session -- the refusal
+    # must not hand out a session cookie.
     response2 = client.get(f"/authenticate?one_time_code={code}")
-    assert response2.status_code == 403
+    assert response2.status_code >= 400
     assert MNGR_FORWARD_SESSION_COOKIE_NAME not in response2.cookies
     assert "set-cookie" not in response2.headers
 
@@ -666,10 +670,6 @@ def test_bare_origin_html_navigation_redirects_to_shell_label(tmp_path: Path) ->
     )
 
 
-@pytest.mark.witnesses(
-    "forwarding.default-service-redirect",
-    partial="covers only the 'non-HTML served unchanged' clause; the redirect is in test_bare_origin_html_navigation_redirects_to_shell_label",
-)
 def test_bare_origin_non_html_does_not_redirect(tmp_path: Path) -> None:
     """A non-HTML request to the bare origin (e.g. the readiness probe) is served
     by the shell directly rather than redirected, so probes are unaffected."""
@@ -1312,7 +1312,7 @@ def test_subdomain_unauthenticated_html_redirects_to_goto_bridge(tmp_path: Path)
     """A stale subdomain cookie must redirect to /goto/<id>/ on the bare
     origin, not the bare landing page.
 
-    Background: the host app (minds.app) regenerates its signing key on
+    Background: the host app (Mind.app) regenerates its signing key on
     every restart, so any pre-existing per-subdomain session cookie
     fails verification after a quit/reopen. Previously the unauthenticated
     HTML response 302-redirected to ``localhost:<port>/``, dumping the
@@ -1563,10 +1563,6 @@ def test_subdomain_forward_routes_loopback_without_tunnel_to_recovery(
     assert payload["reason"] == "CONNECT_ERROR"
 
 
-@pytest.mark.witnesses(
-    "forwarding.never-serves-host-loopback",
-    partial="witnesses the operator opt-in escape hatch only, not the default refusal across every request and connection",
-)
 def test_subdomain_forward_allows_loopback_fallback_when_opted_in(tmp_path: Path) -> None:
     """``allow_host_loopback=True`` (the legacy DEV-mode escape hatch) restores the old fallback path."""
     preauth = "opaque-preauth-cookie-value"
@@ -2069,59 +2065,111 @@ def test_subdomain_forward_reports_a_stalled_backend_without_abandoning_the_requ
     assert payload["status_code"] is None
 
 
-# Flaky: the 0.5s poll window racing the stall timer has lost on a contended CI
-# sandbox (the timer outlived the request it was armed for) and passed on retry.
-@pytest.mark.flaky
+# Longer than any virtual clock in this file is advanced to, so a client
+# disconnect scheduled this far out never arrives.
+_NEVER_ON_A_VIRTUAL_CLOCK_SECONDS: Final[float] = 3600.0
+
+
+class _VirtualClockEventLoop(asyncio.SelectorEventLoop):
+    """A selector loop whose clock only advances when a test tells it to.
+
+    The stall timer is armed with ``loop.call_later``, so its deadline is read
+    off this clock. Freezing it lets a request run to completion -- and disarm
+    the timer -- before the deadline is ever reached; advancing it past the
+    deadline afterwards is what checks the disarm. A real timer short enough to
+    wait out would instead race the request against CI scheduling jitter.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._now_seconds = 0.0
+
+    def time(self) -> float:
+        return self._now_seconds
+
+    def advance(self, seconds: float) -> None:
+        self._now_seconds += seconds
+
+
 def test_subdomain_forward_emits_no_stall_envelope_when_the_backend_answers_in_time(tmp_path: Path) -> None:
     """A backend that answers inside the stall window must not enroll the agent for probing.
 
     Guards the cancel half of the timer: leaving it armed would emit a
     ``STALLED`` envelope for every healthy request and keep every workspace
-    permanently enrolled as a probe suspect.
+    permanently enrolled as a probe suspect. Driven on a hand-advanced clock
+    (see ``_VirtualClockEventLoop``) so the check is deterministic.
     """
     instance_key = _make_test_instance_key()
     preauth = "preauth-cookie-no-stall"
+    stall_notice_seconds = 0.05
     app, _captured, env_out, mock_client = _make_forward_app_with_capture(
         tmp_path,
         instance_key,
         preauth,
         backend_delay_seconds=0.0,
-        stall_notice_seconds=0.05,
+        stall_notice_seconds=stall_notice_seconds,
     )
+    app.state.http_client = mock_client
+    app.state.ssh_http_clients = {}
+    app.state.ssh_http_clients_lock = threading.Lock()
 
-    with TestClient(app, base_url=_agent_origin(), follow_redirects=False) as client:
-        app.state.http_client = mock_client
-        response = client.get(
-            "/api/quick",
-            headers={
-                "cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}",
-                "accept": "application/json",
-            },
+    loop = _VirtualClockEventLoop()
+    try:
+        _elapsed, _sent_types, sent_status = loop.run_until_complete(
+            _drive_request_through_asgi(
+                app, "/api/quick", preauth, disconnect_after_seconds=_NEVER_ON_A_VIRTUAL_CLOCK_SECONDS
+            )
         )
-        assert response.status_code == 200
-        # Polled from inside the block, where the client's event loop is still
-        # running, and for longer than the window: leaving the block first tears
-        # that loop down, so an uncancelled timer would die with it instead of
-        # firing and the assertion would hold no matter what.
-        assert not poll_until(lambda: _envelope_lines(env_out) != [], timeout=0.5, poll_interval=0.05), (
-            "the stall timer outlived the request it was armed for"
-        )
+        # The request has returned, so the handler has disarmed the timer. Move
+        # past the deadline it was armed for and let the loop run whatever is
+        # due: a timer left armed fires here, a disarmed one stays silent.
+        loop.advance(stall_notice_seconds + 1.0)
+        loop.run_until_complete(asyncio.sleep(0))
+    finally:
+        loop.close()
+
+    assert sent_status == 200
+    assert _envelope_lines(env_out) == [], "the stall timer outlived the request it was armed for"
 
 
-async def _drive_request_until_client_disconnects(
+def _make_forward_request_scope(path: str, preauth: str, accept_header: bytes = b"application/json") -> dict[str, Any]:
+    """Build the ASGI scope for one authenticated request to an agent's forward origin."""
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", f"{_TEST_AGENT_ID}.localhost:{_LISTEN_PORT}".encode("utf-8")),
+            (b"cookie", f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}".encode("utf-8")),
+            (b"accept", accept_header),
+        ],
+        "client": ("127.0.0.1", 54321),
+        "server": ("127.0.0.1", _LISTEN_PORT),
+    }
+
+
+async def _drive_request_through_asgi(
     app: FastAPI,
     path: str,
     preauth: str,
     disconnect_after_seconds: float,
     accept_header: bytes = b"application/json",
 ) -> tuple[float, list[str], int | None]:
-    """Run one request through ``app``'s ASGI interface, disconnecting mid-flight.
+    """Run one request through ``app``'s ASGI interface, the client giving up after a delay.
 
-    ``TestClient`` cannot express this: its receive channel only yields
-    ``http.disconnect`` once the response is complete, which is exactly the
-    ordering under test. Returns how long the app took, the message types it
-    sent back, and the status it started the response with (``None`` if it
-    never started one).
+    ``TestClient`` cannot express a mid-flight disconnect: its receive channel
+    only yields ``http.disconnect`` once the response is complete, which is
+    exactly the ordering the disconnect tests are about. The disconnect is
+    scheduled on the event loop's own clock, so a delay that clock never reaches
+    is a client that never gives up at all. Returns how long the app took, the
+    message types it sent back, and the status it started the response with
+    (``None`` if it never started one).
     """
     sent_types: list[str] = []
     sent_status: int | None = None
@@ -2141,24 +2189,7 @@ async def _drive_request_until_client_disconnects(
         if message["type"] == "http.response.start":
             sent_status = int(message["status"])
 
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": "2.1"},
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode("utf-8"),
-        "query_string": b"",
-        "root_path": "",
-        "headers": [
-            (b"host", f"{_TEST_AGENT_ID}.localhost:18421".encode("utf-8")),
-            (b"cookie", f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}".encode("utf-8")),
-            (b"accept", accept_header),
-        ],
-        "client": ("127.0.0.1", 54321),
-        "server": ("127.0.0.1", 18421),
-    }
+    scope = _make_forward_request_scope(path, preauth, accept_header)
     started_at = time.monotonic()
     await app(scope, _receive, _send)
     return time.monotonic() - started_at, sent_types, sent_status
@@ -2204,9 +2235,7 @@ def test_subdomain_forward_abandons_the_backend_when_the_client_gives_up(
     app.state.ssh_http_clients_lock = threading.Lock()
 
     elapsed_seconds, sent_types, sent_status = asyncio.run(
-        _drive_request_until_client_disconnects(
-            app, path, preauth, disconnect_after_seconds=0.05, accept_header=accept_header
-        )
+        _drive_request_through_asgi(app, path, preauth, disconnect_after_seconds=0.05, accept_header=accept_header)
     )
 
     assert elapsed_seconds < 2.0, "the handler waited for the backend instead of abandoning the request"
@@ -2890,8 +2919,10 @@ def test_event_stream_ends_when_the_backend_connection_is_lost_midstream(tmp_pat
 
 
 @pytest.mark.witnesses("forwarding.service-origin")
-def test_service_origin_routes_to_named_service_backend(tmp_path: Path) -> None:
-    """A ``<service>.agent-<hex>.localhost`` origin forwards to that service's registered URL."""
+@pytest.mark.parametrize("host_suffix", ["localhost", "localhost:8421"])
+def test_service_origin_routes_to_named_service_backend(tmp_path: Path, host_suffix: str) -> None:
+    """A ``<service>.agent-<hex>.localhost`` origin -- with or without a port -- forwards to
+    that service's registered URL."""
     instance_key = _make_test_instance_key()
     preauth = "preauth-service-origin"
     app, _auth_store, resolver = _make_forward_app(tmp_path, preauth_cookie_value=preauth)
@@ -2908,13 +2939,14 @@ def test_service_origin_routes_to_named_service_backend(tmp_path: Path) -> None:
         captured.append(request)
         return httpx.Response(200, content=b"ok")
 
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
-
-    with TestClient(app, base_url=_agent_origin("terminal"), follow_redirects=False) as client:
-        app.state.http_client = mock_client
+    with TestClient(app, follow_redirects=False) as client:
+        app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
         response = client.get(
             "/ws-info",
-            headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
+            headers={
+                "host": f"terminal.{_TEST_AGENT_ID}.{host_suffix}",
+                "cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}",
+            },
         )
 
     assert response.status_code == 200
@@ -3201,6 +3233,10 @@ def test_ws_forward_stamps_owner_header_on_backend_handshake(tmp_path: Path) -> 
 
 
 @pytest.mark.witnesses("forwarding.ws-relay")
+@pytest.mark.witnesses(
+    "credential-not-forwarded",
+    partial="witnesses the WebSocket handshake path (which forwards no client headers at all); the HTTP path and the every-request quantifier are witnessed/open elsewhere",
+)
 def test_ws_relay_forwards_path_query_subprotocol_and_messages_both_ways(tmp_path: Path) -> None:
     """An authenticated WebSocket is connected through to the backend and relayed both ways.
 
@@ -3215,9 +3251,13 @@ def test_ws_relay_forwards_path_query_subprotocol_and_messages_both_ways(tmp_pat
     - closing the client leg closes the backend leg too.
     """
     backend_closed = threading.Event()
+    forwarded_cookie_headers: list[str] = []
 
     def backend_handler(connection: ServerConnection) -> None:
         assert connection.request is not None
+        # Capture the handshake's Cookie header(s) so the test can assert the
+        # proxy's session credential never reaches the backend.
+        forwarded_cookie_headers.extend(connection.request.headers.get_all("Cookie"))
         # Echo the request target back first so the client can assert the
         # backend was reached at the same path and query, then mirror every
         # message (preserving text vs binary) to prove both-directions relay.
@@ -3255,6 +3295,10 @@ def test_ws_relay_forwards_path_query_subprotocol_and_messages_both_ways(tmp_pat
                 # Binary relayed unchanged, client -> backend -> client.
                 session.send_bytes(b"\x00\x01\x02")
                 assert session.receive_bytes() == b"\x00\x01\x02"
+            # credential-not-forwarded: the client authenticated with the session
+            # cookie, but the backend handshake carries no mngr_forward session
+            # cookie -- code behind the agent origin never sees the credential.
+            assert all(MNGR_FORWARD_SESSION_COOKIE_NAME not in header for header in forwarded_cookie_headers)
             # Closing the client leg (on context exit) closes the backend leg too.
             assert backend_closed.wait(timeout=10)
     finally:
@@ -4419,6 +4463,7 @@ def test_bridge_destination_survives_the_bridge(tmp_path: Path) -> None:
             cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: bare_session},
         )
         redemption = urlsplit(hop1.headers["location"])
+        assert redemption.netloc == f"{_TEST_AGENT_ID}.localhost:18421"
         hop2 = client.get(f"/_subdomain_auth?{redemption.query}", headers={"host": redemption.netloc})
     assert hop2.status_code == 302
     assert hop2.headers["location"] == "/some/page"

@@ -24,23 +24,27 @@ Today, "destroy project" hangs the project-settings page until the underlying `m
 
 ### Detached destroy subprocess
 
-- **Command**: a single `mngr destroy @<host_id>.<provider> --force` invocation (falling back to the bare `host-<hex>` address when discovery did not report the owning provider; no shell). Addressing the host destroys it as a whole via `provider.destroy_host` — every agent on the host goes down together, and the teardown's completeness does not depend on an agent-listing snapshot being complete at that moment. `--force` makes a retry idempotent when the host is already gone. (Historical note: this originally piped `mngr list --include 'host.id == ...' --ids` into `mngr destroy -f -`, which could leave the host alive when the listing snapshot was missing agents — the 2026-07-14 partial workspace-destroy incident.)
-- **No imbue_cloud lease release.** Lease release belongs in `mngr_imbue_cloud.instance.delete_host`, which mngr's GC calls after the destroyed-host grace period. Eagerly calling `mngr imbue_cloud hosts release` here was duplicating that responsibility in two places; we drop the eager call so `delete_host` is the single source of truth for lease lifecycle.
-- **Detached spawn**: `subprocess.Popen([...], start_new_session=True, stdin=DEVNULL, stdout=log_file, stderr=log_file, ...)`. Inherits the parent's `MNGR_HOST_DIR` / `MNGR_PREFIX` so the subprocess hits the right minds host dir. The Popen handle is intentionally allowed to go out of scope — same pattern as `spawn_detached_latchkey_gateway`.
+- **Command**: a single `mngr destroy @<host_id>.<provider> --force` invocation (falling back to the bare `host-<hex>` address when discovery did not report the owning provider), wrapped in `sh -c '<argv>; echo $? > <exit_code>'` so the process records its own exit status. Addressing the host destroys it as a whole via `provider.destroy_host` — every agent on the host goes down together, and the teardown's completeness does not depend on an agent-listing snapshot being complete at that moment. `--force` makes a retry idempotent when the host is already gone. (Historical note: this originally piped `mngr list --include 'host.id == ...' --ids` into `mngr destroy -f -`, which could leave the host alive when the listing snapshot was missing agents — the 2026-07-14 partial workspace-destroy incident.)
+- **No explicit imbue_cloud lease release.** `mngr destroy` is terminal for imbue_cloud: `destroy_host` wipes the leased VM's data and releases the lease through the connector (`delete_host`, which mngr's GC calls after the destroyed-host grace period, is a re-run of the same flow). Calling `mngr imbue_cloud hosts release` here would duplicate that responsibility.
+- **Detached spawn**: `subprocess.Popen(["sh", "-c", ...], start_new_session=True, stdin=DEVNULL, stdout=log_file, stderr=log_file, ...)`. Inherits the parent's `MNGR_HOST_DIR` / `MNGR_PREFIX` so the subprocess hits the right minds host dir. The Popen handle is intentionally allowed to go out of scope — same pattern as `spawn_detached_latchkey_gateway`.
 - **Output log** at `<paths.data_dir>/destroying/<agent_id>/output.log` (combined stdout+stderr, written via Popen redirection — no Python wrapper writes to it).
-- **Pid file** at `<paths.data_dir>/destroying/<agent_id>/pid` (single-line text). Written by the minds backend immediately after `Popen(...)` returns and **before** the API response. The file's existence + the pid's liveness are the only state we track on disk. No `state.json`.
+- **Pid file** at `<paths.data_dir>/destroying/<agent_id>/pid` (single-line text), holding the wrapping shell's pid. Written by the minds backend immediately after `Popen(...)` returns and **before** the API response. No `state.json`.
+- **Exit-status file** at `<paths.data_dir>/destroying/<agent_id>/exit_code` (single-line text). Written by the detached shell itself, because nothing else can: minds reaps the child only while it is still the parent, and a minds restart reparents the destroy and loses its status. Absent while the destroy runs, and for a marker written before this existed. A retry deletes it up front so the previous run's status cannot be read as this one's.
 - The subprocess terminates when the chained mngr commands exit; output log + pid file persist for inspection.
 
 ### Status derivation (no state file)
 
-For a given `agent_id`, status is computed from three signals:
+For a given `agent_id`, status is computed from four signals:
 
-| Directory present? | `pid` alive? | Agent in `list_known_workspace_ids()`? | Status |
-|---|---|---|---|
-| no | — | — | not in flight |
-| yes | yes | — | **running** |
-| yes | no | yes | **failed** (the destroy ran but the agent is still there) |
-| yes | no | no | **done** (auto-deleted on next render) |
+| Directory present? | `pid` alive? | `exit_code` | Host still active? | Status |
+|---|---|---|---|---|
+| no | — | — | — | not in flight |
+| yes | yes | — | — | **running** |
+| yes | no | non-zero | — | **failed** (the destroy reported a failure, e.g. a leaked lease) |
+| yes | no | zero or absent | yes | **failed** (the destroy ran but the host is still there) |
+| yes | no | zero or absent | no | **done** (auto-deleted on next render) |
+
+A non-zero exit status is failed whatever the host reads as, so a destroy that could not finish its cleanup stays visible with its log instead of being finalized. "Host still active" is the whole host, not just the workspace agent: a minds host also runs a `system-services` agent, so a destroy that removed only the workspace agent must read as failed.
 
 There is one ~1-second race window: if the subprocess just exited cleanly but the destroy event hasn't propagated through `mngr observe` → plugin → minds resolver yet, the agent will still appear in `list_known_workspace_ids()` and status will momentarily read "failed". The detail page poll picks up the correct status on the next tick (the discovery tail polls at 1 Hz; see `_discovery_stream_tail_events_file` in `libs/mngr/imbue/mngr/api/discovery_events.py:716`). Acceptable jitter.
 

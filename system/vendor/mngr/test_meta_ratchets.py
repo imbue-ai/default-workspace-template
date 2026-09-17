@@ -3,6 +3,7 @@ import fnmatch
 import re
 import subprocess
 import sys
+import tomllib
 from functools import cache
 from pathlib import Path
 
@@ -14,9 +15,8 @@ from inline_snapshot import snapshot
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule_all_files
-from imbue.imbue_common.ratchet_testing.core import BINARY_FILE_EXCLUSION
 from imbue.imbue_common.ratchet_testing.core import RatchetMatchChunk
-from imbue.imbue_common.ratchet_testing.core import _get_all_files_with_extension
+from imbue.imbue_common.ratchet_testing.core import _get_all_text_files_with_extension
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_import_lint_errors
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
 from imbue.imbue_common.ratchet_testing.ratchets import find_bash_scripts_without_strict_mode
@@ -113,7 +113,7 @@ def _find_test_ratchets_file(project_dir: Path) -> Path | None:
     gitignored directory (e.g. apps/minds_evals/datasets/, whose harbor tasks
     embed a full mngr-internal clone) must not be mistaken for project code.
     """
-    matches = [f for f in _get_all_files_with_extension(project_dir, ".py") if f.name == "test_ratchets.py"]
+    matches = [f for f in _get_all_text_files_with_extension(project_dir, ".py") if f.name == "test_ratchets.py"]
     if len(matches) == 1:
         return matches[0]
     elif len(matches) == 0:
@@ -334,7 +334,7 @@ def test_numbered_sql_migrations_have_unique_numbers() -> None:
     for every directory named ``migrations`` that contains numbered SQL files.
     """
     migration_files_by_dir: dict[Path, list[Path]] = {}
-    for sql_file in _get_all_files_with_extension(_REPO_ROOT, ".sql"):
+    for sql_file in _get_all_text_files_with_extension(_REPO_ROOT, ".sql"):
         if sql_file.parent.name == "migrations" and _NUMBERED_MIGRATION_RE.match(sql_file.name):
             migration_files_by_dir.setdefault(sql_file.parent, []).append(sql_file)
     # The check must actually be exercising something; if the discovery ever
@@ -418,7 +418,7 @@ _PREVENT_OLD_MNG_NAME = RegexRatchetRule(
 
 def test_prevent_old_mng_name_in_file_contents() -> None:
     """Ensure the old 'mng' name (not followed by 'r') is not reintroduced in file contents."""
-    exclusions = _SELF_EXCLUSION + BINARY_FILE_EXCLUSION + _DATA_FILE_EXCLUSION + _MIGRATION_SCRIPT_EXCLUSION
+    exclusions = _SELF_EXCLUSION + _DATA_FILE_EXCLUSION + _MIGRATION_SCRIPT_EXCLUSION
     chunks = check_ratchet_rule_all_files(_PREVENT_OLD_MNG_NAME, _REPO_ROOT, exclusions)
     assert len(chunks) <= snapshot(0), _PREVENT_OLD_MNG_NAME.format_failure(chunks)
 
@@ -426,7 +426,7 @@ def test_prevent_old_mng_name_in_file_contents() -> None:
 def test_prevent_old_mng_name_in_file_paths() -> None:
     """Ensure the old 'mng' name (not followed by 'r') is not reintroduced in file paths."""
     mng_not_mngr = re.compile(r"mng(?!r)")
-    all_paths = _get_all_files_with_extension(_REPO_ROOT, None)
+    all_paths = _get_all_text_files_with_extension(_REPO_ROOT, None)
     mng_paths = [
         p
         for p in all_paths
@@ -439,6 +439,10 @@ def test_prevent_old_mng_name_in_file_paths() -> None:
     )
 
 
+# See test_no_import_layer_violations for the flaky/timeout rationale: under a
+# loaded sandbox the per-project pyproject parse loop has exceeded the 10s default.
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_every_project_has_pypi_readme() -> None:
     """Ensure each project's pyproject.toml has a readme field pointing to an existing file.
 
@@ -452,7 +456,10 @@ def test_every_project_has_pypi_readme() -> None:
 
     for project_dir in _get_all_project_dirs():
         pyproject_path = project_dir / "pyproject.toml"
-        pyproject = tomlkit.parse(pyproject_path.read_text())
+        # Read-only lookup, so the stdlib parser: tomlkit's round-trip document
+        # model is an order of magnitude slower, which is what let this loop
+        # trip the timeout under load.
+        pyproject = tomllib.loads(pyproject_path.read_text())
         project_section = pyproject.get("project", {})
 
         readme_value = project_section.get("readme")
@@ -989,7 +996,7 @@ def _get_root_ty_excluded_python_files() -> tuple[Path, ...]:
             continue
         path = _REPO_ROOT / str(entry)
         if path.is_dir():
-            excluded_files.extend(_get_all_files_with_extension(path, ".py"))
+            excluded_files.extend(_get_all_text_files_with_extension(path, ".py"))
         elif path.is_file() and path.suffix == ".py":
             excluded_files.append(path)
     return tuple(excluded_files)
@@ -1063,7 +1070,7 @@ def test_standalone_project_ty_carve_outs_are_checked_by_the_root_workspace() ->
             # check cannot probe is a carve-out it cannot guard, so it is reported.
             carve_out = project_dir / str(entry)
             if carve_out.is_dir():
-                carve_out_files.extend(_get_all_files_with_extension(carve_out, ".py"))
+                carve_out_files.extend(_get_all_text_files_with_extension(carve_out, ".py"))
             elif carve_out.is_file():
                 # A non-Python file is not something either type check would read.
                 if carve_out.suffix == ".py":
@@ -1256,7 +1263,7 @@ def _collect_class_defs_for_model_config_checks() -> tuple[dict[str, set[str]], 
     """
     base_names_by_class: dict[str, set[str]] = {}
     forbid_locations_by_class: dict[str, list[str]] = {}
-    for py_path in _get_all_files_with_extension(_REPO_ROOT, ".py"):
+    for py_path in _get_all_text_files_with_extension(_REPO_ROOT, ".py"):
         try:
             tree = ast.parse(py_path.read_text())
         except (SyntaxError, UnicodeDecodeError):
@@ -1418,7 +1425,7 @@ def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:
     # rglob descends into node_modules/.git/.venv and can blow the test timeout
     # on a slow sandbox.
     wire_types_paths = [
-        path for path in _get_all_files_with_extension(_REPO_ROOT, ".py") if path.name == "wire_types.py"
+        path for path in _get_all_text_files_with_extension(_REPO_ROOT, ".py") if path.name == "wire_types.py"
     ]
     for wire_types_path in wire_types_paths:
         tree = ast.parse(wire_types_path.read_text())
@@ -1470,12 +1477,12 @@ _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
 _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
     rule_name="minds references in mngr-level code",
     rule_description=(
-        "mngr-level code must not reference minds, default-workspace-template, or the "
+        "mngr-level code must not reference Mind, default-workspace-template, or the "
         "/home/user/workspace container path -- those are higher-level concerns layered on top "
         "of mngr (see specs/machine-workspace-naming/decisions.md). Describe the behavior "
         "generically (e.g. 'a caller may...') instead of naming the higher-level product."
     ),
-    pattern_string=r"(?i)\bminds\b|default[-_]workspace[-_]template|/home/user/workspace",
+    pattern_string=r"(?i)\bminds?\b|default[-_]workspace[-_]template|/home/user/workspace",
 )
 
 
@@ -1494,10 +1501,10 @@ def _mngr_level_terminology_chunks(rule: RegexRatchetRule) -> list[RatchetMatchC
 def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
     """Keep the minds-level 'workspace' vocabulary out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(337), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(333), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
 
 
 def test_prevent_minds_references_in_mngr_level_code() -> None:
     """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(348), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(317), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

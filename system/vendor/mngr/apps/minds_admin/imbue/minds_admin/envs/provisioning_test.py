@@ -25,6 +25,7 @@ from imbue.minds.config.data_types import PlanQuotasConfig
 from imbue.minds.config.data_types import ScaledownWindowConfig
 from imbue.minds.config.data_types import StorageDeployConfig
 from imbue.minds.config.data_types import WebWorkspacesConfig
+from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import SecretTemplateValidationError
@@ -55,10 +56,14 @@ from imbue.minds_admin.envs.provisioning import destroy_env
 from imbue.minds_admin.envs.provisioning import list_dev_envs
 from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
 from imbue.minds_admin.envs.provisioning import resolve_web_template_pin
+from imbue.minds_admin.envs.provisioning import update_feed_base_url_for_tier
 from imbue.minds_admin.envs.provisioning import with_analytics_enablement
+from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
 from imbue.minds_admin.envs.recover import RecoverTargetAlreadyExistsError
 from imbue.minds_admin.envs.testing import make_workspace_storage_vault_values
+from imbue.minds_admin.slices.box_registry import BoxRegistryImportReport
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
+from imbue.mngr_imbue_cloud.primitives import PRODUCTION_TIER
 from imbue.mngr_imbue_cloud.primitives import STAGING_TIER
 
 
@@ -401,6 +406,12 @@ def _build_fake_providers(
         if fail_step == "wipe_neon":
             raise NeonProviderError("neon wipe boom")
 
+    def import_registry_boxes(registry_dsn, host_pool_dsn, cg):
+        call_log["calls"].append(
+            ("import_registry_boxes", registry_dsn.get_secret_value(), host_pool_dsn.get_secret_value())
+        )
+        return BoxRegistryImportReport(imported=(), skipped=())
+
     def ensure_generation_id(tier_vault_prefix, cg):
         call_log["calls"].append(("ensure_generation_id", tier_vault_prefix))
         return "fake-generation-id"
@@ -428,6 +439,7 @@ def _build_fake_providers(
         apply_pool_hosts_migrations=apply_pool_hosts_migrations,
         apply_analytics_migrations=apply_analytics_migrations,
         seed_paid_list_defaults=seed_paid_list_defaults,
+        import_registry_boxes=import_registry_boxes,
         write_plan_defaults=write_plan_defaults,
         get_modal_app_latest_version=get_modal_app_latest_version,
         rollback_modal_app=rollback_modal_app,
@@ -444,6 +456,12 @@ def _build_fake_providers(
         ensure_generation_id=ensure_generation_id,
         delete_generation_id=delete_generation_id,
     )
+
+
+def test_workspace_storage_key_prefix_follows_the_tier_modal_env_strategy() -> None:
+    # Per-env tiers share their tier's bucket under an <env>/ prefix; shared tiers own the whole keyspace.
+    assert workspace_storage_key_prefix(DevEnvName("dev-josh"), _DEV_LIFECYCLE) == "dev-josh/"
+    assert workspace_storage_key_prefix(DevEnvName("production"), _SHARED_TIER_LIFECYCLE) == ""
 
 
 def test_deploy_dev_env_writes_split_files(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -934,7 +952,7 @@ def test_list_dev_envs_marks_dev_env_without_client_toml_as_no_client(
     assert only.client_config_path is None
 
 
-# ---------- deploy_tier_env (staging / production path) ----------
+# deploy_tier_env (staging / production path)
 
 
 def test_deploy_env_shared_tier_writes_nothing_to_disk(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -1159,6 +1177,8 @@ def _explorer_plan_quotas() -> PlanQuotasConfig:
         max_total_bucket_gb=NonNegativeInt(50),
         monthly_llm_spend_usd=NonNegativeFloat(0.0),
         max_active_synced_workspaces=NonNegativeInt(200),
+        max_active_machine_units=NonNegativeInt(16),
+        max_total_machine_disk_gb=NonNegativeInt(280),
     )
 
 
@@ -1186,6 +1206,8 @@ def test_deploy_env_writes_plan_definitions(_isolated_home: Path, _root_cg: Conc
     assert sorted(rows_by_name) == ["explorer"]
     assert rows_by_name["explorer"]["max_total_bucket_bytes"] == 50 * 1024**3
     assert rows_by_name["explorer"]["monthly_llm_spend_usd"] == 0.0
+    assert rows_by_name["explorer"]["max_active_machine_units"] == 16
+    assert rows_by_name["explorer"]["max_total_machine_disk_gb"] == 280
     assert _step_position(call_log, "write_plan_defaults") > _step_position(call_log, "apply_pool_hosts_migrations")
 
 
@@ -1885,6 +1907,23 @@ def test_resolve_web_template_pin_dev_tier_uses_the_explicit_ref_env_var(
     assert template_ref == "minds-v9.9.9"
 
 
+def test_update_feed_base_url_for_tier_reads_the_committed_production_feed() -> None:
+    lifecycle = load_deploy_config(PRODUCTION_TIER).lifecycle
+    assert update_feed_base_url_for_tier(PRODUCTION_TIER, lifecycle) == "https://updates.imbueminds.com"
+
+
+def test_update_feed_base_url_for_tier_is_empty_where_no_feed_is_committed() -> None:
+    lifecycle = load_deploy_config(STAGING_TIER).lifecycle
+    assert update_feed_base_url_for_tier(STAGING_TIER, lifecycle) == ""
+
+
+def test_update_feed_base_url_for_tier_is_empty_for_tiers_that_write_local_state() -> None:
+    # Dev envs have no committed client.toml to read, and publish no feed.
+    lifecycle = load_deploy_config(DEV_TIER).lifecycle
+    assert lifecycle.writes_local_state
+    assert update_feed_base_url_for_tier(DEV_TIER, lifecycle) == ""
+
+
 def test_deploy_env_dev_tier_with_web_workspaces_refuses_before_any_cloud_mutation(
     _isolated_home: Path, _root_cg: ConcurrencyGroup, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2200,3 +2239,59 @@ def test_with_analytics_enablement_replaces_only_the_analytics_block() -> None:
     assert base_config.analytics.is_deployed is False
     assert enabled_config.analytics.is_deployed is True
     assert enabled_config.modal_workspace == base_config.modal_workspace
+
+
+def test_deploy_env_imports_the_tier_registry_boxes_into_a_dynamic_env(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A dev deploy copies the tier registry's boxes (the Vault neon DATABASE_URL) into the env's host_pool DB after migrating it."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(
+        call_log, vault_responses={"neon": {"DATABASE_URL": "postgres://registry@infra.host/host_pool"}}
+    )
+    deploy_env(
+        DevEnvName("dev-registry-import"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    import_calls = [c for c in call_log["calls"] if c[0] == "import_registry_boxes"]
+    migration_calls = [c for c in call_log["calls"] if c[0] == "apply_pool_hosts_migrations"]
+    assert import_calls == [
+        ("import_registry_boxes", "postgres://registry@infra.host/host_pool", migration_calls[0][1])
+    ]
+    assert _step_position(call_log, "import_registry_boxes") > _step_position(call_log, "apply_pool_hosts_migrations")
+
+
+def test_deploy_env_skips_the_box_import_when_the_tier_has_no_registry(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """An empty (templated) neon DATABASE_URL leaf means the tier has no registry yet: nothing is imported."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log, vault_responses={"neon": {"DATABASE_URL": ""}})
+    deploy_env(
+        DevEnvName("dev-no-registry"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    assert [c for c in call_log["calls"] if c[0] == "import_registry_boxes"] == []
+
+
+def test_deploy_env_never_imports_boxes_into_a_shared_tier(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
+    """A shared tier's neon DATABASE_URL IS its fleet database; there is nothing to import into itself."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging"),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    assert [c for c in call_log["calls"] if c[0] == "import_registry_boxes"] == []

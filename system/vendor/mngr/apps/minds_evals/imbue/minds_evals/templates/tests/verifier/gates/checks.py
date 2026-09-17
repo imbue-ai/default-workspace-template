@@ -16,13 +16,17 @@ from rewardkit import criterion
 # document once the evidence phase captured it. The agent's replies are its `agent` steps.
 TRAJECTORY_PATH = Path("/logs/agent/trajectory.json")
 STATE_PATH = Path("/logs/agent/state.json")
+# What render_judge_transcript.py found when it scanned for the client's progress timeline.
+PROGRESS_SUMMARY_PATH = Path("/logs/agent/progress_summary.json")
 CASE_PATH = Path("/tests/case.json")
 
-# An agent that never authenticated (or is otherwise wedged) answers every turn
-# with the same short stub. Matched against the WHOLE reply (fullmatch), so a
-# real reply that merely mentions logging in is not caught -- only a reply that
-# is essentially nothing but the stub (up to ~80 trailing chars of punctuation
-# or a "please run /login" tail).
+# An agent that never authenticated (or is otherwise wedged) answers every turn with the same short
+# stub. The driver waits on the workspace's own claude-auth endpoint before it posts credentials, so
+# this is a second line rather than the only one: it catches a wedge that reached the turn loop
+# anyway, which the distinctness check below cannot see on a run that only ever sent one message.
+# Matched against the WHOLE reply (fullmatch), so a real reply that merely mentions logging in is not
+# caught -- only a reply that is essentially nothing but the stub (up to ~80 trailing chars of
+# punctuation or a "please run /login" tail).
 _STUB_REPLY_PATTERN = re.compile(
     r"\s*(not logged in|please run /login|invalid api key)[\s.·:!-]*(please run /login)?[\s.·:!-]{0,80}",
     re.IGNORECASE,
@@ -212,9 +216,34 @@ def all_turns_completed(workspace: Path) -> bool:
     return is_every_entry_completed(_load_json(STATE_PATH), _load_json(CASE_PATH))
 
 
+def is_progress_timeline_read(summary: Mapping[str, Any] | None) -> bool:
+    """Whether the timeline scan found what the agent's own commands say should be there.
+
+    An absent summary passes: a trial captured before the renderer wrote one has nothing to say about
+    its timeline, and that is not the agent's failure. So does a trial that ran no step verb.
+    """
+    if summary is None or not summary.get("is_step_command_run"):
+        return True
+    return bool(summary.get("rendered_block_count"))
+
+
 @criterion
-def not_timed_out(workspace: Path) -> bool:
-    """The run did not exceed its wall-clock budget."""
+def progress_timeline_was_read(workspace: Path) -> bool:
+    """If the agent declared progress steps, the renderer recovered at least one of them.
+
+    This is a gate rather than a judge criterion because the two things it separates are not degrees
+    of quality. `nontechnical_status_language` scores an empty timeline 10, on the reasoning that an
+    agent is not charged for a case that never warranted a plan -- so a renderer that stops reading
+    `tk`'s output scores a perfect 10 for copy nobody graded. `tk`'s output format lives in another
+    repo with no version pin here, which is exactly the kind of thing that changes without this
+    suite noticing; it has already cost us one silent break (an id prefix pinned to `wor-`).
+    """
+    return is_progress_timeline_read(_load_json(PROGRESS_SUMMARY_PATH))
+
+
+@criterion
+def finished_within_time(workspace: Path) -> bool:
+    """The run reached its end inside its wall-clock budget."""
     state = _load_json(STATE_PATH)
     if state is None:
         return False

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       app_zip_url:
-        description: 'ToDesktop .zip URL to download as a fresh minds.app. Leave empty to clean only.'
+        description: 'ToDesktop .zip URL to download as a fresh Mind.app. Leave empty to clean only.'
         required: false
         default: ''
 
@@ -24,12 +24,12 @@ jobs:
         run: |
           echo "--- ~/.minds ---"
           ls -d "$HOME/.minds" 2>&1 || echo "  absent"
-          echo "--- /Applications/minds.app ---"
-          ls -d /Applications/minds.app 2>&1 || echo "  absent"
-          echo "--- Minds processes ---"
-          if pgrep -x Minds >/dev/null; then
+          echo "--- /Applications/Mind.app ---"
+          ls -d /Applications/Mind.app 2>&1 || echo "  absent"
+          echo "--- Mind processes ---"
+          if pgrep -x Mind >/dev/null || pgrep -x Minds >/dev/null; then
             echo "  STILL RUNNING (bug) - pids:"
-            pgrep -afl Minds || true
+            pgrep -afl Mind || true; pgrep -afl Minds || true
             exit 1
           else
             echo "  none"

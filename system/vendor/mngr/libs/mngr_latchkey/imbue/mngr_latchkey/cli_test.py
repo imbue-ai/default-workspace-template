@@ -11,6 +11,7 @@ shared gateway); we cover the underlying dispatch logic in
 import contextlib
 import hashlib
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -34,8 +35,10 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import PluginConfig
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import PluginName
+from imbue.mngr_latchkey.agent_setup import _extract_agent_id_from_anyof_entry
 from imbue.mngr_latchkey.cli import ENV_LATCHKEY_BINARY
 from imbue.mngr_latchkey.cli import ENV_LATCHKEY_DIRECTORY
 from imbue.mngr_latchkey.cli import _DEFAULT_LATCHKEY_DIRECTORY
@@ -48,11 +51,18 @@ from imbue.mngr_latchkey.config import LatchkeyPluginConfig
 from imbue.mngr_latchkey.core import LATCHKEY_BINARY
 from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from imbue.mngr_latchkey.discovery_stream import DiscoveryStreamConsumer
+from imbue.mngr_latchkey.remote._mirror import generate_machine_encryption_key
+from imbue.mngr_latchkey.remote._mirror import store_machine_encryption_key
 from imbue.mngr_latchkey.store import LatchkeyForwardInfo
+from imbue.mngr_latchkey.store import LatchkeyForwardOwner
+from imbue.mngr_latchkey.store import acquire_forward_lock
+from imbue.mngr_latchkey.store import forward_lock_path
+from imbue.mngr_latchkey.store import forward_owner_path
 from imbue.mngr_latchkey.store import load_forward_info
 from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 from imbue.mngr_latchkey.store import save_forward_info
+from imbue.mngr_latchkey.store import update_forward_owner_gateway_port
 
 # A version string the upstream ``Latchkey.initialize`` is happy with.
 # Pinned to ``LATCHKEY_MIN_VERSION`` so the fake binary we drop on $PATH
@@ -343,12 +353,12 @@ def test_admin_jwt_prints_jwt_and_creates_admin_file(
 
 @contextlib.contextmanager
 def _fake_running_supervisor() -> Iterator[int]:
-    """Yield the PID of a sleeping subprocess whose cmdline passes the supervisor liveness check.
+    """Yield the PID of a sleeping subprocess that passes the pre-lock forward check.
 
-    The subprocess's argv is shaped like ``[python, -c, ..., "mngr",
-    "latchkey", "forward"]`` so
-    :func:`_cmdline_looks_like_mngr_latchkey_forward` accepts it.
-    Terminated on context exit.
+    That check reads two things, and the subprocess is built for both: its argv
+    ends in ``mngr latchkey forward`` so it looks like one, and it starts here,
+    moments before the record naming it is written, so it is old enough to be
+    the process that wrote it. Terminated on context exit.
     """
     proc = subprocess.Popen(
         [sys.executable, "-c", "import signal; signal.pause()", "mngr", "latchkey", "forward"],
@@ -384,14 +394,19 @@ def test_gateway_info_prints_url_and_password_when_supervisor_record_is_ready(
     monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    with _fake_running_supervisor() as pid:
-        save_forward_info(plugin_data_dir(latchkey_root), _build_forward_info(pid=pid, gateway_port=32867))
+    data_dir = plugin_data_dir(latchkey_root)
+    lock = acquire_forward_lock(data_dir)
+    assert lock is not None
+    try:
+        update_forward_owner_gateway_port(data_dir, 32867)
         result = cli_runner.invoke(
             latchkey,
             ["gateway-info"],
             obj=plugin_manager,
             catch_exceptions=False,
         )
+    finally:
+        lock.release()
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     expected_password = hashlib.sha256(b"fake-jwt-for:/__minds_gateway_password__/sentinel").hexdigest()
@@ -435,17 +450,20 @@ def test_gateway_info_exits_nonzero_when_supervisor_record_is_stale(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Record exists but its PID is a stranger (or dead) => non-zero exit, same message as 'no record'.
+    """Record exists but its PID does not own the directory => non-zero exit, same message as 'no record'.
 
-    Picks PID 1 (init) on Linux: alive, but its cmdline is not ours, so
-    :func:`is_forward_info_alive` rejects it -- the exact PID-reuse case
-    we want the subcommand to handle, not propagate as 'still warming up'.
+    PID 1 is alive on every POSIX system and holds no forward lock, so it stands
+    in for a record naming a process that outlived the forward that wrote it.
+    That is the PID-reuse case the subcommand must handle rather than propagate
+    as 'still warming up'.
     """
     del clean_latchkey_env
     monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
     monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
     monkeypatch.setenv("HOME", str(tmp_path))
-    save_forward_info(plugin_data_dir(latchkey_root), _build_forward_info(pid=1, gateway_port=32867))
+    data_dir = plugin_data_dir(latchkey_root)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    forward_owner_path(data_dir).write_text(LatchkeyForwardOwner(pid=1, gateway_port=32867).model_dump_json())
 
     result = cli_runner.invoke(
         latchkey,
@@ -472,14 +490,19 @@ def test_gateway_info_exits_nonzero_while_supervisor_still_warming_up(
     monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    with _fake_running_supervisor() as pid:
-        save_forward_info(plugin_data_dir(latchkey_root), _build_forward_info(pid=pid, gateway_port=None))
+    # Taking the lock records an owner with no port yet, which is exactly the
+    # state a forward is in between claiming its directory and binding.
+    lock = acquire_forward_lock(plugin_data_dir(latchkey_root))
+    assert lock is not None
+    try:
         result = cli_runner.invoke(
             latchkey,
             ["gateway-info"],
             obj=plugin_manager,
             catch_exceptions=False,
         )
+    finally:
+        lock.release()
     assert result.exit_code != 0
     assert "has not finished binding" in result.output
 
@@ -599,7 +622,7 @@ def test_link_permissions_rejects_missing_opaque_path(
 # -- forward ----------------------------------------------------------------
 
 
-def test_forward_refuses_to_start_when_another_supervisor_is_alive(
+def test_forward_refuses_to_start_when_the_directory_is_already_owned(
     cli_runner: CliRunner,
     plugin_manager: pluggy.PluginManager,
     latchkey_root: Path,
@@ -608,14 +631,57 @@ def test_forward_refuses_to_start_when_another_supervisor_is_alive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A live competing forward record => clean ClickException, no second gateway spawn."""
+    """A held ownership lock => clean ClickException naming the owner, and no record written.
+
+    ``is_singleton=False`` gives the command's acquire its own connection to the
+    lock database rather than the one held here, so holding it contends exactly
+    as another ``mngr latchkey forward`` would.
+    """
+    del clean_latchkey_env
+    monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
+    monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    data_dir = plugin_data_dir(latchkey_root)
+    lock = acquire_forward_lock(data_dir)
+    assert lock is not None
+    try:
+        result = cli_runner.invoke(
+            latchkey,
+            ["forward"],
+            obj=plugin_manager,
+            catch_exceptions=False,
+        )
+    finally:
+        lock.release()
+    assert result.exit_code != 0
+    assert "already owns" in result.output.lower()
+    assert str(os.getpid()) in result.output
+    assert load_forward_info(data_dir) is None
+
+
+def test_forward_refuses_to_start_beside_a_forward_from_an_earlier_build(
+    cli_runner: CliRunner,
+    plugin_manager: pluggy.PluginManager,
+    latchkey_root: Path,
+    fake_latchkey_binary: Path,
+    clean_latchkey_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A forward predating the ownership lock holds none, so only its record announces it.
+
+    CLEANUP: delete with ``_pre_lock_migration``. Without this the new forward
+    would take the lock uncontended and run beside the old one, putting two
+    ``mngr observe`` producers on one events file.
+    """
     del clean_latchkey_env
     monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
     monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
     monkeypatch.setenv("HOME", str(tmp_path))
 
     with _fake_running_supervisor() as pid:
-        save_forward_info(plugin_data_dir(latchkey_root), _build_forward_info(pid=pid, gateway_port=12345))
+        save_forward_info(plugin_data_dir(latchkey_root), _build_forward_info(pid=pid, gateway_port=None))
         result = cli_runner.invoke(
             latchkey,
             ["forward"],
@@ -623,15 +689,119 @@ def test_forward_refuses_to_start_when_another_supervisor_is_alive(
             catch_exceptions=False,
         )
     assert result.exit_code != 0
-    assert "already running" in result.output.lower()
+    assert "from an earlier build is still running" in result.output
     assert str(pid) in result.output
-    # The competing record must be preserved verbatim -- the failing
-    # ``forward`` invocation must not clobber the live supervisor's
-    # PID.
-    persisted = load_forward_info(plugin_data_dir(latchkey_root))
-    assert persisted is not None
-    assert persisted.pid == pid
-    assert persisted.gateway_port == 12345
+
+
+def test_forward_reports_an_unclaimable_directory_as_a_clean_failure(
+    cli_runner: CliRunner,
+    plugin_manager: pluggy.PluginManager,
+    latchkey_root: Path,
+    fake_latchkey_binary: Path,
+    clean_latchkey_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A lock that cannot be taken at all exits cleanly, not as an unhandled fault.
+
+    ``catch_exceptions=False`` re-raises anything that is not a click
+    control-flow exception, so a store error that reached the command boundary
+    unconverted fails this test outright. That matters beyond tidiness: the
+    forward's Sentry boundary exempts only ``ClickException``, so an unconverted
+    error is also reported as a daemon crash. A directory standing where the
+    lock file belongs is refused by the kernel whatever the caller's privileges
+    are.
+    """
+    del clean_latchkey_env
+    monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
+    monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    data_dir = plugin_data_dir(latchkey_root)
+    forward_lock_path(data_dir).mkdir(parents=True)
+    result = cli_runner.invoke(
+        latchkey,
+        ["forward"],
+        obj=plugin_manager,
+        catch_exceptions=False,
+    )
+    assert result.exit_code != 0
+    assert "failed to claim this latchkey directory" in result.output.lower()
+    assert load_forward_info(data_dir) is None
+
+
+# -- register-agent ---------------------------------------------------------
+
+
+def _registered_agent_ids(latchkey_root: Path, host_id: HostId) -> set[str]:
+    """The agent ids the host's canonical file admits to the Minds API proxy."""
+    config = json.loads(permissions_path_for_host(plugin_data_dir(latchkey_root), host_id).read_text())
+    any_of = config["schemas"]["minds-api-proxy-per-agent-unauthorized"]["properties"]["path"]["not"]["anyOf"]
+    return {_extract_agent_id_from_anyof_entry(entry) for entry in any_of}
+
+
+def test_register_agent_writes_the_local_file_for_a_host_with_no_machine_of_its_own(
+    cli_runner: CliRunner,
+    plugin_manager: pluggy.PluginManager,
+    latchkey_root: Path,
+    fake_latchkey_binary: Path,
+    clean_latchkey_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A local host's gateway reads this computer's file, so the edit is the whole change."""
+    del clean_latchkey_env
+    monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
+    monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    agent_id = AgentId.generate()
+
+    result = cli_runner.invoke(
+        latchkey,
+        ["register-agent", "--host-id", str(_HOST_ID_ONE), "--agent-id", str(agent_id)],
+        obj=plugin_manager,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _registered_agent_ids(latchkey_root, _HOST_ID_ONE) == {str(agent_id)}
+
+
+def test_register_agent_fails_loudly_when_the_host_has_a_machine_it_cannot_reach(
+    cli_runner: CliRunner,
+    plugin_manager: pluggy.PluginManager,
+    latchkey_root: Path,
+    fake_latchkey_binary: Path,
+    clean_latchkey_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A host with a machine of its own must be handed the file; when it cannot be, the exit says so.
+
+    The machine's gateway enforces its own copy, so a registration that stops at
+    this computer's file has not admitted the agent there. The local edit still
+    stands -- the next read of the machine carries it over -- and the message
+    says as much.
+    """
+    del clean_latchkey_env
+    monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
+    monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # A recorded machine key is what marks a host as having a machine of its
+    # own; no discovery event stream exists here, so its agent resolves to nothing.
+    store_machine_encryption_key(plugin_data_dir(latchkey_root), _HOST_ID_ONE, generate_machine_encryption_key())
+    agent_id = AgentId.generate()
+
+    result = cli_runner.invoke(
+        latchkey,
+        ["register-agent", "--host-id", str(_HOST_ID_ONE), "--agent-id", str(agent_id)],
+        obj=plugin_manager,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    assert "Registered locally" in result.output
+    assert _registered_agent_ids(latchkey_root, _HOST_ID_ONE) == {str(agent_id)}
 
 
 # -- Group wiring -----------------------------------------------------------

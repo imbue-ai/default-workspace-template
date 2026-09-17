@@ -13,17 +13,10 @@ dependencies = [
 [tool.uv]
 # Supply-chain cooldown: uv ignores any package uploaded after this timestamp
 # when resolving, so we only adopt releases public long enough for malware to
-# surface. scripts/release.py advances it to 2 weeks before each release, but
-# only ever forward -- pushing it back would re-exclude a deliberately-pinned
-# fresh dep and break resolution. This only buys a detection delay;
-# it can't catch a compromise that stays undetected past the window.
-exclude-newer = "2026-07-20T00:00:00Z"
-# modal 1.5.4 (2026-08-12) is the first release carrying the MODAL_SANDBOX_V2
-# opt-in for Modal's V2 Sandbox backend, so it postdates the global cutoff -- but
-# it has been public well past the 2-week cooldown window. Override just this
-# package rather than advancing the global cutoff, which would adopt every dep's
-# newer releases at once.
-exclude-newer-package = { modal = "2026-08-13T00:00:00Z" }
+# surface. scripts/release.py advances it to 2 weeks before each release, and
+# only ever forward. This only buys a detection delay; it can't catch a
+# compromise that stays undetected past the window.
+exclude-newer = "2026-09-01T00:00:00Z"
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
@@ -61,6 +54,9 @@ dev = [
     "moto[s3]>=5.0",
     # Validates the generated /api/schema OpenAPI document in minds tests.
     "openapi-spec-validator>=0.7",
+    # psycopg2's SQLSTATE exception classes are injected into psycopg2.errors by
+    # its C extension, so only the stubs declare them to a type checker.
+    "types-psycopg2>=2.9.21",
 ]
 
 # Shared pytest settings (markers, filterwarnings, coverage report config)
@@ -91,6 +87,7 @@ addopts = [
   "--cov=imbue.resource_guards",
   "--cov=imbue.overlay",
   "--cov=imbue.mngr_claude",
+  "--cov=imbue.mngr_autocompact",
   "--cov=imbue.mngr_claude_subagent_proxy",
   "--cov=imbue.mngr_opencode",
   "--cov=imbue.mngr_antigravity",
@@ -116,6 +113,7 @@ addopts = [
   "--cov=imbue.mngr_tmr",
   "--cov=imbue.mngr_mapreduce",
   "--cov=imbue.mngr_behaviors",
+  "--cov=imbue.mngr_witness",
   "--cov=imbue.skitwright",
   "--cov=imbue.minds",
   "--cov=imbue.minds_admin",
@@ -207,14 +205,15 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 # modules are type-checked against their own environment by `test-minds-evals`.
 # The exception is imbue/minds_evals/resources/, which is deliberately NOT
 # excluded here: those files are shipped as source into the eval box and run
-# against the monorepo venv, so this workspace is the environment they actually
-# execute in, and the standalone project (which has no mngr_forward) cannot
-# resolve them. Do NOT collapse the entries below into a plain
-# "apps/minds_evals/": that excludes resources/ too, and since the standalone
-# project excludes it as well, it leaves those files type-checked nowhere
-# (test_meta_ratchets.py probes ty for exactly that). The cost of naming the
-# package's own modules instead is that a new subpackage importing harbor fails
-# here until it is added -- loudly, which is the point.
+# against the monorepo venv there (the proxy hooks against the box's own venv,
+# which installs the litellm version this workspace is pinned to), so this
+# workspace is the environment they actually execute in, and the standalone
+# project (which has no mngr_forward) cannot resolve them. Do NOT collapse the
+# entries below into a plain "apps/minds_evals/": that excludes resources/ too,
+# and since the standalone project excludes it as well, it leaves those files
+# type-checked nowhere (test_meta_ratchets.py probes ty for exactly that). The
+# cost of naming the package's own modules instead is that a new subpackage
+# importing harbor fails here until it is added -- loudly, which is the point.
 exclude = [
     "scripts/style_guide.py",
     "contrib/",
@@ -409,6 +408,15 @@ layers = [
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",
+]
+# ``slices.gen2_scripts`` is the package's leaf (it ships into the connector
+# container and imports nothing from the package outside itself -- its own
+# ratchet in test_project_ratchets.py keeps it on the stdlib, pydantic, yaml,
+# and imbue_common), but import-linter cannot express a layer nested inside
+# another, so the lower-layer uses of it are listed here instead.
+ignore_imports = [
+    "imbue.mngr_imbue_cloud.interfaces -> imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands",
+    "imbue.mngr_imbue_cloud.primitives -> imbue.mngr_imbue_cloud.slices.gen2_scripts.regions",
 ]
 
 [[tool.importlinter.contracts]]

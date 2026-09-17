@@ -28,7 +28,7 @@ What ends up in the container is exactly three things:
 
 1. **The image**: `pinned_image(...)` -- the digest-pinned `python:3.12-slim-trixie` base plus the app's hash-locked pip set (plus any build steps like prisma codegen). Built once and cached; rebuilt only when the pinned inputs / build steps change, and byte-reproducible when it does (see "Every image input is pinned" below).
 2. **The entrypoint file**: Modal's file-path deploy auto-mounts *only* `app.py`, at `/root/app.py`, imported in-container as top-level module `app`.
-3. **The source mounts**: one trailing `add_local_python_source(...)` call listing the packages the app needs (e.g. `"imbue.remote_service_connector", "imbue.modal_app_kit"`), filtered by `shipped_python_source_ignore`.
+3. **The source mounts**: one trailing `add_local_python_source(...)` call listing the packages the app needs (e.g. the connector's `"imbue.remote_service_connector", "imbue.modal_app_kit", "imbue.mngr_imbue_cloud.slices.gen2_scripts", "imbue.imbue_common"`), filtered by `shipped_python_source_ignore`. A dotted subpackage mounts at its dotted path under `/root` without its parents' `__init__.py`, and imports as an implicit namespace package.
 
 Nothing else from the monorepo exists at runtime.
 
@@ -58,7 +58,7 @@ Because the container has only the pip set + the shipped packages, **shipped mod
 
 This cannot be prevented structurally, so it is enforced by tests in each app (see `test_project_ratchets.py` in `apps/remote_service_connector` and in this library):
 
-- shipped modules import only stdlib + the pip set (the allowed import roots live in the app's `deploy_constants.py`, and a drift test ties them to the pyproject image group the image installs, so the two cannot drift) + shipped packages;
+- shipped modules import only stdlib + the pip set (the allowed import roots live in the app's `deploy_constants.py`, and a drift test ties them to the pyproject image group the image installs, so the two cannot drift) + shipped packages -- checked **transitively** (`testing.transitive_shipped_imports`): an import into another mounted package is followed into that package's module, so a mounted library whose other modules need packages the image lacks (the connector ships `imbue.imbue_common` for its frozen-model base, but `imbue_common.logging` needs loguru) fails the test at the first module that would reach them, and an import of a mount-excluded file (a `testing.py`, a test, the entrypoint) is flagged the same way;
 - no shipped module imports the `app` entrypoint;
 - only the entrypoint imports `modal` (Modal injects its client into containers, but deployment concerns stay in one file);
 - this library stays stdlib+modal only, since it ships into every consumer's container -- with the single per-module allowance for `sentry.py`'s `sentry_sdk` import described above (consumers of that module pin `sentry-sdk` in their image groups).

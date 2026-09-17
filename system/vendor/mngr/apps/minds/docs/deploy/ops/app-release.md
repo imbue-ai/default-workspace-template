@@ -34,7 +34,7 @@ gh run list -R imbue-ai/mngr-internal --workflow=minds-launch-to-msg.yml -L 5 \
 ```
 
 Version not bumped or a tag missing → step 1. Both tags exist without a green
-launch-to-msg → step 8. Green → done here until promotion (step 9).
+launch-to-msg → step 8. Green → done here until promotion (steps 9 and 9b).
 
 A run reporting success in **under ~2 minutes** was a marker **cache skip**, not
 a verification — check its job durations.
@@ -182,6 +182,11 @@ uv run apt-mirror verify
 Only after the cut succeeds, commit the new timestamp to
 `.mngr/apt-snapshot-timestamp` on the DEFAULT_WORKSPACE_TEMPLATE branch --
 it must match the freshly committed `apps/apt_mirror/current-timestamp`.
+The cut also freezes the `docker` archive (the pinned engine the gen-2 slice
+guest images install), and `warm` is what pins its package files, so never
+skip the warm; the gen-2 prep reads the committed `current-timestamp` to
+pick the docker archive it installs from, and re-stages every gen-2 box's
+guest image on its next prep after a bump.
 Setting `APT_MIRROR_BASE_URL` empty in a workspace build falls back to
 snapshot.debian.org at the same timestamp (correct but throttled), so a
 not-yet-warmed mirror degrades to slow, never to wrong; warming only
@@ -200,6 +205,10 @@ Also maintain the connector's wire-compat snapshot corpus (`apps/remote_service_
 - **Append** a snapshot module for the release being cut (`wire_models_minds_<version>.py`, registered in `wire_compat_test.py`'s `_SNAPSHOTS`): a self-contained copy of the release's strict-parsed connector response models, stamped with `RELEASE_DATE` and a `SUPPORT_ENDS` of release date + the support window (~1 month today). While every client model is a tolerant `WireModel`, consecutive releases usually share a snapshot — only add a new module when the strictly-parsed surface actually changed; otherwise extend the newest snapshot's `SUPPORT_ENDS` to cover the new release.
 
 - **Prune** any snapshot whose `SUPPORT_ENDS` has passed (the compat test fails loudly until you do), after confirming via the connector access log's `imbue_client` field that no in-window clients of that release remain. Pruning is what un-freezes the response shapes that snapshot pins; also remove any server-side compat shims whose `CLEANUP` note keys off that release.
+
+Also check the two Debian-trixie guest-image pins still agree: DEFAULT_WORKSPACE_TEMPLATE's `[providers.lima]` `default_image_url_*` (desktop Lima VMs) and the `debian-cloud-image` entries of the artifact manifest in `apps/minds_admin/imbue/minds_admin/slices/mirror_artifacts.py` (gen-2 cloud slice guests, specs/slice-fleet-gen2). Both point at imbue's artifact mirror and pin the same cloud-image release so desktop and cloud workspaces run the identical guest OS — bump them together, never one alone.
+
+**Upload before you bump any mirrored pin.** Every artifact the fleet pins (the cloud images, gVisor, age, s5cmd, uv, onetun, the otel collector; see `apps/apt_mirror/README.md`, "Artifacts") is served from the mirror with no upstream fallback, so a pin that names an artifact the mirror lacks fails every prep with a 404. To bump one: add the new release to the manifest with its digest, run `uv run minds-admin artifacts upload` (credentials from the `secrets/minds/production/apt-mirror` Vault entry), confirm with `uv run minds-admin artifacts verify`, and only then land the bump (and, for the cloud image, the matching DEFAULT_WORKSPACE_TEMPLATE `[providers.lima]` URLs).
 
 ### 2. Traditional CI on both branches (parallel, not a serial gate)
 
@@ -371,6 +380,45 @@ unattended — the `minds-release` environment has no reviewers. Confirm after:
 curl -s https://updates.imbueminds.com/<channel>-mac.yml | grep -E 'version:|stagingPercentage:'
 ```
 
+### 9b. Repoint the web channels
+
+The same file's `[web_channels.<channel>]` entries name the template tag browser
+creates (`/hosts/claim`) pin to, published as `<channel>-web.json` and read by the
+connector on every web create (cached about a minute), so no connector deploy is
+involved:
+
+```toml
+[web_channels.alpha]
+template_ref = "minds-v0.5.0"
+```
+
+The production order is: deploy the connector ([services.md](./services.md)),
+bake the pool at the tag ([pool-hosts.md](./pool-hosts.md)), then repoint here.
+Repoint a web channel only **after** the pool has `available` rows at that tag:
+web creates lease an exact match and have no rebuild fallback, and the publish
+checks only that the tag exists on the template remote. Until you repoint, browser
+creates keep leasing the old tag, so do not retire those rows first; they can go
+once no `<channel>-web.json` on the feed names that tag and the connector's
+one-minute cache has rolled ([pool-hosts.md](./pool-hosts.md) owns the retire).
+
+The web pin is deliberately independent of the desktop entry: a web-only template
+fix is a dwt tag baked to the pool plus this one line, and a desktop promotion
+never moves it. Which channel a web user is on is their own choice in the web
+chrome's Settings (default stable). Confirm with:
+
+```bash
+curl -s https://updates.imbueminds.com/<channel>-web.json
+```
+
+then create a workspace from the web chrome on that channel and check the
+connector log for `Could not read the web pin` (a feed read problem) or `No web
+pin published` (the channel file is missing).
+
+Staging and dev envs publish no feed, so this step does not apply there: their
+browser creates pin to the deploy-time `MINDS_WEB_TEMPLATE_REF`, so a deploy
+moves them at once. Those tiers still deploy first and bake right after; their
+browser-chrome creates answer 503 in between, which is acceptable there.
+
 > **Historical note, not a step.** The first channel-capable build had to be
 > Released in ToDesktop once, because installs predating the channel code read
 > ToDesktop's own feed and would never have seen our manifests. That happened
@@ -478,9 +526,16 @@ harmless.
 Clients only offer a channel beyond stable when the tier's `client.toml` sets
 `update_feed_base_url`; a tier that sets none is stable-only and still auto-updates.
 Production sets it (`https://updates.imbueminds.com`), so builds cut from here offer
-stable and alpha; beta is in the machinery but listed for nobody until an audience
-for it is decided. That URL is compiled in at build time, so installs shipped before it was
+all three channels: stable, beta and alpha, each a user's own choice in the
+app's Settings. That URL is compiled in at build time, so installs shipped before it was
 committed stay stable-only for good. See `specs/minds-release-channels/spec.md`.
+
+The same feed carries the web create pins (`<channel>-web.json`, from the file's
+`[web_channels.*]` entries; see step 9b). `minds-admin env deploy` hands the tier's
+`update_feed_base_url` to the connector, which reads the pin for the channel a
+web user chose. A tier with no feed (staging, dev envs) pins web creates to the
+deploy-time `MINDS_WEB_TEMPLATE_REF` instead, as does production while the feed
+cannot be read.
 
 ### Working on the update UI
 

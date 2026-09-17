@@ -8,6 +8,7 @@ import { getAppContext } from "../../../app-context";
 import { Button } from "../../components/Button";
 import { ColorSwatch } from "../../components/ColorSwatch";
 import { Icon16 } from "../../components/Icon";
+import { machineVerdict } from "../../components/MachineVerdict";
 import { Modal } from "../../components/Modal";
 import { Notice } from "../../components/Notice";
 import { routeLinkAttrs } from "../../components/route-link";
@@ -15,7 +16,7 @@ import { SectionHeader } from "../../components/Layout";
 import { TextInput } from "../../components/FormControls";
 import type { UiWorkspaceUpdate } from "../../../channel/messages";
 import type { SettingsGroup, WorkspaceOptionsModel } from "../../../models/workspaceOptions";
-import { normalizeWorkspaceColorHex } from "../../../models/workspaceOptions";
+import { formatMachineSize, formatPendingMachineSize, normalizeWorkspaceColorHex } from "../../../models/workspaceOptions";
 import {
   devOverridePrefill,
   isRecreationRequired,
@@ -24,7 +25,7 @@ import {
   updateActivityNotice,
 } from "../../../models/updates";
 import { noBackupConfirmPrompt, scheduledLine, updateVersionRow } from "../../components/UpdateModal";
-import { BackupGroupSlot } from "./BackupGroupSlot";
+import { BackupGroup } from "./BackupGroup";
 import { Spinner } from "../../components/Spinner";
 import { navEntryClass, splitPane } from "../../components/SplitPane";
 import { workspacePageNoticeFor } from "../../shell/notice-band";
@@ -59,7 +60,7 @@ interface SettingsGroupsLocalState {
   /** The press held for the go-ahead-without-backups confirmation, and its machine. */
   noBackupConfirm: { agentId: string; action: "now" | "schedule"; targetRef: string } | null;
   /** The last dispatch's refusal and the machine it was refused for, or null. */
-  updateError: { agentId: string; message: string } | null;
+  updateError: { agentId: string; message: string; detail: string } | null;
 }
 
 /** The piece of update state only when it belongs to the machine being drawn:
@@ -124,7 +125,7 @@ export function SettingsGroups(): m.Component<SettingsGroupsAttrs> {
           content: [
             selectedGroup === "general" ? renderGeneralGroup(model, local) : null,
             selectedGroup === "account" ? renderAccountGroup(model, local) : null,
-            selectedGroup === "backup" ? m(BackupGroupSlot, { agentId: data.agent_id }) : null,
+            selectedGroup === "backup" ? m(BackupGroup, { agentId: data.agent_id }) : null,
             selectedGroup === "updates" ? renderUpdatesGroup(data.agent_id, local) : null,
           ],
           extra: "mt-8",
@@ -165,7 +166,7 @@ function disabledUpdateReason(update: UiWorkspaceUpdate): m.Children {
     update.availability === "UP_TO_DATE"
       ? "This machine is up to date."
       : update.availability === "APP_BEHIND"
-        ? "This machine is newer than this copy of Minds. Update the app to catch up."
+        ? "This machine is newer than this copy of Mind. Update the app to catch up."
         : isRecreationRequired(update)
           ? "This machine is too old to update in place. Create a new machine and ask its agent to migrate your work across."
           : "";
@@ -216,7 +217,7 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
       action === "schedule" ? updates.scheduleUpdate(agentId, targetRef) : updates.cancelSchedule(agentId);
     void call.then((result) => {
       if (local.pendingSchedule === inFlight) local.pendingSchedule = null;
-      if (!result.isOk) local.updateError = { agentId, message: result.error };
+      if (!result.isOk) local.updateError = { agentId, message: result.error, detail: result.detail };
       m.redraw();
     });
   }
@@ -231,20 +232,21 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
       if (local.pendingDispatch === inFlight) local.pendingDispatch = null;
       // Into the machine, as the modal's Update now does: an attended update is a conversation.
       if (result.isOk) shell.enterWorkspace(agentId);
-      else local.updateError = { agentId, message: result.error };
+      else local.updateError = { agentId, message: result.error, detail: result.detail };
       m.redraw();
     });
   }
 
   const activity = updateActivityNotice(update, isUpdating);
   const held = forMachine(local.noBackupConfirm, agentId);
-  const errorMessage = forMachine(local.updateError, agentId)?.message ?? "";
+  const shownError = forMachine(local.updateError, agentId);
+  const errorMessage = shownError?.message ?? "";
 
   return m("div", { class: "max-w-md" }, [
     m(SectionHeader, "Version"),
     m("div", { class: "flex flex-col gap-1 mb-8" }, [
       updateVersionRow("This machine", update.current_version ?? ""),
-      updateVersionRow("Supported by Minds", update.supported_version ?? ""),
+      updateVersionRow("Supported by Mind", update.supported_version ?? ""),
     ]),
     m(SectionHeader, "Update"),
     m("div", { id: "ws-updates-group", class: "mb-3" }, [
@@ -382,13 +384,13 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
                     ? m(
                         "p",
                         { class: "type-helper text-tertiary" },
-                        "Prefilled with the template ref this build of Minds runs from.",
+                        "Prefilled with the template ref this build of Mind runs from.",
                       )
                     : null,
                   m(
                     "p",
                     { class: "type-helper text-tertiary" },
-                    "Works on an up-to-date machine too. A version newer than this Minds app, a branch, or a bare " +
+                    "Works on an up-to-date machine too. A version newer than this Mind app, a branch, or a bare " +
                       "ref is allowed and applied without further confirmation: it may not be a tested release, " +
                       "parts of this machine may stop working until the app catches up, and the update agent " +
                       'offers a rollback afterwards. On a branch, this machine may afterwards read as "version unknown".',
@@ -398,7 +400,10 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
           ]),
           ],
       errorMessage
-        ? m("p", { class: "type-helper text-important mt-3", role: "alert" }, errorMessage)
+        ? m("div", { class: "type-helper text-important mt-3", role: "alert" }, [
+            errorMessage,
+            machineVerdict(shownError?.detail ?? ""),
+          ])
         : null,
     ]),
   ]);
@@ -529,6 +534,8 @@ function renderGeneralGroup(model: WorkspaceOptionsModel, local: SettingsGroupsL
         : null,
     ]),
 
+    renderMachineSizeSection(model),
+
     m(SectionHeader, "ID"),
     m("p", { class: "type-body font-mono text-secondary mb-8 select-all break-all" }, data.agent_id),
 
@@ -553,6 +560,30 @@ function renderGeneralGroup(model: WorkspaceOptionsModel, local: SettingsGroupsL
       ? m("p", { id: "destroy-error", class: "type-body text-important mt-2" }, model.destroyErrorMessage)
       : null,
   ]);
+}
+
+/** Read-only machine size for leased machines (specs/slice-fleet): current
+ * size plus a passive restart-to-apply note when a resize is pending. Hidden
+ * entirely (null) until the lazy size fetch succeeds. */
+function renderMachineSizeSection(model: WorkspaceOptionsModel): m.Children {
+  const size = model.machineSize;
+  if (size === null || !size.is_available) return null;
+  const currentLabel = formatMachineSize(size);
+  if (!currentLabel) return null;
+  const pendingLabel = formatPendingMachineSize(size);
+  return [
+    m(SectionHeader, "Machine size"),
+    m("div", { id: "machine-size-section", class: "mb-8" }, [
+      m("p", { class: "type-body text-secondary" }, currentLabel),
+      pendingLabel
+        ? m(
+            Notice,
+            { variant: "info" },
+            `A new size is pending (${pendingLabel}). Restart this machine to apply it.`,
+          )
+        : null,
+    ]),
+  ];
 }
 
 async function saveColorDraft(

@@ -288,7 +288,8 @@ def apply_pool_hosts_migrations(
 
 # Column order for the connector's ``plans`` table writes. Must match the
 # columns created by migration 014_plans_entitlements.sql plus
-# max_total_workspaces added by 024_workspace_stop_start.sql.
+# max_total_workspaces added by 024_workspace_stop_start.sql and the machine
+# sizing quotas added by 036_machine_sizing.sql.
 _PLAN_QUOTA_COLUMNS: Final[tuple[str, ...]] = (
     "max_remote_workspaces",
     "max_total_workspaces",
@@ -296,6 +297,8 @@ _PLAN_QUOTA_COLUMNS: Final[tuple[str, ...]] = (
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
     "max_active_synced_workspaces",
+    "max_active_machine_units",
+    "max_total_machine_disk_gb",
 )
 
 

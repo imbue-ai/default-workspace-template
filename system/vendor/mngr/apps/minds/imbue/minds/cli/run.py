@@ -48,6 +48,7 @@ from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clon
 from imbue.minds.desktop_client.api_key_store import generate_api_key
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.app import start_discovery_health_watchdog_loop
+from imbue.minds.desktop_client.app import start_folder_syncs
 from imbue.minds.desktop_client.app import start_sleep_heartbeat_loop
 from imbue.minds.desktop_client.app import start_system_interface_health_probe_loop
 from imbue.minds.desktop_client.app import start_workspace_update_loops
@@ -67,10 +68,13 @@ from imbue.minds.desktop_client.laptop_agent_types_seed import seed_laptop_agent
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
 from imbue.minds.desktop_client.latchkey.handlers.accounts import AccountsPermissionGrantHandler
+from imbue.minds.desktop_client.latchkey.handlers.custom_service import CustomServiceGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.file_sharing import FileSharingGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.workspace import WorkspacePermissionGrantHandler
+from imbue.minds.desktop_client.latchkey.machine_access import MachineAccess
+from imbue.minds.desktop_client.latchkey.machine_operations import MachineOperator
 from imbue.minds.desktop_client.latchkey.pending_requests import GatewayPendingRequests
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
 from imbue.minds.desktop_client.latchkey_auto_register import LatchkeyAutoRegister
@@ -306,15 +310,14 @@ def run(
     except DockerCleanupError as exc:
         logger.warning("Could not start the Docker state container at launch: {}", exc)
 
-    # Spawn (or adopt) a detached ``mngr latchkey forward`` supervisor.
-    # The supervisor owns the shared latchkey gateway + per-agent reverse
-    # tunnels; running it as a detached subprocess (rather than the inline
-    # ``LatchkeyDiscoveryHandler``/``SSHTunnelManager`` wiring that used to
-    # live here) means a minds restart adopts the existing instance instead
-    # of tearing every tunnel down and re-establishing it. We do *not*
-    # terminate it on minds shutdown -- mirroring how minds already leaves
-    # the gateway running detached so agents in containers/VMs keep working
-    # across desktop-client restarts.
+    # Spawn a detached ``mngr latchkey forward`` supervisor. It owns the
+    # shared latchkey gateway + per-agent reverse tunnels. On every minds
+    # start it is terminated and respawned (see
+    # ``_restart_mngr_latchkey_forward_supervisor``) so it always runs the
+    # current code with the current env; the reverse tunnels are
+    # re-established as discovery re-fires. We do *not* terminate it on
+    # minds shutdown -- it keeps running detached so agents in
+    # containers/VMs keep working across desktop-client restarts.
     gateway_client = LatchkeyGatewayClient.from_latchkey(latchkey)
 
     # Build the supervisor once and keep the handle: the startup restart runs on
@@ -437,41 +440,70 @@ def run(
     mngr_caller = get_default_mngr_caller()
     mngr_caller.initialize(root_concurrency_group)
     mngr_message_sender = MngrMessageSender(mngr_caller=mngr_caller, concurrency_group=root_concurrency_group)
+    machine_operator = MachineOperator(
+        access=MachineAccess(
+            latchkey=latchkey,
+            concurrency_group=root_concurrency_group,
+            # The resolver itself, not a lookup through the app state: machine
+            # operations also run on background threads (an auto-registration
+            # push), where ``get_state()``'s ``current_app`` is unbound.
+            backend_resolver=backend_resolver,
+        )
+    )
+    # Loading the provider set imports every installed provider plugin, which is
+    # seconds of work; started here so the first Permissions tab open finds it
+    # done rather than paying for it under a spinner.
+    machine_operator.access.warm()
     latchkey_permission_handler = LatchkeyPermissionGrantHandler(
         data_dir=data_directory,
         latchkey=latchkey,
-        services_catalog=ServicesCatalog(),
+        services_catalog=ServicesCatalog(latchkey_directory=latchkey.latchkey_directory),
         mngr_message_sender=mngr_message_sender,
         gateway_client=gateway_client,
+        carry_grant_to_machine=machine_operator.connect_service_with_permissions,
     )
+    push_permissions_to_machine = machine_operator.push_permissions
     file_sharing_handler = FileSharingGrantHandler(
         data_dir=data_directory,
         gateway_client=gateway_client,
         latchkey=latchkey,
         mngr_message_sender=mngr_message_sender,
+        push_permissions_to_machine=push_permissions_to_machine,
     )
     workspace_permission_handler = WorkspacePermissionGrantHandler(
         data_dir=data_directory,
+        latchkey=latchkey,
         gateway_client=gateway_client,
         mngr_message_sender=mngr_message_sender,
+        push_permissions_to_machine=push_permissions_to_machine,
     )
     accounts_permission_handler = AccountsPermissionGrantHandler(
         data_dir=data_directory,
+        latchkey=latchkey,
         gateway_client=gateway_client,
         mngr_message_sender=mngr_message_sender,
+        push_permissions_to_machine=push_permissions_to_machine,
+    )
+    custom_service_handler = CustomServiceGrantHandler(
+        data_dir=data_directory,
+        latchkey=latchkey,
+        gateway_client=gateway_client,
+        mngr_message_sender=mngr_message_sender,
+        carry_grant_to_machine=machine_operator.connect_service_with_permissions,
     )
     imbue_cloud_cli = ImbueCloudCli(
         mngr_caller=mngr_caller,
         connector_url=client_env_config.connector_url,
         accounts_base_url=client_env_config.accounts_base_url,
     )
+    # Read-or-create eagerly so this install always has a real identity from
+    # its very first session (a failure aborts startup).
+    device_id = get_or_create_device_id(data_directory, mngr_host_dir)
     workspace_record_store = WorkspaceRecordStore(
         paths=paths,
         mngr_host_dir=mngr_host_dir,
         cli=imbue_cloud_cli,
-        # Read-or-create eagerly so this install always has a real identity
-        # from its very first session (a failure aborts startup).
-        device_id=get_or_create_device_id(data_directory, mngr_host_dir),
+        device_id=device_id,
         device_label=read_device_label(),
     )
     session_store = MultiAccountSessionStore(
@@ -558,6 +590,7 @@ def run(
     # laptop sleep restarts from the wake instead of convicting a workspace of
     # seconds during which no probe ran at all.
     system_interface_health_tracker = SystemInterfaceHealthTracker(sleep_tracker=sleep_tracker)
+    sleep_tracker.add_on_wake_callback(system_interface_health_tracker.invalidate_recovery_progress_after_wake)
 
     # The plugin reports every backend failure it observes; minds decides which
     # ones count. Only envelopes carrying no status code, or an infrastructure
@@ -699,8 +732,13 @@ def run(
 
     # Every newly-discovered agent on a minds-managed host gets
     # its id appended to the host's ``latchkey_permissions.json``
-    # allowed-agent list.
-    LatchkeyAutoRegister(backend_resolver=backend_resolver, latchkey=latchkey).start()
+    # allowed-agent list, and a remote host's machine is handed the result.
+    LatchkeyAutoRegister(
+        backend_resolver=backend_resolver,
+        latchkey=latchkey,
+        push_permissions_to_machine=push_permissions_to_machine,
+        concurrency_group=root_concurrency_group,
+    ).start()
 
     # Emit the started event so Electron can pre-set the cookie before the
     # first navigation. ``minds run`` itself does not open the browser at
@@ -740,6 +778,7 @@ def run(
             file_sharing_handler,
             workspace_permission_handler,
             accounts_permission_handler,
+            custom_service_handler,
         ),
         server_port=port,
         mngr_forward_port=mngr_forward_port,
@@ -752,10 +791,13 @@ def run(
         mngr_host_dir=mngr_host_dir,
         minds_api_key=minds_api_key,
         latchkey_forward_supervisor=latchkey_forward_supervisor,
+        machine_operator=machine_operator,
         discovery_health_watchdog=discovery_health_watchdog,
         mngr_caller=mngr_caller,
         connectivity_detector=connectivity_detector,
+        sleep_tracker=sleep_tracker,
         sync_scheduler=sync_scheduler,
+        device_id=str(device_id),
     )
 
     # Background loop driving the discovery-pipeline watchdog: polls snapshot
@@ -786,6 +828,7 @@ def run(
     )
 
     start_workspace_update_loops(app=app, root_concurrency_group=root_concurrency_group)
+    start_folder_syncs(app=app, root_concurrency_group=root_concurrency_group)
 
     # Wire the permission-requests streaming consumer once the Flask
     # app is built so the on_request callback can mutate the app state
@@ -927,10 +970,10 @@ def _restart_mngr_latchkey_forward_supervisor(supervisor: LatchkeyForwardSupervi
     """Restart the detached ``mngr latchkey forward`` supervisor on minds startup.
 
     Uses :meth:`LatchkeyForwardSupervisor.restart` rather than
-    ``ensure_running`` so that minds upgrades always run with a
-    freshly-spawned supervisor: an older supervisor running stale
-    code from a previous minds version is terminated and replaced
-    on every minds start. A running supervisor that minds is happy
+    ``ensure_running`` so that minds upgrades run with a freshly-spawned
+    supervisor: an older supervisor running stale code from a previous
+    minds version is terminated and replaced on every minds start, unless
+    another minds claims the directory first in the gap between the two. A running supervisor that minds is happy
     to adopt does not exist in practice -- the supervisor's lifetime
     is tied to the gateway it owns, and the gateway is a minds-only
     consumer today. Restarting on every minds start is also what

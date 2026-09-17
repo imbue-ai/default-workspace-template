@@ -60,7 +60,6 @@ from imbue.imbue_common.ratchet_testing.common_ratchets import PREVENT_YAML_USAG
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule_all_files
-from imbue.imbue_common.ratchet_testing.core import BINARY_FILE_EXCLUSION
 from imbue.imbue_common.ratchet_testing.ratchets import TEST_FILE_PATTERNS
 from imbue.imbue_common.ratchet_testing.ratchets import _is_test_file
 from imbue.imbue_common.ratchet_testing.ratchets import find_assert_isinstance_usages
@@ -187,12 +186,20 @@ def check_setattr(source_dir: Path, max_count: int) -> None:
 # --- Banned libraries and patterns ---
 
 
-def check_asyncio_import(source_dir: Path, max_count: int) -> None:
-    assert_ratchet(PREVENT_ASYNCIO_IMPORT, source_dir, max_count)
+def check_asyncio_import(
+    source_dir: Path,
+    max_count: int,
+    excluded_patterns: tuple[str, ...] = (),
+) -> None:
+    assert_ratchet(PREVENT_ASYNCIO_IMPORT, source_dir, max_count, excluded_patterns)
 
 
-def check_async_await(source_dir: Path, max_count: int) -> None:
-    assert_ratchet(PREVENT_ASYNC_AWAIT, source_dir, max_count)
+def check_async_await(
+    source_dir: Path,
+    max_count: int,
+    excluded_patterns: tuple[str, ...] = (),
+) -> None:
+    assert_ratchet(PREVENT_ASYNC_AWAIT, source_dir, max_count, excluded_patterns)
 
 
 def check_pandas_import(source_dir: Path, max_count: int) -> None:
@@ -367,7 +374,7 @@ def check_bare_tmux_targets(source_dir: Path, max_count: int) -> None:
     # consolidated `CHANGELOG.md` / `UNABRIDGED_CHANGELOG.md` they get fanned
     # into all quote the previous buggy form as historical context, which the
     # regex would otherwise flag.
-    excluded = _SELF_EXCLUSION + ("changelog/*", "CHANGELOG.md", "UNABRIDGED_CHANGELOG.md") + BINARY_FILE_EXCLUSION
+    excluded = _SELF_EXCLUSION + ("changelog/*", "CHANGELOG.md", "UNABRIDGED_CHANGELOG.md")
     chunks = check_ratchet_rule_all_files(PREVENT_BARE_TMUX_TARGETS, source_dir, excluded)
     assert len(chunks) <= max_count, PREVENT_BARE_TMUX_TARGETS.format_failure(chunks)
 

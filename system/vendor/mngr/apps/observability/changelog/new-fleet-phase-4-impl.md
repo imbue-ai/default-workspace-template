@@ -1,0 +1,1 @@
+`OpenObserveApiInterface.list_dashboard_summaries` is abstract again: the decorator was lost when the minds-v0.4.4 release was merged down the gen-2 branch stack, so the interface no longer forced implementations to provide it.

@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -10,8 +10,8 @@ metadata:
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
 the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
-`Dockerfile`, `system/supervisord.conf`, the system interface, the vendored
-`mngr`.
+`Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
+the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace, so this flow never mutates the
 live tree from an unverified state: an isolated **worker** does the merge and
@@ -27,7 +27,7 @@ launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
 The default target is the **latest stable `minds-v*` tag**, never newer than
-the Minds app driving this workspace (the template ships the code that app
+the Mind app driving this workspace (the template ships the code that app
 talks to); see `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
@@ -71,7 +71,7 @@ UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
 
 then `tk start "$UPDATE_LEASE_ID"`.
 
-**Record the run for the Minds app** -- as soon as the lease is yours, so the
+**Record the run for the Mind app** -- as soon as the lease is yours, so the
 app can see a run is under way:
 
 ```bash
@@ -123,7 +123,7 @@ refusal's `error:` line as the last thing printed. The output carries `ref`,
 version you are updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Minds app
+Its single `error:` line says why no target could be chosen (the Mind app
 could not be reached or is too old to report its version; every release is
 newer than the app; the workspace is already on the release it may take).
 Relay that line in plain terms and offer the next step; never resolve a ref by
@@ -135,7 +135,7 @@ error names a release the workspace could still take).
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
 risks and get an explicit go-ahead, unless the message that started this pass
-already carries that confirmation (the Minds app's "Update to a specific
+already carries that confirmation (the Mind app's "Update to a specific
 version" prompt says so). If they decline, record `run-status verdict REFUSED
 --detail "<the version they asked for, and that they chose not to attempt
 it>"` and end the pass. Details in `references/version-ceiling.md`.
@@ -192,14 +192,14 @@ verdict REFUSED --detail "..."` as in Step 2.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Minds app sends the user into this
+Surface your own chat tab first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --name "$MNGR_AGENT_NAME"
+    surface-chat-tab --chat-id "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"
 ```
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
@@ -211,16 +211,17 @@ tk create "update-self" -t task \
     --acceptance "worker launched; conflicts triaged; validated; branch applied"
 ```
 
-Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_NAME`
+Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_ID`
 and `$REF` expand, then a **quoted** body. The `lead_agent` line must stay:
 this prose runs cross-version, and an older workspace's launcher may not stamp
-it at launch.
+it at launch. It is the lead's agent id, not its name: a rename of the lead's
+chat mid-update would otherwise strand the worker's report.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
+lead_agent: $MNGR_AGENT_ID
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -242,12 +243,13 @@ lead and synced into your worktree with this runtime dir) -- run *all* its
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
-review-gate escape hatch, or a §4b customization the update cannot keep),
-`done` / `stuck` (terminal). Substitutions:
-`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
+Per §6 of the worker guide: the report shapes come from
+`.agents/shared/references/worker-reporting.md`, but you write and push the
+report by hand as §6 spells out -- not with the launcher's `report` subcommand,
+which this workspace's own launcher may predate. Valid `name:` values:
+`question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
+scope escape hatch, or a §4b customization the update cannot keep),
+`done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
@@ -270,7 +272,7 @@ mngr destroy update-self --force
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
-the worker reports this chat is idle, and naming the worker lets the Minds app
+the worker reports this chat is idle, and naming the worker lets the Mind app
 read the worker's liveness instead of "waiting for you"), then background-poll:
 
 ```bash
@@ -285,16 +287,23 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 ```bash
+# Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
+
+Once the poll is armed, **end your turn**; its completion wakes you with the
+report. Never wait on the worker any other way -- no `sleep`, no polling its
+reports directory or its pane -- see "Never sleep on a worker" in
+`.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. Either way: reply via `mngr message`, consume the
+the third reaches the user. Either way: reply via `create_worker.py reply
+--task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default
@@ -305,10 +314,12 @@ report, re-arm the poll.
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
    a merge question; it is the hold below.
-2. **The worker's review-gate escape hatch** (its §4c): a process question
-   about whether or at what scope the gates run. Answer it by the §4c rule as
-   written; where the rule is silent, the fallback is more coverage, never
-   less. Escalate only if it contains a real question of user intent.
+2. **The worker's scope escape hatch** (its §4a, §4b or §4c): a process
+   question about whether its impact analysis runs, whether a validation item
+   runs, or whether and at what scope the review gates run. Answer it by the
+   rule it names as written; where the rule is silent, the fallback is more
+   coverage, never less. Escalate only if it contains a real question of user
+   intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
    This is the one gate that reaches the user; see below. A cosmetic shift
@@ -356,18 +367,22 @@ carry on into §5 and get their verdict there.
 ### 5a. Audit the report
 
 The worker contract (the staged copy's `references/update-self-worker.md`,
-§4c and §6) makes the review gates rule-driven and the report evidence-bearing.
-It must either show the clean-pull skip's three conditions held
-(`has_merge_work: false`, no impacted user-created code, no worker-authored
-in-branch edits) or carry the gate run's own evidence (fix commits kept or
-reverted, or a clean run, plus architecture-gate verdicts); a side-picked
-conflict must carry the discarded-side accounting. A report missing any of
-this -- including one that openly discloses skipping a gate outside the rule
--- goes back to the worker via the Step 4 cycle (say what is missing, consume
-the report into `data/.tasks/update-self/reports/consumed/`, re-arm). Do not
-run the apply over the gap. A deviation stands only when the worker is gone
-and the gap cannot be closed from here, and then the results message states
-it plainly as a caveat.
+§4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
+review gates rule-driven and the report evidence-bearing. It must show which
+branch of the 4a and 4b rules applied (the footprint evidence, and each
+validation item's condition and whether it held), and either show the
+clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
+user-created code, no worker-authored in-branch edits beyond a retry's
+rollback revert, shown by an empty diff against the landed merge) or carry
+the gate run's own evidence (fix commits kept or reverted, or a clean run,
+plus architecture-gate verdicts); a side-picked conflict must carry the
+discarded-side accounting. A report missing any of this -- including one that
+openly discloses skipping a gate outside the rule -- goes back to the worker
+via the Step 4 cycle (say what is missing, consume the report into
+`data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
+over the gap. A deviation stands only when the worker is gone and the gap
+cannot be closed from here, and then the results message states it plainly
+as a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
@@ -382,9 +397,12 @@ container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
-**When the update touches `system/apps/system_interface/` at all**, also take
-the `editing service system_interface` lease through the apply, as
-`update-system-interface` does: check `tk ready` for a foreign one (surface
+**When the update touches `system/apps/system_interface/`,
+`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+`system/package.json` / `system/package-lock.json` at all** (the trees the
+shell's bundle is stamped over, the same set `update-system-interface`'s
+freshness check names), also take the `editing service system_interface` lease
+through the apply, as `update-system-interface` does: check `tk ready` for a foreign one (surface
 instead of proceeding), then `tk create "editing service system_interface" -t
 chore` and `tk start` it, each as its own command. Release it afterwards.
 
@@ -397,18 +415,29 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     --merge-ref mngr/update-self --ff-only --target-ref "$REF"
 ```
 
-When the report names the worker's **built system-interface bundle**, append
-`--worker-bundle <that path>` so the exact build the worker validated is
-installed instead of a live build.
+When the report names the worker's **built frontend bundles** (the shell's
+`static/` and the chat app's), append `--worker-bundle system_interface=<path>
+--worker-bundle chat=<path>` so the exact builds the worker validated are
+installed instead of a live build; the apply installs them only as a pair (one
+`npm run build` emits both), and builds live when either is missing or stale.
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
 affected environments, re-runs `system/scripts/setup_system.sh` when a file it
-reads changed, pre-flights the merged backend, installs or builds the frontend
-bundle, restarts the services agent (every apply), probes the live UI, refreshes
-every open view, writes the `docs/VERSION_HISTORY.md` entry, and runs `uv run
-env-converge upgrade` -- reverting the entire merge and restoring the
-snapshots on any failure. Exit codes:
+reads changed, pre-flights the merged backend (the shell, and the chat app in its
+side-effect-free `--preflight` mode, since the chat is the process that imports
+mngr and the harness plugins), installs or builds the frontend
+bundle, runs the workspace layout migration
+(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
+there is reported and left to the next boot's run), restarts the services
+agent (every apply; the fresh supervisord it brings up reads the merged program
+table, so a program the update adds starts on its own), probes the shell's health
+route and the instances API of every critical app that serves one (the chat, the
+terminal; each at the URL its manifest or its fresh registry row names), probes the
+live UI, refreshes every open view, writes the
+`docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
+reverting the entire merge and restoring the snapshots on any other failure.
+Exit codes:
 
 - **`0` -- applied.** Read the closing stderr lines: a UI that was already
   broken beforehand still exits 0 naming the breakage (report it separately);
@@ -422,8 +451,10 @@ snapshots on any failure. Exit codes:
 - **`3` -- emergency.** Even the rollback could not restore health; escalate,
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
-  pass, another apply in flight, or this merge already landed and rolled
-  back). Re-dispatch a fresh worker pass off the current `HEAD`.
+  pass, another apply in flight, this merge already landed and rolled back, or
+  a re-merge of a rolled-back target that does not revert the rollback commit
+  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
+  names the commit to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
@@ -463,9 +494,13 @@ If a stray system-interface preview is registered (an older pass may have left
 one; `update-system-interface` refuses its next pass while one is):
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 python3 system/scripts/layout.py close si-preview
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 ```
+
+The close goes first: an op addressed to an app the registry no longer holds is refused,
+so once `unpreview` has deregistered the row there is nothing left to close (the tab is
+pruned on its own when the app leaves the inventory).
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the

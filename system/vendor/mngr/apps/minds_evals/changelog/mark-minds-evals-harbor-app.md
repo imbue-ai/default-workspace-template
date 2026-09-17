@@ -1,6 +1,6 @@
 Add `apps/minds_evals`: the harbor-based replacement for the bespoke Minds persona eval harness (PR1 of the conversion stack, landing alongside the old `apps/mngr_minds_eval` rather than removing it).
 
-- `minds-evals generate` converts the existing eval-config JSON schema into a harbor task dataset: one task per persona case, with a byte-identical `environment/` per dataset (adapted box Dockerfile + entrypoint + staged shallow mngr clone at an exact SHA) so Modal layer-caches the box image once per mngr SHA.
+- `minds-evals generate` converts the existing eval-config JSON schema into a harbor task dataset: one task per persona case, with a byte-identical `environment/` per dataset (adapted box Dockerfile + entrypoint + staged shallow mngr clone at an exact SHA) so Modal builds and caches the box image once per mngr SHA.
 
 - `MindsPersonaDriver`, a host-side harbor agent, owns the conversation loop: starts the Minds backend in the box with per-trial env (Modal token pair from `~/.modal.toml`, salted per-trial `MNGR__PROVIDERS__MODAL__USER_ID`), creates one nested workspace per case through the production Minds API path, drives literal and `DECIDE_FROM_PERSONA` turns (decider ported from the dwt eval worker), snapshots the workspace per turn, and keeps `full_transcript.jsonl` + `state.json` current so timed-out trials still grade.
 

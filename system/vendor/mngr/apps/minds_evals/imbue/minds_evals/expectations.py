@@ -8,6 +8,7 @@ collector can never probe a different set of checks than the judge scores -- and
 verifier, a stdlib+rewardkit container that cannot import this package, free of expansion logic.
 """
 
+import re
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
@@ -15,6 +16,7 @@ from typing import assert_never
 
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import AppCheck
+from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import DEFAULT_MIN_REGISTERED_APPS
 from imbue.minds_evals.data_types import DeliverableExpectation
 from imbue.minds_evals.data_types import DeliverableKind
@@ -26,21 +28,36 @@ from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import HttpExpectation
 from imbue.minds_evals.data_types import MINDS_APP_EXPECTED_HTTP_STATUS
+from imbue.minds_evals.data_types import ProcessCheck
+from imbue.minds_evals.data_types import ProcessCheckKind
+from imbue.minds_evals.data_types import ProcessExpectation
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RESERVED_MINDS_UI_SURFACE
+from imbue.minds_evals.data_types import SKILL_NAME_PATTERN
+from imbue.minds_evals.data_types import TimingCheck
+from imbue.minds_evals.data_types import TimingExpectation
 from imbue.minds_evals.data_types import UiFlow
 from imbue.minds_evals.data_types import UiFlowCheck
+from imbue.minds_evals.data_types import is_same_skill
 from imbue.minds_evals.errors import EvalConfigError
 
 _EXPECTATIONS_KEYS: Final[frozenset[str]] = frozenset(
-    {"outcome", "deliverable", "ui_flows", "test_commands", "fresh_env"}
+    {"outcome", "deliverable", "ui_flows", "test_commands", "fresh_env", "process", "timing"}
 )
 _DELIVERABLE_KEYS: Final[frozenset[str]] = frozenset({"kind", "min_registered_apps", "http", "files"})
 _HTTP_KEYS: Final[frozenset[str]] = frozenset({"target", "expect_status", "expect_body_regex"})
 _FILES_KEYS: Final[frozenset[str]] = frozenset({"glob", "min_count"})
-_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "steps", "expect", "script", "surface"})
+_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "actions", "expect", "script", "surface"})
+_PROCESS_KEYS: Final[frozenset[str]] = frozenset({"required_skills", "forbidden_skills", "max_worker_launches"})
+_TIMING_KEYS: Final[frozenset[str]] = frozenset({"fast_seconds", "slow_seconds", "requires_no_failures"})
+
+_SKILL_NAME_RE: Final[re.Pattern[str]] = re.compile(SKILL_NAME_PATTERN)
 
 _DEFAULT_FILES_MIN_COUNT: Final[int] = 1
+
+# The id of the one check a timing block expands to, and so of its manifest entry. A constant rather
+# than a per-case slug, so a reader and a regrade find the measurement under one name.
+TIMING_CHECK_ID: Final[str] = "time_to_goal"
 
 
 @pure
@@ -183,24 +200,197 @@ def _parse_ui_flow(raw_entry: object, case_id: str, index: int) -> UiFlow:
     name = str(raw.get("name") or "").strip()
     if not name:
         raise EvalConfigError("case {!r}: {} needs a 'name'".format(case_id, what))
-    steps = str(raw.get("steps") or "").strip()
+    actions = str(raw.get("actions") or "").strip()
     expect = str(raw.get("expect") or "").strip()
     script = str(raw.get("script") or "").strip()
     # A flow is either natural language the verification agent executes, or a per-case script for a
     # UI with stable selectors -- never both, and never neither.
-    if script and (steps or expect):
-        raise EvalConfigError("case {!r}: {} carries both 'script' and 'steps'/'expect'".format(case_id, what))
-    if not script and not (steps and expect):
-        raise EvalConfigError("case {!r}: {} needs either 'steps' + 'expect' or 'script'".format(case_id, what))
+    if script and (actions or expect):
+        raise EvalConfigError("case {!r}: {} carries both 'script' and 'actions'/'expect'".format(case_id, what))
+    if not script and not (actions and expect):
+        raise EvalConfigError("case {!r}: {} needs either 'actions' + 'expect' or 'script'".format(case_id, what))
     if script:
         # The field is reserved, not implemented. Accepting it would hand a case author a green
         # generation and a completed trial for verification that never ran -- the one failure mode a
         # reserved field must not have.
         raise EvalConfigError(
             "case {!r}: {} uses 'script', which is a known but unimplemented field -- scripted flow "
-            "execution has no semantics yet, so nothing would run it. Use 'steps' + 'expect'.".format(case_id, what)
+            "execution has no semantics yet, so nothing would run it. Use 'actions' + 'expect'.".format(case_id, what)
         )
-    return UiFlow(name=name, steps=steps, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
+    return UiFlow(name=name, actions=actions, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
+
+
+@pure
+def _parse_skill_names(raw_value: object, case_id: str, what: str) -> tuple[str, ...]:
+    """The skill names of one process list, checked against the spelling a trajectory can be
+    matched on. Two names that slugify alike are rejected, since the slug is the manifest entry's
+    id and the second check would overwrite the first."""
+    raw_names = _require_sequence(raw_value or [], case_id, what)
+    names: list[str] = []
+    for index, raw_name in enumerate(raw_names):
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
+        if not _SKILL_NAME_RE.match(name):
+            raise EvalConfigError(
+                "case {!r}: {}[{}] must be a skill name matching {} (a plugin skill is spelled 'plugin:skill')".format(
+                    case_id, what, index, SKILL_NAME_PATTERN
+                )
+            )
+        names.append(name)
+    slugs = [slugify(name) for name in names]
+    duplicate_slugs = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicate_slugs:
+        raise EvalConfigError(
+            "case {!r}: {} has names that collide: {}".format(case_id, what, ", ".join(duplicate_slugs))
+        )
+    return tuple(names)
+
+
+@pure
+def _parse_process(raw_entry: object, case_id: str) -> ProcessExpectation:
+    raw = _require_mapping(raw_entry, case_id, "expectations.process")
+    _reject_unknown_keys(raw, _PROCESS_KEYS, case_id, "expectations.process")
+    required_skills = _parse_skill_names(raw.get("required_skills"), case_id, "expectations.process.required_skills")
+    forbidden_skills = _parse_skill_names(
+        raw.get("forbidden_skills"), case_id, "expectations.process.forbidden_skills"
+    )
+    # Asked with the collector's own matching rule rather than by equality, since that is what
+    # decides the checks: a bare forbidden name matches a qualified required one, and the pair could
+    # then never both pass.
+    contradictory = sorted(
+        {
+            required if required == forbidden else "{} (as {})".format(required, forbidden)
+            for required in required_skills
+            for forbidden in forbidden_skills
+            if is_same_skill(required, forbidden) or is_same_skill(forbidden, required)
+        }
+    )
+    if contradictory:
+        raise EvalConfigError(
+            "case {!r}: expectations.process both requires and forbids: {}".format(case_id, ", ".join(contradictory))
+        )
+    raw_max_launches = raw.get("max_worker_launches")
+    if raw_max_launches is not None and (
+        not isinstance(raw_max_launches, int) or isinstance(raw_max_launches, bool) or raw_max_launches < 0
+    ):
+        raise EvalConfigError(
+            "case {!r}: expectations.process.max_worker_launches must be a non-negative integer".format(case_id)
+        )
+    # A block that checks nothing is an authoring mistake rather than a way to opt out: leaving
+    # `process` off says the same thing, and accepting the empty block would report a case as
+    # grading the agent's process when nothing about it is measured.
+    if not required_skills and not forbidden_skills and raw_max_launches is None:
+        raise EvalConfigError(
+            "case {!r}: expectations.process declares nothing to check -- give it skills or a "
+            "'max_worker_launches', or leave the block off".format(case_id)
+        )
+    return ProcessExpectation(
+        required_skills=required_skills,
+        forbidden_skills=forbidden_skills,
+        max_worker_launches=raw_max_launches,
+    )
+
+
+@pure
+def _declared_check_classes(
+    deliverable: DeliverableExpectation | None,
+    ui_flows: tuple[UiFlow, ...],
+    test_commands: tuple[str, ...],
+    process: ProcessExpectation | None,
+) -> frozenset[CheckClass]:
+    """Which expectation classes this case records entries for.
+
+    Read by the timing block, whose prerequisite may only name a class the case declares: a class
+    with no entries can never carry a failure, so naming one would read as a prerequisite while
+    gating on nothing at all.
+    """
+    classes: set[CheckClass] = set()
+    if deliverable is not None:
+        # Whatever refines it, a deliverable always expands into the registry check, the kind's
+        # implied root-path probe, and the captured git bundle.
+        classes.update({CheckClass.APP, CheckClass.HTTP, CheckClass.BUNDLE})
+        if deliverable.files:
+            classes.add(CheckClass.FILES)
+    if ui_flows:
+        classes.add(CheckClass.UI_FLOWS)
+    if test_commands:
+        classes.add(CheckClass.TEST_COMMAND)
+    if process is not None:
+        classes.add(CheckClass.PROCESS)
+    return frozenset(classes)
+
+
+@pure
+def _parse_timing_anchor(raw: Mapping[str, Any], key: str, case_id: str) -> float:
+    """One of the two anchors: required, numeric and strictly positive, since the curve between them
+    is taken over logarithms."""
+    if key not in raw:
+        raise EvalConfigError("case {!r}: expectations.timing needs a {!r}".format(case_id, key))
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvalConfigError("case {!r}: expectations.timing.{} must be a number".format(case_id, key))
+    if value <= 0:
+        raise EvalConfigError("case {!r}: expectations.timing.{} must be a positive number".format(case_id, key))
+    return float(value)
+
+
+@pure
+def _parse_timing_prerequisites(
+    raw_value: object, case_id: str, declared_classes: frozenset[CheckClass]
+) -> tuple[CheckClass, ...]:
+    """The classes whose failure zeroes the measured time. An empty list is a case that measures the
+    time on its own terms, which is a legitimate thing to ask for."""
+    what = "expectations.timing.requires_no_failures"
+    raw_names = _require_sequence(raw_value or [], case_id, what)
+    prerequisites: list[CheckClass] = []
+    for index, raw_name in enumerate(raw_names):
+        where = "{}[{}]".format(what, index)
+        name = raw_name.strip().lower() if isinstance(raw_name, str) else ""
+        if name == CheckClass.TIMING.value:
+            raise EvalConfigError(
+                "case {!r}: {} names 'timing' itself, which cannot be its own prerequisite".format(case_id, where)
+            )
+        if name == CheckClass.TEST_COMMAND.value:
+            raise EvalConfigError(
+                "case {!r}: {} names 'test_command', which is recorded and never gated, so it cannot "
+                "gate the time either".format(case_id, where)
+            )
+        if name not in {member.value for member in CheckClass}:
+            raise EvalConfigError(
+                "case {!r}: {} is not an expectation class (known: {})".format(
+                    case_id, where, ", ".join(sorted(member.value for member in CheckClass))
+                )
+            )
+        check_class = CheckClass(name)
+        if check_class not in declared_classes:
+            raise EvalConfigError(
+                "case {!r}: {} names {!r}, which this case does not declare, so it could never fail "
+                "(declared: {})".format(
+                    case_id, where, name, ", ".join(sorted(member.value for member in declared_classes)) or "none"
+                )
+            )
+        prerequisites.append(check_class)
+    return tuple(prerequisites)
+
+
+@pure
+def _parse_timing(raw_entry: object, case_id: str, declared_classes: frozenset[CheckClass]) -> TimingExpectation:
+    raw = _require_mapping(raw_entry, case_id, "expectations.timing")
+    _reject_unknown_keys(raw, _TIMING_KEYS, case_id, "expectations.timing")
+    fast_seconds = _parse_timing_anchor(raw, "fast_seconds", case_id)
+    slow_seconds = _parse_timing_anchor(raw, "slow_seconds", case_id)
+    # Checked here as well as on the model, so a mis-authored config is told which case and which
+    # two numbers are the problem rather than reported as a pydantic validation failure.
+    if fast_seconds >= slow_seconds:
+        raise EvalConfigError(
+            "case {!r}: expectations.timing.fast_seconds ({}) must be below slow_seconds ({})".format(
+                case_id, fast_seconds, slow_seconds
+            )
+        )
+    return TimingExpectation(
+        fast_seconds=fast_seconds,
+        slow_seconds=slow_seconds,
+        requires_no_failures=_parse_timing_prerequisites(raw.get("requires_no_failures"), case_id, declared_classes),
+    )
 
 
 @pure
@@ -214,13 +404,15 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         raise EvalConfigError(
             "case {!r}: expectations needs a non-empty 'outcome' (the prose the judge grades against)".format(case_id)
         )
-    # A block with no deliverable commissions nothing probeable, so its outcome dimension holds
+    # A block with no deliverable commissions no app, HTTP or file check, so unless it declares
+    # flows or a process block -- which register their own criteria -- its outcome dimension holds
     # nothing but the judge and is graded from the conversation and the always-on capture alone.
     # That composition is deliberately different from a deliverable case's even split between the
     # judge and the programmatic checks, so the two are not comparable score for score; it is the
     # shape a stepped case's early phases need, where the exit criterion is what the client and the
     # agent agreed on rather than what is running.
     raw_deliverable = raw.get("deliverable")
+    raw_process = raw.get("process")
     raw_flows = _require_sequence(raw.get("ui_flows") or [], case_id, "expectations.ui_flows")
     raw_commands = _require_sequence(raw.get("test_commands") or [], case_id, "expectations.test_commands")
     test_commands = tuple(str(command).strip() for command in raw_commands)
@@ -248,12 +440,24 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
                 case_id, ", ".join(duplicate_names)
             )
         )
+    deliverable = _parse_deliverable(raw_deliverable, case_id) if raw_deliverable is not None else None
+    process = _parse_process(raw_process, case_id) if raw_process is not None else None
+    # Last, because a timing block's prerequisite is checked against the classes the rest of the
+    # block declares.
+    raw_timing = raw.get("timing")
+    timing = (
+        _parse_timing(raw_timing, case_id, _declared_check_classes(deliverable, ui_flows, test_commands, process))
+        if raw_timing is not None
+        else None
+    )
     return Expectations(
         outcome=outcome,
-        deliverable=_parse_deliverable(raw_deliverable, case_id) if raw_deliverable is not None else None,
+        deliverable=deliverable,
         ui_flows=ui_flows,
         test_commands=test_commands,
         is_fresh_env_enabled=raw_fresh_env,
+        process=process,
+        timing=timing,
     )
 
 
@@ -321,7 +525,7 @@ def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
         UiFlowCheck(
             check_id="ui_flow_{}_{}".format(index, slugify(flow.name)),
             name=flow.name,
-            steps=flow.steps,
+            actions=flow.actions,
             expect=flow.expect,
             surface=flow.surface,
         )
@@ -330,12 +534,63 @@ def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
 
 
 @pure
+def _expand_process(process: ProcessExpectation) -> tuple[ProcessCheck, ...]:
+    """One flat check list out of what a process block asks, each with the id its manifest entry is
+    keyed on. The launch cap is one check whatever the cap is, so its id needs no discriminator."""
+    required_checks = tuple(
+        ProcessCheck(
+            check_id="skill_required_{}".format(slugify(name)),
+            kind=ProcessCheckKind.REQUIRED_SKILL,
+            skill=name,
+            max_worker_launches=0,
+        )
+        for name in process.required_skills
+    )
+    forbidden_checks = tuple(
+        ProcessCheck(
+            check_id="skill_forbidden_{}".format(slugify(name)),
+            kind=ProcessCheckKind.FORBIDDEN_SKILL,
+            skill=name,
+            max_worker_launches=0,
+        )
+        for name in process.forbidden_skills
+    )
+    launch_checks = (
+        (
+            ProcessCheck(
+                check_id="worker_launches",
+                kind=ProcessCheckKind.MAX_WORKER_LAUNCHES,
+                skill="",
+                max_worker_launches=process.max_worker_launches,
+            ),
+        )
+        if process.max_worker_launches is not None
+        else ()
+    )
+    return (*required_checks, *forbidden_checks, *launch_checks)
+
+
+@pure
+def _expand_timing(timing: TimingExpectation) -> tuple[TimingCheck, ...]:
+    """The one check a timing block expands to, in the tuple every other class is read out of."""
+    return (
+        TimingCheck(
+            check_id=TIMING_CHECK_ID,
+            fast_seconds=timing.fast_seconds,
+            slow_seconds=timing.slow_seconds,
+            requires_no_failures=timing.requires_no_failures,
+        ),
+    )
+
+
+@pure
 def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
     """Expand `deliverable.kind` into the explicit per-class check list both consumers act on.
 
-    Expectations that commission nothing expand to no checks and no bundle: there is no artifact to
-    probe or to capture, so the collector records only its always-on capture and the outcome judge
-    grades the prose against the conversation.
+    Expectations that commission no deliverable expand to no app, HTTP or file check and no bundle:
+    there is no artifact to probe or to capture. Flows and a process block expand on their own, so a
+    case with no deliverable can still carry checks; one that declares none of the three leaves the
+    collector its always-on capture and the outcome judge the prose and the conversation.
     """
     app_checks, http_checks, files_checks = (
         _expand_deliverable(expectations.deliverable) if expectations.deliverable is not None else ((), (), ())
@@ -349,4 +604,6 @@ def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
         is_deliverable_bundle_required=expectations.deliverable is not None,
         ui_flow_checks=_expand_ui_flows(expectations.ui_flows),
         is_fresh_env_enabled=expectations.is_fresh_env_enabled,
+        process_checks=_expand_process(expectations.process) if expectations.process is not None else (),
+        timing_checks=_expand_timing(expectations.timing) if expectations.timing is not None else (),
     )

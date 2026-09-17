@@ -57,7 +57,11 @@ pytestmark = [pytest.mark.release, pytest.mark.minds_services, pytest.mark.docke
 
 _CREATE_TIMEOUT_SECONDS = 1200
 _IN_CONTAINER_TIMEOUT_SECONDS = 120
-_SYSTEM_INTERFACE_READY_ATTEMPTS = 60
+# Every route this test drives (sign-in, accounts, create-chat) belongs to the workspace's chat
+# app, which runs as its own program at its own port, reachable only from inside the container.
+# 8010 is the port the template's chat app registers by default, so a fresh workspace answers there.
+_CHAT_APP_URL = "http://localhost:8010"
+_CHAT_APP_READY_ATTEMPTS = 60
 # How long to wait for a freshly created chat to be registered by mngr.
 _CHAT_CREATE_ATTEMPTS = 24
 _CHAT_REPLY_ATTEMPTS = 60
@@ -168,14 +172,14 @@ def _find_container_name(host_id: str) -> str:
     return names[0]
 
 
-def _wait_for_system_interface(container_name: str) -> None:
+def _wait_for_chat_app(container_name: str) -> None:
     poll = (
-        f"for i in $(seq 1 {_SYSTEM_INTERFACE_READY_ATTEMPTS}); do "
-        "code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/claude-auth/status); "
+        f"for i in $(seq 1 {_CHAT_APP_READY_ATTEMPTS}); do "
+        f"code=$(curl -s -o /dev/null -w '%{{http_code}}' {_CHAT_APP_URL}/api/claude-auth/status); "
         '[ "$code" = "200" ] && exit 0; sleep 5; done; exit 1'
     )
-    result = _exec_in_container(container_name, poll, timeout=_SYSTEM_INTERFACE_READY_ATTEMPTS * 5 + 120)
-    assert result.returncode == 0, "The workspace's system_interface never answered its claude-auth status endpoint"
+    result = _exec_in_container(container_name, poll, timeout=_CHAT_APP_READY_ATTEMPTS * 5 + 120)
+    assert result.returncode == 0, "The workspace's chat app never answered its claude-auth status endpoint"
 
 
 def _await_env_and_require_workspace_prereqs(env: SharedEnvHandle, template_ref: DefaultWorkspaceTemplateRef) -> Path:
@@ -201,7 +205,7 @@ def _local_docker_workspace(source_worktree: Path, host_name: str) -> Iterator[s
     try:
         _agent_id, host_id = _create_docker_workspace(template_path, host_name)
         container_name = _find_container_name(host_id)
-        _wait_for_system_interface(container_name)
+        _wait_for_chat_app(container_name)
         yield container_name
     finally:
         destroy = _run(
@@ -221,11 +225,11 @@ def _submit_credentials_via_workspace_endpoint(container_name: str, credential_b
     # logged; a redacted stand-in is logged instead.
     submit = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/claude-auth/submit-credentials "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/claude-auth/submit-credentials "
         f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=600,
         logged_command=(
-            "curl -s -X POST http://localhost:8000/api/claude-auth/submit-credentials "
+            f"curl -s -X POST {_CHAT_APP_URL}/api/claude-auth/submit-credentials "
             "-H 'Content-Type: application/json' -d '<credential blob redacted>'"
         ),
     )
@@ -247,14 +251,15 @@ def _create_chat_on_account(container_name: str, account_id: str) -> str:
     payload = json.dumps({"account_id": account_id})
     created = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/agents/create-chat "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/chats/create "
         f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
     assert created.returncode == 0, f"create-chat curl failed: {created.stderr}"
     body = json.loads(created.stdout)
-    agent_id = str(body.get("agent_id", ""))
-    assert agent_id, f"create-chat returned no agent id: {created.stdout[:500]}"
+    # A chat's id is its first agent's id, so the chat just created runs on the agent of that id.
+    agent_id = str(body.get("chat_id", ""))
+    assert agent_id, f"create-chat returned no chat id: {created.stdout[:500]}"
 
     # The endpoint answers as soon as the background `mngr create` starts, so the agent is
     # a proto for a few seconds; messaging it before mngr registers it would fail.
@@ -330,8 +335,7 @@ def _sign_in_paste_lane(container_name: str, lane_id: str, api_key: str, key_pro
     start = json.dumps({"lane_id": lane_id, "method_id": "api_key"})
     started = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/accounts "
-        f"-H 'Content-Type: application/json' -d {shlex.quote(start)}",
+        f"curl -s -X POST {_CHAT_APP_URL}/api/accounts -H 'Content-Type: application/json' -d {shlex.quote(start)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
     assert started.returncode == 0, f"start-flow curl failed for {lane_id}: {started.stderr}"
@@ -341,7 +345,7 @@ def _sign_in_paste_lane(container_name: str, lane_id: str, api_key: str, key_pro
     body = {"api_key": api_key} | ({"key_provider": key_provider} if key_provider else {})
     submitted = _exec_in_container(
         container_name,
-        f"curl -s -X POST http://localhost:8000/api/accounts/flow/{flow['flow_id']} "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/accounts/flow/{flow['flow_id']} "
         f"-H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
@@ -508,9 +512,14 @@ def test_litellm_spend_tracking_via_local_workspace(
         logger.info("litellm recorded spend {} for key alias {}", spend, key_alias)
 
 
-# Every lane whose sign-in is a file write, so it needs no browser and no real credential.
-# The OAuth lanes (Anthropic subscription, OpenAI device, Google) cannot be reached without a
-# human in a browser; their PTY driving is covered by unit tests against recorded output.
+# Lanes whose sign-in is a file write, so each needs no browser and no real credential. Two lanes
+# that also offer one are deliberately absent: `anthropic`, whose paste method
+# `test_litellm_spend_tracking_via_local_workspace` above already drives end to end including a real
+# turn, and `openai` (a raw key into codex's auth.json), because this test runs against whatever
+# template ref the deployment orchestrator prepared, released tags included, and on one that
+# predates that method the sign-in 404s. Every remaining sign-in is a PTY flow needing a human at a
+# browser -- claude's subscription login, codex's device auth, antigravity's Google flow -- and
+# their PTY driving is covered by unit tests against recorded output.
 _PASTE_LANES: tuple[tuple[str, str | None, str], ...] = (
     ("opencode-go", None, "Opencode Go (Pi)"),
     ("openrouter", None, "OpenRouter (Pi)"),
@@ -528,8 +537,7 @@ def test_every_paste_lane_binds_a_chat_to_its_own_account(
     The other half of the sign-in artifact. `test_litellm_spend_tracking_via_local_workspace`
     proves one lane end to end including a real turn; this proves the part that is common to
     all of them -- account minted, credential written where the harness looks, chat created
-    against it, agent pointed at that folder -- for every lane that can be driven without a
-    human in a browser.
+    against it, agent pointed at that folder -- for each lane in `_PASTE_LANES`.
 
     Deliberately fake keys. What fails silently here is the BINDING, not the key: a chat
     bound to nothing is indistinguishable from a working one until its first turn, and the
@@ -556,7 +564,7 @@ def test_every_paste_lane_binds_a_chat_to_its_own_account(
         # by the lane -- two of these run on pi and would otherwise be indistinguishable.
         listed = _exec_in_container(
             container_name,
-            "curl -s http://localhost:8000/api/accounts",
+            f"curl -s {_CHAT_APP_URL}/api/accounts",
             timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
         )
         assert listed.returncode == 0, f"accounts curl failed: {listed.stderr}"

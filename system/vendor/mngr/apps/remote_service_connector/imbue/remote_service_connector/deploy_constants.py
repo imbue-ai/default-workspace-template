@@ -36,8 +36,11 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
         # directly.
         "sentry_sdk",
         "tenacity",
-        # electron-updater's channel manifests, whose format the shipped
-        # binary that reads them fixes.
+        # Two YAML-by-external-contract formats: electron-updater's channel
+        # manifests (read by accounts_web; the shipped binary fixes their
+        # format) and the cloud-init NoCloud material the mounted
+        # ``imbue.mngr_imbue_cloud.slices.gen2_scripts.guest`` renders for the
+        # gen-2 slice restore.
         "yaml",
     }
 )

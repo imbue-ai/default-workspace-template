@@ -4,11 +4,13 @@ from pathlib import Path
 import httpx
 import pytest
 from click.testing import CliRunner
+from inline_snapshot import snapshot
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.observability.cli import OpenObserveNotReadyError
 from imbue.observability.cli import SshTunnelExitedError
 from imbue.observability.cli import _find_free_local_port
+from imbue.observability.cli import _instance_listing_row
 from imbue.observability.cli import _probe_openobserve_ready
 from imbue.observability.cli import _wait_for_local_port
 from imbue.observability.cli import main
@@ -156,3 +158,39 @@ def test_probe_openobserve_ready_raises_when_nothing_answers_through_the_tunnel(
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(OpenObserveNotReadyError, match="not answering yet"):
             _probe_openobserve_ready(client, "http://127.0.0.1:5080")
+
+
+def test_instance_listing_row_includes_the_public_ipv4() -> None:
+    instance = {
+        "name": "observability-production-1",
+        "id": "1f0f6f0e6f6f4b0e9a1b",
+        "status": "ACTIVE",
+        "region": "US-WEST-OR-1",
+        "ipAddresses": [
+            {"type": "private", "version": 4, "ip": "10.11.12.13"},
+            {"type": "public", "version": 6, "ip": "2001:db8::1234"},
+            {"type": "public", "version": 4, "ip": "203.0.113.57"},
+        ],
+    }
+
+    assert _instance_listing_row(instance) == snapshot(
+        {
+            "name": "observability-production-1",
+            "instance_id": "1f0f6f0e6f6f4b0e9a1b",
+            "status": "ACTIVE",
+            "region": "US-WEST-OR-1",
+            "ip": "203.0.113.57",
+        }
+    )
+
+
+def test_instance_listing_row_leaves_ip_empty_while_the_instance_has_no_public_ipv4() -> None:
+    instance = {
+        "name": "bugsink-dev-2",
+        "id": "9c8b7a6d5e4f3a2b1c0d",
+        "status": "BUILD",
+        "region": "US-EAST-VA-1",
+        "ipAddresses": [{"type": "private", "version": 4, "ip": "10.20.30.40"}],
+    }
+
+    assert _instance_listing_row(instance)["ip"] is None

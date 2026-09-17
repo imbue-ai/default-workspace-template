@@ -43,3 +43,15 @@ class HttpUpstreamFetcher(UpstreamFetcherInterface):
             # so the CLI reports it as a clean one-line error.
             raise AptMirrorUpstreamError(url, response.status_code)
         return response.content
+
+    @retry(
+        retry=retry_if_exception_type((httpx.TransportError, AptMirrorTransientUpstreamError)),
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, min=1, max=15),
+        reraise=True,
+    )
+    def is_served(self, url: str) -> bool:
+        response = self.client.head(url, follow_redirects=True)
+        if response.status_code >= 500 or response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            raise AptMirrorTransientUpstreamError(url, response.status_code)
+        return response.is_success

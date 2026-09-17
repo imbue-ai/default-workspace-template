@@ -26,11 +26,12 @@ absent or unrecognized.
 ## Valid report `name:` values
 
 - Gates: `outline-approval` (emergent only -- the design gate), `final-creation`
-  (both).
+  (both), and `question` mid-flight in every shape, whenever the answer is not
+  in your task file or the repo.
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
 **System-interface exception.** When the creation is the system interface, there
-is no `## Change origin` toggle and **no gate report at all**: the change is
+is no `## Change origin` toggle and **no approval gate**: the change is
 handed to you as a plain brief, and user approval happens through the lead's
 pre-merge live preview, not a worker gate. Implement the brief, verify it per
 `type-system-interface.md`, then report `done` (or a mid-flight `question`,
@@ -120,8 +121,8 @@ store slips in, since the harden attention is otherwise on the changed path.
 
 ### Review gates
 
-Run `/autofix` and the other gates per `harden-creation.md`. In the committed
-path, any fixes become follow-up commits on your branch.
+Ensure all review gates have been run per `harden-creation.md`, before the final gate
+report, so the user sees a single report that already reflects the verdicts.
 
 ### Final gate, then hand off
 
@@ -137,6 +138,8 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
 - Scenarios run: <list, with pass/fail>
 - Shape changes: <none, or the output-schema / field / CLI / exit-code deltas a
   consumer or surface would need to adapt to>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
 
 **App or service:**
@@ -146,7 +149,12 @@ Updated app or service `<name>`:
 - Change: <one-sentence>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
+
+The last two lines come from the scope file (`harden-creation.md`); a
+creation with no footprint writes `none` for both.
 
 Push it and stop. On approval, emit a `name: done` terminal report. In the
 committed path a clean verification may produce no new worker commits -- that is

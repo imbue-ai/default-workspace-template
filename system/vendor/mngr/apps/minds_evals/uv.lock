@@ -1242,8 +1242,8 @@ wheels = [
 
 [[package]]
 name = "harbor"
-version = "0.21.0"
-source = { git = "https://github.com/harbor-framework/harbor?tag=v0.21.0#64afbbcb62165950301e1a6407c729aa26d844ff" }
+version = "0.22.0"
+source = { git = "https://github.com/harbor-framework/harbor?tag=v0.22.0#4407eb5227a2ff4f0d3f16b2eb48849382fdf276" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -1276,14 +1276,14 @@ modal = [
 
 [[package]]
 name = "harbor-rewardkit"
-version = "0.1.7"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "litellm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/c2/250143b4373cf4f654e8efffa51e5058b16485769315b5ce1704c9366723/harbor_rewardkit-0.1.7.tar.gz", hash = "sha256:1afd6bf4aac87a6d95a563d6e2062df175e104ef8c3b94361b5054670ba0d278", size = 29966, upload-time = "2026-06-27T05:59:28.786Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/70/1e70173e730c08e13fb1e887fbd1c2706b3fdb55b84476c08dd9ab79cd49/harbor_rewardkit-0.2.0.tar.gz", hash = "sha256:3e79b5cd00fc1b852963d6858ceedafd817081a907da69b8892a8d770f8a3a35", size = 40913, upload-time = "2026-08-22T03:39:02.4Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/be/b5e8a882023f420ad6636344f0cf890892f9e586fc7c370b4395f5333609/harbor_rewardkit-0.1.7-py3-none-any.whl", hash = "sha256:cb9938e551a0ac2cd21f68e819c3f6f6b3a7cebb2e8ae4a19fb3148d5514539c", size = 46396, upload-time = "2026-06-27T05:59:27.88Z" },
+    { url = "https://files.pythonhosted.org/packages/30/39/7bbe09abe9b7f2feffaa13b41c7e11bd7da7d80c269864829e4820278362/harbor_rewardkit-0.2.0-py3-none-any.whl", hash = "sha256:be4f2c966943e9b443a203b49ce979f88dfef9ca3d9530f6ee0eee2e051ac5ca", size = 57665, upload-time = "2026-08-22T03:39:01.34Z" },
 ]
 
 [[package]]
@@ -1421,14 +1421,17 @@ requires-dist = [
     { name = "cowsay-python", specifier = ">=1.0.2" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "import-linter", marker = "extra == 'testing'", specifier = ">=2.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
+    { name = "inline-snapshot", marker = "extra == 'testing'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
     { name = "sentry-sdk", specifier = ">=2.63.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "testing"]
 
 [[package]]
 name = "imbue-mngr"
@@ -1478,7 +1481,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=2.2.0" },
     { name = "overlay", editable = "../../libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "paramiko", specifier = ">=3.0" },
+    { name = "paramiko", specifier = "==3.5.1" },
     { name = "pluggy", specifier = ">=1.5.0" },
     { name = "psutil", specifier = ">=7.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -1566,15 +1569,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/38a1b9c6323c5dff0ab6c74aa839f1c7d8b7057a861d80ec5bfe834be24e/inline_snapshot-0.35.2.tar.gz", hash = "sha256:6cfd2ea0b52d9cb9beb13c1e73d740ff86f630ba48d9ea6947e54e3ff8494876", size = 2534713, upload-time = "2026-07-16T10:51:58.826Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ea/de85fc264e4c76bda3552eee42904e8b7079fd826902aa5fa044bc5bbc3c/inline_snapshot-0.35.2-py3-none-any.whl", hash = "sha256:91b230b310c95a8c3b91cdbc637e064c7c2f98c13935b64875a7ba9ef174e161", size = 94669, upload-time = "2026-07-16T10:51:57.457Z" },
-]
-
-[[package]]
-name = "invoke"
-version = "3.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/33/f6/227c48c5fe47fa178ccf1fda8f047d16c97ba926567b661e9ce2045c600c/invoke-3.0.3.tar.gz", hash = "sha256:437b6a622223824380bfb4e64f612711a6b648c795f565efc8625af66fb57f0c", size = 343419, upload-time = "2026-04-07T15:17:48.307Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/de/bbc12563bbf979618d17625a4e753ff7a078523e28d870d3626daa97261a/invoke-3.0.3-py3-none-any.whl", hash = "sha256:f11327165e5cbb89b2ad1d88d3292b5113332c43b8553b494da435d6ec6f5053", size = 160958, upload-time = "2026-04-07T15:17:46.875Z" },
 ]
 
 [[package]]
@@ -1838,6 +1832,8 @@ dependencies = [
     { name = "imbue-common" },
     { name = "imbue-mngr-usage" },
     { name = "loguru" },
+    { name = "modal" },
+    { name = "playwright" },
     { name = "pydantic" },
 ]
 
@@ -1858,16 +1854,18 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
     { name = "click", specifier = ">=8.0.0" },
-    { name = "harbor", extras = ["modal"], git = "https://github.com/harbor-framework/harbor?tag=v0.21.0" },
+    { name = "harbor", extras = ["modal"], git = "https://github.com/harbor-framework/harbor?tag=v0.22.0" },
     { name = "imbue-common", editable = "../../libs/imbue_common" },
     { name = "imbue-mngr-usage", editable = "../../libs/mngr_usage" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "modal", specifier = ">=1.5.1" },
+    { name = "playwright", specifier = "==1.59.0" },
     { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "harbor-rewardkit", specifier = "==0.1.*" },
+    { name = "harbor-rewardkit", specifier = "==0.2.0" },
     { name = "imbue-common", extras = ["dev"], editable = "../../libs/imbue_common" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=9.0" },
@@ -2040,17 +2038,16 @@ wheels = [
 
 [[package]]
 name = "paramiko"
-version = "4.0.0"
+version = "3.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bcrypt" },
     { name = "cryptography" },
-    { name = "invoke" },
     { name = "pynacl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/e7/81fdcbc7f190cdb058cffc9431587eb289833bdd633e2002455ca9bb13d4/paramiko-4.0.0.tar.gz", hash = "sha256:6a25f07b380cc9c9a88d2b920ad37167ac4667f8d9886ccebd8f90f654b5d69f", size = 1630743, upload-time = "2025-08-04T01:02:03.711Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/15/ad6ce226e8138315f2451c2aeea985bf35ee910afb477bae7477dc3a8f3b/paramiko-3.5.1.tar.gz", hash = "sha256:b2c665bc45b2b215bd7d7f039901b14b067da00f3a11e6640995fd58f2664822", size = 1566110, upload-time = "2025-02-04T02:37:59.783Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/90/a744336f5af32c433bd09af7854599682a383b37cfd78f7de263de6ad6cb/paramiko-4.0.0-py3-none-any.whl", hash = "sha256:0e20e00ac666503bf0b4eda3b6d833465a2b7aff2e2b3d79a8bba5ef144ee3b9", size = 223932, upload-time = "2025-08-04T01:02:02.029Z" },
+    { url = "https://files.pythonhosted.org/packages/15/f8/c7bd0ef12954a81a1d3cea60a13946bd9a49a0036a5927770c461eade7ae/paramiko-3.5.1-py3-none-any.whl", hash = "sha256:43b9a0501fc2b5e70680388d9346cf252cfb7d00b0667c39e80eb43a408b8f61", size = 227298, upload-time = "2025-02-04T02:37:57.672Z" },
 ]
 
 [[package]]
@@ -2112,6 +2109,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/52/cd/4f25b2f95b23f5d2c9c1fe43e49841bff5800562149b2666afc09309aa8f/platformdirs-4.10.1.tar.gz", hash = "sha256:ceab4084426fe6319ce18e86deada8ab1b7487c7aee7040c55e277c9ae793695", size = 31678, upload-time = "2026-07-18T03:53:43.808Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/73/6fd0bb9ce84138c3857f12e9de63bc901852975a092d545f18087a204aa2/platformdirs-4.10.1-py3-none-any.whl", hash = "sha256:0e4eff26be2d75293977f7cddc153fd9b8eaa7fb0c7b64ffe4076cb443117443", size = 22906, upload-time = "2026-07-18T03:53:42.576Z" },
+]
+
+[[package]]
+name = "playwright"
+version = "1.59.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "greenlet" },
+    { name = "pyee" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/48/abab23f40643b4de8f2665816f0a1bf0994eeecda39d6d62f0f292b2ad01/playwright-1.59.0-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:bfc6940100b57423175c819ce2422ec5880d55fa2769987f62ab7a1f5fe6783e", size = 43156922, upload-time = "2026-04-29T08:11:08.921Z" },
+    { url = "https://files.pythonhosted.org/packages/08/71/5e4d98b2ce3641b4343623c6450ff33b9de1c979d12a957505e392338b07/playwright-1.59.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:af068143a0c045ec11608b67d6c42e58db7e9cf65a742dd21fddedc1a9802c47", size = 41947177, upload-time = "2026-04-29T08:11:12.867Z" },
+    { url = "https://files.pythonhosted.org/packages/80/91/fd219aa78ca03d37e93aaedaed4e224131e3090a9264f9bb773c8271d67e/playwright-1.59.0-py3-none-macosx_11_0_universal2.whl", hash = "sha256:4a4a2d4842b0e4120de3fa48636e4b69085a05b81d8a35ad4353f530ade72ed6", size = 43156922, upload-time = "2026-04-29T08:11:16.595Z" },
+    { url = "https://files.pythonhosted.org/packages/73/0c/1e513d37c5be07d12829ebce93dbfe7baee230084cb66966c423432799c4/playwright-1.59.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:c5792aad9e22b91a09264b9edbc18553cf05ea5a39404d65dc19a012c6b2e51d", size = 47151793, upload-time = "2026-04-29T08:11:19.979Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/2d/15f72288cb65d690134e18fefb9483cc4976f7579b580648c45e494481a7/playwright-1.59.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8c881a19377d2b900af855fb525b5f22a27bf3cfbecba6d1edb36766d56cb100", size = 46877615, upload-time = "2026-04-29T08:11:23.863Z" },
+    { url = "https://files.pythonhosted.org/packages/72/a1/717ac5bc99f387c0f60def91271ea4262125c0815d764a5d1776a272275c/playwright-1.59.0-py3-none-win32.whl", hash = "sha256:6989c476be2b9cd3e24a18cc9dcf202e266fb3d91e3e5395cd668c54ea54b119", size = 37713698, upload-time = "2026-04-29T08:11:27.251Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/a5/4e630ee05d8b46b840f943268e86d6063703e8dadb2d3eb405c7b9b2e48c/playwright-1.59.0-py3-none-win_amd64.whl", hash = "sha256:d5a5cc064b82ca92996080025710844e417f44df8fda9001102c28f44174171c", size = 37713704, upload-time = "2026-04-29T08:11:30.41Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/0c/3ece41761ba13c8321009aefcaec7a016eb42799c42eef5e03ace7f2de5b/playwright-1.59.0-py3-none-win_arm64.whl", hash = "sha256:93581ad515728cadc8af39b288a5633ba6d36e7d72048e79d890ce01ea2156f9", size = 33956745, upload-time = "2026-04-29T08:11:34.738Z" },
 ]
 
 [[package]]
@@ -2372,6 +2388,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/64/d3/84c282a7eee1d3ac4c0377546ef5a1ea436ce26840d9ac3b7ed54a377507/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:3009f12e4e90b7f88b4f9adb1b0c4a3d58fe7820f3238c190047209d148026df", size = 1936024, upload-time = "2026-05-06T13:40:15.671Z" },
     { url = "https://files.pythonhosted.org/packages/d7/ca/eac61596cdeb4d7e174d3dc0bd8a6238f14f75f97a24e7b7db4c7e7340a0/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ad785e92e6dc634c21555edc8bd6b64957ab844541bcb96a1366c202951ae526", size = 1990696, upload-time = "2026-05-06T13:38:34.717Z" },
     { url = "https://files.pythonhosted.org/packages/fa/c3/7c8b240552251faf6b3a957db200fcfbbcec36763c050428b601e0c9b83b/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:00c603d540afdd6b80eb39f078f33ebd46211f02f33e34a32d9f053bba711de0", size = 2147590, upload-time = "2026-05-06T13:39:29.883Z" },
+]
+
+[[package]]
+name = "pyee"
+version = "13.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/04/e7c1fe4dc78a6fdbfd6c337b1c3732ff543b8a397683ab38378447baa331/pyee-13.0.1.tar.gz", hash = "sha256:0b931f7c14535667ed4c7e0d531716368715e860b988770fc7eb8578d1f67fc8", size = 31655, upload-time = "2026-02-14T21:12:28.044Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/b4d4827c93ef43c01f599ef31453ccc1c132b353284fc6c87d535c233129/pyee-13.0.1-py3-none-any.whl", hash = "sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228", size = 15659, upload-time = "2026-02-14T21:12:26.263Z" },
 ]
 
 [[package]]

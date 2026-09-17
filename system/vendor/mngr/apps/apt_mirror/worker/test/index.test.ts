@@ -8,6 +8,8 @@ const POOL_URL = `https://apt.example.com/snap/${T}/debian/pool/main/f/foo/foo_1
 const POOL_KEY = "pool/debian/pool/main/f/foo/foo_1.0_amd64.deb";
 const DISTS_URL = `https://apt.example.com/snap/${T}/debian/dists/trixie/InRelease`;
 const DISTS_KEY = `snap/${T}/debian/dists/trixie/InRelease`;
+const ARTIFACT_URL = "https://apt.example.com/artifacts/gvisor/20260601/x86_64/runsc";
+const ARTIFACT_KEY = "artifacts/gvisor/20260601/x86_64/runsc";
 
 beforeAll(() => {
   fetchMock.activate();
@@ -193,5 +195,45 @@ describe("pool", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("live-deb");
     expect(await env.MIRROR_BUCKET.get(POOL_KEY)).toBeNull();
+  });
+});
+
+describe("artifacts", () => {
+  it("serves an uploaded artifact from R2 with immutable caching", async () => {
+    await env.MIRROR_BUCKET.put(ARTIFACT_KEY, "runsc-bytes");
+    const response = await runWorker(ARTIFACT_URL);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("runsc-bytes");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+  });
+
+  it("serves a range from an uploaded artifact (curl resumes large image downloads)", async () => {
+    await env.MIRROR_BUCKET.put(ARTIFACT_KEY, "runsc-bytes");
+    const ranged = await runWorker(ARTIFACT_URL, { headers: { Range: "bytes=0-4" } });
+    expect(ranged.status).toBe(206);
+    expect(await ranged.text()).toBe("runsc");
+    expect(ranged.headers.get("Content-Range")).toBe("bytes 0-4/11");
+  });
+
+  it("answers HEAD with headers only", async () => {
+    await env.MIRROR_BUCKET.put(ARTIFACT_KEY, "runsc-bytes");
+    const response = await runWorker(ARTIFACT_URL, { method: "HEAD" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("11");
+    expect(await response.text()).toBe("");
+  });
+
+  it("404s a missing artifact without any upstream fetch", async () => {
+    // fetchMock has no interceptors registered: any upstream attempt would throw.
+    const response = await runWorker("https://apt.example.com/artifacts/age/1.2.1/age-v1.2.1-linux-amd64.tar.gz");
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects malformed artifact paths", async () => {
+    expect((await runWorker("https://apt.example.com/artifacts/gvisor/20260601")).status).toBe(400);
+    expect((await runWorker("https://apt.example.com/artifacts/gvisor/20260601/%2e%2e%2fx")).status).toBe(400);
+    expect((await runWorker("https://apt.example.com/artifacts/.hidden/1/f")).status).toBe(400);
+    expect((await runWorker("https://apt.example.com/artifacts/gvisor/1%202/f")).status).toBe(400);
+    expect((await runWorker(ARTIFACT_URL, { method: "POST" })).status).toBe(405);
   });
 });

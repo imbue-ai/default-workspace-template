@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
 metadata:
   author: imbue
 ---
@@ -8,7 +8,7 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). A broken build here is
+(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -16,8 +16,9 @@ skill is the single canonical path for that.
 
 This is the **system-interface specialization of the generic creation
 lifecycle.** It reuses the generic update orchestration -- the task file, the
-generic `harden-worker`, and the report poll -- from `update-creation` with
-`type=system-interface`, and adds the one thing the system interface needs
+generic worker contract at `.agents/shared/worker/SKILL.md`, and the report
+poll -- from `update-creation` with `type=system-interface`, and adds the one
+thing the system interface needs
 that no other creation does: a pre-merge **preview**, then a go-live through
 the general **update apply** (`update_self.py apply`), which lands the merge
 and reveals it as one atomic, rollback-on-failure motion. The
@@ -94,7 +95,7 @@ specifics:
   when a real conversation motivates the change (the motivating agent id + what
   looks wrong in plain words -- see the next bullet; omit it, or write "no real
   scenario", for net-new work), and `## Success criteria` (what "done" looks
-  like, plus the standing line: *follow the installed `harden-worker` sub-skill;
+  like, plus the standing line: *follow `.agents/shared/worker/SKILL.md`;
   it composes `harden-creation.md`, `op-update.md`, and
   `type-system-interface.md` for how to run, test, verify, and what not to
   touch; report `done` only when its testing contract and the review gates all
@@ -125,9 +126,8 @@ specifics:
   A change can be partly both -- anchored in a real conversation but adding
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
-- **Launch** with `--template worker` (installs the generic
-  `harden-worker`) per `update-creation` Step 3, then background-poll per
-  `.agents/shared/references/lead-proxy.md`.
+- **Launch** with `--template worker` per `update-creation` Step 3, then
+  background-poll per `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
   `done` you do **not** merge here (that is `update-creation` Step 4's behavior
   for other creations). Instead, go to the preview below. On `stuck` or a
@@ -219,12 +219,16 @@ If the user **approves** the preview:
    verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/apps/system_interface/` has not changed since the worker branched (for
-   example, another pass merged in the meantime):
+   `system/apps/system_interface/`, `system/apps/chat/frontend/`, the shared
+   `system/libs/workspace_ui/`, and the npm lockfile (the trees the shell's and
+   the chat's bundles are stamped over; the apply installs the worker's bundles
+   only as a pair, so a stale chat stamp costs the shell's bundle too) have not
+   changed since the worker branched (for example, another pass merged in the
+   meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/apps/chat/frontend/ system/libs/workspace_ui/ system/package-lock.json
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
@@ -260,7 +264,8 @@ WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-$SLUG" \
-    --worker-bundle "$WORK_DIR/system/apps/system_interface/imbue/system_interface/static"
+    --worker-bundle "system_interface=$WORK_DIR/system/apps/system_interface/imbue/system_interface/static" \
+    --worker-bundle "chat=$WORK_DIR/system/apps/chat/imbue/chat/static"
 ```
 
 That single command owns the whole go-live as one deterministic, self-healing
@@ -297,10 +302,12 @@ Interpret the exit code and report it to the user:
   a rollback whose own git steps failed). The interface may be down; escalate
   immediately. The pre-apply copies are kept under
   `data/.state/update-apply/snapshots/`, and when the apply touched the
-  frontend the stderr names the bundle copy -- copying it back over
-  `system/apps/system_interface/imbue/system_interface/static/` needs neither
-  `npm` nor a registry, so pass that path on with the escalation. Read the
-  stderr rather than assuming a path is there. This exit also leaves a durable
+  frontend the stderr names a copy per bundle (the shell's and the chat's) --
+  copying each back over its own served directory
+  (`system/apps/system_interface/imbue/system_interface/static/` and
+  `system/apps/chat/imbue/chat/static/`) needs neither `npm` nor a registry,
+  so pass both paths on with the escalation. Read the stderr rather than
+  assuming a path is there. This exit also leaves a durable
   `data/.state/update-apply/emergency.json` (reason, the agent that drove the
   apply, where the copies are) and the system interface shows a banner off it
   until it is gone, so deleting that file once the workspace is verified
@@ -336,9 +343,17 @@ python3 system/scripts/layout.py close si-preview
 ```
 
 Do this on every one of those exits, not only the successful one. Once the
-preview is down and its tab is closed, the worker can be destroyed per
-`launch-task` (after a failed apply, keep it until the diagnosis is done -- its
-branch and report are the retry's input). Close the `update-$SLUG` ticket the
+preview is down and its tab is closed, destroy the worker (this flow does not
+pass through `update-creation` Step 4, so the destroy is yours). After a `0`:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-$SLUG
+```
+
+After a failed apply (`1`, `2`, `3`), stop it instead
+(`create_worker.py stop --name update-$SLUG`) and keep it until the diagnosis
+is done -- its branch and report are the retry's input, and a diagnosed retry
+re-runs the apply against the kept branch. Close the `update-$SLUG` ticket the
 orchestration opened, and release the editing lease taken in Step 4 with
 `tk close "$LEASE_ID" "Apply finished."` -- on every exit code, since a lease
 left open blocks the next pass (on a rejection no lease was taken -- Step 4

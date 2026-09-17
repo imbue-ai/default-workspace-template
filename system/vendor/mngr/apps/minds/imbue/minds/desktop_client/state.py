@@ -31,11 +31,14 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backup_trim import BackupTrimManager
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
+from imbue.minds.desktop_client.folder_sync import FolderSyncManager
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
 from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
+from imbue.minds.desktop_client.latchkey.machine_operations import MachineOperator
 from imbue.minds.desktop_client.latchkey.pending_requests import PendingRequestsInterface
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
+from imbue.minds.desktop_client.machine_stop_kinds import MachineStopKindTracker
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.notification_feed import NotificationFeed
@@ -115,6 +118,13 @@ class DesktopClientState(MutableModel):
             "create_desktop_client (None only for apps constructed without it, e.g. minimal tests)"
         ),
     )
+    machine_stop_kind_tracker: MachineStopKindTracker | None = Field(
+        default=None,
+        description=(
+            "Reads why each stopped cloud machine is stopped from the connector, for the list and the "
+            "recovery gate; its background loop is stopped at shutdown (None in minimal tests)"
+        ),
+    )
     client_env_config: ClientEnvConfig | None = Field(
         default=None, frozen=True, description="Loaded per-env client config (connector URL, etc.)"
     )
@@ -127,22 +137,21 @@ class DesktopClientState(MutableModel):
     sync_scheduler: WorkspaceSyncScheduler | None = Field(
         default=None, frozen=True, description="Background workspace-record sync loop (kicked on auth changes)"
     )
+    folder_sync_manager: FolderSyncManager | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Owns the ``mngr pair`` subprocess behind each synced shared path; None when there "
+            "is no root concurrency group to run them on, which the pane reports as syncing "
+            "being unsupported"
+        ),
+    )
     pending_requests: PendingRequestsInterface | None = Field(
         default=None,
         frozen=True,
         description=(
             "The one answer to 'what permission requests are pending?': gateway-backed reads "
             "plus the append-only verdict index (see latchkey/pending_requests.py)."
-        ),
-    )
-    is_account_setup_skipped: bool = Field(
-        default=False,
-        description=(
-            "True once the user chose 'Continue without an account' on the welcome "
-            "splash this run; until then (while signed out with no workspaces) the "
-            "home route bounces back to the welcome splash. Reset per app run, "
-            "mirroring the cold-start routing that lands a functionally-empty app "
-            "on the welcome screen."
         ),
     )
     request_event_handlers: tuple[RequestEventHandler, ...] = Field(
@@ -189,6 +198,16 @@ class DesktopClientState(MutableModel):
     )
     latchkey_forward_supervisor: LatchkeyForwardSupervisor | None = Field(
         default=None, frozen=True, description="Detached mngr latchkey forward supervisor handle"
+    )
+    machine_operator: MachineOperator | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Reads and edits a remote workspace's own machine -- its credentials and the policy its "
+            "gateway enforces -- synchronously, blocking the caller until the machine answers. None in "
+            "minimal setups, which can reach no machine at all and so leave the local edit as the whole "
+            "change."
+        ),
     )
     permission_requests_consumer: PermissionRequestsConsumer | None = Field(
         default=None, description="Streaming permission-requests consumer (wired post-construction)"

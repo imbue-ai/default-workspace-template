@@ -8,6 +8,8 @@ crashing the container at import time.
 """
 
 import os
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Final
 
 from pydantic import BaseModel
@@ -71,12 +73,52 @@ class AnalyticsSettings(BaseModel):
     aggregation_window_days: int = Field(description="Trailing window (days) the activity aggregation recomputes")
 
 
-class CollectionSettings(BaseModel):
-    """The collection loop's tuning knobs plus the pool SSH key it hops with."""
+class ManagementSshCredentials(BaseModel):
+    """What a workspace hop authenticates with: a private key, and on gen-2 the short-lived certificate for it."""
 
     model_config = ConfigDict(frozen=True)
 
-    pool_ssh_private_key: SecretStr = Field(description="Ed25519 PEM the pool uses to reach workspace sshds")
+    private_key_pem: SecretStr = Field(description="OpenSSH ed25519 private key PEM")
+    certificate: str | None = Field(
+        description="The OpenSSH certificate presented instead of the raw key; None for the gen-1 pool key"
+    )
+
+
+# The gen-2 certificate bundle the connector's ssh_cert_refresh cron stores in
+# the shared Modal Dict (its entry shape is the contract between the two apps;
+# see the connector's ssh_certs module).
+SSH_CERT_DICT_NAME: Final[str] = "ssh-management-certs"
+SSH_CERT_DICT_KEY_ANALYTICS: Final[str] = "analytics"
+
+
+def gen2_credentials_from_dict_entry(
+    entry: Mapping[str, str] | None, now: datetime
+) -> ManagementSshCredentials | None:
+    """The analytics certificate credentials from the Dict entry, or None when absent or expired."""
+    if entry is None:
+        return None
+    expires_at = datetime.fromisoformat(entry["expires_at"])
+    if expires_at <= now:
+        return None
+    return ManagementSshCredentials(
+        private_key_pem=SecretStr(entry["private_key_pem"]), certificate=entry["certificate"]
+    )
+
+
+class CollectionSettings(BaseModel):
+    """The collection loop's tuning knobs plus the management credentials it hops with."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # CLEANUP: drop with the pool-ssh secret once the gen-1 -> gen-2 cutover has
+    # run on every tier (phase 6 of blueprint/slice-fleet-cutover).
+    pool_ssh_private_key: SecretStr = Field(description="Ed25519 PEM gen-1 workspaces authorize (the pool key)")
+    gen2_credentials: ManagementSshCredentials | None = Field(
+        description=(
+            "The analytics certificate credentials gen-2 workspaces trust, from the connector's certificate Dict; "
+            "None when no fresh certificate is stored (gen-2 workspaces are then skipped, never hopped with the pool key)"
+        )
+    )
     interval_seconds: int = Field(gt=0, description="Minimum seconds between collection attempts on one workspace")
     parallelism: int = Field(gt=0, description="Workspaces collected concurrently by one poll run")
     # Must stay positive: GNU timeout treats 0 as "no timeout", which would
@@ -133,18 +175,21 @@ def load_analytics_settings() -> AnalyticsSettings:
     )
 
 
-def load_collection_settings() -> CollectionSettings:
+def load_collection_settings(gen2_credentials: ManagementSshCredentials | None) -> CollectionSettings:
     """Raises AnalyticsConfigError when the pool key is absent or a tuning value is malformed.
 
-    The pool SSH key arrives via the ``pool-ssh`` Modal Secret the collection
-    function additionally attaches (the same key the connector leases with);
-    the tuning knobs live in the analytics secret, default sensibly, and must
-    be positive (the model rejects zero/negative overrides loudly rather than
+    The gen-1 pool SSH key arrives via the ``pool-ssh`` Modal Secret the
+    collection function additionally attaches (the same key the connector
+    leases gen-1 rows with); the gen-2 certificate credentials are read from
+    the connector's certificate Dict by the entrypoint and passed in. The
+    tuning knobs live in the analytics secret, default sensibly, and must be
+    positive (the model rejects zero/negative overrides loudly rather than
     silently correcting them).
     """
     try:
         return CollectionSettings(
             pool_ssh_private_key=SecretStr(_require_env("POOL_SSH_PRIVATE_KEY")),
+            gen2_credentials=gen2_credentials,
             interval_seconds=_read_optional_int_env(
                 "ANALYTICS_COLLECTION_INTERVAL_SECONDS", _DEFAULT_COLLECTION_INTERVAL_SECONDS
             ),

@@ -50,6 +50,9 @@ class CollectableWorkspace(BaseModel):
     ssh_user: str = Field(description="SSH user for both endpoints (as the connector uses it)")
     container_host_public_key: str | None = Field(description="Bake-time container sshd key, when recorded")
     outer_host_public_key: str | None = Field(description="Bake-time VM-root sshd key, when recorded")
+    box_generation: int = Field(
+        description="The slice fleet generation of the box (selects the management credentials: certificate on gen-2)"
+    )
 
 
 def read_explorer_accounts(rsc_connection: Any) -> dict[str, str]:
@@ -120,7 +123,7 @@ def list_online_explorer_workspaces(
         with rsc_connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id, host_id, leased_to_user, vps_address, ssh_port, container_ssh_port, ssh_user,"
-                " container_host_public_key, outer_host_public_key"
+                " container_host_public_key, outer_host_public_key, box_generation"
                 " FROM pool_hosts"
                 " WHERE status = 'leased' AND leased_to_user = ANY(%s)"
                 " AND vps_address IS NOT NULL AND container_ssh_port IS NOT NULL",
@@ -142,6 +145,7 @@ def list_online_explorer_workspaces(
                 ssh_user=str(row[6] or "root"),
                 container_host_public_key=row[7],
                 outer_host_public_key=row[8],
+                box_generation=int(row[9] or 1),
             )
         )
     return workspaces

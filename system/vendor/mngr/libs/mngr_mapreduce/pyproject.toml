@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "imbue-mngr==0.2.17",
+    # Node prompt templates are Jinja; already a dependency of mngr_tmr and mngr_forward.
+    "jinja2>=3.1",
 ]
 
 [build-system]

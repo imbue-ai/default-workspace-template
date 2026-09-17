@@ -40,7 +40,6 @@ from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as
 
 import imbue.remote_service_connector.auth_proxy as auth_proxy_mod
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
-from imbue.remote_service_connector.compat import wire_models_minds_0_3_16
 from imbue.remote_service_connector.compat import wire_models_minds_0_4_0
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
@@ -58,7 +57,7 @@ from imbue.remote_service_connector.web import web_app
 # Every snapshot currently enforced. Append the new release's module at each
 # minds release; delete a module (and its entry here) when it leaves the
 # support window (see test_compat_snapshots_are_within_their_support_window).
-_SNAPSHOTS = (wire_models_minds_0_3_16, wire_models_minds_0_4_0)
+_SNAPSHOTS = (wire_models_minds_0_4_0,)
 
 
 def _validate_for_snapshots(endpoint_key: str, body: object) -> None:
@@ -84,9 +83,7 @@ def _validate_entries_for_snapshots(endpoint_key: str, entries: object) -> None:
         _validate_for_snapshots(endpoint_key, entry)
 
 
-# ---------------------------------------------------------------------------
 # Snapshot aging
-# ---------------------------------------------------------------------------
 
 
 def test_compat_snapshots_are_within_their_support_window() -> None:
@@ -101,9 +98,7 @@ def test_compat_snapshots_are_within_their_support_window() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Response validation, per endpoint group
-# ---------------------------------------------------------------------------
 
 
 def test_auth_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,9 +300,7 @@ def test_sync_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch)
     _validate_for_snapshots("GET /sync/bundle", bundle.json())
 
 
-# ---------------------------------------------------------------------------
 # Route completeness
-# ---------------------------------------------------------------------------
 
 # Routes whose responses are strictly parsed by shipped clients, mapped to the
 # snapshot endpoint key(s) whose fixtures above exercise them. Each key must
@@ -454,6 +447,12 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/release"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/stop-kind"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/start"): _OPERATOR,
+    ("POST", "/admin/machines/{host_db_id}/resize"): _OPERATOR,
+    # Machine resize: the plugin CLI reads the response with tolerant .get
+    # readers (no strict wire model on the response body).
+    ("POST", "/machines/{host_db_id}/resize"): _TOLERANT_CLIENT,
 }
 
 

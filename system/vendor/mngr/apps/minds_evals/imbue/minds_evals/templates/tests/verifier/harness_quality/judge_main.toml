@@ -1,0 +1,21 @@
+# The lead agent's own harness: the skills and tools the workspace agent reached for while talking to
+# the client. Its own toml (rather than a second criterion beside the worker's) so that each judge is
+# shown exactly one scope's report and cannot blame one scope for the other's failures.
+#
+# points = 5 keeps the scale coarse on purpose: this dimension answers "did the harness hold", and a
+# 1-10 scale invites a precision the evidence does not support.
+[judge]
+judge = "anthropic/claude-opus-4-8"
+files = ["/logs/agent/harness_main.txt"]
+prompt_template = "prompt.md"
+# rewardkit averages a directory's .py criteria into ONE reward of weight 1.0, so two judge
+# tomls at weight 1.0 each would carry a third apiece against a sixth for each scripted
+# criterion. Half each makes the dimension an equal-weight mean of all four, the same
+# per-criterion parity the quality dimension buys with its own weight.
+weight = 0.5
+
+[[criterion]]
+name = "main_harness_success"
+description = "How well did the harness hold for the LEAD agent? 5 = every skill and tool it reached for resolved and worked. 3 = something failed but the agent routed around it and the work still happened. 1 = the tooling it depended on did not load and the work it was for did not happen."
+type = "likert"
+points = 5

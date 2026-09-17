@@ -5,15 +5,15 @@ no room, this is how new capacity is bought. Ordering is rare and slow (delivery
 plus provisioning is roughly half an hour), so it is separated from the bake
 rather than inlined into it.
 
-The standing default is **one `24sys032-us` per US region per release**, though
+The standing default is **one `24sys03-v1-us` per US region per release**, though
 recent releases have instead filled existing free slots when the audit showed
 enough -- 0.4.2 and 0.4.3 both did. Decide from the live audit, and record which
 you chose in the release's history entry.
 
 | Region label (lease) | OVH datacenter | Box | RAM | Storage | Slices/box |
 |---|---|---|---|---|---|
-| `US-EAST-VA` | `vin` | `24sys032-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
-| `US-WEST-OR` | `hil` | `24sys032-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
+| `US-EAST-VA` | `vin` | `24sys03-v1-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
+| `US-WEST-OR` | `hil` | `24sys03-v1-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
 
 OVH **orders** take the datacenter code (`vin` / `hil`); slice **bakes** take the
 lease-region label (`US-EAST-VA` / `US-WEST-OR`). Nothing cross-checks the two.
@@ -25,7 +25,7 @@ and the exact server specs for both regions **without charging**, using
 `--dry-run` (builds + assigns a non-committal cart, prints the preview, then
 deletes the cart -- no charge, no prompt, no DB write):
 
-`24sys032-us` has **two mandatory option families** that each offer a choice, so
+`24sys03-v1-us` has **two mandatory option families** that each offer a choice, so
 both must be passed via `--option` (discovered on the first run; the command
 errors and lists the offers + monthly prices until every such family is chosen):
 
@@ -38,7 +38,7 @@ errors and lists the offers + monthly prices until every such family is chosen):
 for DC in vin hil; do
   echo "===== ${DC} ====="
   just server-order --dry-run \
-      --plan-code 24sys032-us \
+      --plan-code 24sys03-v1-us \
       --region "${DC}" \
       --memory-gb 128 \
       --storage softraid-2x960nvme \
@@ -47,7 +47,7 @@ for DC in vin hil; do
 done
 ```
 
-Each block prints `About to order 24sys032-us in <dc>: 128GB RAM,
+Each block prints `About to order 24sys03-v1-us in <dc>: 128GB RAM,
 softraid-2x960nvme, 8c/16t, 960GB usable disk (RAID1) -> 14 slices of 8GB` and an
 `OVH price preview:` (subtotal / tax / due now), followed by `Dry run: cart
 deleted, no order placed.` Review the price, specs, and slice count, and approve
@@ -69,13 +69,13 @@ preview, use `--yes` to skip the interactive confirm:
 
 ```bash
 just server-order --yes \
-    --plan-code 24sys032-us --region vin \
+    --plan-code 24sys03-v1-us --region vin \
     --memory-gb 128 --storage softraid-2x960nvme \
     --option bandwidth-1000-24sys-us \
     --option vrack-bandwidth-500-24sys-us
 
 just server-order --yes \
-    --plan-code 24sys032-us --region hil \
+    --plan-code 24sys03-v1-us --region hil \
     --memory-gb 128 --storage softraid-2x960nvme \
     --option bandwidth-1000-24sys-us \
     --option vrack-bandwidth-500-24sys-us
@@ -91,7 +91,7 @@ export SRV_HIL=<server-id-printed-for-hil>
 
 ## Step 4 -- await delivery
 
-Delivery for `24sys032-us` is usually ~1h (the pricing table showed `~1h` /
+Delivery for `24sys03-v1-us` is usually ~1h (the pricing table showed `~1h` /
 high stock). Resumable; a no-op once delivered.
 
 ```bash
@@ -132,5 +132,5 @@ Both end at status `ready`. Confirm:
 just server-list
 ```
 
-You should see both new boxes `ready`, plan `24sys032-us`, 14 slots each, in
+You should see both new boxes `ready`, plan `24sys03-v1-us`, 14 slots each, in
 their regions.

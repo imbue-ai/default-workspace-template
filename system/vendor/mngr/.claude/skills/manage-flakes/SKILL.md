@@ -9,10 +9,11 @@ Take the set of flaky tests the caller hands you and make the MIND Linear backlo
 
 ## What the caller gives you
 
-- A list of flaky tests in the shape the CLI's `list-flakes` emits -- at least `test`, `sample_failure_lines`, `is_marked_flaky`, `branches`, `last_seen`. (A single-flake caller assembles one such record.)
+- A list of flaky tests in the shape the CLI's `list-flakes` emits -- at least `test`, `failure_modes` (each a distinct failure first-line plus the `branches` it appeared on), `is_marked_flaky`, `branches`, `last_seen`. (A single-flake caller assembles one such record.)
 - Whether the set is **full-window** (every flake in a CI window, e.g. `detect-flakes`) or **partial** (e.g. one incidental flake from `report-incidental-flakes`). This flag gates closing -- see step 4.
+- Whether the run is **autonomous** -- stated by the caller, or passed to this skill directly as `--autonomous`. This gates the approval pause in step 5, and nothing else.
 
-Precondition: `latchkey services info linear` reports `"valid"`.
+Precondition: Linear is reachable through latchkey -- check with `uv run python scripts/flake_reconcile.py list-tickets`, which is read-only. (Do not test this with `latchkey services info linear`: its `credentialStatus` field exists in latchkey 2.x but not in 3.x, so it reads as unset on a current CLI.)
 
 ## The CLI
 
@@ -46,7 +47,7 @@ For each cluster settle on: a title naming the cause, the affected tests, a one-
 
 ### 3. Prioritize each cluster -- the branch filter
 
-A flake seen only on one unmerged feature branch is probably that branch's own bug; filing it as ready sends a fixer chasing something they cannot reproduce on `main`. Take the union of `branches` across the cluster's tests. The rule is deterministic -- `preferred-status` computes it:
+A flake seen only on one unmerged feature branch is probably that branch's own bug; filing it as ready sends a fixer chasing something they cannot reproduce on `main`. Take the union of `branches` across the **`failure_modes` the cluster covers** -- not across whole tests. A test that times out on `main` and separately hard-fails on one broken feature branch is two clusters, and the test-level `branches` union would promote both; only the per-mode branches tell them apart. Fall back to a test's own `branches` only when the cluster covers every mode of that test. The rule is deterministic -- `preferred-status` computes it:
 
 - any flake on **`main`** -> **ready** (a live problem on main)
 - never on main, but on **more than one** feature branch -> **ready** (branch-independent / systemic; it will reach main)
@@ -74,7 +75,22 @@ When you re-scope a ticket, give it a new `flake-cluster` slug matching its new 
 
 ### 5. Show the plan, then apply
 
-Summarize every intended CREATE / UPDATE / CLOSE / state change for the user and **get approval before the first write**. On approval, execute and report what changed (each command prints the affected ticket).
+Summarize every intended CREATE / UPDATE / CLOSE / state change.
+
+**Interactively:** **get approval before the first write.** On approval, execute and report what changed (each command prints the affected ticket).
+
+**Autonomously (`--autonomous`):** do not pause -- but do not skip the narration either. Write the same plan you would have shown to `flake-sweep-summary.md` at the repo root, *then* apply it, *then* append what actually changed, including anything that failed. Stating the plan before acting is load-bearing rather than ceremony: it is the only record of intent if a write goes wrong, and narrating a plan first measurably improves how faithfully it gets followed. Every other rule still applies -- closes remain restricted to full-window sweeps (step 4), and a human's or agent's state move is still never clobbered.
+
+## Run summary (autonomous runs)
+
+`flake-sweep-summary.md` is read verbatim into a GitHub job summary and a Slack post, so write it
+for someone who sees nothing else. Markdown, in this order:
+
+- one line: the window swept, how many flaky tests, how many clusters;
+- the planned CREATE / UPDATE / CLOSE / state changes -- written *before* applying them;
+- what actually changed, with ticket identifiers, plus anything that failed;
+- what a human should look at: unmarked flakes that can turn CI red, clusters you were unsure of,
+  and open tickets you deliberately left alone.
 
 ## Ticket body
 
@@ -86,3 +102,5 @@ Sibling skills (the fixer and the reporters) parse this shape -- keep it. At the
 ```
 
 Then, skimmable: the root cause and resolution hypothesis; an affected-tests table (`test | flaking commits | hard-fails | @flaky`); the representative failure line(s); an unmarked-flake callout if any; and how many commits/days the cluster spans. Footer it as auto-filed by `manage-flakes`.
+
+State the branch evidence -- which branches, and whether `main` is among them -- for **the failure modes this cluster covers**, on the same per-mode basis step 3 prioritizes on. Never report an affected test's full `branches` list: a test can flake on `main` under a mode that belongs to a different ticket, and inheriting that reads to the fixer as "this reproduces on `main`" when it does not. Where the two differ, say so, so a reader can tell the cluster's own scope from its tests'.

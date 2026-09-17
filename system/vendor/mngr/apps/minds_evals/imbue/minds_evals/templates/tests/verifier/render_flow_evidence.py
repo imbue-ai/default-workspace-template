@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 VERIFICATION_DIR = Path("/logs/agent/verification")
-# The case as the generator expanded it, which is where a flow's declared steps and its `expect`
+# The case as the generator expanded it, which is where a flow's declared actions and its `expect`
 # live. Same path outcome/checks.py reads: harbor mounts the task's tests directory there.
 CASE_PATH = Path("/tests/case.json")
 DIGEST_PATH = Path("/logs/agent/judge_flows_digest.txt")
@@ -33,6 +33,10 @@ SCREENSHOTS_DIR = Path("/logs/agent/judge_screenshots")
 
 MANIFEST_FILENAME = "manifest.json"
 READING_ACTION = "read the final state"
+# The opening record a flow writes before it acts, which is not rendered as a step: its declarations
+# are the header's, and the page it opened onto is the state the first action record carries, since
+# a step records the state its action was chosen from.
+INIT_KIND = "init"
 FLOWS_DIRNAME = "flows"
 FLOW_LOG_FILENAME = "log.jsonl"
 UI_FLOWS_CLASS = "ui_flows"
@@ -69,8 +73,34 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 # How a manifest status reads in the digest. Trial time records whether a flow ran to the end of its
-# declared steps; it does not rule on the `expect`, so the words here must not suggest it did.
+# declared actions; it does not rule on the `expect`, so the words here must not suggest it did.
 _COMPLETION_BY_STATUS = {"passed": "completed", "failed": "incomplete", "error": "not measured"}
+
+# The agent driving a flow may reload only where the declared actions say so; it waits out a
+# pending state instead. A reload it took anyway is its last resort for an app that had stopped
+# responding, and the judge -- which reads the declared actions and can see which reloads they
+# called for -- is told to read it that way.
+_RELOAD_NOTE = (
+    "Note on reloads: the agent driving a flow reloads the page only where the declared actions say "
+    "to. A 'reload the page' step that the declared actions did not call for is the agent's last "
+    "resort after the app stopped responding to it, and is evidence against the app: an app that "
+    "needs a full reload to show its own state has already failed to work."
+)
+
+
+# A step whose record carries a ref acted on a control the page exposes with no accessible name.
+# That is the app's accessibility falling short, and it is kept in the record for a measure of its
+# own. The judge rules on the flow's declared actions and `expect`: where those ask for nothing
+# about accessibility the defect is not theirs to score, and where they do, the judge is not told
+# to look away from evidence the record itself put in front of it.
+_UNNAMED_CONTROL_NOTE = (
+    "Note on unnamed controls: a step marked 'addressed by ref' acted on a control the page exposes "
+    "with no accessible name -- no label, no aria-label -- which the agent could only address by "
+    "its position in the accessibility tree. That is an accessibility defect of the delivered app, "
+    "recorded here for a separate measure of it. Unless the declared actions or the expectation you "
+    "are judging call for accessibility, it is not what this flow measures, and on its own it is not "
+    "meant to lower the score you give here."
+)
 
 
 def _declared_flows(case_path: Path) -> dict[str, dict[str, Any]]:
@@ -88,6 +118,17 @@ def _declared_flows(case_path: Path) -> dict[str, dict[str, Any]]:
         for check in checks
         if isinstance(check, dict) and check.get("check_id")
     }
+
+
+def _declared_actions(check: dict[str, Any]) -> str:
+    """What the flow declares it does. Read as `actions`, with `steps` as the name a dataset
+    generated before the rename carries; a regrade of such a trial still has to show the judge the
+    flow it ran.
+
+    CLEANUP: drop the `steps` fallback once no trial generated before 2026-09-11 is regraded any
+    more (after the next minds release ships with the rename).
+    """
+    return str(check.get("actions") or check.get("steps") or "")
 
 
 def _flow_entries(verification_dir: Path) -> list[dict[str, Any]]:
@@ -171,10 +212,29 @@ def select_screenshots(
 
 
 def _render_step(step: dict[str, Any], max_state_chars: int) -> list[str]:
+    """One step: what the agent did, what it predicted, and what the page did with it.
+
+    A log written before the agent recorded predictions carries neither prediction nor observation,
+    and simply has those lines left off.
+    """
     lines = [
         "  step {}: {}".format(step.get("step_index"), step.get("action") or "(no action)"),
-        "    agent reasoning: {}".format(step.get("reasoning") or "(none recorded)"),
     ]
+    target_ref = str(step.get("target_ref") or "")
+    if target_ref:
+        lines.append(
+            "    addressed by ref: the page gives this control no accessible name (see the note on "
+            "unnamed controls above)"
+        )
+    lines.append("    agent reasoning: {}".format(step.get("reasoning") or "(none recorded)"))
+    expected = str(step.get("expected") or "")
+    if expected:
+        lines.append("    and expected: {}".format(expected))
+    observed = str(step.get("observed") or "")
+    if observed:
+        # What the page did against what was predicted of it, which is where an app that ignores a
+        # gesture, or answers it with something else entirely, shows up.
+        lines.append("    the page then: {}".format(observed))
     state = str(step.get("state") or "")
     if len(state) > max_state_chars:
         state = state[:max_state_chars] + "\n[...page state truncated...]"
@@ -199,7 +259,7 @@ def _flow_header(entry: dict[str, Any], check: dict[str, Any], steps: list[dict[
         "",
     )
     return [
-        "declared steps: {}".format(check.get("steps") or "(not recorded)"),
+        "declared actions: {}".format(_declared_actions(check) or "(not recorded)"),
         "expect (YOU decide whether this holds): {}".format(check.get("expect") or "(not recorded)"),
         "completion: {} ({})".format(
             _COMPLETION_BY_STATUS.get(str(entry.get("status") or ""), "unknown"), entry.get("reason") or "-"
@@ -230,8 +290,9 @@ def _render_detail(
         steps = steps_by_flow.get(flow_dir.name, [])
         detail_lines += ["## flow: {}".format(flow_dir.name), ""]
         detail_lines += _flow_header(entry, check, steps)
-        for index, step in enumerate(steps):
-            is_last = index == len(steps) - 1
+        rendered = [step for step in steps if step.get("kind") != INIT_KIND]
+        for index, step in enumerate(rendered):
+            is_last = index == len(rendered) - 1
             detail_lines.extend(_render_step(step, MAX_STEP_STATE_CHARS if is_last else earlier_state_chars))
         detail_lines.append("")
     return "\n".join(detail_lines) + "\n"
@@ -286,7 +347,9 @@ def render_digest(
             "{} of {} selected screenshot(s) are attached to this judge request; the earliest flows' "
             "frames were dropped to stay within the attachment ceiling.".format(attached_count, chosen_count)
         )
-    index_lines += ["", attachment_line, ""]
+    index_lines += ["", attachment_line, "", _RELOAD_NOTE, ""]
+    if any(step.get("target_ref") for steps in steps_by_flow.values() for step in steps):
+        index_lines += [_UNNAMED_CONTROL_NOTE, ""]
 
     index = "\n".join(index_lines) + "\n"
     # The index is always kept whole: it is what tells the judge how many flows there were and how

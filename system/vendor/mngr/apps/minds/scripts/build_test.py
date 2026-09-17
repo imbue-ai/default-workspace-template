@@ -36,7 +36,7 @@ from typing import Final
 
 import pytest
 
-from imbue.mngr_latchkey.remote_gateway import DATALIB_CURL_VERSION as GATEWAY_DATALIB_CURL_VERSION
+from imbue.mngr_latchkey.remote.provisioning import DATALIB_CURL_VERSION as GATEWAY_DATALIB_CURL_VERSION
 
 # The full set of workspace packages bundled into the standalone app. This
 # same set is hand-maintained in three other places:
@@ -140,6 +140,40 @@ def test_workspace_wheel_excludes_test_files(built_wheels: dict[str, Path], pack
         'Add `exclude = ["*_test.py", "test_*.py", "**/conftest.py"]` to '
         "[tool.hatch.build.targets.wheel] in the package's pyproject.toml."
     )
+
+
+@pytest.mark.acceptance
+def test_imbue_common_testing_extra_installs_its_test_library(built_wheels: dict[str, Path], tmp_path: Path) -> None:
+    """A downstream suite installing ``imbue-common[testing]`` from the wheel can import the test
+    library the wheel ships, and installing the wheel alone pulls in no pytest.
+    """
+    wheel = built_wheels["imbue-common"]
+    venv = tmp_path / "venv"
+    # The test environment pins uv offline and frozen; a fresh venv has to fetch the extra's packages.
+    env = {key: value for key, value in os.environ.items() if key not in ("UV_OFFLINE", "UV_FROZEN")}
+    subprocess.run(["uv", "venv", "-q", str(venv)], check=True, capture_output=True, env=env)
+    python = venv / "bin" / "python"
+
+    subprocess.run(
+        ["uv", "pip", "install", "-q", "--python", str(python), str(wheel)], check=True, capture_output=True, env=env
+    )
+    runtime_only = subprocess.run([str(python), "-c", "import pytest"], capture_output=True, text=True)
+    assert runtime_only.returncode != 0, "the runtime install must not pull in pytest"
+
+    subprocess.run(
+        ["uv", "pip", "install", "-q", "--python", str(python), f"{wheel}[testing]"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    test_library = [
+        "imbue.imbue_common.pytest_utils",
+        "imbue.imbue_common.ratchet_testing.common_ratchets",
+        "imbue.imbue_common.ratchet_testing.core",
+        "imbue.imbue_common.ratchet_testing.ratchets",
+        "imbue.imbue_common.ratchet_testing.standard_ratchet_checks",
+    ]
+    subprocess.run([str(python), "-c", "import " + ", ".join(test_library)], check=True, capture_output=True)
 
 
 def _uv_schema_argv() -> list[str]:
@@ -850,7 +884,7 @@ def test_datalib_curl_pin_agrees_with_the_latchkey_gateway() -> None:
 
     The dispatch curl is fetched from two independent places -- minds bundles
     it for the desktop app (``download-binaries.js``) and the latchkey gateway
-    installs it on the VPS (``mngr_latchkey.remote_gateway``) -- and the pin is
+    installs it on the VPS (``mngr_latchkey.remote.provisioning``) -- and the pin is
     duplicated because the mngr wheel must not read files outside the ``imbue``
     package, so a shared manifest is not available across the two projects.
     Bumping one and not the other would leave a desktop client impersonating
@@ -861,7 +895,7 @@ def test_datalib_curl_pin_agrees_with_the_latchkey_gateway() -> None:
     assert match is not None, "Could not find DATALIB_CURL_VERSION in download-binaries.js"
     assert match.group(1) == GATEWAY_DATALIB_CURL_VERSION, (
         f"download-binaries.js pins datalib curl {match.group(1)} but "
-        f"mngr_latchkey.remote_gateway pins {GATEWAY_DATALIB_CURL_VERSION}; "
+        f"mngr_latchkey.remote.provisioning pins {GATEWAY_DATALIB_CURL_VERSION}; "
         "bump both together."
     )
 

@@ -28,12 +28,42 @@ from imbue.observability.primitives import OPENOBSERVE_ORGANIZATION
 
 # Pinned OpenTelemetry Collector (contrib) release installed on every machine
 # (bump deliberately; the sha256s are the published checksums of this exact
-# version's linux .deb packages).
+# version's linux .deb packages). Public so the artifact mirror's manifest
+# (minds_admin) uploads exactly these files under exactly these hashes.
 OTELCOL_CONTRIB_VERSION: Final[str] = "0.159.0"
-_OTELCOL_DEB_SHA256_BY_GOARCH: Final[dict[str, str]] = {
+OTELCOL_DEB_SHA256_BY_GOARCH: Final[dict[str, str]] = {
     "amd64": "4ede8d750d6bf845e353be46cc550f590e6ccdaeeb60aae941cde6ad561877db",
     "arm64": "430469fbfb48f123d08dfc896973bdc205ba393901cc506e92c9c928698a6d5e",
 }
+OTELCOL_CONTRIB_ARTIFACT_NAME: Final[str] = "otelcol-contrib"
+# The .deb is fetched from imbue's artifact mirror (apps/apt_mirror; the
+# operator tooling uploads it there), never from GitHub at install time, so a
+# pruned or unreachable upstream release can never break a box prep or a
+# relay/instance provision. The upstream URL is what the mirror upload
+# verifies against.
+_OTELCOL_UPSTREAM_RELEASES_URL: Final[str] = (
+    "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download"
+)
+_ARTIFACT_MIRROR_URL: Final[str] = "https://apt.imbuepackages.com/artifacts"
+
+
+@pure
+def otelcol_contrib_deb_filename(goarch: str) -> str:
+    return f"otelcol-contrib_{OTELCOL_CONTRIB_VERSION}_linux_{goarch}.deb"
+
+
+@pure
+def otelcol_contrib_deb_upstream_url(goarch: str) -> str:
+    return f"{_OTELCOL_UPSTREAM_RELEASES_URL}/v{OTELCOL_CONTRIB_VERSION}/{otelcol_contrib_deb_filename(goarch)}"
+
+
+@pure
+def otelcol_contrib_deb_mirror_url(goarch: str) -> str:
+    return (
+        f"{_ARTIFACT_MIRROR_URL}/{OTELCOL_CONTRIB_ARTIFACT_NAME}/{OTELCOL_CONTRIB_VERSION}/"
+        f"{otelcol_contrib_deb_filename(goarch)}"
+    )
+
 
 # Where the .deb's own systemd service reads its config, and where the
 # file-backed sending queue lives.
@@ -195,9 +225,11 @@ def render_collector_install_script(config: CollectorInstallConfig) -> str:
     artifact. The config embeds the ingest credential, so it is installed
     owner-only for the service user.
     """
-    amd64_sha256 = _OTELCOL_DEB_SHA256_BY_GOARCH["amd64"]
-    arm64_sha256 = _OTELCOL_DEB_SHA256_BY_GOARCH["arm64"]
+    amd64_sha256 = OTELCOL_DEB_SHA256_BY_GOARCH["amd64"]
+    arm64_sha256 = OTELCOL_DEB_SHA256_BY_GOARCH["arm64"]
     version = OTELCOL_CONTRIB_VERSION
+    amd64_url = otelcol_contrib_deb_mirror_url("amd64")
+    arm64_url = otelcol_contrib_deb_mirror_url("arm64")
     config_text = render_collector_config(config)
     return f"""\
 set -euo pipefail
@@ -213,8 +245,8 @@ cloud-init status --wait 2>/dev/null || true
 
 otelcol_arch="$(uname -m)"
 case "${{otelcol_arch}}" in
-    x86_64) otelcol_goarch="amd64"; otelcol_sha256="{amd64_sha256}" ;;
-    aarch64) otelcol_goarch="arm64"; otelcol_sha256="{arm64_sha256}" ;;
+    x86_64) otelcol_goarch="amd64"; otelcol_sha256="{amd64_sha256}"; otelcol_url="{amd64_url}" ;;
+    aarch64) otelcol_goarch="arm64"; otelcol_sha256="{arm64_sha256}"; otelcol_url="{arm64_url}" ;;
     *) echo "Unsupported architecture for otelcol-contrib: ${{otelcol_arch}}" >&2; exit 1 ;;
 esac
 
@@ -223,7 +255,7 @@ if ! dpkg-query -W -f='${{Version}}' otelcol-contrib 2>/dev/null | grep -q "^{ve
     # would let a local user pre-plant a symlink or swap the package between
     # the sha256 check and the install.
     otelcol_tmp="$(mktemp -d)"
-    curl -fsSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{version}/otelcol-contrib_{version}_linux_${{otelcol_goarch}}.deb" -o "${{otelcol_tmp}}/otelcol-contrib.deb"
+    curl -fsSL "${{otelcol_url}}" -o "${{otelcol_tmp}}/otelcol-contrib.deb"
     echo "${{otelcol_sha256}}  ${{otelcol_tmp}}/otelcol-contrib.deb" | sha256sum -c -
     # apt-get (not dpkg -i): its lock timeout rides out a concurrent
     # unattended-upgrades run, which holds the dpkg lock for minutes on a

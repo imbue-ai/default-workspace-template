@@ -26,7 +26,7 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    I undid it; everything is safe".
 2. **Held back by your app version** -- if and only if `held_back_by_ceiling`
    is `true` in `/tmp/update-self-target.json`: "there's a newer version
-   available (`latest_available`), but it needs a newer Minds app than you're
+   available (`latest_available`), but it needs a newer Mind app than you're
    running, so I stopped at X". Do not derive this by comparing `ref` against
    `latest_available` yourself -- those also differ when the user's own
    `--override` picked an older tag, and the flag already accounts for that.
@@ -44,7 +44,9 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    cannot-be-kept creation never reaches this message unresolved; it stopped
    the pass at the Step 4 hold.
 6. **Validation** -- did the suites pass; is any failure pre-existing or
-   unrelated.
+   unrelated. When the worker's rule ran none of them (the update touched
+   nothing of theirs), say that the release arrived exactly as it was shipped
+   and tested -- never that checks ran and passed.
 7. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
    missing backup, a deviation the worker disclosed that could not be closed.
 8. **Pre-existing issues** -- only if any, and only after verifying

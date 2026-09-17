@@ -1,0 +1,14 @@
+{
+  "mngr_branch": "main",
+  "timeout_seconds": 900,
+  "verification_timeout_seconds": 600,
+  "personas": [
+    {
+      "id": "hello",
+      "persona": "A curious first-time user who just wants to see the assistant answer.",
+      "prompts": [
+        "Reply with exactly one short sentence saying hello and naming the model you are running as. Do not build anything."
+      ]
+    }
+  ]
+}

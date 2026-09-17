@@ -124,14 +124,27 @@ become Vault entries in step 4.
   mint a dedicated key under a staging-tagged Anthropic account or
   reuse an existing one; just don't share it with production.
 
-- [ ] **Pool-management SSH keypair.**
+- [ ] **The tier's SSH certificate authority.** Gen-2 boxes, VMs, and
+  containers trust the `minds-staging-ssh` Vault SSH CA for management access
+  (no static key). `terraform apply` in the imbue-ai/vault repo creates
+  the mount, CA, roles, and the `minds-connector-staging` AppRole; then
+  read the CA public key and commit it as `[ssh_ca] public_key` in
+  `apps/minds/imbue/minds/config/envs/staging/deploy.toml`:
+  ```bash
+  vault read -field=public_key minds-staging-ssh/config/ca
+  ```
+  The connector's AppRole credentials go into Vault in step 4. See
+  [vault.md](vault.md#ssh-certificate-authority-gen-2-management-ssh).
+
+- [ ] **Pool-management SSH keypair (gen-1 boxes only).** Only needed while
+  the tier runs gen-1 boxes; a gen-2-only tier skips this and the
+  `pool-ssh` entry below.
   ```bash
   mkdir -p .minds/staging/pool_management_key
   ssh-keygen -t ed25519 -f .minds/staging/pool_management_key/id_ed25519 -N ""
   ```
   The directory is gitignored (it sits inside `.minds/` which is
-  already excluded). The private key goes into Vault in step 4; the
-  public key file is referenced by step 7.
+  already excluded). The private key goes into Vault in step 4.
 
 - [ ] **LiteLLM master key.** Any high-entropy string:
   ```bash
@@ -185,6 +198,53 @@ on first bring-up.
 
 ---
 
+## 3b. (dev / ci only) Stand up the tier's box registry
+
+Staging and production have one pool database, so the `host_pool` DB
+above is both the connector's database and the fleet's box registry.
+The dynamic tiers (dev, ci) give every env its own pool database, so
+the tier needs a standing **box registry**: one Neon project no connector
+runs against, whose `bare_metal_servers` rows are the fleet and whose
+pooled DSN is the tier's `secrets/minds/<tier>/neon/DATABASE_URL` leaf.
+`minds-admin env deploy` copies its `ready` rows into every fresh env, and
+the tier-addressed `minds-admin wireguard` commands read it directly. The
+dev registry (`minds-dev-infra`) was created 2026-09-16; the ci one
+(`minds-ci-infra`) with specs/remote-workspaces-in-ci.md. To stand one up
+for a new dynamic tier, with the tier's `employee`-role Vault login:
+
+```bash
+uv run python - <<'PY'
+from pydantic import SecretStr
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.minds.envs.primitives import DevEnvName
+from imbue.minds.envs.vault_reader import VaultPath, read_vault_kv, write_vault_kv
+from imbue.minds_admin.envs.migrations import apply_pool_hosts_migrations
+from imbue.minds_admin.envs.providers.neon_db import create_neon_project, pool_hosts_migrations_dir
+
+TIER = "dev"
+with ConcurrencyGroup(name="registry-bringup") as cg:
+    admin = read_vault_kv(VaultPath(f"secrets/minds/{TIER}/neon-admin"), parent_concurrency_group=cg)
+    record = create_neon_project(
+        DevEnvName(f"{TIER}-infra"), org_id=admin["NEON_ORG_ID"],
+        api_token=SecretStr(admin["NEON_API_TOKEN"]), parent_cg=cg,
+    )
+    apply_pool_hosts_migrations(record.host_pool_dsn, migrations_dir=pool_hosts_migrations_dir(), parent_cg=cg)
+    write_vault_kv(
+        VaultPath(f"secrets/minds/{TIER}/neon"),
+        {"DATABASE_URL": record.host_pool_dsn.get_secret_value()},
+        parent_concurrency_group=cg,
+    )
+PY
+```
+
+Then register or import the tier's boxes into it (`minds-admin server
+import-boxes --source-database-url <old pool DB> --database-url <registry>`
+copies rows id-preserving from an env that already holds them). Operate on
+the registry through the activation-only `<tier>-infra` env root:
+`eval "$(uv run minds-admin env activate --create dev-infra)"` and
+`eval "$(just registry-dsn dev)"`. Details: the "Box registry" section of
+[host-pool-setup.md](../host-pool-setup.md).
+
 ## 4. Push every Vault entry the staging deploy reads
 
 For each service below: copy the template, fill in values, push,
@@ -221,9 +281,20 @@ Modal-pushed entries (consumed by the deployed apps at runtime):
 - [ ] **`secrets/minds/staging/neon`** -- `DATABASE_URL` (pooled DSN
   for the `host_pool` DB).
 
-- [ ] **`secrets/minds/staging/pool-ssh`** -- `POOL_SSH_PRIVATE_KEY`.
-  Push via the `@<path>` syntax so the key file never leaves your
-  laptop:
+- [ ] **`secrets/minds/staging/ssh-ca`** -- `VAULT_SSH_APPROLE_ROLE_ID`,
+  `VAULT_SSH_APPROLE_SECRET_ID`: the connector's credentials for signing
+  its own management SSH certificates. Mint them (the secret-id is
+  deliberately not in terraform state) and push through the template:
+  ```bash
+  vault read -field=role_id auth/approle/role/minds-connector-staging/role-id
+  vault write -f -field=secret_id auth/approle/role/minds-connector-staging/secret-id
+  cp .minds/template/ssh-ca.sh /tmp/staging-ssh-ca.sh   # fill in, push, shred
+  uv run scripts/push_vault_from_file.py staging ssh-ca /tmp/staging-ssh-ca.sh
+  ```
+
+- [ ] **`secrets/minds/staging/pool-ssh`** -- `POOL_SSH_PRIVATE_KEY` (gen-1
+  boxes only). Push via the `@<path>` syntax so the key file never leaves
+  your laptop:
   ```bash
   vault kv put -mount=secrets minds/staging/pool-ssh/POOL_SSH_PRIVATE_KEY \
       value=@.minds/staging/pool_management_key/id_ed25519
@@ -401,10 +472,11 @@ just pool-bake US-WEST-OR v0.3.0 1 --server-id <bare-metal-server-id>
 ```
 
 `just pool-bake <region> <tag> [count] [extra flags]` wraps
-`minds-admin pool create`, which derives the pool SSH key from
-the tier's Vault entry and -- for staging/production -- reads the host_pool
-DSN from `secrets/minds/staging/neon`. You do NOT export any of those by
-hand. See [pool-hosts.md](../ops/pool-hosts.md) step 5 for the full
+`minds-admin pool create`, which reaches the box with your operator SSH
+certificate (signed by the tier's Vault SSH CA on demand; on a gen-1 box,
+the pool key from the tier's Vault entry) and -- for staging/production --
+reads the host_pool DSN from `secrets/minds/staging/neon`. You do NOT export
+any of those by hand. See [pool-hosts.md](../ops/pool-hosts.md) step 5 for the full
 breakdown.
 
 `region` is the lease-region **label** stamped on each row (what the

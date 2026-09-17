@@ -22,11 +22,13 @@ import hashlib
 import json
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import zipfile
 from collections.abc import Iterable
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -67,13 +69,15 @@ from imbue.minds.desktop_client.backup_workspace_scripts import build_workspace_
 from imbue.minds.desktop_client.backup_workspace_scripts import extract_marker_json
 from imbue.minds.desktop_client.e2e_workspace_runner import _DEFAULT_MINDS_ROOT_NAME
 from imbue.minds.desktop_client.e2e_workspace_runner import _REPO_ROOT
-from imbue.minds.desktop_client.e2e_workspace_runner import _send_message_and_await_reply
+from imbue.minds.desktop_client.e2e_workspace_runner import await_chat_reply
 from imbue.minds.desktop_client.e2e_workspace_runner import configure_logging
 from imbue.minds.desktop_client.e2e_workspace_runner import create_workspace_via_electron
 from imbue.minds.desktop_client.e2e_workspace_runner import destroy_agent_best_effort
 from imbue.minds.desktop_client.e2e_workspace_runner import ensure_minds_env_defaults
 from imbue.minds.desktop_client.e2e_workspace_runner import find_free_port
 from imbue.minds.desktop_client.e2e_workspace_runner import resolve_default_workspace_template_path
+from imbue.minds.desktop_client.e2e_workspace_runner import send_chat_message
+from imbue.minds.desktop_client.e2e_workspace_runner import wait_for_chat_input
 from imbue.minds.desktop_client.restic_cli import ResticNotInstalledError
 from imbue.minds.desktop_client.workspace_diagnostics import STAGED_ZIP_FILENAME
 from imbue.minds.desktop_client.workspace_diagnostics import WORKSPACE_COLLECTOR_PATH
@@ -355,6 +359,13 @@ def _ensure_dockerd_after_snapshot_resume(snapshot_sandbox_dockerd: None) -> Non
 @pytest.mark.minds_snapshot_resume
 @pytest.mark.docker
 @pytest.mark.timeout(60)
+# The "every workspace container is exited" assertion only holds before any
+# other test in the same offload sandbox has `docker start`ed one (the
+# running_workspace fixture and the Electron create test both do), and the
+# batch order is not fixed; seen failing with the forever-* and docker-state
+# containers running on 2026-09-13. The durable fix is to take this reading in
+# the session fixture before anything starts a container.
+@pytest.mark.flaky
 def test_workspace_docker_container_is_present_and_stopped() -> None:
     """The snapshot captured a stopped DEFAULT_WORKSPACE_TEMPLATE workspace Docker container.
 
@@ -535,20 +546,19 @@ def test_minds_recovery_restores_dead_system_interface() -> None:
     )
 
 
-# -- Electron-driven create + chat (a second workspace) -----------------------
+# Electron-driven create + chat (a second workspace)
 #
 # The snapshot image bakes a warm Electron/Playwright/Xvfb/Docker toolchain (the
 # snapshot *build* drives that same toolchain to create the first workspace).
 # This test reuses that warm toolchain to drive the real Electron app and create
 # a SECOND workspace -- which boots unauthenticated (the create flow injects no
-# AI credentials anymore), signs in through the workspace's own provider
-# chooser with a raw API key (the chooser auto-appears on the fresh workspace,
-# the designed first-boot step), then sends a chat message to its
-# ``system_interface`` and asserts the agent replies. It runs in the same
-# offload snapshot stage (carries minds_snapshot_resume), so all the "drive
-# Electron" coverage lives in one place instead of a separate cold-install CI
-# job. It does NOT use the baked first workspace (it creates its own), so it is
-# independent of the ``running_workspace`` fixture.
+# AI credentials), open on the welcome chat the creation page seeded. The first
+# message sent there opens the provider chooser in the chat's own frame; the
+# test signs in through it with a raw API key (the designed first-boot step) and
+# asserts the agent replies. It runs in the same offload snapshot stage (carries
+# minds_snapshot_resume), so all the "drive Electron" coverage lives in one
+# place. It does NOT use the baked first workspace (it creates its own), so it
+# is independent of the ``running_workspace`` fixture.
 
 
 def _opt_into_pytest_config_guard(settings_path: Path) -> None:
@@ -650,12 +660,13 @@ def _prepare_electron_workspace_inputs(tmp_path: Path, monkeypatch: pytest.Monke
     return default_workspace_template_path, host_config_root
 
 
-def _sign_in_with_api_key_via_modal(page: Page | Frame, api_key: str) -> None:
-    """Drive the workspace's provider chooser through the API-key path.
+def _sign_in_with_api_key_via_modal(chat: Frame, api_key: str) -> None:
+    """Drive the provider chooser in the chat's own frame through the API-key path.
 
-    A freshly created workspace has no providers, so the chooser opens on its own -- the
-    designed first-boot step. The template's own first-run rule fires it once: no providers
-    signed in and this workspace has never been greeted.
+    A freshly created workspace has no providers, so the first send in its welcome chat (the
+    conversation the creation page seeded) opens the chooser in that chat's page -- the designed
+    first-boot step. The sign-in launches that same chat, on the account it minted, with the
+    message that was sent.
 
     Signing in MINTS AN ACCOUNT (a folder under ``~/.minds/accounts`` plus an index row) rather
     than writing into a shared settings block, so nothing is restarted here and the verdict is
@@ -663,35 +674,43 @@ def _sign_in_with_api_key_via_modal(page: Page | Frame, api_key: str) -> None:
 
     Every control this clicks is targeted by a ``data-e2e`` attribute rather than copy or a
     tailwind class: this drives the template's dialog from the other repo, so it has to survive
-    a wording change or a re-port of the UI. The final wait keys on the chooser's stable
-    ``.claude-login-overlay`` container class disappearing.
+    a wording change or a re-port of the UI.
     """
-    logger.info("Waiting for the provider chooser to auto-appear")
-    page.wait_for_selector("[data-e2e=provider-chooser]", timeout=120_000)
+    logger.info("Waiting for the provider chooser to appear in the new chat's frame")
+    chat.wait_for_selector("[data-e2e=provider-chooser]", timeout=120_000)
     # Anthropic's lane, then its API-key method under "Other ways to sign in" -- the lane's
     # PRIMARY method is the browser sign-in, which needs a human.
-    page.click("[data-e2e=lane-anthropic]")
-    page.wait_for_selector("[data-e2e=method-api_key]", timeout=30_000)
-    page.click("[data-e2e=method-api_key]")
-    page.wait_for_selector("[data-e2e=api-key-input]", timeout=30_000)
-    page.fill("[data-e2e=api-key-input]", api_key)
+    chat.click("[data-e2e=lane-anthropic]")
+    chat.wait_for_selector("[data-e2e=method-api_key]", timeout=30_000)
+    chat.click("[data-e2e=method-api_key]")
+    chat.wait_for_selector("[data-e2e=api-key-input]", timeout=30_000)
+    chat.fill("[data-e2e=api-key-input]", api_key)
     logger.info("Submitting the API key through the chooser")
-    page.click("[data-e2e=save-key]")
-    page.wait_for_selector("[data-e2e=status-success]", timeout=300_000)
-    page.click("[data-e2e=done]")
-    page.wait_for_selector(".claude-login-overlay", state="detached", timeout=10_000)
+    chat.click("[data-e2e=save-key]")
+    chat.wait_for_selector("[data-e2e=status-success]", timeout=300_000)
+    chat.click("[data-e2e=done]")
+    chat.wait_for_selector("[data-e2e=provider-chooser]", state="detached", timeout=10_000)
     logger.info("Signed in via the chooser")
 
 
 def _sign_in_and_chat(page: Page | Frame, api_key: str, token: str) -> None:
-    _sign_in_with_api_key_via_modal(page, api_key)
-    _send_message_and_await_reply(page, token)
+    """Message the welcome chat the creation page opened; its first send is what asks for the account."""
+    chat = wait_for_chat_input(page)
+    send_chat_message(chat, page, token)
+    _sign_in_with_api_key_via_modal(chat, api_key)
+    await_chat_reply(chat, page, token)
 
 
 @pytest.mark.minds_snapshot_resume
 @pytest.mark.docker
 @pytest.mark.rsync
 @pytest.mark.timeout(900)
+# Drives a real Electron app end-to-end (launch, CDP attach, create flow, chooser
+# sign-in, chat), and individual steps have intermittently timed out under CI load
+# (the sign-in Frame.click, and the 240s wait for the agent's reply); the marker
+# routes the test into the retrying offload group. A genuine break still surfaces
+# by failing every retry, as MIND-285's New Tab regression did.
+@pytest.mark.flaky
 def test_create_workspace_and_sign_in_via_modal_then_chat_via_electron(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -700,10 +719,12 @@ def test_create_workspace_and_sign_in_via_modal_then_chat_via_electron(
     """Create an unauthenticated Docker workspace, sign in via the chooser, chat.
 
     The product-level first-boot round-trip: the create flow injects no AI
-    credentials, so the workspace boots unauthenticated and its provider
-    chooser auto-appears; the test fills the API-key path in the real
-    chooser UI (which mints a provider account holding the key), then asserts
-    the agent answers a chat message (echoes a unique token) -- end-to-end
+    credentials, so the workspace boots unauthenticated, open on the welcome chat
+    the creation page seeded with the onboarding conversation; the first message
+    sent there asks for an account by showing the provider chooser in the chat's
+    own frame; the test fills the API-key path in the real chooser UI (which mints
+    a provider account holding the key), which launches the chat with that
+    message, then asserts the agent answers it (echoes a unique token) -- end-to-end
     through the real Electron app and the desktop client proxy.
 
     Runs in the snapshot offload sandbox, reusing the warm Electron toolchain
@@ -743,7 +764,7 @@ def test_create_workspace_and_sign_in_via_modal_then_chat_via_electron(
         destroy_agent_best_effort(workspace_name, config_project_dir=host_config_root / ".mngr")
 
 
-# -- Backup-update chat gate against a deterministically RUNNING agent --------
+# Backup-update chat gate against a deterministically RUNNING agent
 #
 # The backup update's chat gate must (a) classify a non-main agent that is
 # RUNNING as a running chat, (b) block the mutating update on it, and (c) stop
@@ -878,7 +899,7 @@ def test_backup_update_gate_blocks_on_live_chat_and_stop_chats_clears_it(
         )
 
 
-# -- Backup service: check / update / converge against the resumed workspace --
+# Backup service: check / update / converge against the resumed workspace
 #
 # These replace the old test_backup_service_release.py release tests (which
 # ran against a fake default-workspace-template-shaped repo with a stub supervisorctl). Here
@@ -966,7 +987,7 @@ def test_backup_service_check_update_and_force_update_converge(running_workspace
     assert forced_payload["committed"] is False, forced_payload
 
 
-# -- Backup enable / env repair / destination change (minds-side, real exec) --
+# Backup enable / env repair / destination change (minds-side, real exec)
 
 # Pinned restic download for sandboxes whose snapshot image predates the
 # bundled binary; must track scripts/download-binaries.js.
@@ -1115,7 +1136,7 @@ def test_backup_enable_repair_and_destination_change_on_resumed_workspace(
     assert read_workspace_env() == canonical_three
 
 
-# -- In-place restore (the real worker + script, against the resumed workspace) --
+# In-place restore (the real worker + script, against the resumed workspace)
 
 
 def _cp_repo_host_to_container(container_name: str, repository: Path) -> None:
@@ -1131,6 +1152,78 @@ def _cp_repo_container_to_host(container_name: str, repository: Path) -> None:
 def _restic_env_prefix() -> str:
     """Shell prefix exporting the injected restic.env for an in-container restic call."""
     return "set -a; . /home/user/workspace/data/.secrets/restic.env; set +a; "
+
+
+def _host_backup_state(container_name: str) -> str:
+    """The supervisord state token for the workspace's ``host-backup`` program (e.g. ``RUNNING``/``STOPPED``)."""
+    # `supervisorctl status <name>` prints "<name> <STATE> <detail>"; its exit
+    # code is non-zero for any non-RUNNING state, so only the token matters.
+    status = _exec_in_container(container_name, "supervisorctl status host-backup", timeout=30)
+    parts = status.stdout.split()
+    return parts[1] if len(parts) >= 2 else ""
+
+
+class _QuiescedWorkspaceRepo(FrozenModel):
+    """Exclusive in-container restic access: the workspace's ``host-backup``
+    service is stopped for this scope, so a lock-taking restic step cannot race
+    a live backup tick.
+
+    Reachable only through ``_LiveWorkspaceRepo.quiesced``, so the operations
+    that take the repository lock live here and nowhere else -- the type makes
+    "run a locking restic command while the service might hold the lock"
+    unrepresentable (the race behind MIND-197).
+    """
+
+    container_name: str
+
+    def backup(self, source_path: str, *, tag: str, excludes: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        """Take a tagged ``restic backup`` of ``source_path`` (a lock-holding write)."""
+        exclude_flags = "".join(f" --exclude {shlex.quote(pattern)}" for pattern in excludes)
+        return _exec_in_container(
+            self.container_name,
+            _restic_env_prefix() + f"restic backup {shlex.quote(source_path)} --tag {shlex.quote(tag)}{exclude_flags}",
+            timeout=600,
+        )
+
+
+class _LiveWorkspaceRepo(FrozenModel):
+    """In-container restic access while the ``host-backup`` service may be
+    ticking against the same repository.
+
+    Only lock-free reads are race-safe in this state; anything that takes the
+    repository lock is reached through :meth:`quiesced`.
+    """
+
+    container_name: str
+
+    def snapshots_no_lock(self) -> subprocess.CompletedProcess[str]:
+        """List snapshots with ``--no-lock`` (a read that never blocks on a live tick's lock)."""
+        # Safe without the lock: a live tick only appends snapshots, never
+        # removing the ones under assertion.
+        return _exec_in_container(
+            self.container_name, _restic_env_prefix() + "restic snapshots --no-lock --json", timeout=120
+        )
+
+    @contextmanager
+    def quiesced(self) -> Iterator[_QuiescedWorkspaceRepo]:
+        """Stop ``host-backup`` for the scope so the repository has no other restic actor.
+
+        The restore under test restarts the service itself (``supervisorctl
+        restart all``), so production service recovery is still exercised.
+        """
+        _exec_in_container(self.container_name, "supervisorctl stop host-backup", timeout=60)
+        # The service is a separate process the type cannot see, so verify the
+        # stop took and fail closed rather than trust the type alone.
+        state = _host_backup_state(self.container_name)
+        assert state != "RUNNING", f"host-backup did not stop (state {state!r}); the repository is not quiesced"
+        # Stopping mid-tick can kill a restic holding the lock, leaving it stale;
+        # clear it so the exclusive scope starts clean (the service is down, so
+        # `unlock` only removes dead-holder locks).
+        _exec_in_container(self.container_name, _restic_env_prefix() + "restic unlock", timeout=60)
+        try:
+            yield _QuiescedWorkspaceRepo(container_name=self.container_name)
+        finally:
+            _exec_in_container(self.container_name, "supervisorctl start host-backup", timeout=60)
 
 
 @pytest.mark.minds_snapshot_resume
@@ -1169,6 +1262,7 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
 
     container_name = running_workspace.container_name
     agent_id = AgentId(running_workspace.services_agent_id)
+    workspace_repo = _LiveWorkspaceRepo(container_name=container_name)
     data_dir = tmp_path / "minds-data"
     data_dir.mkdir()
     paths = InstallationPaths(data_dir=data_dir)
@@ -1199,13 +1293,15 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     sentinel = "/home/user/workspace/restore-e2e-sentinel.txt"
     written = _exec_in_container(container_name, f"printf 'version-one\\n' > {sentinel}", timeout=30)
     assert written.returncode == 0, written.stderr
-    source_backup = _exec_in_container(
-        container_name,
-        _restic_env_prefix()
-        + "restic backup /home/user --tag e2e-source --exclude '**/.venv' --exclude '**/node_modules' "
-        "--exclude '**/__pycache__' --exclude '**/.cache'",
-        timeout=600,
-    )
+    # Take the source snapshot with the repository to ourselves: host-backup
+    # ticks against this same repo, and a live tick's lock would fail this
+    # backup (MIND-197). The restore under test restarts host-backup afterwards.
+    with workspace_repo.quiesced() as exclusive_repo:
+        source_backup = exclusive_repo.backup(
+            "/home/user",
+            tag="e2e-source",
+            excludes=("**/.venv", "**/node_modules", "**/__pycache__", "**/.cache"),
+        )
     assert source_backup.returncode == 0, (source_backup.stdout, source_backup.stderr)
 
     # Work done after the snapshot: the restore must undo both of these.
@@ -1243,6 +1339,9 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
         is_update_after=False,
         is_skip_safety_snapshot=False,
         is_skip_chat_gate=False,
+        # No update detector runs in this test, so nothing has resolved a
+        # version for this workspace -- the same None the route passes then.
+        workspace_version_ref=None,
     )
 
     record = registry.get(agent_id)
@@ -1281,7 +1380,9 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     # The repository timeline tells the story: the source snapshot, the
     # pre-restore safety snapshot, and the restored state tagged with its
     # lineage.
-    timeline = _exec_in_container(container_name, _restic_env_prefix() + "restic snapshots --json", timeout=120)
+    # host-backup is running again (the restore restarted it), so read the
+    # timeline lock-free rather than racing a live tick's lock (MIND-197).
+    timeline = workspace_repo.snapshots_no_lock()
     assert timeline.returncode == 0, (timeline.stdout, timeline.stderr)
     entries = json.loads(timeline.stdout)
     tags_by_snapshot = [tuple(entry.get("tags") or ()) for entry in entries]
@@ -1294,7 +1395,7 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     assert _wait_for_system_interface_up(container_name)
 
 
-# -- Bug-report diagnostics against the resumed workspace ---------------------
+# Bug-report diagnostics against the resumed workspace
 #
 # A bug report can carry the workspace's own logs and its recent chat
 # transcripts, gathered by the RESIDENT collector the workspace template ships
@@ -1553,14 +1654,16 @@ def test_bug_report_diagnostics_collect_the_workspace_logs_and_transcript(
     staging_dir = tmp_path / "bug-report-staging"
     staging_dir.mkdir()
     # Dated far ahead so the planted chat outranks any real chat the workspace
-    # holds: selection prefers the transcript whose USER last spoke (the file
-    # mtimes only break ties and cover transcripts with no user message).
+    # holds: selection ranks a transcript by the newest timestamp in it.
+    planted_marker = f"planted-chat-{get_short_random_string()}"
     chat_line = json.dumps(
         {
-            "type": "user_message",
+            "type": "step",
+            "event_id": f"planted-{get_short_random_string()}",
+            "emitter": "claude/common_transcript",
             "timestamp": "2030-01-01T00:00:00.000000000Z",
-            "source": "claude/common_transcript",
-            "message": f"planted-chat-{get_short_random_string()}",
+            "source": "user",
+            "message": planted_marker,
         }
     )
     # mngr is the collector's source of truth for what agents exist, so the
@@ -1618,7 +1721,9 @@ def test_bug_report_diagnostics_collect_the_workspace_logs_and_transcript(
     chat_member_names = [name for name in member_text_by_name if name.startswith(_CHAT_MEMBER_DIR_PREFIX)]
     assert chat_member_names, sorted(member_text_by_name)
     assert all(name.endswith(".jsonl") for name in chat_member_names), chat_member_names
-    assert any(chat_line in member_text_by_name[name] for name in chat_member_names), (
+    # The marker rather than the planted line itself: what mngr writes out is
+    # its own serialization of the record, not the bytes the plant wrote.
+    assert any(planted_marker in member_text_by_name[name] for name in chat_member_names), (
         f"the planted chat is missing from the attached archive: {chat_member_names}"
     )
     # Conversations have to stay tellable apart, and the member name is the only
@@ -1665,17 +1770,21 @@ def test_bug_report_diagnostics_withhold_every_chat_when_one_carries_a_secret(
     clean_marker = f"planted-clean-chat-{get_short_random_string()}"
     clean_chat_line = json.dumps(
         {
-            "type": "user_message",
+            "type": "step",
+            "event_id": f"planted-clean-{get_short_random_string()}",
+            "emitter": "claude/common_transcript",
             "timestamp": "2030-01-01T00:00:00.000000000Z",
-            "source": "claude/common_transcript",
+            "source": "user",
             "message": clean_marker,
         }
     )
     poisoned_chat_line = json.dumps(
         {
-            "type": "user_message",
+            "type": "step",
+            "event_id": f"planted-poisoned-{get_short_random_string()}",
+            "emitter": "claude/common_transcript",
             "timestamp": "2030-01-01T00:00:01.000000000Z",
-            "source": "claude/common_transcript",
+            "source": "user",
             "message": f"here is my key: {fake_api_key}",
         }
     )
@@ -1923,8 +2032,10 @@ def test_live_reprovision_succeeds_inside_the_running_workspace(running_workspac
             f"--- stdout (tail) ---\n{reprovision.stdout[-4000:]}\n"
             f"--- stderr (tail) ---\n{reprovision.stderr[-4000:]}"
         )
-        # The provision guard's short-circuit also exits 0.
-        assert "[provision-guard]" not in reprovision.stdout, "the provision guard skipped the re-provision"
+        # The provision guard's short-circuit also exits 0. Only its skip line means the
+        # script did not run; its other lines (an inherited pin being ignored) are printed
+        # by a run that proceeds.
+        assert "already provisioned for tree" not in reprovision.stdout, "the provision guard skipped the re-provision"
         stamped = _exec_in_container(container_name, f"ls {_PROVISION_MARKER_DIR}/*.setup_system.done", timeout=30)
         assert stamped.returncode == 0, f"no fresh provision marker under {_PROVISION_MARKER_DIR}: {stamped.stderr!r}"
         # The busy binary was replaced under the running process (no ETXTBSY).

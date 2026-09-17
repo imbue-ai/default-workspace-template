@@ -26,7 +26,6 @@ export interface UpdateStatus {
   feedVersion?: string | null;
   version?: string;
   message?: string;
-  reason?: string;
   /** ISO-8601, carried on every status a settled check publishes. */
   lastCheckedAt?: string | null;
 }
@@ -36,6 +35,13 @@ export interface PeekedChannel {
   version: string | null;
   /** Whether moving here would stop updates until the channel catches up. */
   wouldPark: boolean;
+  /**
+   * Whether this install sits outside a rollout the channel has already started.
+   *
+   * Optional: a preload that omits it leaves the row reading "Currently on
+   * <version>".
+   */
+  isOutsideRollout?: boolean;
   error?: string;
 }
 
@@ -97,6 +103,10 @@ declare global {
 }
 
 function native(): MindsNativeSurface | null {
+  // Guarded for the sake of the view suites, which render components straight
+  // to vnodes under node with no DOM at all. Every caller already treats null
+  // as "not the desktop app", so there is nothing else to answer there.
+  if (typeof window === "undefined") return null;
   return window.mindsNative ?? null;
 }
 

@@ -1,9 +1,12 @@
-"""A scripted VerificationAgent for the evidence collector's flow-loop tests.
+"""A scripted VerificationAgent for the tests of the UI-flow loop.
 
-The flow loop's behaviour is a function of what the agent decides and what the step script reports, so a
-scripted agent (paired with the scripted box environment) exercises every branch without an API
-call. Actions and readings are consumed in order across the whole run; the last entry repeats, so a
-test that only cares about the first few decisions does not have to pad the script to the step cap.
+The loop's behaviour is a function of what the agent decides and what the step script reports, so
+scripting the decisions holds one of those two still and no test of it needs an API call. Both tests
+that drive the loop use this: the collector's pair it with the scripted box environment, which holds
+the other half still too, and the flow lab's leave a real browser to answer so what the executor
+reports is the only thing under test. Actions and readings are consumed in order across the whole
+run; the last entry repeats, so a test that only cares about the first few decisions does not have
+to pad the script to the step cap.
 """
 
 from pydantic import Field
@@ -19,6 +22,9 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
     action_count: int = Field(default=0, description="How many decisions have been handed out")
     reading_count: int = Field(default=0, description="How many readings have been handed out")
     prompts: list[str] = Field(default_factory=list, description="Every page state the agent was shown")
+    histories: list[tuple[str, ...]] = Field(
+        default_factory=list, description="The history each decision was shown, in order"
+    )
 
     def _record(self, is_answered: bool) -> ui_flows.VerifierCall:
         call = ui_flows.VerifierCall(
@@ -28,16 +34,17 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
         return call
 
     def decide_next_action(
-        self, flow_steps: str, history: tuple[str, ...], state_text: str
+        self, flow_actions: str, history: tuple[str, ...], state_text: str
     ) -> tuple[ui_flows.FlowAction | None, ui_flows.VerifierCall]:
         self.prompts.append(state_text)
+        self.histories.append(history)
         assert self.actions, "the scripted agent was asked for an action but has no script"
         action = self.actions[min(self.action_count, len(self.actions) - 1)]
         self.action_count += 1
         return action, self._record(action is not None)
 
     def read_final_state(
-        self, flow_steps: str, history: tuple[str, ...], state_text: str
+        self, flow_actions: str, history: tuple[str, ...], state_text: str
     ) -> tuple[ui_flows.FlowReading | None, ui_flows.VerifierCall]:
         assert self.readings, "the scripted agent was asked for a reading but has no script"
         reading = self.readings[min(self.reading_count, len(self.readings) - 1)]
@@ -47,13 +54,27 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
 
 def done_action(reasoning: str = "every step is carried out") -> ui_flows.FlowAction:
     return ui_flows.FlowAction(
-        kind=ui_flows.FlowActionKind.DONE, role="", target="", text="", amount=0, reasoning=reasoning
+        kind=ui_flows.FlowActionKind.DONE,
+        role="",
+        target="",
+        ref="",
+        text="",
+        amount=0,
+        reasoning=reasoning,
+        expected="nothing further",
     )
 
 
 def click_action(role: str = "button", target: str = "Add") -> ui_flows.FlowAction:
     return ui_flows.FlowAction(
-        kind=ui_flows.FlowActionKind.CLICK, role=role, target=target, text="", amount=0, reasoning="clicking it"
+        kind=ui_flows.FlowActionKind.CLICK,
+        role=role,
+        target=target,
+        ref="",
+        text="",
+        amount=0,
+        reasoning="the button is on the page",
+        expected="the item is added to the list",
     )
 
 
