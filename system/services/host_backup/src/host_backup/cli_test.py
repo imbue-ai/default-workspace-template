@@ -12,6 +12,7 @@ from host_backup.cli import (
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
+    _TAIL_READ_MAX_BYTES,
     _exit_code_for_completion,
     _read_tail_lines,
     _scan_for_inflight_tick_ids,
@@ -152,6 +153,16 @@ def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> N
     events_path = tmp_path / "events.jsonl"
     padding = "x" * 200_000
     with events_path.open("w") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "source": "backup",
+                    "type": BackupEventType.BACKUP_STARTED.value,
+                    "tick_id": "older-than-the-window",
+                }
+            )
+            + "\n"
+        )
         for index in range(50):
             fh.write(
                 json.dumps(
@@ -174,37 +185,14 @@ def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> N
             )
             + "\n"
         )
-    assert events_path.stat().st_size > 8 * 1024 * 1024
+    assert events_path.stat().st_size > _TAIL_READ_MAX_BYTES
 
-    read_bytes = 0
-    real_open = Path.open
+    pending = _scan_for_inflight_tick_ids(events_path, max_lines=200)
 
-    def counting_open(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        handle = real_open(self, *args, **kwargs)
-        if self != events_path:
-            return handle
-        real_read = handle.read
-
-        def counting_read(*read_args):  # type: ignore[no-untyped-def]
-            nonlocal read_bytes
-            chunk = real_read(*read_args)
-            read_bytes += len(chunk)
-            return chunk
-
-        handle.read = counting_read  # type: ignore[method-assign]
-        return handle
-
-    Path.open = counting_open  # type: ignore[method-assign]
-    try:
-        pending = _scan_for_inflight_tick_ids(events_path, max_lines=200)
-    finally:
-        Path.open = real_open  # type: ignore[method-assign]
-
-    # The tick still in flight is found -- it is the newest event, so the bounded
-    # window always covers it -- without the file's size ever being read.
+    # The log is 52 lines, so `max_lines` excludes nothing: the only thing that can
+    # keep the tick at the top of the file out of this answer is a window that never
+    # reached it. A scan that read the file whole reports it as in flight too.
     assert pending == {"in-flight"}
-    assert read_bytes <= 8 * 1024 * 1024
-    assert read_bytes < events_path.stat().st_size
 
 
 def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> None:
