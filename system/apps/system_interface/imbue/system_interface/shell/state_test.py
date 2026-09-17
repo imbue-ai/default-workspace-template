@@ -1,4 +1,4 @@
-"""Tests for ``ShellState``: the referenced-lifetime deletion and the pruning that follows an app's list shrinking."""
+"""Tests for ``ShellState``: the referenced-lifetime deletion, and that an app's list shrinking takes no tab away."""
 
 from datetime import timedelta
 from pathlib import Path
