@@ -12,11 +12,13 @@
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
+ * While a switch is armed the menu describes the TARGET instead, since that is what the next
+ * message runs on.
  *
  * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
  * (`components/menu`), not this file's: it opens on a click of the chip, its submenus open on
  * hover, and it is dismissed the way it was summoned. What this file owns is the rows -- the
- * effort slider, the fast switch, the account list with its controls, the model list with its
+ * effort slider, the fast-mode row, the account list with its controls, the model list with its
  * search -- and the data behind them.
  */
 
@@ -25,17 +27,27 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
+import {
+  getPendingAccountId,
+  getPendingPick,
+  isSwitchTarget,
+  pendingSwitchTarget,
+  setPendingAccount,
+  switchKind,
+} from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
+import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
-import { startChatOnAccount } from "../shell";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
-import { createMenu, startTruncated, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
+import { createMenu, menuRowClass, startTruncated, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { Portal } from "@imbue/workspace-ui/src/portal";
 import { accountRow, emptyAccountRowState } from "./accountRow";
+import { FastModeModal } from "./FastModeModal";
 import * as css from "./modelProviderMenuStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -93,15 +105,13 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   // Cleared whenever the submenu or the menu closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
-  // The account whose row was pressed and is waiting for "Launch" or "Cancel". A chat's
-  // account is fixed at create time, so pressing another account's row can only mean a new
-  // chat on it -- asked, not done by surprise. Cleared with the rest of the submenu's state.
-  let launchPromptAccountId: string | null = null;
-  const launchDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
+  // The fast-mode chooser is up (models/FastMode.ts); opened from the fast row, which closes
+  // the menu, so it outlives the menu it was opened from.
+  let isFastModeModalOpen = false;
   // What the last view saw, for the menu's own open hook to read: which chat is showing, and
   // whether its picker is the kind whose model list is worth warming.
   let viewedChatId = "";
@@ -112,7 +122,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     rowState.confirmingRemoval = null;
     rowState.renamingId = null;
     rowState.renameDraft = "";
-    launchPromptAccountId = null;
   }
 
   const menu = createMenu({
@@ -142,11 +151,11 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       resetSubmenuState();
       modelQuery = "";
     },
-    // A rename mid-type, an armed "Remove?" or an open launch prompt (providers), and a
-    // typed search (model) are all work a drifting pointer must not throw away.
+    // A rename mid-type or an armed "Remove?" (providers), and a typed search (model), are all
+    // work a drifting pointer must not throw away.
     holdsSubmenuOpen: (key) => {
       if (key === "providers") {
-        return rowState.renamingId !== null || rowState.confirmingRemoval !== null || launchPromptAccountId !== null;
+        return rowState.renamingId !== null || rowState.confirmingRemoval !== null;
       }
       return modelQuery !== "";
     },
@@ -285,49 +294,57 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     ]);
   }
 
-  /** Fast mode: a switch.
+  /** A row that states a value and opens a chooser of its OWN -- a dialog, not a submenu, which
+   *  is the one shape the shared menu has no kind for. Dressed as the submenu rows beside it:
+   *  the shared row, its label a step back from its value, and a chevron saying there is
+   *  somewhere to go. The menu closes on the way, because what opens is a modal over it. */
+  function pickerRow(opts: { label: string; value: string; tooltip: string | null; onOpen: () => void }): m.Vnode {
+    return m(
+      "button",
+      {
+        type: "button",
+        class: menuRowClass({ extra: "text-primary" }),
+        ...hoverTooltipAttrs(opts.tooltip, "above"),
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          menu.close();
+          opts.onOpen();
+        },
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, opts.label),
+        m("span", { class: css.ROW_VALUE_STATIC }, [
+          m("span", { class: "truncate" }, opts.value),
+          m("span", { class: css.ROW_CHEVRON }, m.trust(icon("chevron-right", { size: 13 }))),
+        ]),
+      ],
+    );
+  }
+
+  /** What the fast row reads, loading the chat's mode the first time it is asked for.
    *
-   * A switch rather than a toggling icon, because a switch says on or off by its shape instead
-   * of by its fill.
-   */
-  function fastRow(opts: {
-    on: boolean;
-    interactive: boolean;
-    tooltip: string | null;
-    onToggle: () => void;
-  }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
-      m("span", { class: css.ROW_LABEL }, "Fast Mode"),
-      m(
-        "span",
-        { class: css.ROW_VALUE_STATIC },
-        m(
-          "button",
-          {
-            type: "button",
-            role: "switch",
-            class: `${css.switchClass("sm")} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
-            "aria-label": "Fast Mode",
-            "aria-checked": opts.on ? "true" : "false",
-            disabled: !opts.interactive,
-            onclick: () => {
-              if (opts.interactive) opts.onToggle();
-            },
-          },
-          m(
-            "span",
-            { class: css.switchKnobClass("sm", opts.on) },
-            opts.on
-              ? m(
-                  "span",
-                  { class: css.SWITCH_CHECK },
-                  m.trust(icon("check", { size: css.switchCheckSize("sm"), strokeWidth: 3.5 })),
-                )
-              : null,
-          ),
-        ),
-      ),
-    ]);
+   * The row states the MODE rather than a switch position, because auto is neither on nor off:
+   * a chat in auto reads "Auto" while fast, "Auto (off now)" once its fast turns have run. */
+  function fastModeValue(chatId: string): string {
+    const state = getFastModeState(chatId);
+    if (state === null) {
+      void ensureFastModeState(chatId);
+      return "...";
+    }
+    return fastModeLabel(state);
+  }
+
+  /** Fast mode, as a row that opens the chooser. The chooser is a modal of its own so the menu
+   *  stays a list of one-line facts. */
+  function fastRow(opts: { chatId: string; tooltip: string | null }): m.Vnode {
+    return pickerRow({
+      label: "Fast Mode",
+      value: fastModeValue(opts.chatId),
+      tooltip: opts.tooltip,
+      onOpen: () => {
+        isFastModeModalOpen = true;
+      },
+    });
   }
 
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
@@ -353,43 +370,23 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     ]);
   }
 
-  /** The confirmation a pressed account row opens: launch a new chat on it, or not. */
-  function launchPrompt(target: ProviderAccount, current: ProviderAccount | null): m.Children {
-    return m(launchDialog, {
-      title: "Launch a new chat?",
-      body: [
-        `A chat's provider is fixed when it starts, so this one stays on ${current?.label ?? "its provider"}. ` +
-          `Start a new chat on ${target.label}?`,
-      ],
-      dismissLabel: "Cancel",
-      actions: [
-        {
-          label: "Launch",
-          run: () => {
-            menu.close();
-            void startChatOnAccount(target.id);
-          },
-        },
-      ],
-      onDismiss: () => {
-        launchPromptAccountId = null;
-      },
-    });
-  }
-
   /** The Provider row's submenu: every signed-in account, plus a way to add one.
    *
-   * Our chats bind to an account when they are created and nothing rebinds them, so pressing
-   * an account that is not this chat's asks to open a new chat on it. Each row also carries
-   * the default toggle: the starred account is the one a new chat opens on when nothing
-   * names one (the New Tab tile, the rail shortcut, an agent's `layout.py open chat`).
+   * Pressing any account but the chat's own begins the switch to it (``beginSwitchTo``): the
+   * dialog for a handoff, which takes the model and offers a new chat instead; armed at once for
+   * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
+   * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
+   * choice back. Each row also carries the default toggle: the starred
+   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
+   * shortcut, an agent's `layout.py open chat`).
    */
-  function providerSubmenu(current: ProviderAccount | null): m.Children {
+  function providerSubmenu(chatId: string, current: ProviderAccount | null): m.Children {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
-    const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
+    const pendingId = getPendingAccountId(chatId);
+    const chat = getChatById(chatId);
     // The account rows (or the one line standing in for them when there are none), plus the
-    // "+ Add a provider" row under them. The launch prompt is a dialog on top, not a row.
+    // "+ Add a provider" row under them.
     return [
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -400,23 +397,26 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           ? [m("div", { class: css.SUBMENU_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
+              const isPending = row.id === pendingId;
               return accountRow({
                 row,
                 isCurrent,
                 isDefault: row.id === defaultId,
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                ...(isPending ? { badge: "next" } : {}),
                 onSelect: () => {
-                  if (isCurrent) {
+                  if (isCurrent || isPending || chat === undefined || !isSwitchTarget(chat, row)) {
                     menu.closeSubmenu();
+                    setPendingAccount(chatId, null);
                     return;
                   }
-                  launchPromptAccountId = row.id;
+                  menu.close();
+                  beginSwitchTo(chatId, row);
                 },
                 state: rowState,
               });
             }),
       ),
-      prompted !== null ? launchPrompt(prompted, current) : null,
       m(
         "button",
         {
@@ -424,7 +424,15 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           class: css.SUBMENU_ADD,
           onclick: () => {
             menu.close();
-            openProviderChooser({ onSignedIn: (accountId) => startChatOnAccount(accountId) });
+            openProviderChooser({
+              onSignedIn: (accountId) => {
+                // Signed in from inside a chat: the new account is what the user switches this
+                // chat to next, so the switch begins on it.
+                const account = accountForAgent(accountId);
+                if (account !== null) beginSwitchTo(chatId, account);
+                m.redraw();
+              },
+            });
           },
         },
         "+ Add a provider",
@@ -556,9 +564,15 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       viewedChatId = chatId;
       viewedPickerIsFetched = searchable || dynamic;
 
+      // The account the next send switches the chat to, and the model picked for it: while a
+      // switch is armed the menu reads as the target, since that is what the next message runs on.
+      const pending = pendingSwitchTarget(chatId);
+      const pendingPick = getPendingPick(chatId);
+
       // The chip states the WHOLE choice, from the same three values the menu's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
-      // the model has one to state, and the bolt only when fast is actually on.
+      // the model has one to state, and the bolt only when fast is actually on. An armed switch
+      // replaces all of it with the target's pick and a "next" mark.
       const trigger = m(
         "button",
         {
@@ -571,20 +585,46 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           // as a label for what is already written on the chip).
           ...hoverTooltipAttrs("Change model or provider", "above"),
         },
-        [
-          // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
-          // is already read apart from the words and a dot beside it doubles the punctuation.
-          m("span", matched?.label ?? account?.provider ?? "Model"),
-          shownEfforts.length > 1 && currentEffort !== null
-            ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
-            : null,
-          currentFast
-            ? m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true })))
-            : null,
-        ],
+        pending !== null
+          ? [
+              m("span", pendingPick?.label ?? pending.harness_label),
+              m(
+                "span",
+                {
+                  class:
+                    "model-provider-menu-next-badge ml-1.5 rounded-full bg-accent-light px-1.5 " +
+                    "text-(length:--font-size-helper) text-accent",
+                },
+                "next",
+              ),
+            ]
+          : [
+              // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
+              // is already read apart from the words and a dot beside it doubles the punctuation.
+              m("span", matched?.label ?? account?.provider ?? "Model"),
+              shownEfforts.length > 1 && currentEffort !== null
+                ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
+                : null,
+              currentFast
+                ? m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true })))
+                : null,
+            ],
       );
 
-      if (!menu.isOpen()) return trigger;
+      // The fast-mode chooser outlives the menu it was opened from (the row closes the menu), so
+      // it portals on its own while the menu is down.
+      const fastModeModal = isFastModeModalOpen
+        ? m(Portal, {
+            children: m(FastModeModal, {
+              chatId,
+              onClose: () => {
+                isFastModeModalOpen = false;
+              },
+            }),
+          })
+        : null;
+
+      if (!menu.isOpen()) return [trigger, fastModeModal];
 
       const currentIdentity: ModelIdentity =
         matched === null
@@ -592,80 +632,106 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           : { model_id: matched.id, effort: currentEffort, fast: currentFast };
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
-      const rows: MenuRow[] = [
-        {
+      const rows: MenuRow[] = [];
+      if (pending !== null) {
+        // While a switch is armed the menu describes the TARGET: the account the next send moves
+        // the chat to and, for a handoff, the model picked for it, which opens the dialog again
+        // to change. A rebind keeps the agent's model, so it has no row to offer.
+        rows.push({
+          kind: "submenu",
+          key: "providers",
+          label: "Provider",
+          value: pending.provider,
+          sub: `${pending.harness_label}, next message`,
+          content: () => providerSubmenu(chatId, account),
+        });
+        if (switchKind(chat, pending) === "handoff") {
+          rows.push({ kind: "divider" });
+          rows.push({
+            kind: "custom",
+            key: "model",
+            render: () =>
+              pickerRow({
+                label: "Model",
+                value: pendingPick?.label ?? "Default model",
+                tooltip: "Change the model this chat switches to",
+                onOpen: () => openSwitchDialog(chatId, pending),
+              }),
+          });
+        }
+      } else {
+        rows.push({
           kind: "submenu",
           key: "providers",
           label: "Provider",
           value: account?.provider ?? "Not signed in",
           sub: account?.harness_label,
-          content: () => providerSubmenu(account),
-        },
-        { kind: "divider" },
-      ];
-      if (matched !== null) {
-        // A read-only harness gets a row that states the model and nothing more: no chevron,
-        // no list. Its models are switched from its own terminal.
-        rows.push(
-          interactive
-            ? {
-                kind: "submenu",
-                key: "model",
-                label: "Model",
-                value: matched.label,
-                truncateValue: "start",
-                maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
-                onOpen: () => {
-                  if (searchable || dynamic) warmOfferedModels(chatId);
-                },
-                content: () =>
-                  modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
-              }
-            : {
-                kind: "value",
-                key: "model",
-                label: "Model",
-                value: matched.label,
-                truncateValue: "start",
-                tooltip: readOnlyTooltip ?? undefined,
-              },
-        );
-        rows.push({
-          kind: "custom",
-          key: "effort",
-          render: () =>
-            effortRow({
-              efforts: matched.efforts,
-              current: currentEffort,
-              interactive,
-              tooltip: readOnlyTooltip,
-              onPick: (level) => {
-                const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
-              },
-            }),
+          content: () => providerSubmenu(chatId, account),
         });
-        if (matched.supports_fast) {
+        rows.push({ kind: "divider" });
+        if (matched !== null) {
+          // A read-only harness gets a row that states the model and nothing more: no chevron,
+          // no list. Its models are switched from its own terminal.
+          rows.push(
+            interactive
+              ? {
+                  kind: "submenu",
+                  key: "model",
+                  label: "Model",
+                  value: matched.label,
+                  truncateValue: "start",
+                  maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
+                  onOpen: () => {
+                    if (searchable || dynamic) warmOfferedModels(chatId);
+                  },
+                  content: () =>
+                    modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
+                }
+              : {
+                  kind: "value",
+                  key: "model",
+                  label: "Model",
+                  value: matched.label,
+                  truncateValue: "start",
+                  tooltip: readOnlyTooltip ?? undefined,
+                },
+          );
           rows.push({
             kind: "custom",
-            key: "fast",
+            key: "effort",
             render: () =>
-              fastRow({
-                on: currentFast,
+              effortRow({
+                efforts: matched.efforts,
+                current: currentEffort,
                 interactive,
                 tooltip: readOnlyTooltip,
-                onToggle: () => {
-                  const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
+                onPick: (level) => {
+                  const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
                   setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
               }),
           });
+          if (matched.supports_fast) {
+            // Read-only leaves the mode stated and nothing to press, the same way the Model row
+            // stands down: the chooser would offer a switch the harness cannot take.
+            rows.push(
+              interactive
+                ? { kind: "custom", key: "fast", render: () => fastRow({ chatId, tooltip: readOnlyTooltip }) }
+                : {
+                    kind: "value",
+                    key: "fast",
+                    label: "Fast Mode",
+                    value: fastModeValue(chatId),
+                    tooltip: readOnlyTooltip ?? undefined,
+                  },
+            );
+          }
         }
       }
       rows.push({ kind: "divider" });
       rows.push({ kind: "action", key: "stop-agent", label: "Stop agent", onSelect: () => stopAgent(chatId) });
 
-      return [trigger, menu.view(rows)];
+      return [trigger, menu.view(rows), fastModeModal];
     },
   };
 }

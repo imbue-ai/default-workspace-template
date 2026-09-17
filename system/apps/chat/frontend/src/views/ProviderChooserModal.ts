@@ -46,9 +46,12 @@ import {
   clearFlow,
   deleteAccount,
   getAccounts,
+  getBrokenAccountId,
   getFlow,
   getLanes,
+  isPickingAccount,
   loadAccounts,
+  pickAccount,
   takeChooserAccountId,
   loadLanes,
   startFlow,
@@ -319,33 +322,54 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ];
   }
 
-  /** A signed-in account is a STATE, not a place to
-   *  navigate to, so the row is not a button -- it reads as a listed fact with two explicit
-   *  actions beside it. Re-auth stays reachable because an expired credential is otherwise
-   *  a dead end: without it the only way back is to delete the account, which orphans every
-   *  chat bound to it rather than reviving them. */
+  /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
+   *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
+   *  the row itself also picks it; the account the caller is leaving is listed but not
+   *  pickable. Re-auth stays reachable because an expired credential is otherwise a
+   *  dead end: without it the only way back is to delete the account, which orphans every chat
+   *  bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
     const confirming = signedIn.find((account) => account.id === confirmingDelete) ?? null;
+    const picking = isPickingAccount();
+    const brokenAccountId = getBrokenAccountId();
     return m("div", [
       m("div", { class: css.SECTION_LABEL }, "Signed in"),
       m(
         "div",
         { class: css.ROW_STACK },
-        signedIn.map((account) =>
-          m("div", { class: css.ACCOUNT_ROW, key: account.id }, [
+        signedIn.map((account) => {
+          const isBroken = account.id === brokenAccountId;
+          const identity = [
             m(
               "span",
               { class: "flex w-6 shrink-0 items-center justify-center" },
               m.trust(providerMark(account.lane, 20)),
             ),
             m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, account.label),
+          ];
+          return m("div", { class: picking ? css.ACCOUNT_ROW_PICKABLE : css.ACCOUNT_ROW, key: account.id }, [
+            picking
+              ? m(
+                  "button",
+                  {
+                    type: "button",
+                    class: css.ACCOUNT_PICK,
+                    disabled: isBroken,
+                    "data-e2e": `pick-account-${account.id}`,
+                    onclick: () => pickAccount(account.id),
+                  },
+                  identity,
+                )
+              : identity,
+            picking && isBroken ? m("span", { class: css.ACCOUNT_BROKEN_NOTE }, "Not working") : null,
             m(
               Button,
               {
                 variant: "ghost",
                 sm: true,
+                extra: css.ACCOUNT_ACTION,
                 title: "Sign in again, keeping this account and every chat on it",
                 onclick: () => void reauthenticate(account.id, account.lane),
               },
@@ -357,6 +381,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 variant: "ghost",
                 sm: true,
                 icon: true,
+                extra: css.ACCOUNT_ACTION,
                 "aria-label": `Remove ${account.label}`,
                 onclick: () => {
                   confirmingDelete = account.id;
@@ -364,8 +389,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               },
               m.trust(icon("trash", { size: 15 })),
             ),
-          ]),
-        ),
+          ]);
+        }),
       ),
       confirming !== null
         ? removeAccountDialog(

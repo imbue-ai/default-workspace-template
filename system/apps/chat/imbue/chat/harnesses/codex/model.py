@@ -307,6 +307,10 @@ class CodexModelResolver(HarnessModelResolver):
         )
         return self
 
+    def list_persisted_options(self) -> tuple[ModelOption, ...] | None:
+        """The sidecar's raw ``model/list``, mapped: the last set this agent was offered, or ``()`` with none."""
+        return codex_models_to_options(read_codex_model_options(get_codex_model_options_path(self._agent_state_dir)))
+
     def list_offered_options(self) -> tuple[ModelOption, ...] | None:
         """The per-agent picker options, fetched FRESH from ``model/list`` on every open (D2).
 
@@ -357,7 +361,14 @@ class CodexModelResolver(HarnessModelResolver):
             settings["service_tier"] = FAST_SERVICE_TIER if identity.fast else None
         if not settings:
             return SwitchResult(ok=True)
-        client = self._open_client()
+        try:
+            client = self._open_client()
+        except (CodexAppServerError, OSError) as exc:
+            # Guarded like ``list_offered_options``' open: this method's contract is to report a
+            # failed switch, and an unattended caller (the handoff's model pick) has nothing above
+            # it that would catch a raise.
+            logger.warning("codex switch: daemon not reachable: {}", exc)
+            return SwitchResult(ok=False, detail="Failed to apply the model change")
         try:
             client.settings_update(**settings)
         except CodexAppServerError as exc:

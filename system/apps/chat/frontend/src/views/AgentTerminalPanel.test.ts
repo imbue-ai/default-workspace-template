@@ -16,6 +16,10 @@ vi.hoisted(() => {
 
 const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
+  getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
+}));
 
 // The stub just marks where the terminal iframe would mount.
 vi.mock("./TerminalFrame", () => ({
@@ -27,7 +31,7 @@ vi.mock("./TerminalFrame", () => ({
 import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
-import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 
 const ATTRS = { chatId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
@@ -56,13 +60,31 @@ describe("the agent terminal's liveness gate", () => {
   });
 
   it("unmounts the iframe for a positively-dead agent and offers a Start button", async () => {
-    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { name: "sunny-hollow", state: "STOPPED" } });
+    agentState.agent = chatSnapshotFixture("agent-1", {
+      name: "sunny-hollow",
+      active_agent: { name: "sunny-hollow", state: "STOPPED" },
+    });
     const root = mountPanel();
     await settle();
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
     expect(root.querySelector(".iframe-panel-stub")).toBeNull();
     expect(root.querySelector(".agent-terminal-start")).not.toBeNull();
     expect(root.textContent).toContain("sunny-hollow");
+  });
+
+  it("reports the switch's phase under the chat's name, with no Start, while a dead agent converges", async () => {
+    agentState.agent = chatSnapshotFixture("agent-1", {
+      name: "Chat-8",
+      handoff: handoffStateFixture({ phase: "switching" }),
+      active_agent: { name: "archived-1-Chat-8-agent-1", state: "STOPPED" },
+    });
+    const root = mountPanel();
+    await settle();
+    expect(root.querySelector(".iframe-panel-stub")).toBeNull();
+    expect(root.querySelector(".agent-terminal-start")).toBeNull();
+    expect(root.textContent).toContain("Chat-8");
+    expect(root.textContent).not.toContain("archived-1-Chat-8-agent-1");
+    expect(root.textContent).toContain("Starting Codex…");
   });
 
   it("keeps the iframe for a live agent and for UNKNOWN (non-evidence is not death)", async () => {
