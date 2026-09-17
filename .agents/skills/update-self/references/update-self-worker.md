@@ -323,7 +323,9 @@ gates only on a pure clean pull**: `has_merge_work` false from Step 4 **and**
 your 4a analysis found no user-created code depending on anything the update
 changed (and no global-dep bump with a user-created dependent) **and** you
 authored no in-branch edits of your own (a mirror edit from 4a is merge work
-even though `classify-merge` cannot see it). **Otherwise run the real gates**,
+even though `classify-merge` cannot see it; Step 1's rollback revert is not,
+when the tree it leaves is identical to the landed merge). **Otherwise run
+the real gates**,
 scoped to every file whose merged content differs from the target release. The
 full rule, its scope, and the keep/revert disposition for fix commits are in
 `references/worker-review-gates.md`. If you believe the gates should not run,
