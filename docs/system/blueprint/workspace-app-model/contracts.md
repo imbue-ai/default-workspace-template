@@ -179,6 +179,8 @@ Instance verbs are relayed by the shell, so browsers never reach an `instances_u
 | `POST /api/apps/<name>/instances/<key>/start` | | passthrough |
 
 After any successful relay the shell refetches that app's list immediately rather than waiting for the nudge.
+A successful delete also drops the address from every project tab set and every client layout (seeds included) and broadcasts the writes; it is the only thing that removes an address from them.
+An address its app merely does not list keeps its tabs: a window shows it as unavailable, loads no page for it, and loads the page again once the app lists it.
 
 Projects and views:
 
@@ -213,7 +215,7 @@ All under `data/.state/system_interface/`, written atomically (temp file plus re
 - `projects.json`: `{"version": 1, "projects": [project, ...]}` in creation order.
 - `layouts/<view_id>/<client_id>.json`: a `layout` (section 6).
 - `layouts/<view_id>/seed.<device_kind>.json`: a `layout`; rewritten on every save a browser of that device kind makes.
-  The shell's own writes (an agent op, a tab rebind, a pruned address) never copy a client's layout over a seed: a prune or a rebind edits the seed files directly, and an agent op edits only the target client's file.
+  The shell's own writes (an agent op, a tab rebind, a deleted address) never copy a client's layout over a seed: a delete or a rebind edits the seed files directly, and an agent op edits only the target client's file.
   An op on a view the client has no file for first materializes the client's copy from the seed of its device kind.
 - The client layout file is the truth of the arrangement: the browser writes it through the save route for the user's own gestures, and the shell writes it for agent ops and its own bookkeeping, and every write is followed by a `layout_updated` broadcast (section 8).
 - `clients.json`: `{"version": 1, "clients": {"<client_id>": {"device_kind", "active_view", "last_seen"}}}`.
@@ -237,13 +239,13 @@ Outbound (shell to browser):
 |---|---|---|
 | `apps_updated` | `{"apps": [app, ...]}` | on connect, and whenever any app's row, liveness, or instance list changed (the whole inventory, diffed before sending) |
 | `projects_updated` | `{"projects": [project, ...]}` | on connect and after any project write |
-| `layout_updated` | `{"view_id", "client_id", "save_id"}` | after any write of a client layout (a browser's save, an agent op, a tab rebind, a prune); the shell mints the save id of its own writes; a window applies it only when `client_id` is its own, the view is the one it shows, and `save_id` is not one it minted, and then only when the fetched `updated_at` differs from the one it holds |
+| `layout_updated` | `{"view_id", "client_id", "save_id"}` | after any write of a client layout (a browser's save, an agent op, a tab rebind, a delete); the shell mints the save id of its own writes; a window applies it only when `client_id` is its own, the view is the one it shows, and `save_id` is not one it minted, and then only when the fetched `updated_at` differs from the one it holds |
 | `active_view_changed` | `{"client_id", "view_id"}` | after a `client_state` report or a `load` op (or an op's `--view`) changed the client's stored active view; never when the report names the view already stored; the other windows of that client switch and report back without a previous view |
 | `tab_rebound` | `{"client_id", "view_id", "tab_id", "address"}` | after `POST /api/tabs/<tab_id>/instance`; the owning client re-addresses that tab, adds the address to the view's tab set through the projects route, and saves |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the four transient verbs of section 12 (`maximize`, `restore`, `refresh`, `reload_system_interface`); `requester` is the address of the instance that posted the op (its own chat), `""` when unknown, and is what `self` resolves to; `target_client_id` names the client whose windows apply it, `null` for the two machine-wide forms |
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label", "params": [name, ...]}], "default_shortcut", "launcher_rank", "is_running", "is_listed", "instances": [record, ...]}`.
-`is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed, and treats nothing as missing before its first non-empty `apps_updated`.
+`is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client shows a tab as unavailable only when its address is missing from a list that has arrived, never from the empty seed, and treats nothing as missing before its first non-empty `apps_updated`.
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`, stoppable `false` (the app-level Stop and Start are its verbs).
 
 The shell's socket carries nothing about chats.

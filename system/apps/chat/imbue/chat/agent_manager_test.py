@@ -29,6 +29,7 @@ from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
@@ -743,6 +744,59 @@ def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
         messages.append(json.loads(raw))
     completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
     assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
+
+
+def test_a_created_chat_stays_listed_through_observe_events_that_predate_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The observe stream reports a new agent seconds after its create returns; every event before
+    that rebuilds the tracked agents without it, which must not unlist the chat the create landed."""
+    created_id = str(MngrAgentId())
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+
+    agent_manager._handle_observe_event(make_agent_state_event(_agent_details("older-chat")))
+    agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
+
+    assert created_id in {snapshot.chat_id for snapshot in agent_manager.get_chat_snapshots()}
+
+
+def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A create that never reaches the stream (the agent died before observe saw it) must not be held
+    for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
+    created_id = str(MngrAgentId())
+    (tmp_path / "agents" / created_id).mkdir(parents=True)
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+    with agent_manager._lock:
+        assert created_id in agent_manager._activity_tracked_agents
+        assert created_id in agent_manager._model_watcher_by_agent
+
+    for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
+        agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
+
+    assert agent_manager.get_agent_by_id(created_id) is None
+    with agent_manager._lock:
+        assert created_id not in agent_manager._activity_tracked_agents
+        assert created_id not in agent_manager._model_watcher_by_agent
+
+
+def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    created_id = MngrAgentId()
+    _seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
+    agent_manager._run_creation(
+        ChatId(str(created_id)), str(created_id), "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE
+    )
+    created = _agent_details("chat-1", agent_id=created_id)
+
+    agent_manager._handle_observe_event(make_agent_state_event(created))
+    agent_manager._handle_observe_event(make_agent_removed_event(created.id, created.name, created.host.id))
+
+    assert agent_manager.get_agent_by_id(str(created_id)) is None
 
 
 def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails(
