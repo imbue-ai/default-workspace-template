@@ -573,8 +573,9 @@ async function executeDelete(address: string): Promise<void> {
     alert(`Failed to delete: ${(e as Error).message}`);
     return;
   }
-  // The shell refetches the app's list before answering, so the ``apps_updated`` that follows
-  // drops the panel everywhere; dropping it here too keeps this client from waiting a redraw.
+  // A delete takes the address out of the tab sets and the saved layouts, so the
+  // ``projects_updated`` and ``layout_updated`` that follow drop the panel in every other
+  // window; dropping it here too keeps this client from waiting for its own layout to arrive.
   dropPanelsForAddress(address);
   m.redraw();
 }
