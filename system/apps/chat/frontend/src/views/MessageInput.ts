@@ -963,6 +963,36 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         // keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable" && actionFailureKind !== "rejected_by_agent";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
+        const actions = [
+          ...(isRepeatable
+            ? [
+                {
+                  label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
+                  tooltip: "Tries the same thing again",
+                  isDisabled: actionFailureInFlight !== null,
+                  run: () => void retryFailedSend(),
+                },
+              ]
+            : []),
+          // Force needs a message to send afterwards, so it is offered only for our own send --
+          // and never for an agent that is merely still starting, where restarting would
+          // discard the session it was about to finish bringing up. It is the only thing that
+          // helps an agent that is GONE, which is why it survives Retry being withheld.
+          // Withheld for a refusal too: restarting the agent does not refill a spent quota
+          // or mint a working credential, so it would spend the session to earn the same
+          // refusal again.
+          ...(recovery === null || actionFailureKind === "not_ready" || actionFailureKind === "rejected_by_agent"
+            ? []
+            : [
+                {
+                  label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
+                  tooltip: "Restarts agent to reset it & resends message",
+                  isDestructive: true,
+                  isDisabled: actionFailureInFlight !== null,
+                  run: () => void forceFailedSend(),
+                },
+              ]),
+        ];
         return m(actionFailureNotice, {
           title: actionFailureTitle,
           body: [
@@ -980,39 +1010,12 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                   ? "You can open the agent's terminal, fix it there, then Retry."
                   : null,
           ],
-          dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
+          // "Cancel" calls off the actions beside it, so it is only that when there are some:
+          // a refusal withholds both Retry and Force, leaving closing the only thing to do.
+          dismissLabel: actions.length > 0 ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
-          actions: [
-            ...(isRepeatable
-              ? [
-                  {
-                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
-                    tooltip: "Tries the same thing again",
-                    isDisabled: actionFailureInFlight !== null,
-                    run: () => void retryFailedSend(),
-                  },
-                ]
-              : []),
-            // Force needs a message to send afterwards, so it is offered only for our own send --
-            // and never for an agent that is merely still starting, where restarting would
-            // discard the session it was about to finish bringing up. It is the only thing that
-            // helps an agent that is GONE, which is why it survives Retry being withheld.
-            // Withheld for a refusal too: restarting the agent does not refill a spent quota
-            // or mint a working credential, so it would spend the session to earn the same
-            // refusal again.
-            ...(recovery === null || actionFailureKind === "not_ready" || actionFailureKind === "rejected_by_agent"
-              ? []
-              : [
-                  {
-                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    tooltip: "Restarts agent to reset it & resends message",
-                    isDestructive: true,
-                    isDisabled: actionFailureInFlight !== null,
-                    run: () => void forceFailedSend(),
-                  },
-                ]),
-          ],
+          actions,
         });
       }
 
