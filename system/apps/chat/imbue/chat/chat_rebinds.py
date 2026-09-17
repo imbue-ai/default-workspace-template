@@ -113,6 +113,8 @@ class RebindDeps(FrozenModel):
     # Pop the next held send, or clear the rebind and return None when none remain; atomic with
     # the message route's hold. Raises ``RebindCancelledError`` for another rebind.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
+    # Park a send the restarted agent refused, for the composer to take back.
+    park_undelivered_send: Callable[[ChatId, HeldSend], None]
     get_agent_state: Callable[[str], AgentStateItem | None]
     get_agent_info: Callable[[str], AgentInfo | None]
     resolve_account: Callable[[str], Account]
@@ -378,7 +380,9 @@ class RebindRunner:
                 f"agent {agent_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
-            deliver_held_send(self._deps.deliver, agent_info, held, chat_id)
+            undelivered = deliver_held_send(self._deps.deliver, agent_info, held, chat_id)
+            if undelivered is not None:
+                self._deps.park_undelivered_send(chat_id, undelivered)
         logger.info(
             "Rebind of chat {}: agent {} is back on account {}", chat_id, agent_id, agent_info.labels.get("account")
         )

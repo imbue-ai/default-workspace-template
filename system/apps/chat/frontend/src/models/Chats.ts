@@ -97,7 +97,15 @@ export interface ChatSnapshot {
   agent_ids: string[];
   // Null while the chat is not converging on a new agent.
   handoff: HandoffState | null;
+  /** Sends a finished switch could not deliver, waiting to go back to this chat's composer. */
+  undelivered_sends: HeldSendSnapshot[];
   active_agent: ActiveAgent;
+}
+
+/** One send the app is holding for a composer: what it was sent as, and what it said. */
+export interface HeldSendSnapshot {
+  message_id: string;
+  text: string;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend

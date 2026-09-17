@@ -80,6 +80,7 @@ from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
@@ -4398,5 +4399,95 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
             deps.take_next_held_send(ChatId(agent_id), "rebind-gone")
         with pytest.raises(RebindCancelledError):
             deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
+    finally:
+        manager.stop()
+
+
+# Undelivered sends: a send a finished switch could not hand over waits on the record for the composer.
+
+
+def _parked_send(message_id: str, text: str) -> HeldSend:
+    return HeldSend(
+        message_id=message_id,
+        text=text,
+        origin=HeldSendOrigin.CLIENT,
+        received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_a_parked_send_reaches_the_composer_and_leaves_once_taken(broadcaster: WebSocketBroadcaster) -> None:
+    """The whole round trip: a send the agent refused waits on the record, rides the snapshot to
+    the composer, and is gone once the composer says it has it.
+
+    The user was answered 202 when the switch held this, so nothing but the record holds their
+    words; before this they were logged and dropped.
+    """
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert [(held.message_id, held.text) for held in snapshot.undelivered_sends] == [("m-1", "the thing I typed")]
+
+        manager.take_undelivered_send(ChatId(first), "m-1")
+
+        taken = manager.get_chat_snapshot(first)
+        assert taken is not None and taken.undelivered_sends == ()
+    finally:
+        manager.stop()
+
+
+def test_taking_a_send_that_is_already_gone_is_not_an_error(broadcaster: WebSocketBroadcaster) -> None:
+    """The composer prepends before it acks, so an ack can arrive twice (a reload that absorbed
+    the same send, a retried request). The second must not fail, and must not disturb a send
+    parked beside it."""
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "first"))
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-2", "second"))
+
+        manager.take_undelivered_send(ChatId(first), "m-1")
+        manager.take_undelivered_send(ChatId(first), "m-1")
+        manager.take_undelivered_send(ChatId(first), "never-parked")
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert [held.message_id for held in snapshot.undelivered_sends] == ["m-2"]
+    finally:
+        manager.stop()
+
+
+def test_parking_the_same_send_twice_keeps_one_copy(broadcaster: WebSocketBroadcaster) -> None:
+    """A resume can run a delivery step again, and the second refusal must not hand the user two
+    copies of one message to send."""
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert len(snapshot.undelivered_sends) == 1
     finally:
         manager.stop()

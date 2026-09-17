@@ -673,6 +673,10 @@ def chat_snapshot_for_active_agent(
         labels=agent.labels,
         agent_ids=chat.member_agent_ids,
         handoff=_transition_state_of(chat.record),
+        undelivered_sends=tuple(
+            HeldSendSnapshot(message_id=parked.message_id, text=parked.text)
+            for parked in (chat.record.undelivered_sends if chat.record is not None else ())
+        ),
         active_agent=ActiveAgentSnapshot(
             agent_id=agent.id,
             name=agent.name,
@@ -1683,7 +1687,7 @@ class AgentManager:
             if transition.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
                 raise ChatConvergingError(cancel_refused_detail(transition.target_harness))
             others = transition.held_sends_after_trigger()
-            if len(record.agents) == 1:
+            if len(record.agents) == 1 and not record.undelivered_sends:
                 self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
@@ -1707,7 +1711,9 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            undelivered = deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            if undelivered is not None:
+                self._park_undelivered_send(chat_id, undelivered)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id`` (spec 5.10, and spec 6 for a rebind).
@@ -1875,6 +1881,7 @@ class AgentManager:
             read_record=self._read_chat_record,
             update_record=self._update_record_for_handoff,
             take_next_held_send=self._take_next_held_send,
+            park_undelivered_send=self._park_undelivered_send,
             get_agent_state=self.get_agent_by_id,
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
@@ -1902,6 +1909,7 @@ class AgentManager:
             read_record=self._read_chat_record,
             update_record=self._update_record_for_rebind,
             take_next_held_send=self._take_next_held_send_for_rebind,
+            park_undelivered_send=self._park_undelivered_send,
             get_agent_state=self.get_agent_by_id,
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
@@ -2046,6 +2054,53 @@ class AgentManager:
         except HandoffCancelledError as e:
             raise RebindCancelledError(str(e)) from e
 
+    def _park_undelivered_send(self, chat_id: ChatId, held: HeldSend) -> None:
+        """Park a send the agent would not take on the chat record, for the composer to take back.
+
+        The user was answered 202 when this was held, so the app owns the only copy: dropping it
+        loses words the user typed. It goes on the RECORD rather than on the switch, which is
+        cleared the moment the held list empties, and the record outlives it -- including for a
+        single-agent chat's rebind, which otherwise takes its record with it.
+        """
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+            if record is None:
+                _loguru_logger.warning(
+                    "Chat {} has no record to park undelivered send {} on; it is lost", chat_id, held.message_id
+                )
+                return
+            if any(parked.message_id == held.message_id for parked in record.undelivered_sends):
+                return
+            self._write_record_locked(
+                record.model_copy_update(
+                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, held))
+                )
+            )
+        self._broadcast_chats_updated()
+
+    def take_undelivered_send(self, chat_id: ChatId, message_id: str) -> None:
+        """Drop a parked send once the composer has it back, and let the record go if that was all it held.
+
+        Keyed by message id and tolerant of an id that is already gone, so a page that acks twice
+        (or acks one a reload already took) is not an error: the composer prepends before it acks,
+        and a re-delivered send it has already absorbed is dropped on its side by the same id.
+        """
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+            if record is None:
+                return
+            remaining = tuple(parked for parked in record.undelivered_sends if parked.message_id != message_id)
+            if len(remaining) == len(record.undelivered_sends):
+                return
+            emptied = record.model_copy_update(to_update(record.field_ref().undelivered_sends, remaining))
+            # Restores the invariant the park suspended: a single-agent chat keeps no record of
+            # its own once nothing is left to say about it.
+            if not remaining and emptied.converging is None and len(emptied.agents) == 1 and not emptied.is_seeded:
+                self._delete_record_locked(chat_id)
+            else:
+                self._write_record_locked(emptied)
+        self._broadcast_chats_updated()
+
     def _take_next_held_send_for_rebind(self, chat_id: ChatId, rebind_id: str) -> HeldSend | None:
         """``_take_next_held_send`` for a rebind, raising the rebind runner's own cancelled error."""
         try:
@@ -2070,7 +2125,7 @@ class AgentManager:
                 )
                 self._write_record_locked(record.with_converging(remaining))
                 return held
-            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
+            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1 and not record.undelivered_sends:
                 self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
