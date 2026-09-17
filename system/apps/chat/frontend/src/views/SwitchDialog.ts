@@ -48,12 +48,13 @@ interface OpenDialog {
 let open: OpenDialog | null = null;
 
 /**
- * Switch ``chatId`` to ``target``, arm the switch, or ask first; nothing, when ``target`` is the
- * account the chat already runs on (a re-authenticated one, say). A chat with no user turn yet has
- * nothing to hand over, so it switches at once with no summary and no dialog; the draft, if any,
- * stays in the composer and goes out normally once the chat runs on the new account. A rebind is
- * armed at once with no dialog: the next send carries it out, so a turn in progress is not cut
- * short by the press. A handoff with context gets the dialog.
+ * Switch ``chatId`` to ``target``, arm the switch, or ask first; nothing, when the chat is not in
+ * the chat list yet or ``target`` is the account it already runs on (a re-authenticated one, say).
+ * A chat with no user turn yet has nothing to hand over, so it switches at once with no summary
+ * and no dialog; the draft, if any, stays in the composer and goes out normally once the chat
+ * runs on the new account. A rebind is armed at once with no dialog: the next send carries it
+ * out, so a turn in progress is not cut short by the press. A handoff with context gets the
+ * dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
   const chat = getChatById(chatId);
