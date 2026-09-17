@@ -446,7 +446,7 @@ def main():
             target = page.evaluate("""(() => {
               const el = document.querySelector('.transcript-scroll');
               const elRect = el.getBoundingClientRect();
-              for (const t of el.querySelectorAll('.tool-call-header')) {
+              for (const t of el.querySelectorAll('.tool-chip, .tool-call-header')) {
                 const r = t.getBoundingClientRect();
                 if (r.top > elRect.top + 4 && r.top < elRect.top + 260 && r.height > 4) {
                   return { x: r.x + 40, y: r.y + r.height / 2 };

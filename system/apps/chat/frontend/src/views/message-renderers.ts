@@ -12,11 +12,11 @@ import { openProviderChooser } from "../models/Providers";
 import { openSubagentTab, startChatOnAccount } from "../shell";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
-import { renderToolBlock, type PayloadState } from "./ToolCallBlock";
+import { ToolChipGroup, type ChipCall } from "./ToolChipGroup";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
@@ -188,6 +188,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedDetailVersion = -1;
+  let renderedExpansionVersion = -1;
   return {
     onbeforeupdate(vnode) {
       const { event, toolResults, chatId } = vnode.attrs;
@@ -208,7 +209,11 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
-        getEventDetailVersion(chatId) !== renderedDetailVersion
+        getEventDetailVersion(chatId) !== renderedDetailVersion ||
+        // Opening a tool chip swaps WHICH detail panel exists, so unlike the
+        // older blocks (a CSS-revealed body already in the DOM) it needs a real
+        // re-render to build one.
+        getExpansionVersion() !== renderedExpansionVersion
       );
     },
     view(vnode) {
@@ -220,6 +225,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedDetailVersion = getEventDetailVersion(chatId);
+      renderedExpansionVersion = getExpansionVersion();
 
       return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
     },
@@ -328,90 +334,6 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
   );
 }
 
-export function renderToolCallBlock(
-  toolCall: ToolCall,
-  toolResult: ToolResultEvent | null,
-  chatId: string,
-  assistantEventId: string,
-): m.Vnode {
-  // The harness's parser already worked out what this call should read as -- for
-  // codex that means unwrapping an `exec` whose real operation is buried in a JS
-  // argument, which is not something this view should have to know. Falls back to
-  // the tool name for events parsed before the labels existed.
-  const isError = toolResult?.is_error === true;
-  // Keyed by the tool call's stable id so the expansion survives the row
-  // unmounting and remounting (virtualization) or re-rendering (streaming).
-  const expansionKey = `tc:${toolCall.tool_call_id}`;
-
-  // Events are payload-free on the wire: the full input/output are fetched on demand
-  // (cached frontend-side for the page session) the first time the row is expanded.
-  const requestPayloads = () => {
-    if (toolCall.input_chars > 0) {
-      requestEventDetail(chatId, assistantEventId);
-    }
-    if (toolResult && toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
-      requestEventDetail(chatId, toolResult.event_id);
-    }
-  };
-  if (isBlockExpanded(expansionKey)) {
-    // Re-request on every expanded render: a no-op when cached or in flight, and it
-    // heals an entry dropped by a transient fetch failure.
-    requestPayloads();
-  }
-
-  let inputText = "";
-  let inputState: PayloadState = "loaded";
-  if (toolCall.input_chars > 0 || Boolean(toolCall.tk_command)) {
-    const inputDetail = getEventDetailState(chatId, assistantEventId);
-    if (inputDetail?.state === "loaded") {
-      inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
-    } else if (toolCall.input_chars === 0) {
-      // Only the stamped tk command exists (nothing to fetch).
-      inputText = toolCall.tk_command ?? "";
-    } else {
-      inputState = inputDetail?.state ?? "loading";
-    }
-  }
-
-  let outputText = "";
-  let outputState: PayloadState = "loaded";
-  if (toolResult) {
-    // A frontend-synthesized skill expansion carries its body inline; a real result's
-    // output is fetched. When both exist (a Skill call with real output plus its
-    // expansion), the fetched output leads and the expansion follows.
-    const isFetchable = toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-");
-    const fetched = isFetchable ? getEventDetailState(chatId, toolResult.event_id) : undefined;
-    const inline = toolResult.output ?? "";
-    if (fetched?.state === "loaded") {
-      outputText = [fetched.detail.output ?? "", inline].filter((part) => part).join("\n\n");
-    } else if (isFetchable) {
-      outputState = fetched?.state ?? "loading";
-    } else {
-      outputText = inline;
-    }
-  }
-
-  return renderToolBlock({
-    headerText: toolCall.header_label || `Tool: ${toolCall.tool_name}`,
-    inputText,
-    outputText,
-    inputState,
-    outputState,
-    isError,
-    errorSnippet: toolResult?.error_snippet ?? undefined,
-    // The markdown rhythm: the same vertical slot a paragraph-adjacent block
-    // gets in the assistant flow.
-    extra: "my-[0.25em]",
-    expansionKey,
-    // Kick off the payload fetches; the redraw renders the loading note (or
-    // the cached payload) into the just-revealed details section.
-    onExpand: () => {
-      requestPayloads();
-      m.redraw();
-    },
-  });
-}
-
 /** The "sign in again" affordance under an auth failure.
  *
  * Resolves the chat's own account from its `account` label, so the chooser opens ON that
@@ -515,8 +437,49 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, chatId: string):
 }
 
 /**
- * Render the children (text + tool calls) of an assistant message.
- * Used by both the stable (memoized) and simple assistant message renderers.
+ * Render a run of assistant events as interleaved prose and tool-chip rows.
+ *
+ * Consecutive tool calls collapse into ONE chip row even across event
+ * boundaries, which is what makes a sequence read as one line of "what it did":
+ * a harness emits one event per model response, so three tool calls in a row are
+ * usually three events, and grouping only within an event would leave them as
+ * three separate rows. Prose breaks the run and starts a fresh row after it.
+ *
+ * Callers that hold a whole list of events (a step's revealed work, an ungrouped
+ * run, a handoff's body) pass them all so the merging can happen; a caller that
+ * holds one event (a top-level virtualized row, which is measured and windowed
+ * on its own) passes just that one and gets a row per event.
+ */
+export function renderAssistantRun(
+  events: AssistantMessageEvent[],
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
+): m.Children[] {
+  const children: m.Children[] = [];
+  // One array for the whole run, emptied in place by `splice` rather than
+  // reassigned: appendEventParts holds this same reference, so swapping in a
+  // fresh array here would leave it pushing into the flushed one.
+  const pendingChips: ChipCall[] = [];
+
+  // Anything that is not a tool chip ends the run in progress: the row has to
+  // land above whatever interrupted it, in transcript order.
+  const flushChips = (): void => {
+    if (pendingChips.length === 0) return;
+    children.push(m(ToolChipGroup, { chips: pendingChips.splice(0), toolResults, chatId }));
+  };
+
+  for (const event of events) {
+    appendEventParts(event, toolResults, chatId, resolutionsByRequestId, children, pendingChips, flushChips);
+  }
+  flushChips();
+  return children;
+}
+
+/**
+ * Render the children (text + tool calls) of a single assistant message.
+ * The one-event case of {@link renderAssistantRun}; kept as its own name
+ * because most callers have exactly one event.
  */
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
@@ -524,14 +487,36 @@ export function renderAssistantMessageChildren(
   chatId: string,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
 ): m.Children[] {
+  return renderAssistantRun([event], toolResults, chatId, resolutionsByRequestId);
+}
+
+/** One event's contribution to a run: its thinking toggle, its prose and its
+ *  cards, while its plain tool calls accumulate onto the run's open chip row
+ *  (`pendingChips`), which `flushChips` closes off.
+ *
+ *  Appends into the run's own `children` rather than returning its own list:
+ *  `flushChips` writes the chip row there too, and a run's parts have to
+ *  interleave in ONE array to stay in transcript order -- an event that is
+ *  prose, then a tool call, then a sub-agent card would otherwise land its chip
+ *  row above its own prose. */
+function appendEventParts(
+  event: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  children: m.Children[],
+  pendingChips: ChipCall[],
+  flushChips: () => void,
+): void {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
 
-  const children: m.Children[] = [];
   if (event.has_thinking) {
+    flushChips();
     children.push(renderThinkingDisclosure(event, chatId));
   }
   if (textContent) {
+    flushChips();
     if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Mind's fault" note.
@@ -566,17 +551,20 @@ export function renderAssistantMessageChildren(
   for (const toolCall of toolCalls) {
     // Render the rich card as soon as we have the Agent call's description (from the tool
     // input), even before its subagent session is linked; the card shows a non-clickable
-    // "Running…" state until subagent_metadata.session_id arrives.
+    // "Running…" state until subagent_metadata.session_id arrives. A sub-agent is a whole
+    // conversation, not an action, so it stays a card rather than joining the chips.
     if (toolCall.tool_name === "Agent" && (toolCall.subagent_metadata || toolCall.description)) {
       // The Agent call's tool result arrives only when the sub-agent finishes, so its
       // absence is our signal that the sub-agent is still actively working.
       const subagentRunning = !toolResults.has(toolCall.tool_call_id);
+      flushChips();
       children.push(renderSubagentCard(toolCall, chatId, subagentRunning));
       continue;
     }
     const result = toolResults.get(toolCall.tool_call_id) ?? null;
     // A permission request renders as its own card (the request, a verdict or
-    // button, and the raw call) rather than a generic tool block.
+    // button, and the raw call) rather than a chip: it is something to ACT on,
+    // so it must not be one click away behind a chip.
     // Gated on the input-only predicate so the card shows even while the request
     // is still pending -- the same signal the timeline walk uses to lift it out
     // of its step. The resolution (once the user decides) comes from the walk,
@@ -584,14 +572,14 @@ export function renderAssistantMessageChildren(
     // one permission request resolves each of its cards independently.
     if (isFiledPermissionRequest(toolCall, result)) {
       const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId);
+      flushChips();
       children.push(
         m(PermissionCard, { toolCall, toolResult: result, resolution, chatId, assistantEventId: event.event_id }),
       );
       continue;
     }
-    children.push(renderToolCallBlock(toolCall, result, chatId, event.event_id));
+    pendingChips.push({ call: toolCall, eventId: event.event_id });
   }
-  return children;
 }
 
 /**

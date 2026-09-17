@@ -466,6 +466,23 @@
   word-break: break-word;
 }
 
+/* The inline tool chips' detail panel (views/ToolChipGroup.ts) shows a tool's
+   raw input and output, so its <pre>/<code> shed the markdown chrome they would
+   otherwise inherit -- the panel's own border is the only frame it needs, and a
+   code chip drawn per line inside it would fight that border. Contextual rules
+   rather than utilities on the elements: `.markdown-content pre` is an
+   element-plus-class selector, so it outranks a utility class sitting on the
+   element itself, and the panel renders inside `.markdown-content` wherever a
+   step's revealed work does. */
+.tool-chip-detail pre,
+.tool-chip-detail code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
 /* Progress view (the per-turn task timeline rendered from tk tickets).
    The timeline's structure lives as utilities in views/timeline-node.ts and
    views/ProgressBlock.ts, and the bullets in the library's components/icons.ts.
