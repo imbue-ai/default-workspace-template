@@ -565,6 +565,24 @@ describe("the combo card", () => {
     expect(ROOT().textContent).toContain("next");
   });
 
+  it("drops a failed switch's pick, which the chat keeps for the retry but never applied", () => {
+    // The failure notice stands over the composer while the chip sits under it, so a chip still
+    // promising the picked model would contradict it -- and the agent is on the model it always was.
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: rebindStateFixture({
+        phase: "failed",
+        failed_step: "model",
+        error: "Unknown model",
+        model_pick: { model_id: "opus", effort: "high", fast: false },
+      }),
+    });
+    render();
+    expect(ROOT().textContent).toContain("Opus");
+    expect(ROOT().textContent).not.toContain("High");
+    expect(ROOT().textContent).not.toContain("next");
+  });
+
   it("names a reloaded switch's pick by its id for a harness whose models no catalog holds", () => {
     // codex's option set is per agent, so a pick of one is named by the id it was made under.
     agentState.agent = chatSnapshotFixture("a1", {
