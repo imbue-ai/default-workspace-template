@@ -19,6 +19,12 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
+IMPORTANT: Providing the first mock/feedback to the user quickly is critical, as the
+user will be waiting to see an initial draft.
+Thus, before you do any lengthy work, think briefly about how you can parallelize the task,
+and delegate as much as possible to parallel background agents to reduce the user's
+wait times.
+
 ## First: fire off the plan recorder
 
 Before anything else, run this once to record what the user requested:
