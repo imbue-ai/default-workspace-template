@@ -326,9 +326,9 @@ class CodexModelResolver(HarnessModelResolver):
 
         Account-scoped, so it answers for an account no agent has ever run on -- which is the case
         the switch dialog exists to serve, and the one an agent-by-agent search cannot answer at
-        all. A successful probe is written through to the account's sidecar; when the probe cannot
-        run the sidecar is the answer, and an account that has neither offers nothing rather than
-        guessing from some other account's models.
+        all. A successful probe is written through to the account's sidecar; when the probe tells us
+        nothing usable the sidecar is the answer, and an account that has neither offers nothing
+        rather than guessing from some other account's models.
 
         ``probe`` is injectable so the fall-back policy can be exercised without codex on PATH and
         without a network round trip -- every arm below is a judgement about the probe's answer,
@@ -340,10 +340,12 @@ class CodexModelResolver(HarnessModelResolver):
         except AccountModelProbeError as e:
             logger.info("Falling back to the sidecar for the models of account {}: {}", account_dir.name, e)
             return codex_models_to_options(read_codex_model_options(options_path))
-        # Only a non-empty answer is persisted, so a daemon that came up but answered with nothing
-        # never clobbers a good sidecar.
-        if models:
-            write_codex_model_options(options_path, models)
+        # A daemon that came up but listed nothing is not evidence that the account has no models, so
+        # that answer neither clobbers the sidecar nor is handed on in place of it.
+        if not models:
+            logger.info("The codex of account {} listed no models; falling back to the sidecar", account_dir.name)
+            return codex_models_to_options(read_codex_model_options(options_path))
+        write_codex_model_options(options_path, models)
         return codex_models_to_options(models)
 
     def list_offered_options(self) -> tuple[ModelOption, ...] | None:

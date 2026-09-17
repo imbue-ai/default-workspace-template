@@ -524,9 +524,11 @@ def test_an_account_with_no_probe_and_no_sidecar_offers_nothing(tmp_path: Path) 
     assert CodexModelResolver.list_account_options(tmp_path, probe=_refuse) == ()
 
 
-def test_a_probe_that_answers_with_nothing_does_not_clobber_a_good_sidecar(tmp_path: Path) -> None:
-    """A daemon that came up but listed no models is not evidence the account has none."""
+def test_a_probe_that_answers_with_nothing_leaves_the_sidecar_both_kept_and_offered(tmp_path: Path) -> None:
+    """A daemon that came up but listed no models is not evidence the account has none, so that answer
+    neither overwrites what is known nor is shown to the user in place of it."""
     kept = (_codex_model("gpt-5.5", "GPT-5.5", ("low",)),)
     write_codex_model_options(codex_model_options_path(tmp_path), kept)
-    assert CodexModelResolver.list_account_options(tmp_path, probe=lambda account_dir: ()) == ()
+    offered = CodexModelResolver.list_account_options(tmp_path, probe=lambda account_dir: ())
+    assert [option.id for option in offered] == ["gpt-5.5"]
     assert read_codex_model_options(codex_model_options_path(tmp_path)) == kept
