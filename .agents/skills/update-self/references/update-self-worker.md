@@ -144,7 +144,12 @@ provisioning paragraph at its end, record the footprint evidence
 go to 4b. Every impacted consumer is then built-in, restarted by the apply and
 tested upstream. Enumerating consumers, grepping for retired names, and
 reasoning about coupling all exist to find user code, and with none to find
-they only spend the user's time. If you believe the analysis should run anyway
+they only spend the user's time. The footprint is read from git, so the one
+user consumer it cannot see is a scheduled task: cron drop-ins live under the
+gitignored `data/.state/cron.d`. On this branch, list that directory and grep
+its lines for any path the update deleted or renamed (`git diff --name-status
+--diff-filter=DR "$BASE" "$TARGET_REF"`); a hit is a user-created consumer,
+and 4a runs in full. If you believe the analysis should run anyway
 in a situation this rule does not cover, that is a `question` gate (Step 6),
 never a silent widening. When `has_local_footprint` is true, run all of it.
 
@@ -226,8 +231,11 @@ in your report.
   never the live store. A service that arrived exactly as upstream shipped
   it is not booted here: upstream tested it, and for the shell and the chat
   app the apply pre-flights the merged copy itself before anything live
-  restarts. This runs on the host's global toolchain, so it does not
-  exercise a global-dependency bump.
+  restarts. Every other built-in program that arrived clean lands on
+  upstream's testing alone, caught after the restart only by the apply's
+  probes and rollback; that is the coverage this rule gives up, on purpose.
+  This runs on the host's global toolchain, so it does not exercise a
+  global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
