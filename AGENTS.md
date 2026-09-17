@@ -183,6 +183,8 @@ They are inherently flaky due to timing and useless in CI, but valuable for agen
 
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
+If the user asks you to read or act on something in a third-party tool they have an account with -- including a link they paste, such as a Notion page, Google Doc, or Slack thread -- run `latchkey services list --viable` before anything else, and use the `latchkey` skill for anything it lists (its names may differ from the product's, e.g. Notion is `notion-mcp`). That is how you reach the accounts the user connected in Minds; use the web tools or the browser only for tools latchkey does not cover.
+
 # Browser is available as a tool
 
 A stealth build of Chromium designed to look like an ordinary human browser is installed in this workspace and can be used to complete browser-related tasks. 

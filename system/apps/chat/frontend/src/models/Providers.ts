@@ -272,6 +272,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
     if (status.account_id !== null && chooserOnSignedIn !== null) {
       const run = chooserOnSignedIn;
       chooserOnSignedIn = null;
+      chooserOnDismissed = null;
       run(status.account_id);
     }
   } else if (status.state === "failed") {
@@ -362,6 +363,9 @@ let chooserAccountId: string | null = null;
 // an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
 // can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
+// What to do if the chooser closes with the sign-in hook still armed: the caller that was
+// waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
+let chooserOnDismissed: (() => void) | null = null;
 let chooserUnpickable: UnpickableAccount | null = null;
 
 export function isProviderChooserOpen(): boolean {
@@ -382,6 +386,8 @@ export interface ProviderChooserIntent {
   /** Run once a sign-in succeeds, with the account it produced. Also run when a signed-in
    *  account is picked instead, which is why its presence makes those rows pickable. */
   onSignedIn?: (accountId: string) => void;
+  /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
+  onDismissed?: () => void;
   /** The account the caller is moving away from: listed, but not pickable. */
   unpickable?: UnpickableAccount;
 }
@@ -392,6 +398,7 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOpen = true;
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
+  chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
   m.redraw();
 }
@@ -408,6 +415,9 @@ export function getUnpickableAccount(): UnpickableAccount | null {
 /** Use an account that is already signed in: what a finished sign-in does, minus the sign-in. */
 export function pickAccount(accountId: string): void {
   const run = chooserOnSignedIn;
+  // Both hooks stand down before the close, as after a sign-in: a pick is not a dismissal.
+  chooserOnSignedIn = null;
+  chooserOnDismissed = null;
   closeProviderChooser();
   run?.(accountId);
 }
@@ -424,8 +434,12 @@ export function closeProviderChooser(): void {
   if (!chooserOpen) return;
   chooserOpen = false;
   // Cleared on close as well as on open: a chooser dismissed without signing in must not
-  // leave a callback armed for whoever opens it next.
+  // leave a callback armed for whoever opens it next. A sign-in hook still armed here means no
+  // sign-in ran, which is what the dismissal hook is for.
+  const dismissed = chooserOnSignedIn !== null ? chooserOnDismissed : null;
   chooserOnSignedIn = null;
+  chooserOnDismissed = null;
   chooserUnpickable = null;
+  dismissed?.();
   m.redraw();
 }
