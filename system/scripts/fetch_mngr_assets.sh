@@ -3,12 +3,10 @@
 # pyproject.toml gives it, into system/vendor/mngr-assets/ (gitignored).
 #
 # mngr itself is installed as Python packages from that same source; these are
-# the two things a package cannot deliver:
+# the files no published package carries:
 #   apps/minds/imbue/minds/desktop_client/static/   the embed contract and the
-#                                                   service icons the system_interface
-#                                                   frontend bundles at build time
-#   libs/mngr_ttyd/imbue/mngr_ttyd/resources/       the OSC 52-capable ttyd client
-#                                                   the terminal app serves
+#                                                   service icons the frontends
+#                                                   bundle at build time
 #   style_guide.md                                  the base code style guide,
 #                                                   docs/system/style_guide.md
 #
@@ -21,7 +19,6 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
-    libs/mngr_ttyd/imbue/mngr_ttyd/resources
     style_guide.md
 )
 

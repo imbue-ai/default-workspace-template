@@ -24,7 +24,13 @@ FAKE_CREATED_EPOCH_BASE: Final[int] = 1_700_000_000
 # Where a test source starts a terminal created without a workdir.
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
 # The command a test source gives a new session (the fake tmux records it, never runs it).
-TEST_SESSION_COMMAND: Final[tuple[str, ...]] = ("python3", "/opt/oom_tag_service.py", "terminal-session", "bash", "-l")
+TEST_SESSION_COMMAND: Final[tuple[str, ...]] = (
+    "python3",
+    "/opt/oom_tag_service.py",
+    "terminal-session",
+    "bash",
+    "-l",
+)
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 

@@ -113,6 +113,7 @@ imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3
 imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_antigravity" }
 imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_autocompact" }
 concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]

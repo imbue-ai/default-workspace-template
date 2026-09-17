@@ -74,8 +74,8 @@ in that app's folder and is named `<app>-<role>`.
   memories, tickets, secrets, machine state, and per-app data (see
   `data/README.md`)
 - `system/vendor/mngr-assets/` - The few non-Python files this workspace needs
-  from mngr (the embed contract and service icons the UI bundles, the terminal's
-  ttyd client), fetched at build time from the mngr commit `pyproject.toml` pins.
+  from mngr (the embed contract and service icons the UI bundles, the style
+  guide), fetched at build time from the mngr commit `pyproject.toml` pins.
   mngr itself is installed as packages from that same commit, not vendored.
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script

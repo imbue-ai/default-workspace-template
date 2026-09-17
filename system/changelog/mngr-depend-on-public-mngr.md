@@ -7,9 +7,9 @@
   from that pin; `system/config/mngr_plugins.toml` lists each plugin's package
   and repo subdirectory.
 
-- The few non-Python files the workspace needs from mngr (the embed contract and
-  service icons the UI bundles, the terminal's ttyd client) are fetched at build
-  time by `system/scripts/fetch_mngr_assets.sh` into gitignored
+- The few files the workspace needs from mngr that no published package carries
+  (the embed contract and service icons the UI bundles, the style guide) are
+  fetched at build time by `system/scripts/fetch_mngr_assets.sh` into gitignored
   `system/vendor/mngr-assets/`.
 
 - There is no way to build a workspace against any other mngr: the build reads
