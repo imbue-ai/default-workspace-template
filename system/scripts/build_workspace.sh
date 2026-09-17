@@ -57,9 +57,9 @@ git config --global --add safe.directory "$REPO_ROOT"
 # forms are supported. Each tool also gets the mngr plugins
 # system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
 # an app's manifest name for that app's -- as extras, so it can parse
-# plugin-specific config. mngr and every plugin come from wherever pyproject.toml's
-# [tool.uv.sources] points imbue-mngr: the pinned public-repo commit, or the local
-# tree. The update-self apply reads the same table, so a release adding a plugin
+# plugin-specific config. mngr and every plugin come from the public-repo commit
+# pyproject.toml's [tool.uv.sources] pins imbue-mngr to. The update-self apply
+# reads the same table, so a release adding a plugin
 # registers it in existing workspaces as well as here. mngr_modal is intentionally
 # not registered (providers.modal.is_enabled=false).
 python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"

@@ -33,7 +33,7 @@ dev = [
     "ruff>=0.4",
     "pyright>=1.1",
     "inline-snapshot>=0.31",
-    # The vendored ratchet library (imbue_common.ratchet_testing) imports it at module level,
+    # The pinned imbue-common package's ratchet library (imbue_common.ratchet_testing) imports it at module level,
     # so every project's test_ratchets.py needs it even where no import contract is declared.
     "import-linter>=2.0",
     "tomlkit>=0.12",
@@ -48,7 +48,7 @@ dev = [
     # entry points, so settings.toml fields like `isolate_local_config_dir`,
     # `auto_allow_permissions`, etc. fail to parse as "Unknown fields".
     # Keeping the venv's mngr in lockstep with the tool-installed mngr
-    # (which has --with-editable mngr_claude on the chat app's tool install)
+    # (which gets its plugins from the same pinned commit via system/config/mngr_plugins.toml)
     # avoids a cwd-dependent divergence.
     "imbue-mngr-claude",
     # imbue-mngr-codex: same rationale as imbue-mngr-claude above -- registers the

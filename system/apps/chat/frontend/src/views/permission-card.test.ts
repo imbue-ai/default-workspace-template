@@ -750,10 +750,10 @@ describe("shell-reported verdicts", () => {
   });
 });
 
-// Delivery through the real endpoint needs the vendored contract to know
+// Delivery through the real endpoint needs the fetched contract to know
 // PERMISSION_RESOLUTIONS (a stale snapshot's validator drops the type before
 // any handler runs; this repo deliberately does not edit system/vendor by
-// hand). These un-skip themselves the moment the vendor sync lands, and cover
+// hand). These un-skip themselves once the mngr pin carries it, and cover
 // the source and payload checks the shell's messages actually pass through.
 const HAS_RESOLUTIONS_MESSAGE = "PERMISSION_RESOLUTIONS" in embedContract;
 

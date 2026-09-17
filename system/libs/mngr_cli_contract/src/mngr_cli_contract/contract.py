@@ -5,7 +5,7 @@ pins such an argv against a *hand-written expected argv* (via a stubbed
 subprocess runner) only confirms "the code emits the bytes we told it to
 emit" -- the expected argv is authored from the same assumption as the
 production code, so the two drift together and the test can never notice when
-system/vendor/mngr renames or removes the subcommand or one of its flags. That
+an mngr pin bump renames or removes the subcommand or one of its flags. That
 divergence then surfaces only at runtime.
 
 ``assert_mngr_argv_valid`` closes that gap by resolving the argv against the
@@ -65,7 +65,7 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
 
     Raises ``MngrArgvContractError`` when the subcommand does not exist, an
     option token is unrecognized, or a ``-S`` key path does not resolve -- i.e.
-    exactly the drift that a system/vendor/mngr change would introduce. Does not
+    exactly the drift that an mngr pin bump would introduce. Does not
     raise on other value-level problems (nonexistent paths, missing required
     options): those are not CLI-surface drift and would make the contract check
     brittle.
