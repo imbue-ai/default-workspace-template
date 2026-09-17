@@ -234,10 +234,11 @@ Repeat until every node is done.
      changes. Otherwise destroy it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
      Destroying a worker leaves `$BUILD` intact.
-   - **Exit 76 (the worker went idle without reporting).** It has been up for
-     at least two minutes and has ended its turn, so it either finished and the
-     delivery failed or it stopped early. Look for a delivered report first
-     (`$RUN/nodes/N/reports/`), and if there is none, nudge it once:
+   - **Exit 76 (the worker's agent is not running and no report arrived).** A
+     worker that has not yet started its first turn reads the same way as one
+     that stopped early, and the check gives up after about fifteen seconds, so
+     read this as "not working *yet*", not "broken". Look for a delivered report
+     first (`$RUN/nodes/N/reports/`), and if there is none, nudge it once:
 
      ```bash
      uv run .agents/skills/launch-task/scripts/create_worker.py reply \
