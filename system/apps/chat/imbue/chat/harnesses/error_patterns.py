@@ -14,8 +14,11 @@ transcript, in its own surface form:
 The kind set and the provider-fault split are ordinary HTTP semantics, so they are
 harness-agnostic; only the surface-form regexes differ, and both live below.
 
-Auth-family failures are handled by :mod:`auth_errors`, which has its own recovery surface --
-so they are deliberately NOT classified here. That is enforced rather than left to the tables:
+Auth-family failures are handled by :mod:`auth_errors`, which describes them in its own words
+-- so they are deliberately NOT classified here. (Its recovery actions are no longer its own:
+they render under every provider failure, because the classification cannot reliably tell a
+dead end from a transient one and both families end the turn the same way for the reader.)
+That is enforced rather than left to the tables:
 :func:`classify_api_error` returns ``None`` for anything the auth vocabulary claims, so a
 message can never carry both subtexts. Without it the two families overlap by construction --
 Anthropic reports exhausted third-party usage as a 400 ``invalid_request_error``, which is in
@@ -80,8 +83,9 @@ def classify_api_error(text: str) -> str | None:
     a recognized model API error.
 
     Auth errors return ``None`` here on purpose (see the module docstring): the two families
-    have different recovery surfaces, and a message carrying both subtexts would offer the
-    user two contradictory next steps.
+    describe the failure differently, and a message carrying both subtexts would tell the
+    user two different things about what went wrong. This is about the DESCRIPTION, not the
+    recovery action -- the sign-in and switch-provider links render under either family.
     """
     if not text or is_auth_error_text(text):
         return None
