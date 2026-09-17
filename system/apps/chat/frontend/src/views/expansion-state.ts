@@ -14,16 +14,31 @@
 
 const expandedBlockKeys = new Set<string>();
 
+/** Bumped on every actual change below. A memoized wrapper that renders
+ *  expandable content has to repaint when an expansion moves, and the move
+ *  happens out here in module state rather than in any vnode's attrs -- so the
+ *  counter is what such a wrapper compares (see StableAssistantMessage). The
+ *  older blocks toggle a DOM class directly instead, which is why they worked
+ *  without it; anything whose expanded BODY differs (rather than just its
+ *  visibility) cannot, because the body has to be built at render time. */
+let expansionVersion = 0;
+
 export function isBlockExpanded(key: string): boolean {
   return expandedBlockKeys.has(key);
 }
 
+export function getExpansionVersion(): number {
+  return expansionVersion;
+}
+
 export function setBlockExpanded(key: string, isExpanded: boolean): void {
+  if (isExpanded === expandedBlockKeys.has(key)) return;
   if (isExpanded) {
     expandedBlockKeys.add(key);
   } else {
     expandedBlockKeys.delete(key);
   }
+  expansionVersion += 1;
 }
 
 /** Flip and return the new state. */

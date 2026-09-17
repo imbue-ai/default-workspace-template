@@ -15,12 +15,7 @@ import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
-import {
-  renderAssistantMessage,
-  renderAssistantMessageChildren,
-  renderPermissionItem,
-  renderUserMessage,
-} from "./message-renderers";
+import { renderAssistantRun, renderPermissionItem, renderUserMessage } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
 import {
@@ -106,10 +101,9 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
 }
 
 function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
-  const children: m.Children[] = [];
-  for (const e of step.events) {
-    children.push(...renderAssistantMessageChildren(e, toolResults, chatId));
-  }
+  // One run over all the step's events, so a sequence of tool calls reads as a
+  // single row of chips rather than one row per event.
+  const children = renderAssistantRun(step.events, toolResults, chatId);
   // The revealed work sits flush under its title -- no indent and no left rule.
   // The timeline's own thread already runs down the left of every node, so a
   // second vertical line inside an opened step read as a nested timeline that
@@ -204,7 +198,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
-            item.events.map((e) => renderAssistantMessage(e, toolResults, chatId)),
+            // The whole ungrouped run at once, so its tool calls merge into one
+            // chip row the way a step's revealed work does.
+            renderAssistantRun(item.events, toolResults, chatId),
           );
         }
         if (item.kind === "permission") {

@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
+import type { ToolCall, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
   buildToolResultsWithSkillExpansions,
   renderAssistantMessageChildren,
+  renderAssistantRun,
   renderSubagentCard,
-  renderToolCallBlock,
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
@@ -365,43 +365,94 @@ describe("renderSubagentCard", () => {
   });
 });
 
-describe("renderToolCallBlock", () => {
-  // A real codex code-mode call: tool_name is always "exec"; the operation is buried
-  // in the JS input as tools.<fn>(...). The header should surface what it ran.
-  const execCall: ToolCall = {
-    tool_call_id: "c1",
-    tool_name: "exec",
-    input_chars: 72,
-    header_label: "Tool: Bash",
-  };
-
-  it("renders the parser's header label", () => {
-    const text = allText(renderToolCallBlock(execCall, null, "agent-x", "a-1"));
-    // A codex exec is headed by what it actually did, never the bare "Tool: exec".
-    expect(text).toContain("Tool: Bash");
-    expect(text).not.toContain("Tool: exec");
-  });
-
-  it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
-    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_chars: 6 };
-    expect(allText(renderToolCallBlock(bash, null, "agent-x", "a-1"))).toContain("Tool: Bash");
-  });
-
-  it("keeps a failed call glanceable via the resident error snippet", () => {
-    const call: ToolCall = { tool_call_id: "c3", tool_name: "Bash", input_chars: 6 };
-    const failed: ToolResultEvent = {
+describe("renderAssistantRun", () => {
+  function assistantEvent(id: string, text: string, calls: ToolCall[]): AssistantMessageEvent {
+    return {
       timestamp: "t",
-      type: "tool_result",
-      event_id: "r-c3",
+      type: "assistant_message",
+      event_id: id,
       source: "test",
-      tool_call_id: "c3",
-      tool_name: "Bash",
-      output_chars: 5000,
-      is_error: true,
-      error_snippet: "FileNotFoundError: no such file",
+      model: "m",
+      text,
+      tool_calls: calls,
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
     };
-    const text = allText(renderToolCallBlock(call, failed, "agent-x", "a-1"));
-    expect(text).toContain("FileNotFoundError: no such file");
+  }
+
+  function call(id: string, name = "Read"): ToolCall {
+    return { tool_call_id: id, tool_name: name, input_chars: 10 };
+  }
+
+  /** The chips of each ToolChipGroup in a rendered run, in order. */
+  function chipRows(children: unknown[]): string[][] {
+    return children
+      .filter((c): c is m.Vnode<{ chips: { call: ToolCall }[] }> => {
+        const v = c as { attrs?: { chips?: unknown } };
+        return Array.isArray(v?.attrs?.chips);
+      })
+      .map((group) => group.attrs.chips.map((chip) => chip.call.tool_call_id));
+  }
+
+  it("merges consecutive tool calls into one row, across event boundaries", () => {
+    // A harness emits one event per model response, so a run of tool calls is
+    // usually a run of EVENTS -- the case that matters most and the one that
+    // grouping within a single event would miss entirely.
+    const children = renderAssistantRun(
+      [
+        assistantEvent("a1", "", [call("t1")]),
+        assistantEvent("a2", "", [call("t2", "Bash")]),
+        assistantEvent("a3", "", [call("t3")]),
+      ],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1", "t2", "t3"]]);
+  });
+
+  it("breaks the row where the agent speaks", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "and now the other file", [call("t2")])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1"], ["t2"]]);
+  });
+
+  it("keeps each chip pointing at the event that issued it", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "", [call("t2")])],
+      new Map(),
+      "agent-x",
+    );
+    const group = children.find((c) =>
+      Array.isArray((c as { attrs?: { chips?: unknown } })?.attrs?.chips),
+    ) as m.Vnode<{
+      chips: { eventId: string }[];
+    }>;
+    // The input of a call is fetched from ITS event, so a merged row cannot
+    // collapse them onto one id.
+    expect(group.attrs.chips.map((chip) => chip.eventId)).toEqual(["a1", "a2"]);
+  });
+
+  it("breaks the row for a sub-agent card, which is a conversation rather than an action", () => {
+    const agentCall: ToolCall = {
+      tool_call_id: "t2",
+      tool_name: "Agent",
+      input_chars: 10,
+      description: "explore foo",
+      subagent_type: "Explore",
+    };
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1"), agentCall, call("t3")])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1"], ["t3"]]);
   });
 });
 
@@ -555,51 +606,3 @@ function findByClass(node: unknown, name: string): { attrs?: Record<string, unkn
   }
   return null;
 }
-
-describe("expanded tool row payload states", () => {
-  const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
-  const result: ToolResultEvent = {
-    timestamp: "t",
-    type: "tool_result",
-    event_id: "r-pc-1",
-    source: "test",
-    tool_call_id: "pc-1",
-    tool_name: "Bash",
-    output_chars: 5000,
-    is_error: false,
-  };
-
-  beforeEach(() => {
-    mockDetailState.mockReset();
-    mockRequestDetail.mockReset();
-    setBlockExpanded("tc:pc-1", true);
-  });
-
-  it("shows loading notes and requests the payloads while nothing is cached", () => {
-    mockDetailState.mockReturnValue(undefined);
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("Loading");
-    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "a-pc-1");
-    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "r-pc-1");
-  });
-
-  it("renders the full fetched input and output once loaded", () => {
-    mockDetailState.mockImplementation((_chatId: string, eventId: string) =>
-      eventId === "a-pc-1"
-        ? {
-            state: "loaded",
-            detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null },
-          }
-        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
-    );
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("the whole input");
-    expect(text).toContain("the whole output");
-  });
-
-  it("shows the quiet placeholder when the payload is gone", () => {
-    mockDetailState.mockReturnValue({ state: "unavailable" });
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("No longer available");
-  });
-});

@@ -16,7 +16,7 @@ import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import type { ToolResultEvent } from "../models/Response";
 import { harnessLabel } from "./harness-labels";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
-import { StableUserMessage, renderAssistantMessageChildren } from "./message-renderers";
+import { StableUserMessage, renderAssistantRun } from "./message-renderers";
 import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
 import {
@@ -151,7 +151,7 @@ export function renderHandoffNode(
                     { class: "message message-system-collapsed mb-1 flex flex-col items-end" },
                     m(StableUserMessage, { event: node.request }),
                   ),
-              ...node.events.flatMap((event) => renderAssistantMessageChildren(event, toolResults, chatId)),
+              ...renderAssistantRun(node.events, toolResults, chatId),
               node.prompt === null
                 ? null
                 : m(
