@@ -132,6 +132,47 @@ workspace's own content beside the merged set, and `has_local_footprint` says
 whether any local content at all -- `local_only` or merged -- is outside the
 docs class; both 4a and 4b read it.
 
+**When `has_local_footprint` is true, also resolve the user's creations by
+footprint** before 4a. Every app with an `app.toml` has a footprint the
+manifest library computes -- its directory, the supervisord drop-ins that run
+it, and the paths its manifest claims in `[[references]]` -- and reading it
+over two ranges answers by rule what 4a and 4b otherwise judge by hand:
+whether the creation carries the workspace's own content, and whether the
+update reached it.
+
+```bash
+mkdir -p data/.tasks/update-self/scopes
+for manifest in system/apps/*/app.toml; do
+    package=$(basename "$(dirname "$manifest")")
+    uv run app-manifest footprint "$manifest" --diff-base "$BASE" --diff-ref HEAD^1 \
+        --out "data/.tasks/update-self/scopes/$package.local.json" || exit 1
+    uv run app-manifest footprint "$manifest" --diff-base HEAD^1 \
+        --out "data/.tasks/update-self/scopes/$package.update.json" || exit 1
+done
+```
+
+`<package>.local.json`'s `diff.inside_footprint` is the creation's own
+content: every file of its footprint in which the workspace differs from the
+base (all of them for an app built here, the modified ones for a built-in app
+the user changed). Empty means the creation is upstream's exactly as shipped,
+and nothing below concerns it. `<package>.update.json`'s
+`diff.inside_footprint` is what the update changed inside that same
+footprint. A creation with both non-empty is one **the update touches**: 4a
+names it and its `references` as consumers, and 4b's customization survival
+covers it over exactly the files the `.update.json` lists. A creation with
+local content that the update did not reach by footprint is still a consumer
+for 4a to find by grep and interface coupling (its steps 2 and 3): the
+footprint is what the app owns, not what it depends on.
+
+A `footprint` command that fails names a manifest the merged tree can no
+longer satisfy -- most often a `[[references]]` path the update deleted or
+moved. That is merge work: fix the reference in your branch (the root suite's
+`system/test_app_manifests.py` holds every manifest to it) and rerun; never
+drop the creation from the loop. An app directory with no `app.toml` has no
+footprint the library can compute, so its directory is its footprint, read by
+hand as before; a workspace-added skill has no footprint the update can reach
+at all and stays a consumer for step 2 to find.
+
 ### 4a. Identify impacted services, skills, and creations
 
 **Whether this analysis runs is decided by rule.** It exists to find a
@@ -170,12 +211,17 @@ command).
    `system/supervisord.conf.d/` program (and what its `command` invokes), every
    app or service under `system/services/` and `system/apps/`, every
    workspace-added skill under `.agents/skills/`, and any cron or scheduled
-   runners.
+   runners. Start from the Step 4 scope files: they already name every
+   manifest app with local content and, through `references`, the skills,
+   scripts and docs each claims -- the part of this list that is declared
+   rather than discovered.
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared scripts
-   and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
-   app's `app.toml` claims in `[[references]]`. If the update adds reference-
-   or dependency-declaration machinery, write the declarations it expects.
+   and libs it calls; check skills' `SKILL.md` and scripts. For a manifest app
+   the search over its `[[references]]` is already done: its `.update.json`
+   lists the update's changes inside its footprint, references included, and
+   a hit there is an impacted consumer. If the update adds reference- or
+   dependency-declaration machinery, write the declarations it expects.
 3. **Reason about interface-level coupling no grep finds**: an API surface (the
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
@@ -252,7 +298,12 @@ in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
-  result* still carries it in substance. Suites passing is not the bar. For a
+  result* still carries it in substance. For a manifest app that set is read
+  off the Step 4 scope files -- every creation whose `.local.json` and
+  `.update.json` both list files inside its footprint, checked over the files
+  the `.update.json` names -- and a creation 4a found coupled through an
+  interface joins it whether or not its footprint shows a change. Suites
+  passing is not the bar. For a
   visual surface, screenshot the merged instance you booted and the running
   workspace's surface (read-only) for the before picture, and actually look at
   the pair; for an app or integration, exercise its hook points. Classify
@@ -331,7 +382,9 @@ Valid `name:` values:
     on what was reconciled) for the system interface and each user web
     service; the lead attaches the rollback offer to each nontrivial one.
   - **Customization survival** -- each touched creation classified per 4b,
-    with evidence paths for anything not plainly intact.
+    with evidence paths for anything not plainly intact, and the scope-file
+    evidence for the manifest apps: which carried local content and which
+    the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
     both (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`
     and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
