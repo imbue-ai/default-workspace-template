@@ -468,7 +468,11 @@ def _tool_extras(
             continue  # the base package, which we re-pin to the commit pyproject.toml gives it
         editable = requirement.get("editable") or requirement.get("directory")
         if editable:
-            extras.extend(["--with-editable", editable])
+            # A workspace that vendored mngr was installed with editable paths into that
+            # tree; the merge that moves it onto the pin deletes the tree, and the manifest
+            # supplies those plugins from the pin instead.
+            if Path(editable).is_dir():
+                extras.extend(["--with-editable", editable])
         elif requirement.get("git"):
             extras.extend(
                 ["--with", f"{name} @ git+{_format_git_url(requirement['git'])}"]

@@ -4681,6 +4681,59 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     ]
 
 
+def test_a_workspace_that_vendored_mngr_is_refreshed_from_the_pin(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A workspace built before mngr was pinned was installed editable from the
+    # tree at system/vendor/mngr, which the merge onto the pin deletes. Its
+    # receipt still names those paths; the refresh takes every plugin from the
+    # manifest at the pin and carries none of the deleted paths along.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    gone = apply_repo / "system" / "vendor" / "mngr"
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_layout.MNGR_TOOL_NAME,
+        f"""
+        [tool]
+        requirements = [
+            {{ name = "imbue-mngr", editable = "{gone / "libs/mngr"}" }},
+            {{ name = "imbue-mngr-claude", editable = "{gone / "libs/mngr_claude"}" }},
+            {{ name = "imbue-mngr-wait", editable = "{gone / "libs/mngr_wait"}" }},
+        ]
+        """,
+    )
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        """
+        [[plugins]]
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
+        tools = ["mngr"]
+
+        [[plugins]]
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
+        tools = ["mngr"]
+        """
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, _MNGR_BASE) == [
+        "uv",
+        "tool",
+        "install",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
+        "--reinstall",
+    ]
+
+
 def test_the_refresh_repins_the_base_to_the_in_tree_source(
     apply_repo: Path, tmp_path: Path
 ) -> None:
