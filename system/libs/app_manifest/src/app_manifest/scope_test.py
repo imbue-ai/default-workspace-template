@@ -29,6 +29,7 @@ from app_manifest.testing import run_git
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_conf
+from app_manifest.testing import write_supervisord_dropin
 
 
 # --- the news workspace every case below is built on ----------------------------
@@ -114,6 +115,34 @@ def test_wiring_includes_the_programs_the_manifest_declares(tmp_path: Path) -> N
     wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
 
     assert list(wiring[0].sections) == ["program:news", "program:xvfb"]
+
+
+def test_wiring_reads_the_drop_ins_and_reports_one_entry_per_file_that_holds_a_block(
+    tmp_path: Path,
+) -> None:
+    # The template declares every program in its own supervisord.conf.d/ file and none in
+    # the daemon's config, so an app's own block, its declared programs and its sidecars
+    # can each sit in a different file; each file with any of them is its own entry.
+    build_news_workspace(tmp_path)
+    write_supervisord_conf(tmp_path, ("program:files",))
+    write_supervisord_dropin(tmp_path, "news")
+    write_supervisord_dropin(tmp_path, "xvfb")
+    write_supervisord_dropin(tmp_path, "news-fetcher")
+    write_supervisord_dropin(tmp_path, "chat")
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[wiring]\nprograms = ["xvfb"]\n',
+        is_icon_written=True,
+    )
+
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+
+    assert [(entry.path, list(entry.sections)) for entry in wiring] == [
+        ("system/supervisord.conf.d/news-fetcher.conf", ["program:news-fetcher"]),
+        ("system/supervisord.conf.d/news.conf", ["program:news"]),
+        ("system/supervisord.conf.d/xvfb.conf", ["program:xvfb"]),
+    ]
 
 
 def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> None:
@@ -407,6 +436,10 @@ def test_a_change_to_the_owning_apps_manifest_is_inside_a_skill_scopes_footprint
     assert scope_with_diff.diff is not None
     assert "system/apps/news/app.toml" in scope_with_diff.diff.files
     # Only the owning app's manifest counts as inside the skill's footprint.
+    assert scope_with_diff.diff.inside_footprint == (
+        ".agents/skills/news-refresh/SKILL.md",
+        "system/apps/news/app.toml",
+    )
     assert scope_with_diff.diff.outside_footprint == (
         "docs/system/news.md",
         "system/apps/news/runner.py",
@@ -453,6 +486,11 @@ def test_the_diff_lists_every_changed_file_and_only_the_unaccounted_ones_as_outs
     ]
     # The app directory, the referenced skill, and the owned supervisord block are all accounted
     # for; the other app's file is the one nothing in the footprint explains.
+    assert list(scope_with_diff.diff.inside_footprint) == [
+        ".agents/skills/news-refresh/SKILL.md",
+        "system/apps/news/runner.py",
+        "system/supervisord.conf",
+    ]
     assert list(scope_with_diff.diff.outside_footprint) == ["system/apps/files/runner.py"]
 
 
@@ -471,6 +509,9 @@ def test_an_excluded_file_is_never_reported_outside_the_footprint(tmp_path: Path
     assert scope_with_diff.diff is not None
     assert "docs/generated/api.md" in scope_with_diff.diff.files
     assert "system/apps/news/frontend/dist/bundle.js" in scope_with_diff.diff.files
+    # Excluded on both sides: the bundle sits under the app directory but is not the
+    # creation's content either.
+    assert scope_with_diff.diff.inside_footprint == ()
     assert scope_with_diff.diff.outside_footprint == ()
 
 
@@ -525,3 +566,39 @@ def test_the_diff_against_a_diverged_base_reports_only_the_branchs_own_changes(
     assert scope_with_diff.diff is not None
     assert list(scope_with_diff.diff.files) == ["system/apps/news/runner.py"]
     assert scope_with_diff.diff.outside_footprint == ()
+
+
+def test_the_diff_can_run_to_a_ref_other_than_head_so_a_merge_answers_for_each_side(
+    tmp_path: Path,
+) -> None:
+    # The update-self worker stands on a merge commit and asks two questions of one tree:
+    # what the workspace itself changed since the fork (base to the merge's first parent),
+    # and what the update brought in (first parent to the merge). Both are the same
+    # footprint read over a different range.
+    repo_root = tmp_path / "workspace"
+    base_sha = _commit_news_workspace_base(repo_root)
+    run_git(repo_root, ("checkout", "-q", "-b", "upstream"))
+    write_repo_file(repo_root, "system/scripts/run_news.sh", "#!/bin/sh\nexit 1\n")
+    write_repo_file(repo_root, "docs/system/style_guide.md", "# style, revised upstream\n")
+    commit_everything(repo_root, "the release")
+    run_git(repo_root, ("checkout", "-q", "main"))
+    write_repo_file(repo_root, "system/apps/news/extra.py", "MINE = True\n")
+    local_sha = commit_everything(repo_root, "the workspace's own work")
+    run_git(repo_root, ("merge", "-q", "--no-ff", "-m", "update-self: merge upstream", "upstream"))
+
+    local_side = with_diff_against_base(_news_app_scope(repo_root), repo_root, base_sha, "HEAD^1")
+    update_side = with_diff_against_base(_news_app_scope(repo_root), repo_root, "HEAD^1")
+
+    assert local_side.diff is not None
+    assert local_side.diff.ref == local_sha
+    assert local_side.diff.files == ("system/apps/news/extra.py",)
+    assert local_side.diff.inside_footprint == ("system/apps/news/extra.py",)
+    assert update_side.diff is not None
+    assert update_side.diff.base == local_sha
+    assert sorted(update_side.diff.files) == [
+        "docs/system/style_guide.md",
+        "system/scripts/run_news.sh",
+    ]
+    # The referenced script the release changed is inside; the doc the app never claimed is not.
+    assert update_side.diff.inside_footprint == ("system/scripts/run_news.sh",)
+    assert update_side.diff.outside_footprint == ("docs/system/style_guide.md",)

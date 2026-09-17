@@ -75,7 +75,8 @@ system interface -- has nothing to resolve: its footprint is its own directory
 plus its supervisord section, and the run carries no scope file.
 
 The file records `primary` (the creation's own directories), `wiring` (the
-`system/supervisord.conf` sections that run it), `references` (what its
+supervisord program blocks that run it, in the files that declare them),
+`references` (what its
 manifest claims outside its directory -- a skill that drives it, a script, a
 doc), `context` (paths to read but never change), `conventions`, `exclude` (a
 hard denylist of globs), and `diff` (the branch's changed files, split into

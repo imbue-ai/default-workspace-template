@@ -48,6 +48,14 @@ def write_supervisord_conf(repo_root: Path, section_names: Sequence[str]) -> Pat
     return conf_path
 
 
+def write_supervisord_dropin(repo_root: Path, program: str) -> Path:
+    """Create ``system/supervisord.conf.d/<program>.conf`` holding that one program's block."""
+    dropin_path = repo_root / "system" / "supervisord.conf.d" / f"{program}.conf"
+    dropin_path.parent.mkdir(parents=True, exist_ok=True)
+    dropin_path.write_text(f"[program:{program}]\ncommand=/bin/true\n", encoding="utf-8")
+    return dropin_path
+
+
 def write_repo_file(repo_root: Path, relative_path: str, content: str) -> Path:
     """Create a file at a repo-relative path, making the directories above it."""
     file_path = repo_root / relative_path

@@ -9,8 +9,9 @@ run and test a web frontend in isolation, see
 
 ## Where the source lives
 
-An app's footprint is its own directory, the `system/supervisord.conf` sections
-that run it, and the `[[references]]` its `app.toml` declares -- skills,
+An app's footprint is its own directory, the supervisord program blocks that
+run it (each in its own `system/supervisord.conf.d/` drop-in), and the
+`[[references]]` its `app.toml` declares -- skills,
 scripts, docs, and other apps. It may be the only consumer of its references, or they may be shared. The scope file (`harden-creation.md`) is that footprint resolved to literal paths.
 
 - The scaffolded lib: `system/apps/<package>/src/<package>/runner.py` (the Flask app

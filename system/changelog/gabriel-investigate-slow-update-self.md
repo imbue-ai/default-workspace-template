@@ -1,0 +1,1 @@
+The app manifest docs (`system/apps/README.md`, the workspace app model's `contracts.md`) now say an app's `[wiring] programs` and the blocks its footprint carries are declared under `system/supervisord.conf.d/`, where the template keeps every program, rather than in `system/supervisord.conf`, which the footprint library now reads the drop-ins of.
