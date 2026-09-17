@@ -161,8 +161,7 @@ describe("the switch dialog", () => {
   });
 
   it("does nothing for the account the chat already runs on, fresh or not", async () => {
-    // A sign-in again from the chooser hands back the chat's own account: switching to it would be
-    // refused by the route on a fresh chat and would arm a switch that never applies on any other.
+    // A sign-in again from the chooser hands back the chat's own account.
     state.events = [WELCOME];
     beginSwitchTo("agent-1", OWN as ProviderAccount);
     state.events = [WELCOME, TYPED];

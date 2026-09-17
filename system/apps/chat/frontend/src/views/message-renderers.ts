@@ -438,10 +438,9 @@ function renderReauthAction(chatId: string): m.Children {
     ),
     // Two ways out, because the right one depends on whether the credential is fixable, which
     // the user knows and we do not: an expired login is, a spent quota mostly is not. The second
-    // moves this chat to the account picked, as the provider menu does: a rebind for another
-    // account on the same harness and lane, a handoff otherwise. It waits for the chat list, which
-    // can land after the transcript: the move needs the chat, and the chooser fixes which account
-    // it refuses when it opens.
+    // moves this chat to the account picked: a rebind for another account on the same harness and
+    // lane, a handoff otherwise. It waits for the chat list, which can land after the transcript:
+    // the move needs the chat, and the chooser fixes which account it refuses when it opens.
     chat === undefined
       ? null
       : [

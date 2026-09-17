@@ -253,8 +253,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  // --- chooser ---------------------------------------------------------------------------
-
   /** IntroChooserModal's ChooserRow. */
   function laneRow(candidate: Lane): m.Vnode {
     return m(
@@ -328,9 +326,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
    *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
    *  the row itself also picks it; the account the caller is leaving is listed but not
-   *  pickable, with the caller's note beside it. Re-auth stays reachable because an expired credential is otherwise a
-   *  dead end: without it the only way back is to delete the account, which orphans every chat
-   *  bound to it rather than reviving them. */
+   *  pickable, with the caller's note beside it. Re-auth stays reachable because an expired
+   *  credential is otherwise a dead end: without it the only way back is to delete the account,
+   *  which orphans every chat bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
@@ -415,8 +413,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : null,
     ]);
   }
-
-  // --- sign-in bodies --------------------------------------------------------------------
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
   function openLinkStep(url: string, label: string, title = "Open the sign-in page"): m.Vnode {
