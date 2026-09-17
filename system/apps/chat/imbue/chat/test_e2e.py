@@ -769,6 +769,24 @@ def _settled_chat_snapshot(server: RunningWorkspace) -> ChatSnapshot:
     return snapshot
 
 
+def _rebound_chat_snapshot(server: RunningWorkspace, account_id: str) -> ChatSnapshot:
+    """The chat's snapshot once its rebind has landed: the same agent, now running on ``account_id``.
+
+    A rebind leaves the record like any other switch, so the account has to be waited on too: the
+    record clears the moment the agent is back, whichever account it came back on.
+    """
+    manager = server.chat_state.agent_manager
+
+    def _rebound() -> bool:
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        return snapshot is not None and snapshot.handoff is None and snapshot.active_agent.account_id == account_id
+
+    wait_for(_rebound, timeout=30.0, poll_interval=0.1, error_message="the rebind never reached the chosen account")
+    snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+    assert snapshot is not None
+    return snapshot
+
+
 def _switched_workspace(
     tmp_path: Path,
     messenger: MngrMessenger | None = None,
@@ -924,24 +942,13 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         switch_button.click()
 
         # The rebind runs against the fake mngr and lands the same agent on the second account.
-        manager = server.chat_state.agent_manager
         second_account = server.account_ids[1]
-
-        def is_rebound() -> bool:
-            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-            return (
-                snapshot is not None
-                and snapshot.handoff is None
-                and snapshot.active_agent.account_id == second_account
-            )
-
-        wait_for(is_rebound, timeout=30.0)
-        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+        snapshot = _rebound_chat_snapshot(server, second_account)
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
         # The session file followed the agent into the new account's folder, and the confirming
         # message went through the ordinary send path once the agent was back.
         assert list((account_dir(second_account) / "projects").rglob(f"{FIXTURE_SESSION_ID}.jsonl"))
-        messenger = manager._messenger
+        messenger = server.chat_state.agent_manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
         # The page keeps the transcript, no handoff node remains (the agent did not change), the held
@@ -1041,19 +1048,8 @@ def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_p
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
         chat.locator(".message-input-send-button--switch").click()
 
-        manager = server.chat_state.agent_manager
-
-        def is_rebound() -> bool:
-            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-            return (
-                snapshot is not None
-                and snapshot.handoff is None
-                and snapshot.active_agent.account_id == server.account_ids[1]
-            )
-
-        wait_for(is_rebound, timeout=30.0)
-        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+        snapshot = _rebound_chat_snapshot(server, server.account_ids[1])
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
 
 
 @pytest.mark.timeout(90, func_only=False)
