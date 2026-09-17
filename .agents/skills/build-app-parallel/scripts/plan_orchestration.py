@@ -96,6 +96,28 @@ def node_report_path(run_dir: Path, node_idx: int) -> Path:
     return node_folder(run_dir, node_idx) / "reports" / "report.md"
 
 
+def read_node_report(run_dir: Path, node_idx: int) -> str | None:
+    """A finished node's report, wherever it currently sits, or ``None``.
+
+    The launcher's ``await`` archives a report into ``reports/consumed/`` under a
+    timestamped name the moment it prints it, so by the time a dependent node's
+    task is written the live path is usually empty. Reading the archive too is
+    what keeps a handoff from going missing between the poll and the next launch;
+    the newest archived report wins, since a worker that revises its work after a
+    review delivers a fresh one.
+    """
+    live_path = node_report_path(run_dir, node_idx)
+    if live_path.is_file():
+        return live_path.read_text(encoding="utf-8")
+    archived = sorted(
+        (live_path.parent / "consumed").glob("*.md"),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    )
+    if not archived:
+        return None
+    return archived[-1].read_text(encoding="utf-8")
+
+
 class PlanError(ValueError):
     """Raised when a planner's output is not a usable plan."""
 
@@ -255,7 +277,9 @@ def render_node_task(
     missing_reports = [idx for idx in node["access"] if idx not in report_by_node_idx]
     if missing_reports:
         raise PlanError(
-            f"node {node_idx} needs the reports of nodes {missing_reports}, which are missing"
+            f"node {node_idx} needs the reports of nodes {missing_reports}, which are "
+            f"missing from both reports/report.md and reports/consumed/ -- those nodes "
+            f"have not delivered, so this node is not ready to start"
         )
 
     handoff_sections = [
@@ -329,9 +353,9 @@ def _run_write_task(run_dir: Path, node_idx: int) -> int:
     if not 0 <= node_idx < len(nodes):
         raise PlanError(f"no such node in the plan: {node_idx}")
     report_by_node_idx = {
-        idx: node_report_path(run_dir, idx).read_text(encoding="utf-8")
+        idx: report
         for idx in nodes[node_idx]["access"]
-        if node_report_path(run_dir, idx).is_file()
+        if (report := read_node_report(run_dir, idx)) is not None
     }
     task_path = node_task_path(run_dir, node_idx)
     task_text = render_node_task(
