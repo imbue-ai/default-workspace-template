@@ -1172,7 +1172,7 @@ def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_
 
     The tab stays in the dock, the project's tab set, and the saved layout (also across a reload),
     shows the instance as unavailable without loading its page, and loads the page again once
-    the app lists the instance again.
+    the app lists the instance again. While unavailable, its Close tab button closes it.
     """
     with _running_e2e_server(tmp_path, _PORT + 30) as server:
         page.goto(server.base_url)
@@ -1187,7 +1187,7 @@ def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_
         server.stub_source.records.clear()
         _tell_the_shell_the_stub_list_changed(server)
 
-        placeholder = page.get_by_text("This isn't available right now.")
+        placeholder = page.locator(".si-unavailable-instance")
         expect(placeholder).to_be_visible(timeout=15000)
         expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(0)
         expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
@@ -1217,6 +1217,12 @@ def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_
         expect(frame_input).to_be_visible(timeout=15000)
         expect(placeholder).to_have_count(0)
         assert stub_page_requests != []
+
+        server.stub_source.records.clear()
+        _tell_the_shell_the_stub_list_changed(server)
+        expect(placeholder).to_be_visible(timeout=15000)
+        placeholder.locator(".si-unavailable-instance-close").click()
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0, timeout=10000)
 
 
 @pytest.mark.timeout(120, func_only=False)

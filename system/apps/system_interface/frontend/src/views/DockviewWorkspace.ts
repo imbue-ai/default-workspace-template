@@ -82,7 +82,7 @@ import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "
 import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import type { IconName } from "@imbue/workspace-ui/src/components/icons";
@@ -2029,7 +2029,10 @@ function renderLiveContent(surface: LiveSurface): m.Children {
     if (app !== undefined && stopped !== null) {
       return m(StoppedAppPlaceholder, { ...stopped, appName: app.name });
     }
-    const note = isAddressUnlisted(address) ? UNAVAILABLE_PANEL_TEXT : "Waiting for this tab's app to list it.";
+    if (isAddressUnlisted(address)) {
+      return m(UnavailableInstancePlaceholder, { address });
+    }
+    const note = "Waiting for this tab's app to list it.";
     return m(
       "div",
       { class: "dockview-panel-unrecoverable flex h-full items-center justify-center p-4 text-center" },
@@ -2057,8 +2060,38 @@ function renderLiveContent(surface: LiveSurface): m.Children {
 
 const UNRECOVERABLE_PANEL_TEXT =
   "This tab's contents could not be restored. Close it and open it again from the sidebar.";
-const UNAVAILABLE_PANEL_TEXT = "This isn't available right now. The tab reconnects when it's back.";
 const UNAVAILABLE_STATUS = "unavailable";
+
+/**
+ * What a tab shows while its app does not list its instance. Nothing says whether that is a
+ * blip or a removal, so the pane says both: it stays put and reconnects if the instance comes
+ * back, and offers the close for when it will not.
+ */
+const UnavailableInstancePlaceholder: m.Component<{ address: string }> = {
+  view(vnode) {
+    const { address } = vnode.attrs;
+    const closeTab = (): void => {
+      const panelId = liveSurfaceBoundPanelId(address);
+      if (panelId !== null) panelById(panelId)?.api.close();
+    };
+    return m(
+      "div",
+      {
+        class:
+          "si-unavailable-instance flex h-full w-full flex-col items-center justify-center gap-3 bg-surface p-4 text-center",
+      },
+      [
+        m("div", { class: "text-[15px] font-medium text-primary" }, "This can't be found right now"),
+        m(
+          "div",
+          { class: "text-(length:--font-size-row) text-faint" },
+          "It may come back on its own, in which case this tab reconnects, or it may have been removed. If that seems wrong, ask an agent to look into it.",
+        ),
+        m(Button, { extra: "si-unavailable-instance-close mt-1", onclick: closeTab }, "Close tab"),
+      ],
+    );
+  },
+};
 
 /**
  * A dockview panel is only a place: an empty div dockview creates,
