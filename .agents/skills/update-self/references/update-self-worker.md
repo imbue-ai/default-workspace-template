@@ -146,12 +146,15 @@ tested upstream. Enumerating consumers, grepping for retired names, and
 reasoning about coupling all exist to find user code, and with none to find
 they only spend the user's time. The footprint is read from git, so the one
 user consumer it cannot see is a scheduled task: cron drop-ins live under the
-gitignored `data/.state/cron.d`. On this branch, list that directory and grep
-its lines for any path the update deleted or renamed (`git diff --name-status
---diff-filter=DR "$BASE" "$TARGET_REF"`); a hit is a user-created consumer,
-and 4a runs in full. If you believe the analysis should run anyway
-in a situation this rule does not cover, that is a `question` gate (Step 6),
-never a silent widening. When `has_local_footprint` is true, run all of it.
+gitignored `data/.state/cron.d`, and your worktree holds none of them (the
+launcher syncs only this run's `data/.tasks/update-self/` into it), so read
+the lead's copy. On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` and
+grep its lines for any path the update deleted or renamed (`git diff
+--name-status --diff-filter=DR "$BASE" "$TARGET_REF"`); a hit is a
+user-created consumer, and 4a runs in full. If you believe the analysis
+should run anyway in a situation this rule does not cover, that is a
+`question` gate (Step 6), never a silent widening. When `has_local_footprint`
+is true, run all of it.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
