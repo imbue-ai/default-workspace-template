@@ -5490,8 +5490,46 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     ]
     assert len(recovery_installs) == 3
     err = capsys.readouterr().err
-    assert "could not locate the uv tool environment behind 'mngr'" in err
-    assert "could not locate the uv tool environment behind 'system-interface'" in err
+    assert "nothing to copy aside for 'tool-imbue-mngr'" in err
+    assert "nothing to copy aside for 'tool-system-interface'" in err
+
+
+def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
+    apply_repo: Path,
+) -> None:
+    # With nothing resolvable on PATH the refresh installs into the build's
+    # pinned tool home, and `uv tool install --reinstall` rebuilds what stands
+    # there from scratch. So the snapshot has to name that same directory: asked
+    # from PATH alone it copied nothing aside, and the rollback was left
+    # re-resolving the mngr tool over the network -- on a box that often has
+    # none, in the one case where it has just lost its mngr.
+    (apply_repo / ".venv").mkdir()
+    pinned_env = tool_env.tools_dir(tool_env.tool_home()) / update_layout.MNGR_TOOL_NAME
+    pinned_env.mkdir(parents=True)
+    (pinned_env / "marker.txt").write_text("pre-apply")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+    mngr_install = ["uv", "tool", "install", "-e", update_layout.MNGR_DIR]
+
+    def rebuild_from_scratch(argv: list[str]) -> None:
+        if argv[: len(mngr_install)] == mngr_install:
+            shutil.rmtree(pinned_env)
+            pinned_env.mkdir(parents=True)
+
+    runner.on_command = rebuild_from_scratch
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert (pinned_env / "marker.txt").read_text() == "pre-apply"
+    # Put back by copy, so recovery needed no reinstall of its own: the untagged
+    # calls (recovery's) hold no mngr install.
+    assert [c for c in runner.raw_calls if c[: len(mngr_install)] == mngr_install] == []
 
 
 def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(

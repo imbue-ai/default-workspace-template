@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 import tool_env
 from update_apply_contract import SnapshotRecord, snapshots_root
@@ -94,22 +94,6 @@ def run_provisioner(runner: Runner, repo_root: Path) -> str | None:
     return f"bash {PROVISIONER_SCRIPT} failed (exit {returncode}): {stderr}"
 
 
-def _tool_environment_dir(
-    executable: str, tool_name: str, runner: Runner
-) -> Path | None:
-    """The installed tool environment behind ``executable``, or ``None``.
-
-    Resolved from the console script's shebang (see :func:`_tool_location`), so
-    the snapshot copies the installation actually being run rather than
-    whatever uv would default to under this process's ``$HOME``.
-    """
-    found = runner.which(executable)
-    location = _tool_location(Path(found), tool_name) if found is not None else None
-    if location is None:
-        return None
-    return location[0] / tool_name
-
-
 def snapshot_targets(
     plan: ApplyPlan, repo_root: Path, runner: Runner
 ) -> list[tuple[str, Path]]:
@@ -123,6 +107,12 @@ def snapshot_targets(
     reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
     non-critical app's tool is not copied aside: a rollback reinstalls it from
     the restored tree instead.
+
+    A tool environment is named by :func:`_refresh_destination`, the same
+    question the reinstall asks, so what is copied aside is what the reinstall
+    overwrites. Asking it separately (from ``PATH`` alone) meant the last-resort
+    install into the build's pinned home rebuilt an environment nothing had
+    copied, leaving the rollback with only the network to recover it.
     """
     targets: list[tuple[str, Path]] = []
     if plan.frontend:
@@ -138,15 +128,10 @@ def snapshot_targets(
         (app.tool_name, app.executable) for app in plan.app_tools if app.is_critical
     )
     for tool_name, executable in tools:
-        tool_dir = _tool_environment_dir(executable, tool_name, runner)
-        if tool_dir is None:
-            sys.stderr.write(
-                f"note: could not locate the uv tool environment behind "
-                f"'{executable}' (not a uv tool on PATH), so it will not be "
-                "copied aside; a failed apply will have to rebuild it to recover.\n"
-            )
-            continue
-        targets.append((tool_snapshot_name(tool_name), tool_dir))
+        destination = _refresh_destination(executable, tool_name, runner)
+        targets.append(
+            (tool_snapshot_name(tool_name), destination.tool_dir / tool_name)
+        )
     return targets
 
 
@@ -311,10 +296,25 @@ def _pinned_tool_location() -> tuple[Path, Path]:
     return tool_env.tools_dir(home), tool_env.bin_dir(home)
 
 
-def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
-    """The environment for a ``uv tool`` call, aimed at ``executable``'s own
-    installation when we can confirm which that is, else at the mngr tool's,
-    else at the one the build pins.
+class _ToolDestination(NamedTuple):
+    """Where a refresh of one tool installs, and what it says about landing there.
+
+    ``note`` is the line :func:`_uv_tool_env` writes when the destination is not
+    the tool's own installation, and ``None`` when it is -- the ordinary case,
+    which has nothing to explain.
+    """
+
+    tool_dir: Path
+    bin_dir: Path
+    note: str | None
+
+
+def _refresh_destination(
+    executable: str, tool_name: str, runner: Runner
+) -> _ToolDestination:
+    """Where a refresh of ``tool_name`` installs: ``executable``'s own
+    installation when we can confirm which that is, else the mngr tool's, else
+    the one the build pins.
 
     A tool the merge adds (an app this workspace has never run) is on no PATH
     yet, and uv's own default tool directory follows ``$HOME`` -- which at
@@ -331,27 +331,43 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     apply read as success -- a workspace whose ``mngr`` had been deleted, or an
     old lease that never had a uv-tool ``mngr`` to resolve, updated itself into
     having no ``mngr`` on any PATH at all.
+
+    The snapshot asks this too (:func:`snapshot_targets`), which is why the
+    answer is a value and the reporting is the caller's: the copy taken aside
+    has to be of the environment the reinstall is about to rebuild.
     """
+    own = _installed_tool_location(executable, tool_name, runner)
+    if own is not None:
+        return _ToolDestination(own[0], own[1], None)
+    beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
+    if beside_mngr is not None:
+        return _ToolDestination(
+            beside_mngr[0],
+            beside_mngr[1],
+            f"refresh: '{executable}' is not an installed uv tool on PATH; "
+            f"installing '{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n",
+        )
+    pinned = _pinned_tool_location()
+    return _ToolDestination(
+        pinned[0],
+        pinned[1],
+        f"refresh: could not identify the uv tool behind '{executable}' "
+        f"(not an installed uv tool on PATH) nor the one behind "
+        f"'{MNGR_EXECUTABLE}'; installing '{tool_name}' into the build's "
+        f"pinned tool home ({pinned[1]}).\n",
+    )
+
+
+def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
+    """The environment for a ``uv tool`` call, aimed at the destination
+    :func:`_refresh_destination` resolves, and saying so when that is not the
+    tool's own installation."""
     env = dict(os.environ)
-    location = _installed_tool_location(executable, tool_name, runner)
-    if location is None:
-        beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
-        if beside_mngr is None:
-            location = _pinned_tool_location()
-            sys.stderr.write(
-                f"refresh: could not identify the uv tool behind '{executable}' "
-                f"(not an installed uv tool on PATH) nor the one behind "
-                f"'{MNGR_EXECUTABLE}'; installing '{tool_name}' into the build's "
-                f"pinned tool home ({location[1]}).\n"
-            )
-        else:
-            sys.stderr.write(
-                f"refresh: '{executable}' is not an installed uv tool on PATH; "
-                f"installing '{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n"
-            )
-            location = beside_mngr
-    env["UV_TOOL_DIR"] = str(location[0])
-    env["UV_TOOL_BIN_DIR"] = str(location[1])
+    destination = _refresh_destination(executable, tool_name, runner)
+    if destination.note is not None:
+        sys.stderr.write(destination.note)
+    env["UV_TOOL_DIR"] = str(destination.tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
     return env
 
 
