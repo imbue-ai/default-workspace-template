@@ -463,7 +463,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             if pipe.is_paused:
                 # Nothing to encode; block for a conductor wakeup and send NO heartbeat
                 # (0 bandwidth -- the WS ping keeps the socket alive).
-                pipe.next_packet(timeout=_HEARTBEAT_SECONDS)
+                pipe.wait_while_paused(timeout=_HEARTBEAT_SECONDS)
                 continue
             # Local-hop TCP health, ~2Hz (see browser.telemetry).
             if time.monotonic() - last_tcpinfo >= 0.5:
@@ -526,6 +526,10 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             router.close()
         if receiver is not None:
             receiver.join(timeout=5)
+            if receiver.is_alive():
+                logger.warning("stream receiver for {} did not exit within 5s; abandoning it", browser_id)
         if guardian is not None:
             guardian.join(timeout=5)  # stop_event already set above; it exits its next tick
+            if guardian.is_alive():
+                logger.warning("window guardian for {} did not exit within 5s; abandoning it", browser_id)
         stream_slots.release(browser_id)

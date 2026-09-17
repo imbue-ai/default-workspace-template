@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# SessionStart hook: symlink the vendored tk script into ~/.local/bin so the
-# agent can call `tk` (or `ticket`) without typing the full path. Idempotent.
-# Future Docker builds bake this in via the Dockerfile; this hook covers
-# already-built images and local dev sessions.
+# SessionStart hook: make `tk` (and `ticket`) callable without the full path.
+# The workspace build links the vendored script into /usr/local/bin; this
+# hook covers images built before that and local dev sessions, by linking it
+# into ~/.local/bin when nothing on PATH already answers. A worker runs in a
+# worktree under the same HOME, so a link written from there would point
+# every shell in the workspace at a checkout that goes away with the worker.
 set -euo pipefail
 
 repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
@@ -10,12 +12,11 @@ tk_script="${repo_root}/system/vendor/tk/ticket"
 
 [[ -x "$tk_script" ]] || exit 0
 
-mkdir -p "${HOME}/.local/bin"
-
 for name in tk ticket; do
-    target="${HOME}/.local/bin/${name}"
-    if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$tk_script" ]]; then
+    found="$(command -v "$name" || true)"
+    if [[ -n "$found" && -x "$found" ]]; then
         continue
     fi
-    ln -sf "$tk_script" "$target"
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "$tk_script" "${HOME}/.local/bin/${name}"
 done

@@ -5,10 +5,10 @@ and the machinery that keeps it running.
 
 ## Creations
 
-Broadly, in Minds you make "creations". These can be "code" (apps, skills, and
+Broadly, in Mind you make "creations". These can be "code" (apps, skills, and
 the services behind them) or "data" (documents, images, notes).
 
-Minds makes this easier by defining some conventions for the common things
+Mind makes this easier by defining some conventions for the common things
 you'll want to make:
 
 1. an "app" - something you can open as a tab and interact with
@@ -18,13 +18,13 @@ you'll want to make:
    Caretaker is the built-in example)
 3. some "data" - documents, images, notes, or data created by your apps and
    skills
-4. some "customizations" - changes to any of the above. Everything in Minds
+4. some "customizations" - changes to any of the above. Everything in Mind
    can be modified by you!
 
 ## What's here
 
-- `apps/` - Everything you can open as a tab: the built-in apps (the
-  terminal, the browser) and the apps your mind builds for you. (A shortcut
+- `apps/` - Everything you can open as a tab: the built-in apps (chat, the
+  terminal, the file viewer, the browser) and the apps your mind builds for you. (A shortcut
   to `system/apps/`.)
 - `skills/` - Everything your mind knows how to do: the built-in skills and
   the ones it has learned for you. (A shortcut to `.agents/skills/`.)

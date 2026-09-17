@@ -14,7 +14,7 @@ covered by the restic host-backup service instead. Only git commits (the main
 repo and worker worktrees) reach the sync repo, via the post-commit hook.
 
 The service only exists when the github-sync skill has enabled sync (it adds
-the [program:github-sync] block to system/supervisord.conf).
+the [program:github-sync] block as system/supervisord.conf.d/github-sync.conf).
 """
 
 import json

@@ -220,6 +220,53 @@ def test_forget_keeps_restore_marker_that_hourly_thinning_would_drop(
     )
 
 
+def test_forget_thins_snapshots_that_each_came_from_their_own_snapshot_path(
+    tmp_path: Path,
+) -> None:
+    """Retention must thin a repository whose snapshots all have distinct paths.
+
+    This is the shape every outer_trigger workspace produces: each tick reads
+    from `<mount>/snapshots/<timestamp>/home`, so no two snapshots share a path.
+    Under restic's default `host,paths` grouping each one lands in a group of
+    its own and "keep one hourly" keeps all of them.
+    """
+    repo_dir = tmp_path / "repo"
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+
+    # Four ticks, four uniquely-named snapshot dirs, all within the same hour.
+    per_tick_ids: list[str] = []
+    for tick in range(4):
+        source_dir = tmp_path / "snapshots" / f"2026-09-0{tick + 1}" / "home"
+        source_dir.mkdir(parents=True)
+        (source_dir / "f.txt").write_text(f"tick-{tick}")
+        result = restic_backup(
+            source_path=source_dir,
+            excludes=(),
+            tag=f"2026-hourly-{tick}",
+            env_overrides=env,
+        )
+        assert result.returncode == 0, result.stderr
+        per_tick_ids.append(extract_snapshot_id_from_backup_output(result.stdout))
+
+    assert (
+        restic_forget(
+            keep_hourly=1,
+            keep_daily=1,
+            keep_weekly=1,
+            keep_monthly=1,
+            env_overrides=env,
+        ).returncode
+        == 0
+    )
+
+    surviving = _snapshot_ids(env)
+    assert surviving == {per_tick_ids[-1]}, (
+        "keep-hourly=1 must keep exactly the newest tick's snapshot across all "
+        f"snapshot paths, but {len(surviving)} of 4 survived"
+    )
+
+
 def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
     """End-to-end: `_age_out_restore_markers` forgets a backdated marker and keeps a recent one."""
     repo_dir = tmp_path / "repo"

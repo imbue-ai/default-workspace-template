@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="240" height="160" role="img" aria-label="A carrier pigeon carrying a scroll along a dashed route arc between two cities on a parchment air-mail map">
+  <!-- Bespoke thumbnail for the Pigeon Post inspiration. Fully self-contained:
+       no scripts, no external references, mock data only. -->
+  <defs>
+    <radialGradient id="parchment" cx="42%" cy="34%" r="82%">
+      <stop offset="0%" stop-color="#f7eed6"/>
+      <stop offset="100%" stop-color="#ecdcb6"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Parchment field -->
+  <rect x="0" y="0" width="240" height="160" fill="url(#parchment)"/>
+
+  <!-- Air-mail trim: interleaved navy + red dashes around the border -->
+  <rect x="6" y="6" width="228" height="148" rx="9" fill="none" stroke="#1f3a5f" stroke-width="2.4" stroke-dasharray="9 7"/>
+  <rect x="6" y="6" width="228" height="148" rx="9" fill="none" stroke="#b23a2e" stroke-width="2.4" stroke-dasharray="9 7" stroke-dashoffset="8"/>
+
+  <!-- Map panel -->
+  <rect x="15" y="15" width="210" height="130" rx="5" fill="#f3e6c6" stroke="#c9a86b" stroke-width="1"/>
+
+  <!-- Faint graticule, sketched like an old chart -->
+  <g stroke="#d8bd87" stroke-width="0.8" opacity="0.7">
+    <line x1="15" y1="55" x2="225" y2="55"/>
+    <line x1="15" y1="95" x2="225" y2="95"/>
+    <line x1="80" y1="15" x2="80" y2="145"/>
+    <line x1="150" y1="15" x2="150" y2="145"/>
+  </g>
+  <!-- Suggestion of a coastline -->
+  <path d="M20 120 Q55 108 70 120 T120 116 Q150 112 175 122 L215 118"
+        fill="none" stroke="#cdb17a" stroke-width="1.2" opacity="0.55"/>
+
+  <!-- Great-circle route: dashed sepia arc between the two cities -->
+  <path d="M52 116 Q120 24 192 58" fill="none" stroke="#8a5a2b" stroke-width="1.8" stroke-dasharray="5 5" stroke-linecap="round"/>
+
+  <!-- Origin city -->
+  <circle cx="52" cy="116" r="5.5" fill="none" stroke="#1f3a5f" stroke-width="1.6"/>
+  <circle cx="52" cy="116" r="2" fill="#b23a2e"/>
+  <!-- Destination city -->
+  <circle cx="192" cy="58" r="5.5" fill="none" stroke="#1f3a5f" stroke-width="1.6"/>
+  <circle cx="192" cy="58" r="2" fill="#b23a2e"/>
+
+  <!-- The pigeon in flight, mid-arc, carrying its scroll -->
+  <g transform="rotate(-19 120 60)">
+    <!-- motion whispers -->
+    <g stroke="#9a7b4a" stroke-width="1.2" stroke-linecap="round" opacity="0.5">
+      <line x1="86" y1="60" x2="97" y2="60"/>
+      <line x1="88" y1="66" x2="98" y2="66"/>
+    </g>
+
+    <!-- tail -->
+    <polygon points="100,60 82,55 85,64 100,66" fill="#3f5670"/>
+    <!-- body -->
+    <ellipse cx="119" cy="62" rx="17" ry="9.5" fill="#5b7a99"/>
+    <!-- belly highlight -->
+    <ellipse cx="117" cy="66" rx="12" ry="5" fill="#8aa6c0"/>
+    <!-- head -->
+    <circle cx="134" cy="55" r="7.2" fill="#6b8bab"/>
+    <!-- beak (air-mail orange accent) -->
+    <polygon points="140,53 151,55 140,58" fill="#d98a3a"/>
+    <!-- eye -->
+    <circle cx="135" cy="53" r="1.4" fill="#22303f"/>
+    <!-- raised wing -->
+    <path d="M112 60 Q120 40 136 47 Q123 57 118 64 Z" fill="#455f7b"/>
+    <path d="M113 61 Q120 47 131 51" fill="none" stroke="#33485f" stroke-width="0.9" opacity="0.6"/>
+
+    <!-- the scroll it carries -->
+    <g transform="rotate(19 118 78)">
+      <rect x="107" y="74" width="22" height="8" rx="1.5" fill="#f7efd8" stroke="#8a5a2b" stroke-width="1"/>
+      <ellipse cx="107" cy="78" rx="2.2" ry="4.2" fill="#efe0bd" stroke="#8a5a2b" stroke-width="1"/>
+      <ellipse cx="129" cy="78" rx="2.2" ry="4.2" fill="#efe0bd" stroke="#8a5a2b" stroke-width="1"/>
+      <rect x="116" y="73.5" width="4" height="9" fill="#b23a2e"/>
+    </g>
+  </g>
+</svg>

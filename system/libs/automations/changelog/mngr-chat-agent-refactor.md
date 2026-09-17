@@ -1,0 +1,1 @@
+`run_automation.sh` sends `/clear` and `/<skill>` to an existing automation agent through `system/scripts/message_chat.py` (the chat app, by the agent's id) instead of `mngr message --start`; the chat app revives a stopped agent on send, and the script falls back to `mngr message` when the chat app cannot take the message.

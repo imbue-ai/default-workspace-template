@@ -1,0 +1,5 @@
+The file viewer is a Python package now (phase 4 of the workspace app model, `docs/system/blueprint/workspace-app-model/`), installed as its own uv tool like every Python app; nothing changes from the user's seat: the file viewer opens, browses, and reopens exactly as before.
+
+- `files-app` (`src/files_app/main.py`) replaces the `bash -c "forward_port.py ... && exec dufs ..."` line as the `files` supervisord program: it is the `app_instances` sidecar launcher around an unchanged dufs, serving the instances API on `127.0.0.1:8301` from the library's JSON store at `data/.apps/files/instances.json` (`files-<N>` keys, `File Viewer <N>` titles, `referenced`, not renameable, location tracked), registering the manifest and the dufs port 8300, and running today's exact dufs command line as its child.
+
+- The vendored dufs frontend's location beacon posts `{type: "shell:location", path}` (the contract's message) instead of `minds-location`; the asset revision in `index.html` is `?v=minds-3` so browsers refetch it. The shell accepts both spellings until phase 7.

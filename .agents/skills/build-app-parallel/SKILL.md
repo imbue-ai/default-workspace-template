@@ -233,11 +233,16 @@ For a review:
 
 2. **Ask the node's question** in business terms, and loop until the user
    **explicitly confirms**. For each change they ask for:
-   1. Move the builder's last report into `$RUN/nodes/K/reports/consumed/` (per
-      `lead-proxy.md`), so its revised report can land in its place.
-   2. Send the change to the builder, in the user's voice:
-      `mngr message "$APP-node-K" -m "<the change>"`, and re-arm its poll.
-   3. When its new report lands, run
+   1. Send the change to the builder, in the user's voice:
+
+      ```bash
+      uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+          --task-file "$RUN/nodes/K/task.md" -m "<the change>"
+      ```
+
+      Then re-arm its poll. The `await` that printed the builder's last report
+      already archived it, so its next report lands cleanly.
+   2. When its new report lands, run
       `python3 system/scripts/layout.py refresh "$APP-preview"` and show the user
       the change visibly applied.
 

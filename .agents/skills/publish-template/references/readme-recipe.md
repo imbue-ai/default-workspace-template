@@ -9,7 +9,7 @@ generates the structure; this is what goes in the FILL-IN blocks.
 1. **A hero graphic.** Already wired up: the README embeds `template.svg`,
    the bespoke thumbnail designed during assembly. A hand-authored SVG scales
    best, which is what that file already is.
-2. **The "Open in Minds" call-to-action.** Generated, not written by hand. It is
+2. **The "Open in Mind" call-to-action.** Generated, not written by hand. It is
    deliberately prose-free -- a large centered button plus a one-line copyable
    fallback beneath it, nothing else. The button points at the HTTPS trampoline
    (`https://boweiliu.github.io/open-in-minds/?git_url=...`), NEVER a bare
@@ -62,13 +62,13 @@ reporting them as faults:
 - **The hero image will not appear.** The README points at `template.svg` by a
   relative path, which resolves on GitHub and does not resolve in a chat
   message. Tell them the image is the thumbnail they already approved.
-- **The "Open in Minds" button renders as a link or as nothing.** It is an HTML
+- **The "Open in Mind" button renders as a link or as nothing.** It is an HTML
   anchor around an image; GitHub shows the button.
 
 **If they say no, rewrite and show them again** -- that is the entire point of
 asking. Edit `$WT/README.md` and paste the new text. Keep the generated
 structure: their objection is almost always about the WORDS, not the shape, and
-the hero, the Open in Minds call-to-action, and its `MINDS_TEMPLATE_REPO_URL`
+the hero, the Open in Mind call-to-action, and its `MINDS_TEMPLATE_REPO_URL`
 placeholder must all survive any rewrite -- the lead substitutes that
 placeholder in §7 and §8 blocks the push if it is missing. Loop until they are
 happy.
@@ -82,9 +82,9 @@ Chromium (drive it with the `agentic-browser-fleet` skill) and confirm:
 - the hero graphic and any screenshots render, with no broken images. This is
   the real check: a relative path that is correct in the source tree can still
   404 on github.com, and only the published page shows it;
-- the **Open in Minds** badge loads and its link goes to the trampoline.
+- the **Open in Mind** badge loads and its link goes to the trampoline.
   Clicking it opens the trampoline page; the final `minds://` hop only completes
-  on a machine with Minds installed, so do not treat that as a failure;
+  on a machine with Mind installed, so do not treat that as a failure;
 - the copyable ` /use-template` line names the right repo (its leading space is
   deliberate -- a pasted `/...` can be read as a slash command), and every other
   link resolves.

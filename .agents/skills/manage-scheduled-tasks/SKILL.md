@@ -174,9 +174,12 @@ That is all -- no new agent template is required. `system/libs/automations/run_a
 <skill>` creates a persistent singleton agent (labelled `automation=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
-right after its first message via `system/scripts/layout.py open --layout <desktop|mobile>`
+right after its first message via `system/scripts/layout.py open "app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
-template; otherwise the generic `automation` template is used.
+template; otherwise the generic `automation` template is used. The agent runs on the
+workspace's default provider account and its harness (from `.mngr/settings.local.toml`, which
+the chat app maintains); `--type <harness>` names a harness explicitly, and gets no account
+unless the default account is on that harness.
 
 ## How the Caretaker is wired (the built-in example)
 
@@ -256,7 +259,7 @@ The complete map of the scheduling machinery, for edits and debugging:
   `system/libs/automations/run_job_test.py`).
 - `/home/user/workspace/data/.state/jobs/<job-id>/` -- each runner job's state
   (`last_attempt`, `last_success`, `failures`, `lock`).
-- `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
+- `supervisord.conf.d/cron.conf` -- `[program:cron]` is the cron daemon (check it with
   `supervisorctl status cron`).
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.

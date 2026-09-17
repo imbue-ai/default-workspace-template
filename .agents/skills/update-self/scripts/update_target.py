@@ -1,5 +1,5 @@
 """Which ref to update to: the latest stable ``minds-v*`` tag not newer than the
-Minds app driving the workspace (the ceiling), or an explicit override.
+Mind app driving the workspace (the ceiling), or an explicit override.
 """
 
 from __future__ import annotations

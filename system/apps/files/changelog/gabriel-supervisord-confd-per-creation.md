@@ -1,0 +1,1 @@
+Documentation only: the `[program:files]` block now lives in `system/supervisord.conf.d/files.conf` rather than in the shared `system/supervisord.conf`, and the README says so. The program, its command, and the app itself are unchanged -- only the file declaring it moved.

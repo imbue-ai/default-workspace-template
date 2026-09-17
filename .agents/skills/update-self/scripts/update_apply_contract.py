@@ -1,5 +1,5 @@
 """The machine-readable contract between an update apply and the things that read
-it without importing this code: the Minds app (``run.json`` over ``mngr exec``),
+it without importing this code: the Mind app (``run.json`` over ``mngr exec``),
 the bootstrap package and the recovery cron (the apply marker), and the system
 interface's staleness banner (the marker and the emergency record). Every path,
 filename, phase, verdict and record shape lives here; a change to one is a
@@ -34,7 +34,7 @@ MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
 
 # The run-status file: the whole machine-readable contract between an
-# update-self pass and the Minds app. The lead records the run's start here
+# update-self pass and the Mind app. The lead records the run's start here
 # (``run-status start``, once it holds the updating-workspace lease), the
 # worker it hands the merge to (``run-status delegate``), its one mid-flight
 # hold and its clearing (``run-status hold`` / ``resume``), and its
@@ -79,7 +79,7 @@ PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 # interface. The restart is the last phase, and every earlier phase works on
 # the side (even the pre-flight boots the merged backend on its own port), so
 # by the time the workspace's interface can stop answering, the marker has
-# been present for the whole apply. The Minds app's misdiagnosis guard depends
+# been present for the whole apply. The Mind app's misdiagnosis guard depends
 # on exactly this ordering -- its stuck-edge probe reads the marker over
 # ``mngr exec`` *after* an outage begins, and declines unattended recovery on
 # finding it -- so a reordering that lets a service-disturbing step precede
@@ -140,7 +140,8 @@ class ApplyMarker:
     merge_ref: str
     target_ref: str | None
     ff_only: bool
-    worker_bundle: str | None
+    # The worker's already-built bundles, by the app they belong to (every app's, or none).
+    worker_bundles: dict[str, str] | None
     phase: str
     pid: int
     started_at: float
@@ -164,7 +165,7 @@ class ApplyMarker:
             "merge_ref": self.merge_ref,
             "target_ref": self.target_ref,
             "ff_only": self.ff_only,
-            "worker_bundle": self.worker_bundle,
+            "worker_bundles": self.worker_bundles,
             "phase": self.phase,
             "pid": self.pid,
             "started_at": self.started_at,
@@ -191,7 +192,7 @@ class ApplyMarker:
             merge_ref=str(raw["merge_ref"]),
             target_ref=raw.get("target_ref"),
             ff_only=bool(raw.get("ff_only", False)),
-            worker_bundle=raw.get("worker_bundle"),
+            worker_bundles=raw.get("worker_bundles"),
             phase=str(raw.get("phase", PHASE_STARTED)),
             pid=int(raw.get("pid", 0)),
             started_at=float(raw.get("started_at", 0.0)),
@@ -277,7 +278,7 @@ def _mirror_apply_into_run_status(
     """Keep the run record's apply fields equal to the marker's presence and phase.
 
     The marker is the apply's own recovery record; the run record is what the
-    Minds app reads. Stamping the two together at the marker's chokepoints is
+    Mind app reads. Stamping the two together at the marker's chokepoints is
     what lets the app size its apply window off this file alone -- the app
     stands back while ``apply_phase`` is set and for the recovery grace after
     its last restamp, exactly as it did off the marker. A workspace with no run
@@ -293,7 +294,7 @@ def _mirror_apply_into_run_status(
     write_run_status(status, repo_root, now)
 
 
-# The terminal verdicts a run may record, mirrored by the Minds app's
+# The terminal verdicts a run may record, mirrored by the Mind app's
 # ``UpdateVerdict`` enum. The app drops a verdict string it does not know, so
 # adding one here is a contract change that needs the app taught first.
 RUN_VERDICT_UPDATED = "UPDATED"
@@ -320,7 +321,7 @@ RUN_VERDICTS = (
 
 @dataclass
 class RunStatus:
-    """One update-self run's record for the Minds app: who is running, and how it ended.
+    """One update-self run's record for the Mind app: who is running, and how it ended.
 
     Every timestamp is epoch seconds. ``verdict`` is ``None`` while the run is
     going; the fields after it are only meaningful once it is set.
@@ -444,7 +445,7 @@ def write_run_status(
     path.parent.mkdir(parents=True, exist_ok=True)
     scratch = path.with_suffix(".json.tmp")
     # Newline-terminated so a reader that `cat`s the file and then echoes a
-    # sentinel (the Minds app's probe) sees the sentinel on its own line.
+    # sentinel (the Mind app's probe) sees the sentinel on its own line.
     scratch.write_text(status.to_json() + "\n")
     scratch.replace(path)
 

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="A Minds chat sends a file across a file bridge that prints a test page on a local printer">
+  <rect x="0" y="0" width="240" height="160" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="14" y="24" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#1f2328">Minds prints — end to end</text>
+
+  <!-- Minds chat card -->
+  <g>
+    <rect x="14" y="36" width="84" height="104" rx="9" fill="#ffffff" stroke="#d0d7de"/>
+    <circle cx="30" cy="54" r="7" fill="#1f6feb"/>
+    <rect x="42" y="49" width="46" height="6" rx="3" fill="#d8dee4"/>
+    <rect x="42" y="60" width="32" height="6" rx="3" fill="#eaeef2"/>
+    <rect x="24" y="80" width="64" height="6" rx="3" fill="#eaeef2"/>
+    <rect x="24" y="92" width="52" height="6" rx="3" fill="#eaeef2"/>
+    <rect x="24" y="112" width="64" height="18" rx="6" fill="#0969da"/>
+    <text x="56" y="124" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="8" font-weight="700" fill="#ffffff">Print test page</text>
+  </g>
+
+  <!-- file bridge arrow -->
+  <g stroke="#57606a" stroke-width="2" fill="none">
+    <path d="M100 92 H128" stroke-dasharray="5 5"/>
+    <path d="M124 87 L131 92 L124 97"/>
+  </g>
+  <text x="116" y="82" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="8" fill="#57606a">file bridge</text>
+
+  <!-- printer + emerging sheet -->
+  <g>
+    <!-- printed sheet -->
+    <rect x="150" y="28" width="76" height="66" rx="4" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="188" y="42" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="6" font-weight="700" fill="#1f2328">MINDS TEST PAGE</text>
+    <!-- grayscale ramp -->
+    <g>
+      <rect x="156" y="48" width="9" height="9" fill="#111111"/>
+      <rect x="165" y="48" width="9" height="9" fill="#444444"/>
+      <rect x="174" y="48" width="9" height="9" fill="#777777"/>
+      <rect x="183" y="48" width="9" height="9" fill="#aaaaaa"/>
+      <rect x="192" y="48" width="9" height="9" fill="#cccccc"/>
+      <rect x="201" y="48" width="9" height="9" fill="#eeeeee" stroke="#e1e4e8"/>
+      <rect x="210" y="48" width="10" height="9" fill="#ffffff" stroke="#e1e4e8"/>
+    </g>
+    <!-- color swatches -->
+    <g>
+      <rect x="156" y="59" width="9" height="9" fill="#00b3b3"/>
+      <rect x="165" y="59" width="9" height="9" fill="#c800c8"/>
+      <rect x="174" y="59" width="9" height="9" fill="#e6e600"/>
+      <rect x="183" y="59" width="9" height="9" fill="#e00000"/>
+      <rect x="192" y="59" width="9" height="9" fill="#00a000"/>
+      <rect x="201" y="59" width="9" height="9" fill="#0000e0"/>
+      <rect x="210" y="59" width="10" height="9" fill="#111111"/>
+    </g>
+    <rect x="156" y="74" width="64" height="4" rx="2" fill="#d8dee4"/>
+    <rect x="156" y="82" width="50" height="4" rx="2" fill="#eaeef2"/>
+    <!-- printer body -->
+    <rect x="142" y="86" width="92" height="34" rx="7" fill="#eaeef2" stroke="#d0d7de"/>
+    <rect x="150" y="102" width="76" height="18" rx="3" fill="#ffffff" stroke="#d0d7de"/>
+    <circle cx="222" cy="95" r="3.5" fill="#1a7f37"/>
+  </g>
+</svg>

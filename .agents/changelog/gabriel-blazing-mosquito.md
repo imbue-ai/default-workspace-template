@@ -1,0 +1,7 @@
+The update apply's cleanup of shadowing mngr installs is now shared with the workspace build rather than reimplemented alongside it.
+
+The apply has removed stale mngr tool installs left under a second `$HOME` since minds-v0.6.0. The build needed the same sweep, for workspaces created before the tool directories were pinned, and had grown its own copy in shell. The two drifted immediately: the apply strips a shebang before splitting on whitespace and the shell copy cut at the first space, so a `#! /path` spelling resolved to nothing and the cleanup would have removed a tool environment while leaving its console script on `PATH` pointing at a dead interpreter.
+
+That logic now lives in `tool_env.py`. Because the apply is staged and run as one self-contained unit -- so an update cannot fail on a divergence between the tree it came from and the tree it is landing -- the file is vendored byte-identically into `.agents/skills/update-self/scripts/` and imported there as a sibling rather than reached across trees. A test fails if the two copies differ.
+
+Behaviour is unchanged: the apply still resolves which installation to keep from its own `PATH` and still sweeps both `$HOME` and the provisioner home, and its existing tests for that pass unmodified. It picks up one guard the build needed spelled out -- nothing is removed unless the installation being kept is present -- which its receipt check already implied.

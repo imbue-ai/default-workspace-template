@@ -1,0 +1,3 @@
+The send route answers 503 until the chat app has read its agent list from mngr once, the same rule the instances API follows, instead of 404 for an id it has not loaded yet. In-workspace senders (`system/scripts/message_chat.py`) back off to `mngr message` on a 404, so a 404 during the app's first seconds would have routed messages around the app.
+
+The route is now the path every in-workspace sender uses (the browser app's wake-ups, a lead's replies to a worker, the automation runner); a send that names no client posts no client-activity report, as before. A test pins the messaging script's `--system` sentinel to the tag this app's transcript classifier strips.

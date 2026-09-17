@@ -82,10 +82,9 @@ STATE_FILENAME = "instance.json"
 INNER_LOG_FILENAME = "instance.log"
 WRAPPER_LOG_FILENAME = "wrapper.log"
 
-# forward_port.py imports tomlkit (a venv dependency), but this script is run via
-# bare python3 with no venv assumed. Invoke it through ``uv run`` (like
-# ``reveal_system_interface.py`` does) so the dependency is always resolved.
-FORWARD_PORT_CMD = ("uv", "run", "python3", "system/scripts/forward_port.py")
+# forward_port.py is stdlib-only (the supervisord program lines that register an
+# app run it under a plain python3), so no venv is needed here either.
+FORWARD_PORT_CMD = ("python3", "system/scripts/forward_port.py")
 
 # The wrapper server ships beside this script and is stdlib-only, so it runs under
 # the same bare ``python3`` that runs this script -- no venv resolution.
@@ -294,7 +293,9 @@ def up(
         sys.stderr.write(f"up: --cwd {cwd} is not a directory.\n")
         return 1
     preview_requested = preview_title is not None or preview_service_name is not None
-    if preview_requested and not (preview_title and preview_service_name and service_name):
+    if preview_requested and not (
+        preview_title and preview_service_name and service_name
+    ):
         sys.stderr.write(
             "up: a preview needs --service-name, --preview-service-name, and "
             "--preview-title together.\n"
@@ -429,7 +430,7 @@ def up(
         sys.stdout.write(f"{preview_service_name}\n")
         sys.stderr.write(
             f"preview up: open the '{preview_service_name}' service tab, e.g. "
-            f"`python3 system/scripts/layout.py open --layout desktop "
+            f"`python3 system/scripts/layout.py open "
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Run "
             f"'down --name {name}' to tear it down.\n"
@@ -560,9 +561,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Tear down an instance (kill the server(s), deregister service(s)). "
         "Idempotent.",
     )
-    down_parser.add_argument(
-        "--name", required=True, help="The name passed to 'up'."
-    )
+    down_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
     _add_repo_root_arg(down_parser)
 
     args = parser.parse_args(argv)

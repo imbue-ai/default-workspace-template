@@ -1,28 +1,25 @@
-"""Acceptance test for the agent-driven layout pipeline.
+"""Acceptance test for the agent-driven layout pipeline over addresses.
 
 Exercises the full backend path the agent-facing helper depends on:
 ``system/scripts/layout.py`` (subprocess) -> ``POST /api/layout/broadcast``
-(loopback Flask route) -> ``WebSocketBroadcaster.broadcast_layout_op``.
-The WS-to-DOM step is left to manual verification (no headless browser
-harness exists for the dockview layout).
+(loopback Flask route) -> ``WebSocketBroadcaster.broadcast_layout_op``, and the
+relay verbs (``rename``, ``delete``) -> ``POST /api/apps/<app>/instances/...``
+-> the app's own instances API. The WS-to-DOM step is ``test_e2e.py``'s.
 
-Covers ``inspect`` (pure read; bypasses the mutex and broadcaster) and
-``open``/``close`` (mutating ops that acquire the advisory mutex and
-broadcast). Broadcaster output is observed via the broadcaster's own
-queue-registration API rather than a live WebSocket -- the assertion
-target is "the broadcaster received a well-formed message", not "a
-WebSocket transport delivered it", and the latter is already exercised
-by the broadcaster's own tests.
+The machine the script sees is a registry with two rows, both stub apps served
+by ``app_instances``' in-memory source over loopback (so the relay has a real
+instances API to reach): one seeded with an instance, one empty. Broadcaster
+output is observed via the broadcaster's own queue-registration API rather than
+a live WebSocket.
 """
 
 from __future__ import annotations
 
 import json
-import queue as queue_module
+import os
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -30,12 +27,22 @@ from typing import Any
 from typing import Generator
 
 import pytest
+from app_instances.blueprint import build_instances_app
+from app_instances.sidecar import serve_in_background
+from app_instances.testing import LOOPBACK_HOST
+from app_instances.testing import RecordingNudger
+from app_instances.testing import StubInstanceSource
+from app_instances.testing import free_port
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import instance_record
+from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -44,24 +51,21 @@ pytestmark = pytest.mark.acceptance
 
 _PORT = 18766
 _BASE_URL = f"http://127.0.0.1:{_PORT}"
-_AGENT_ID = "test-agent-id"
-_AGENT_NAME = "alice"
+# The seeded app: one instance the script can open, close, and rename.
+_SEEDED_APP_NAME = "chat"
+_SEEDED_KEY = "stub-1"
+_SEEDED_TITLE = "alice"
+_SEEDED_ADDRESS = f"app:{_SEEDED_APP_NAME}?instance={_SEEDED_KEY}"
+# The requesting agent, which the script resolves ``self`` and its attribution against.
+_AGENT_ID = "agent-test-alice"
+_STUB_APP_NAME = "docs"
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
 
 
 def _server_is_up(url: str) -> bool:
-    """Probe ``/api/projects`` and treat any HTTP response as "lifespan finished".
-
-    Hits ``/api/projects`` rather than ``/api/agents`` because the latter
-    calls ``discover_agents``, which reads the real mngr config and can
-    fail with HTTP 500 in dev environments. ``/api/projects`` is a pure
-    file-system read against the redirected ``MNGR_HOST_DIR``. Any HTTP
-    response means the lifespan has run (so ``app.state.broadcaster`` /
-    ``app.state.layout_mutex`` are set), which is what later assertions
-    actually depend on.
-    """
+    """Any HTTP answer from ``/api/projects`` means the app is serving."""
     try:
         urllib.request.urlopen(f"{url}/api/projects", timeout=0.5)
         return True
@@ -71,61 +75,84 @@ def _server_is_up(url: str) -> bool:
         return False
 
 
+class PipelineHarness(FrozenModel):
+    """What one test gets: the shell's URL, its broadcaster, the registry file, and the stub apps' sources."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    base_url: str = Field(description="The shell's loopback URL")
+    broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
+    registry_path: Path = Field(description="The registry file the shell and the script read")
+    seeded_source: StubInstanceSource = Field(description="The seeded app's in-memory instances")
+    stub_source: StubInstanceSource = Field(description="The empty stub app's in-memory instances")
+
+
 @pytest.fixture
-def layout_server(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Generator[tuple[str, WebSocketBroadcaster], None, None]:
-    """Spin up a workspace_server with a preconfigured AgentManager.
+def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[PipelineHarness, None, None]:
+    """A workspace server over a registry of two stub apps, one seeded with an instance, and a started shell."""
+    registry_path = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", _BASE_URL)
 
-    The manager is seeded with a single known agent so that ``list`` and
-    refs like ``chat:alice`` resolve. ``MNGR_HOST_DIR`` is redirected to
-    a tmp dir so the test does not touch the real host state.
-    """
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-    monkeypatch.setenv("MNGR_AGENT_ID", _AGENT_ID)
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
-
-    broadcaster = WebSocketBroadcaster()
-    manager = AgentManager.build(broadcaster)
-    manager._agents[_AGENT_ID] = AgentStateItem(
-        id=_AGENT_ID,
-        name=_AGENT_NAME,
-        state="running",
-        labels={},
-        work_dir=str(tmp_path / "work"),
+    seeded_source = StubInstanceSource()
+    seeded_source.records.append(instance_record(_SEEDED_KEY, _SEEDED_TITLE))
+    seeded_port = free_port()
+    stub_source = StubInstanceSource()
+    stub_port = free_port()
+    stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
+    write_registry(
+        registry_path,
+        registry_row_toml(
+            _SEEDED_APP_NAME,
+            f"http://{LOOPBACK_HOST}:{seeded_port}",
+            is_multi_instance=True,
+            is_critical=True,
+            actions=(("new", "New Chat"), ("subagent", "Open subagent")),
+            default_shortcut=("new", "new"),
+        ),
+        registry_row_toml(_STUB_APP_NAME, stub_url, is_multi_instance=True, actions=(("new", "New docs"),)),
     )
 
+    broadcaster = WebSocketBroadcaster()
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
-    app = create_application(build_test_state(config=config, agent_manager=manager))
+    state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
+    app = create_application(state)
 
     server = make_threaded_server("127.0.0.1", _PORT, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    try:
-        wait_for(
-            lambda: _server_is_up(_BASE_URL),
-            timeout=5.0,
-            poll_interval=0.05,
-            error_message=f"workspace server did not come up at {_BASE_URL}",
-        )
-        yield _BASE_URL, broadcaster
-    finally:
-        server.shutdown()
-        thread.join(timeout=5.0)
+    with (
+        serve_in_background(LOOPBACK_HOST, seeded_port, build_instances_app(seeded_source, RecordingNudger())),
+        serve_in_background(LOOPBACK_HOST, stub_port, build_instances_app(stub_source, RecordingNudger())),
+    ):
+        try:
+            wait_for(
+                lambda: _server_is_up(_BASE_URL),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message=f"workspace server did not come up at {_BASE_URL}",
+            )
+            state.shell.start()
+            try:
+                yield PipelineHarness(
+                    base_url=_BASE_URL,
+                    broadcaster=broadcaster,
+                    registry_path=registry_path,
+                    seeded_source=seeded_source,
+                    stub_source=stub_source,
+                )
+            finally:
+                state.shell.stop()
+        finally:
+            server.shutdown()
+            thread.join(timeout=5.0)
 
 
-def _run_layout_script(
-    args: list[str],
-    base_url: str,
-    cwd: Path,
-) -> subprocess.CompletedProcess[str]:
+def _run_layout_script(args: list[str], harness: PipelineHarness, cwd: Path) -> subprocess.CompletedProcess[str]:
     """Invoke ``system/scripts/layout.py`` as a subprocess against the test server.
 
-    ``cwd`` is set to a sandbox tmp path so the script's relative
-    ``data/.state/apps.toml`` lookup does not pick up the real one
-    from the repo. ``MINDS_WORKSPACE_SERVER_URL`` points at the test
-    server.
+    ``cwd`` is a sandbox so nothing relative resolves into the repo; the registry the
+    script reads is the fixture's, through ``MINDS_APPS_FILE``.
     """
     return subprocess.run(
         [sys.executable, str(_LAYOUT_SCRIPT), *args],
@@ -135,240 +162,318 @@ def _run_layout_script(
         env={
             "PATH": sys.exec_prefix + "/bin:/usr/bin:/bin",
             "PYTHONPATH": "",
-            "MINDS_WORKSPACE_SERVER_URL": base_url,
+            "MINDS_WORKSPACE_SERVER_URL": harness.base_url,
+            "MINDS_APPS_FILE": str(harness.registry_path),
             "MNGR_AGENT_ID": _AGENT_ID,
-            # Mutating ops in production block until the layout state
-            # changes are observable via inspect; this test exercises
-            # the broadcast pipeline without a live frontend to apply
-            # the op, so we tell the script not to wait. Documented in
-            # ``system/scripts/layout.py`` under ``ENV_NO_WAIT_STABLE``.
-            "MINDS_LAYOUT_NO_WAIT_STABLE": "1",
         },
         timeout=15,
     )
 
 
-def _await_layout_op(client_queue: queue_module.Queue[str | None], timeout: float) -> dict[str, Any]:
-    """Block until a ``layout_op`` message arrives, returning the parsed payload.
-
-    Non-``layout_op`` messages (e.g. ``agents_updated``) that race with the
-    test's setup are skipped silently.
-    """
-    deadline_message = f"no layout_op message arrived within {timeout}s"
-    parsed_result: dict[str, Any] = {}
-
-    def _drain_once() -> bool:
-        try:
-            msg = client_queue.get(timeout=0.05)
-        except queue_module.Empty:
-            return False
-        assert msg is not None, "broadcaster shut down before a layout_op arrived"
-        parsed = json.loads(msg)
-        if parsed.get("type") != "layout_op":
-            return False
-        parsed_result.update(parsed)
-        return True
-
-    wait_for(_drain_once, timeout=timeout, poll_interval=0.0, error_message=deadline_message)
-    return parsed_result
-
-
-def test_inspect_round_trips_through_script_and_endpoint(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """``system/scripts/layout.py inspect --json`` returns parseable JSON for an empty layout."""
-    base_url, _ = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    result = _run_layout_script(["inspect", "--json"], base_url=base_url, cwd=sandbox)
-
+def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
+    """``layout.py list --json`` as ``{app name: entry}``."""
+    result = _run_layout_script(["list", "--json"], harness, cwd)
     assert result.returncode == 0, f"stderr={result.stderr!r}"
-    parsed = json.loads(result.stdout)
-    assert parsed == {"active_panel": None, "panels": [], "tree": None}
+    return {entry["name"]: entry for entry in json.loads(result.stdout)}
 
 
-def test_context_round_trips_through_script_and_endpoint(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """``system/scripts/layout.py context --json`` returns a (possibly empty) client list."""
-    base_url, _ = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    result = _run_layout_script(["context", "--json"], base_url=base_url, cwd=sandbox)
-
-    assert result.returncode == 0, f"stderr={result.stderr!r}"
-    assert json.loads(result.stdout) == []
+def _nudge(harness: PipelineHarness, app: str) -> None:
+    """Tell the shell an app's list changed, as the app itself would (``POST /api/apps/<name>/changed``)."""
+    request = urllib.request.Request(f"{harness.base_url}/api/apps/{app}/changed", method="POST")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert response.status == 204
 
 
-def test_mutating_op_without_client_on_layout_fails_with_412(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """With no connected client on the target layout, the script reports the 412 clearly."""
-    base_url, _ = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    result = _run_layout_script(
-        ["close", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
+def _wait_for_instance_listed(harness: PipelineHarness, cwd: Path, app: str, address: str) -> None:
+    """The inventory fetches instance lists off the request thread, so a listing is polled for."""
+    wait_for(
+        lambda: address
+        in {instance["address"] for instance in _listing(harness, cwd).get(app, {"instances": []})["instances"]},
+        timeout=10.0,
+        poll_interval=0.2,
+        error_message=f"{address} never listed under {app}",
     )
 
+
+def _sandbox(tmp_path: Path) -> Path:
+    sandbox = tmp_path / "cwd"
+    sandbox.mkdir(exist_ok=True)
+    return sandbox
+
+
+def test_inspect_and_context_round_trip_through_script_and_endpoint(
+    layout_server: PipelineHarness, tmp_path: Path
+) -> None:
+    """``inspect --json`` and ``context --json`` answer with the empty shapes for a machine nobody has opened,
+    and ``context`` lists a client as soon as it connects, before it has messaged or switched views."""
+    sandbox = _sandbox(tmp_path)
+
+    inspect = _run_layout_script(["inspect", "--json"], layout_server, sandbox)
+    assert inspect.returncode == 0, f"stderr={inspect.stderr!r}"
+    assert json.loads(inspect.stdout)["panels"] == []
+
+    context = _run_layout_script(["context", "--json"], layout_server, sandbox)
+    assert context.returncode == 0, f"stderr={context.stderr!r}"
+    assert json.loads(context.stdout) == []
+
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "everything", "desktop")
+    try:
+        connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
+        assert connected.returncode == 0, f"stderr={connected.stderr!r}"
+        (entry,) = json.loads(connected.stdout)
+        assert entry["client_id"] == "client-silent"
+        assert entry["is_connected"] is True and entry["active_view"] == "everything"
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """With no client connected or recorded, there is nobody's arrangement to edit, and the script says so."""
+    result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, _sandbox(tmp_path))
+
     assert result.returncode == 1
-    assert "No connected client has layout" in result.stderr
+    assert "Could not tell which client" in result.stderr and "--client" in result.stderr
 
 
-def test_list_round_trips_and_includes_seeded_agent(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
+def test_list_shows_every_app_with_the_seeded_instance(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``list --json`` is the inventory: the seeded app with its instance's address, and the stub app with none yet."""
+    sandbox = _sandbox(tmp_path)
+    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
+
+    listing = _listing(layout_server, sandbox)
+    seeded = listing[_SEEDED_APP_NAME]
+    assert [instance["title"] for instance in seeded["instances"] if instance["address"] == _SEEDED_ADDRESS] == [
+        _SEEDED_TITLE
+    ]
+    assert [action["id"] for action in seeded["actions"]] == ["new", "subagent"]
+    assert listing[_STUB_APP_NAME]["instances"] == []
+    assert listing[_STUB_APP_NAME]["is_running"] is True
+
+
+def _inspect_addresses(harness: PipelineHarness, cwd: Path, client_id: str) -> list[str]:
+    inspected = _run_layout_script(["inspect", "--json", "--client", client_id], harness, cwd)
+    assert inspected.returncode == 0, f"stderr={inspected.stderr!r}"
+    return [panel["address"] for panel in json.loads(inspected.stdout)["panels"]]
+
+
+def test_open_of_a_bare_app_creates_the_instance_and_docks_it_in_the_clients_file(
+    layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """``system/scripts/layout.py list --json`` returns the seeded agent as a ``chat:`` entry."""
-    base_url, _ = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    result = _run_layout_script(["list", "--json"], base_url=base_url, cwd=sandbox)
-
-    assert result.returncode == 0, f"stderr={result.stderr!r}"
-    entries = json.loads(result.stdout)
-    refs = {e["ref"] for e in entries}
-    assert f"chat:{_AGENT_NAME}" in refs
-
-
-def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """Full pipeline check for the synchronous-ref-return path.
-
-    ``system/scripts/layout.py open terminal`` must (a) print the
-    ``terminal:<hash>`` ref the server allocated to stdout so the
-    calling agent can capture it, and (b) cause the broadcast to carry
-    the matching ``panel_id`` so the frontend uses the same id the ref
-    was derived from.
-    """
-    base_url, broadcaster = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-    # The script polls data/.state/apps.toml for the named service;
-    # seed ``terminal`` so registration succeeds without the real
-    # forward_port pipeline.
-    state_dir = sandbox / "data" / ".state"
-    state_dir.mkdir(parents=True)
-    (state_dir / "apps.toml").write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n')
-
-    client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
-    try:
-        result = _run_layout_script(["open", "terminal", "--layout", "Project 1"], base_url=base_url, cwd=sandbox)
-        assert result.returncode == 0, f"stderr={result.stderr!r}"
-        printed_ref = result.stdout.strip()
-        assert printed_ref.startswith("terminal:"), printed_ref
-
-        msg = _await_layout_op(client_queue, timeout=2.0)
-        assert msg["op"] == "open"
-        broadcast_args = msg["args"]
-        assert broadcast_args["ref"] == "service:terminal"
-        # The same panel id was used to derive the printed ref AND sent
-        # to the frontend, so the resulting tab is the one the script
-        # told the caller about.
-        assert broadcast_args["panel_id"].startswith("iframe-terminal-")
-    finally:
-        broadcaster.unregister(client_queue)
-
-
-def test_open_close_chat_ref_broadcasts_layout_ops(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """``open`` and ``close`` against a ``chat:`` ref reach the broadcaster intact."""
-    base_url, broadcaster = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
-    try:
-        open_result = _run_layout_script(
-            ["open", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
-        )
-        assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
-        open_msg = _await_layout_op(client_queue, timeout=2.0)
-        assert open_msg["op"] == "open"
-        # ``_cmd_open`` always sends ``new_group``; the broadcaster passes
-        # the args dict through unchanged.
-        assert open_msg["args"] == {"ref": f"chat:{_AGENT_NAME}", "new_group": False}
-
-        close_result = _run_layout_script(
-            ["close", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
-        )
-        assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
-        close_msg = _await_layout_op(client_queue, timeout=2.0)
-        assert close_msg["op"] == "close"
-        assert close_msg["args"] == {"ref": f"chat:{_AGENT_NAME}"}
-    finally:
-        broadcaster.unregister(client_queue)
-
-
-def test_open_chat_terminal_ref_is_refused_before_it_broadcasts(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
-) -> None:
-    """``open chat-terminal:<name>`` fails at the script, and never reaches a client.
-
-    An agent's terminal is the back face of its chat now, so there is no panel for the ref to
-    address. The end-to-end part that matters is that it is refused HERE, by name, rather than
-    broadcast to every client as an op none of them can carry out.
-    """
-    base_url, broadcaster = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
-
-    client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
+    """``open docs --param path=/notes`` creates through the app inside the op, prints the new address, and docks
+    it in the one connected client's arrangement; the write is announced to that client's windows."""
+    sandbox = _sandbox(tmp_path)
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
         result = _run_layout_script(
-            ["open", f"chat-terminal:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
+            ["open", _STUB_APP_NAME, "--view", "Everything", "--param", "path=/notes"], layout_server, sandbox
         )
-        assert result.returncode != 0
-        # Names the retired ref and what replaced it, rather than the five-second
-        # "no such service" the bare-name fallback would have produced.
-        assert f"chat-terminal:{_AGENT_NAME}" in result.stderr
-        assert f"chat:{_AGENT_NAME}" in result.stderr
-        assert "Terminal toggle" in result.stderr
-        # Nothing reached the clients. Drained rather than asserted empty, because unrelated
-        # pushes (``agents_updated``) can race with setup; only a layout_op would be the bug.
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline:
-            try:
-                raw = client_queue.get(timeout=0.05)
-            except queue_module.Empty:
-                continue
-            assert raw is None or json.loads(raw).get("type") != "layout_op"
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+        created = result.stdout.strip()
+        assert created == f"app:{_STUB_APP_NAME}?instance=stub-1"
+        assert [str(record.url) for record in layout_server.stub_source.records] == ["/notes"]
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == [created]
+        assert any(
+            message["type"] == "layout_updated" and message["client_id"] == "client-1"
+            for message in drain_messages(client_queue)
+        )
     finally:
-        broadcaster.unregister(client_queue)
+        layout_server.broadcaster.unregister(client_queue)
 
 
-def test_list_offers_no_terminal_entry_for_an_agent(
-    layout_server: tuple[str, WebSocketBroadcaster],
-    tmp_path: Path,
+def test_open_and_close_of_an_instance_address_edit_the_clients_file(
+    layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """An agent lists once, as its chat.
+    """``open`` docks a listed instance and ``close`` removes it, whether or not a window is open: the client only
+    has to be one the shell knows."""
+    sandbox = _sandbox(tmp_path)
+    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    try:
+        open_result = _run_layout_script(["open", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
+        assert f"opened {_SEEDED_ADDRESS}" in open_result.stderr
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == [_SEEDED_ADDRESS]
 
-    It used to list twice, the second being its terminal panel. Listing that now would
-    advertise a ref the script refuses -- discoverability pointing at a dead end.
-    """
-    base_url, _ = layout_server
-    sandbox = tmp_path / "cwd"
-    sandbox.mkdir()
+        close_result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == []
+        # Closing what is not open is a 404 with the address named.
+        missing = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        assert missing.returncode == 1 and _SEEDED_ADDRESS in missing.stderr
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
 
-    result = _run_layout_script(["list", "--json"], base_url=base_url, cwd=sandbox)
+
+@pytest.mark.parametrize(
+    ("spelling", "expected_hint"),
+    [
+        (f"chat:{_SEEDED_TITLE}", f"the one titled {_SEEDED_TITLE!r}"),
+        ("service:docs?instance=docs-1", "app:docs?instance=docs-1"),
+        ("terminal:terminal-1", "app:terminal?instance=terminal-1"),
+    ],
+)
+def test_retired_spellings_are_refused_before_they_reach_the_shell(
+    layout_server: PipelineHarness, tmp_path: Path, spelling: str, expected_hint: str
+) -> None:
+    """A retired ref fails at the script, naming the new form, and edits nobody's arrangement."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    try:
+        result = _run_layout_script(["open", spelling, "--view", "Everything"], layout_server, _sandbox(tmp_path))
+        assert result.returncode != 0
+        assert spelling in result.stderr
+        assert expected_hint in result.stderr
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_a_url_needs_the_browser_app(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``open https://...`` is the browser's ``new``, so with no browser registered it fails naming the browser."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    try:
+        result = _run_layout_script(
+            ["open", "https://example.com/", "--view", "Everything"], layout_server, _sandbox(tmp_path)
+        )
+        assert result.returncode != 0 and "browser" in result.stderr
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_unknown_app_is_refused_by_name(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``open app:nowhere`` names the missing registration and edits nobody's arrangement."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    try:
+        result = _run_layout_script(["open", "app:nowhere", "--view", "Everything"], layout_server, _sandbox(tmp_path))
+        assert result.returncode != 0
+        assert "nowhere" in result.stderr
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_rename_and_delete_reach_the_app_through_the_relay(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``rename`` retitles the instance in its app, ``delete`` removes it there, and ``list`` follows."""
+    sandbox = _sandbox(tmp_path)
+    layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
+    address = f"app:{_STUB_APP_NAME}?instance=stub-1"
+    _nudge(layout_server, _STUB_APP_NAME)
+    _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
+
+    rename = _run_layout_script(["rename", address, "Design notes"], layout_server, sandbox)
+    assert rename.returncode == 0, f"stderr={rename.stderr!r}"
+    assert [str(record.title) for record in layout_server.stub_source.records] == ["Design notes"]
+    wait_for(
+        lambda: {instance["title"] for instance in _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"]}
+        == {"Design notes"},
+        timeout=10.0,
+        poll_interval=0.2,
+        error_message="the listing never showed the new title",
+    )
+
+    delete = _run_layout_script(["delete", address], layout_server, sandbox)
+    assert delete.returncode == 0, f"stderr={delete.stderr!r}"
+    assert layout_server.stub_source.records == []
+    wait_for(
+        lambda: _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"] == [],
+        timeout=10.0,
+        poll_interval=0.2,
+        error_message="the listing kept the deleted instance",
+    )
+
+
+def test_stop_and_start_reach_the_app_through_the_relay(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``stop`` and ``start`` drive the instance through its app, and ``list`` shows the status they set."""
+    sandbox = _sandbox(tmp_path)
+    layout_server.stub_source.is_stoppable = True
+    layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
+    address = f"app:{_STUB_APP_NAME}?instance=stub-1"
+    _nudge(layout_server, _STUB_APP_NAME)
+    _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
+
+    stop = _run_layout_script(["stop", address], layout_server, sandbox)
+    assert stop.returncode == 0, f"stderr={stop.stderr!r}"
+    assert [str(record.status) for record in layout_server.stub_source.records] == ["stopped"]
+    wait_for(
+        lambda: {instance["status"] for instance in _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"]}
+        == {"stopped"},
+        timeout=10.0,
+        poll_interval=0.2,
+        error_message="the listing never showed the instance as stopped",
+    )
+
+    start = _run_layout_script(["start", address], layout_server, sandbox)
+    assert start.returncode == 0, f"stderr={start.stderr!r}"
+    assert [str(record.status) for record in layout_server.stub_source.records] == ["idle"]
+
+    layout_server.stub_source.is_stoppable = False
+    refused = _run_layout_script(["stop", address], layout_server, sandbox)
+    assert refused.returncode != 0
+    assert "HTTP 400" in refused.stderr
+
+
+def test_relay_verbs_need_an_instance_address(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``rename app:docs`` names the app, not an instance, and says so."""
+    result = _run_layout_script(["rename", f"app:{_STUB_APP_NAME}", "Nope"], layout_server, _sandbox(tmp_path))
+    assert result.returncode != 0
+    assert "instance address" in result.stderr
+
+
+def test_shortcuts_are_set_and_removed_on_a_project(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``shortcut set`` pins an app's action to a project's rail and ``shortcut remove`` takes it off."""
+    sandbox = _sandbox(tmp_path)
+    create = urllib.request.Request(
+        f"{layout_server.base_url}/api/projects",
+        data=json.dumps({"name": "Project 1", "color": "#3B82F6", "glyph": 1}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(create, timeout=5) as response:
+        assert response.status == 201
+
+    set_result = _run_layout_script(
+        ["shortcut", "set", _STUB_APP_NAME, "new", "--mode", "focus", "--view", "Project 1"], layout_server, sandbox
+    )
+    assert set_result.returncode == 0, f"stderr={set_result.stderr!r}"
+    listed = _run_layout_script(["shortcuts", "--view", "Project 1", "--json"], layout_server, sandbox)
+    assert listed.returncode == 0, f"stderr={listed.stderr!r}"
+    rows = {(row["app"], row["action"]): row["mode"] for row in json.loads(listed.stdout)["shortcuts"]}
+    assert rows[(_STUB_APP_NAME, "new")] == "focus"
+    # The chat's default shortcut was seeded when the project was created.
+    assert rows[("chat", "new")] == "new"
+
+    remove_result = _run_layout_script(
+        ["shortcut", "remove", _STUB_APP_NAME, "new", "--view", "Project 1"], layout_server, sandbox
+    )
+    assert remove_result.returncode == 0, f"stderr={remove_result.stderr!r}"
+    listed_after = _run_layout_script(["shortcuts", "--view", "Project 1", "--json"], layout_server, sandbox)
+    assert (_STUB_APP_NAME, "new") not in {
+        (row["app"], row["action"]) for row in json.loads(listed_after.stdout)["shortcuts"]
+    }
+
+
+def test_script_runs_without_a_registry_file_for_read_ops(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``views --json`` needs no registry on disk: the shell answers it."""
+    sandbox = _sandbox(tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(_LAYOUT_SCRIPT), "views", "--json"],
+        capture_output=True,
+        text=True,
+        cwd=str(sandbox),
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": "",
+            "MINDS_WORKSPACE_SERVER_URL": layout_server.base_url,
+            "MINDS_APPS_FILE": str(tmp_path / "absent.toml"),
+        },
+        timeout=15,
+    )
     assert result.returncode == 0, f"stderr={result.stderr!r}"
-    entries = json.loads(result.stdout)
-    by_ref = {e["ref"]: e for e in entries}
-    assert f"chat:{_AGENT_NAME}" in by_ref
-    assert not any(ref.startswith("chat-terminal:") for ref in by_ref)
-    assert not any(entry["kind"] == "agent-terminal" for entry in entries)
+    views = json.loads(result.stdout)
+    assert any(view["id"] == "everything" for view in views)

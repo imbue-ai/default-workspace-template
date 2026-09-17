@@ -24,19 +24,24 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "app-instances",
+    "app-manifest",
     "app-watcher",
     "automations",
     "bootstrap",
     "browser",
     "caretaker",
+    "chat",
     "default-workspace-template",
     "env-converge",
+    "files-app",
     "github-sync",
     "host-backup",
     "mngr-cli-contract",
     "oom-priority",
     "share-gateway",
     "system-interface",
+    "terminal-app",
     "tk-command-parsing",
 ]
 
@@ -195,6 +200,54 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/96/f0/5eb65b2bb0d09ac6776f2eb54adee6abe8228ea05b20a5ad0e4945de8aac/anyio-4.12.1.tar.gz", hash = "sha256:41cfcc3a4c85d3f05c932da7c26d0201ac36f72abd4435ba90d0464a3ffed703", size = 228685, upload-time = "2026-01-06T11:45:21.246Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/0e/27be9fdef66e72d64c0cdc3cc2823101b80585f8119b5c112c2e8f5f7dab/anyio-4.12.1-py3-none-any.whl", hash = "sha256:d405828884fc140aa80a3c667b8beed277f1dfedec42ba031bd6ac3db606ab6c", size = 113592, upload-time = "2026-01-06T11:45:19.497Z" },
+]
+
+[[package]]
+name = "app-instances"
+version = "0.1.0"
+source = { editable = "system/libs/app_instances" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "click" },
+    { name = "flask" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
+
+[[package]]
+name = "app-manifest"
+version = "0.1.0"
+source = { editable = "system/libs/app_manifest" }
+dependencies = [
+    { name = "click" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pathspec" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.1" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pathspec", specifier = ">=1.1" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -404,6 +457,8 @@ name = "browser"
 version = "0.1.0"
 source = { editable = "system/apps/browser" }
 dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "oom-priority" },
@@ -418,6 +473,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
@@ -604,6 +661,91 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/80/3f/bd97d3d9c613013d07cb7733d299385b41df37f0471310f5a73dc359f0b8/charset_normalizer-3.4.9-cp314-cp314t-win_amd64.whl", hash = "sha256:9b8e0f3107e2200b76f6054de99016eac3ee6762713587b36baaa7e4bd2ae177", size = 167620, upload-time = "2026-07-07T14:34:33.438Z" },
     { url = "https://files.pythonhosted.org/packages/3d/c6/eee9dca4439b1061f76373f06ea855678cc4a64c1c3c90b50e479edbb8eb/charset_normalizer-3.4.9-cp314-cp314t-win_arm64.whl", hash = "sha256:19ac87f93086ce37b86e098888555c4b4bc48102279bae3350098c0ed664b501", size = 158037, upload-time = "2026-07-07T14:34:35.018Z" },
     { url = "https://files.pythonhosted.org/packages/98/2b/f97f1c193fb855c345d678f5077d6926034db0722df74c8f057020e05a25/charset_normalizer-3.4.9-py3-none-any.whl", hash = "sha256:68e5f26a1ad57ded6d1cfb85331d1c1a195314756471d97758c48498bb4dcdf5", size = 64538, upload-time = "2026-07-07T14:34:56.993Z" },
+]
+
+[[package]]
+name = "chat"
+version = "0.1.0"
+source = { editable = "system/apps/chat" }
+dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
+    { name = "concurrency-group" },
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-opencode" },
+    { name = "imbue-mngr-pi-coding" },
+    { name = "oom-priority" },
+    { name = "pexpect" },
+    { name = "pydantic-settings" },
+    { name = "pyte" },
+    { name = "simple-websocket" },
+    { name = "tk-command-parsing" },
+    { name = "tomlkit" },
+    { name = "watchdog" },
+    { name = "werkzeug" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot" },
+    { name = "mngr-cli-contract" },
+    { name = "playwright" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-playwright" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "system-interface" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
+    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
+    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
+    { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pexpect", specifier = ">=4.9" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pyte", specifier = ">=0.8" },
+    { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
+    { name = "tomlkit", specifier = ">=0.12" },
+    { name = "watchdog", specifier = ">=4.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
+    { name = "playwright", specifier = ">=1.40" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-playwright", specifier = ">=0.4" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "system-interface", editable = "system/apps/system_interface" },
+    { name = "ty", specifier = "==0.0.24" },
 ]
 
 [[package]]
@@ -800,7 +942,6 @@ source = { virtual = "." }
 dependencies = [
     { name = "app-watcher" },
     { name = "bootstrap" },
-    { name = "browser" },
     { name = "env-converge" },
     { name = "github-sync" },
     { name = "host-backup" },
@@ -816,6 +957,7 @@ dependencies = [
 dev = [
     { name = "imbue-mngr" },
     { name = "imbue-mngr-antigravity" },
+    { name = "imbue-mngr-autocompact" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
     { name = "imbue-mngr-opencode" },
@@ -825,6 +967,7 @@ dev = [
     { name = "mngr-cli-contract" },
     { name = "pyright" },
     { name = "pytest" },
+    { name = "pytest-playwright" },
     { name = "pytest-timeout" },
     { name = "pyyaml" },
     { name = "ruff" },
@@ -835,7 +978,6 @@ dev = [
 requires-dist = [
     { name = "app-watcher", editable = "system/services/app_watcher" },
     { name = "bootstrap", editable = "system/libs/bootstrap" },
-    { name = "browser", editable = "system/apps/browser" },
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },
@@ -851,6 +993,7 @@ requires-dist = [
 dev = [
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
+    { name = "imbue-mngr-autocompact", editable = "system/vendor/mngr/libs/mngr_autocompact" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
     { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
@@ -860,6 +1003,7 @@ dev = [
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.4" },
@@ -972,6 +1116,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c0/80/8232b582c4b318b817cf1274ba74976b07b34d35ef439b3eb948f98645a1/filelock-3.32.0.tar.gz", hash = "sha256:7be2ad23a14607ccc71808e68fe30848aeace7058ace17852f68e2a68e310402", size = 213757, upload-time = "2026-07-21T13:17:42.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/06/79/b4c714bef36bc4ec2beeae1e0c124f0223888cd8c6feb1cdc56038116920/filelock-3.32.0-py3-none-any.whl", hash = "sha256:d396bea984af47333ef05e50eae7eff88c84256de6112aea0ec48a233c064fe3", size = 97732, upload-time = "2026-07-21T13:17:41.55Z" },
+]
+
+[[package]]
+name = "files-app"
+version = "0.1.0"
+source = { editable = "system/apps/files" }
+dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
+    { name = "click" },
+    { name = "imbue-common" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -1470,14 +1635,17 @@ requires-dist = [
     { name = "cowsay-python", specifier = ">=1.0.2" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "import-linter", marker = "extra == 'testing'", specifier = ">=2.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
+    { name = "inline-snapshot", marker = "extra == 'testing'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
     { name = "sentry-sdk", specifier = ">=2.63.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "testing"]
 
 [[package]]
 name = "imbue-mngr"
@@ -1527,7 +1695,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=2.2.0" },
     { name = "overlay", editable = "system/vendor/mngr/libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "paramiko", specifier = ">=3.0" },
+    { name = "paramiko", specifier = "==3.5.1" },
     { name = "pluggy", specifier = ">=1.5.0" },
     { name = "psutil", specifier = ">=7.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -1550,6 +1718,17 @@ requires-dist = [
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
 source = { editable = "system/vendor/mngr/libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
+
+[[package]]
+name = "imbue-mngr-autocompact"
+version = "0.1.0"
+source = { editable = "system/vendor/mngr/libs/mngr_autocompact" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1673,15 +1852,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e3/5c/bfe40e15d684bc30b0073aa97c39be410a5fbef3d33cad6f0bf2012571e0/inotify_simple-2.0.1.tar.gz", hash = "sha256:f010bbbd8283bd71a9f4eb2de94765804ede24bd47320b0e6ef4136e541cdc2c", size = 7101, upload-time = "2025-08-25T06:28:20.998Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/86/8be1ac7e90f80b413e81f1e235148e8db771218886a2353392f02da01be3/inotify_simple-2.0.1-py3-none-any.whl", hash = "sha256:e5da495f2064889f8e68b67f9358b0d102e03b783c2d42e5b8e132ab859a5d8a", size = 7449, upload-time = "2025-08-25T06:28:19.919Z" },
-]
-
-[[package]]
-name = "invoke"
-version = "3.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/33/f6/227c48c5fe47fa178ccf1fda8f047d16c97ba926567b661e9ce2045c600c/invoke-3.0.3.tar.gz", hash = "sha256:437b6a622223824380bfb4e64f612711a6b648c795f565efc8625af66fb57f0c", size = 343419, upload-time = "2026-04-07T15:17:48.307Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/de/bbc12563bbf979618d17625a4e753ff7a078523e28d870d3626daa97261a/invoke-3.0.3-py3-none-any.whl", hash = "sha256:f11327165e5cbb89b2ad1d88d3292b5113332c43b8553b494da435d6ec6f5053", size = 160958, upload-time = "2026-04-07T15:17:46.875Z" },
 ]
 
 [[package]]
@@ -2110,17 +2280,25 @@ wheels = [
 
 [[package]]
 name = "paramiko"
-version = "4.0.0"
+version = "3.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bcrypt" },
     { name = "cryptography" },
-    { name = "invoke" },
     { name = "pynacl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/e7/81fdcbc7f190cdb058cffc9431587eb289833bdd633e2002455ca9bb13d4/paramiko-4.0.0.tar.gz", hash = "sha256:6a25f07b380cc9c9a88d2b920ad37167ac4667f8d9886ccebd8f90f654b5d69f", size = 1630743, upload-time = "2025-08-04T01:02:03.711Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/15/ad6ce226e8138315f2451c2aeea985bf35ee910afb477bae7477dc3a8f3b/paramiko-3.5.1.tar.gz", hash = "sha256:b2c665bc45b2b215bd7d7f039901b14b067da00f3a11e6640995fd58f2664822", size = 1566110, upload-time = "2025-02-04T02:37:59.783Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/90/a744336f5af32c433bd09af7854599682a383b37cfd78f7de263de6ad6cb/paramiko-4.0.0-py3-none-any.whl", hash = "sha256:0e20e00ac666503bf0b4eda3b6d833465a2b7aff2e2b3d79a8bba5ef144ee3b9", size = 223932, upload-time = "2025-08-04T01:02:02.029Z" },
+    { url = "https://files.pythonhosted.org/packages/15/f8/c7bd0ef12954a81a1d3cea60a13946bd9a49a0036a5927770c461eade7ae/paramiko-3.5.1-py3-none-any.whl", hash = "sha256:43b9a0501fc2b5e70680388d9346cf252cfb7d00b0667c39e80eb43a408b8f61", size = 227298, upload-time = "2025-02-04T02:37:57.672Z" },
+]
+
+[[package]]
+name = "pathspec"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
 ]
 
 [[package]]
@@ -3166,7 +3344,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pyjwt", specifier = ">=2.8" },
-    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "werkzeug", specifier = ">=3.1" },
 ]
 
 [[package]]
@@ -3213,31 +3391,24 @@ name = "system-interface"
 version = "0.1.0"
 source = { editable = "system/apps/system_interface" }
 dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
+    { name = "concurrency-group" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
     { name = "imbue-common" },
-    { name = "imbue-mngr" },
-    { name = "imbue-mngr-antigravity" },
-    { name = "imbue-mngr-claude" },
-    { name = "imbue-mngr-codex" },
-    { name = "imbue-mngr-opencode" },
-    { name = "imbue-mngr-pi-coding" },
-    { name = "oom-priority" },
-    { name = "pexpect" },
-    { name = "pluggy" },
     { name = "pydantic-settings" },
-    { name = "pyte" },
     { name = "simple-websocket" },
-    { name = "tk-command-parsing" },
     { name = "watchdog" },
     { name = "werkzeug" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "chat" },
     { name = "coverage" },
-    { name = "import-linter" },
+    { name = "imbue-mngr" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
     { name = "playwright" },
@@ -3245,38 +3416,30 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
-    { name = "resource-guards" },
     { name = "ruff" },
     { name = "ty" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
-    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
-    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
-    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
-    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
-    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
-    { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
-    { name = "oom-priority", editable = "system/services/oom_priority" },
-    { name = "pexpect", specifier = ">=4.9" },
-    { name = "pluggy", specifier = ">=1.5" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
-    { name = "pyte", specifier = ">=0.8" },
     { name = "simple-websocket", specifier = ">=1.0" },
-    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
-    { name = "import-linter", specifier = ">=2.0" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },
@@ -3284,7 +3447,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
-    { name = "resource-guards", editable = "system/vendor/mngr/libs/resource_guards" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "ty", specifier = "==0.0.24" },
 ]
@@ -3305,6 +3467,33 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
+]
+
+[[package]]
+name = "terminal-app"
+version = "0.1.0"
+source = { editable = "system/apps/terminal" }
+dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
+    { name = "click" },
+    { name = "flask" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]

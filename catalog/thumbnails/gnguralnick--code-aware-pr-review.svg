@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Code-Aware PR Review">
+  <rect width="240" height="160" rx="12" fill="#0f172a"/>
+  <!-- window -->
+  <rect x="14" y="14" width="212" height="132" rx="8" fill="#111c33" stroke="#24324a"/>
+  <rect x="14" y="14" width="212" height="20" rx="8" fill="#1b2a44"/>
+  <circle cx="26" cy="24" r="3" fill="#ef6b73"/>
+  <circle cx="36" cy="24" r="3" fill="#e6b45a"/>
+  <circle cx="46" cy="24" r="3" fill="#5bbf7a"/>
+  <!-- left: PR list with status dots -->
+  <rect x="14" y="34" width="66" height="112" fill="#0d1830"/>
+  <rect x="22" y="44" width="50" height="7" rx="3" fill="#33507f"/>
+  <circle cx="26" cy="63" r="3" fill="#5bbf7a"/>
+  <rect x="33" y="60" width="39" height="6" rx="3" fill="#3a4a66"/>
+  <circle cx="26" cy="79" r="3" fill="#e6b45a"/>
+  <rect x="33" y="76" width="33" height="6" rx="3" fill="#3a4a66"/>
+  <circle cx="26" cy="95" r="3" fill="#ef6b73"/>
+  <rect x="33" y="92" width="39" height="6" rx="3" fill="#3a4a66"/>
+  <circle cx="26" cy="111" r="3" fill="#5bbf7a"/>
+  <rect x="33" y="108" width="30" height="6" rx="3" fill="#3a4a66"/>
+  <!-- right: full-file diff in an editor -->
+  <rect x="80" y="34" width="146" height="112" fill="#0b152b"/>
+  <rect x="80" y="34" width="16" height="112" fill="#0e1a33"/>
+  <rect x="100" y="42" width="96" height="6" rx="2" fill="#33405c"/>
+  <!-- added lines -->
+  <rect x="96" y="54" width="130" height="10" fill="#12351f"/>
+  <rect x="100" y="56" width="70" height="6" rx="2" fill="#4cae6a"/>
+  <rect x="96" y="66" width="130" height="10" fill="#12351f"/>
+  <rect x="100" y="68" width="98" height="6" rx="2" fill="#4cae6a"/>
+  <!-- context -->
+  <rect x="100" y="80" width="84" height="6" rx="2" fill="#33405c"/>
+  <!-- removed line -->
+  <rect x="96" y="92" width="130" height="10" fill="#3a1620"/>
+  <rect x="100" y="94" width="60" height="6" rx="2" fill="#c05663"/>
+  <!-- more context -->
+  <rect x="100" y="108" width="104" height="6" rx="2" fill="#33405c"/>
+  <rect x="100" y="120" width="76" height="6" rx="2" fill="#33405c"/>
+  <!-- hover / go-to-definition chip -->
+  <rect x="150" y="116" width="62" height="21" rx="4" fill="#1b2a44" stroke="#2f466b"/>
+  <rect x="156" y="122" width="34" height="4" rx="2" fill="#6aa0e0"/>
+  <rect x="156" y="129" width="48" height="4" rx="2" fill="#3a4a66"/>
+</svg>

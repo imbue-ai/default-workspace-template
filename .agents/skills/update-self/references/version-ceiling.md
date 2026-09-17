@@ -1,6 +1,6 @@
 # The version ceiling
 
-The default update target is capped at the version of the **Minds app driving
+The default update target is capped at the version of the **Mind app driving
 this workspace**, which `resolve-target` reads from the app itself (`GET
 /api/v1/app/version` through the latchkey gateway; `ceiling` in the output).
 The template carries the code the app talks to -- the system interface and the
@@ -26,7 +26,7 @@ the resolved ref is already an ancestor of `HEAD`, not by the ceiling alone.
 app cannot vouch for -- newer than the app, or a branch or commit whose version
 cannot be compared. Do not dispatch the worker on it silently. Tell the user
 plainly what they asked for and what it risks ("that version is newer than your
-Minds app, so parts of your workspace may stop working until you update the
+Mind app, so parts of your workspace may stop working until you update the
 app itself") and get an explicit go-ahead. This is the one confirmation the
 otherwise-unattended flow keeps: it fires at launch, while the user is present,
 and asks whether to *attempt* an unsupported version at all -- a question no

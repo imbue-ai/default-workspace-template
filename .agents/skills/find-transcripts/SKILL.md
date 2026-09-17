@@ -1,6 +1,6 @@
 ---
 name: find-transcripts
-description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Minds agents -- not other services (ChatGPT, claude.ai, etc.)."
+description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Mind agents -- not other services (ChatGPT, claude.ai, etc.)."
 compatibility: Covers agents that ran on this host (active, stopped, or destroyed). Uses find/cat/jq/mngr.
 metadata:
   author: imbue
@@ -32,15 +32,32 @@ whether the agent still exists:
 have short, task-focused transcripts. `mngr list` shows agent names and labels to
 help you identify which is which.
 
+**One chat, several agents.** A chat that the chat app moved to another harness
+has run on more than one agent, and the user sees it as one conversation. Every
+agent of such a chat carries the labels `chat_id=<chat id>` (the id of the
+chat's first agent) and `chat_seq=<n>` (its position, 1 for the first). The
+agents the chat has left are stopped and renamed `archived-<seq>-<name>-<id>`
+with `display_name` "<title> (archived <seq>)"; only the current agent keeps
+the chat's name. To read the whole conversation, list the chat's agents and
+read their transcripts in `chat_seq` order:
+
+```bash
+mngr list --include 'labels.chat_id == "<chat id>"'     # every agent of one chat, archived ones included
+mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'   # the agents of the chat you are running in
+```
+
+An archived agent is still present (not destroyed), so `mngr transcript <id>`
+and the still-present path below both work for it.
+
 ## What this skill does NOT cover
 
 - **Other services** (ChatGPT, claude.ai, other AI tools): their chats are not
   stored on this host. To access them you'd need to pull in that data separately
   via their own export features.
 
-- **Other Minds workspaces**: each workspace is a separate host with its own
+- **Other Mind workspaces**: each workspace is a separate host with its own
   `/home/user/.mngr/`. Transcripts from agents in another workspace live there, not here.
-  To read them, SSH into that workspace via the Minds API: use the `minds-api`
+  To read them, SSH into that workspace via the Mind API: use the `minds-api`
   skill to request the `minds-workspaces-ssh` latchkey permission, then run this
   skill's read commands over SSH on that host.
 

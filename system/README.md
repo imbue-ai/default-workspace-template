@@ -16,7 +16,10 @@ day-to-day, but every part is inspectable and the mind maintains it.
   template pointer). Runtime-written config lives in `data/system/` instead.
 - `changelog/` - Per-change entries for template development.
 - `Dockerfile` - Builds the workspace image.
-- `supervisord.conf` - Defines the background services (also reachable at
+- `supervisord.conf` - The supervisord daemon's own config, plus the
+  `[include]` glob that pulls in `supervisord.conf.d/` (also reachable at
   `/etc/supervisord.conf`, so `supervisorctl` works from any directory).
+- `supervisord.conf.d/` - One `[program:*]` per file: every background service
+  and app. Add a service by writing a file here, remove one by deleting it.
 - `test_meta_ratchets.py`, `test_mngr_template_stacking.py` - Repo-wide test
   suites.

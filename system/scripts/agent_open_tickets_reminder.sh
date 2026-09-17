@@ -42,9 +42,9 @@ tk_script="${repo_root}/system/vendor/tk/ticket"
 # parent-walk and potentially land on a random ancestor).
 export TICKETS_DIR="$tickets_dir"
 
-# `tk steps` lists only step records (creator-scoped to $MNGR_AGENT_NAME
-# when set, so a sibling agent's steps never leak into this agent's
-# reminder). Output format: <id>  [<status>] - <title>
+# `tk steps` lists only step records (creator-scoped to the chat's id, or
+# the agent's name outside the chat app; see tk_creator in the tk script, so
+# a sibling agent's steps never leak into this agent's reminder). Output format: <id>  [<status>] - <title>
 open_lines=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
 
 [[ -n "$open_lines" ]] || exit 0

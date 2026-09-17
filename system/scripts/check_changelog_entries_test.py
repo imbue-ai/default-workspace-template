@@ -62,20 +62,6 @@ def _add_entry(repo: Path, project_dir: str, branch: str) -> None:
     (d / f"{branch.replace('/', '-')}.md").write_text("did a thing\n")
 
 
-def _isolate_base_ref_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drop the runner's own base-ref env from a sandbox-repo test.
-
-    ``resolve_diff_base`` honors ``CHANGELOG_BASE_REF`` / ``GITHUB_BASE_REF``
-    from the environment, and on a stacked PR the CI runner's
-    ``GITHUB_BASE_REF`` names a branch that exists in the real checkout but
-    not in these tests' sandbox repos -- which turned every sandbox resolve
-    into the refuse-to-fall-back error. Tests that SET these vars to exercise
-    that path do so explicitly on top of this clean slate.
-    """
-    monkeypatch.delenv("CHANGELOG_BASE_REF", raising=False)
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-
-
 def test_project_for_path_maps_libs_services_apps_and_dev(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert gate.project_for_path("system/libs/alpha/foo.py", repo) == "alpha"
@@ -91,10 +77,7 @@ def test_project_for_path_maps_libs_services_apps_and_dev(tmp_path: Path) -> Non
     assert gate.project_for_path("README.md", repo) == "dev"
 
 
-def test_gate_flags_agents_change_missing_entry_and_clears_with_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_base_ref_env(monkeypatch)
+def test_gate_flags_agents_change_missing_entry_and_clears_with_one(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "feat/skill")
     skill = repo / ".agents/skills/foo/SKILL.md"
@@ -115,10 +98,7 @@ def test_gate_flags_agents_change_missing_entry_and_clears_with_one(
     assert gate.find_missing_entries("feat/skill", touched, repo) == []
 
 
-def test_gate_fails_when_touched_project_missing_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_base_ref_env(monkeypatch)
+def test_gate_fails_when_touched_project_missing_entry(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "feat/x")
     (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
@@ -134,8 +114,7 @@ def test_gate_fails_when_touched_project_missing_entry(
     ]
 
 
-def test_gate_passes_when_entry_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _isolate_base_ref_env(monkeypatch)
+def test_gate_passes_when_entry_present(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "feat/y")
     (repo / "system/apps/beta/new.py").write_text("print(1)\n")
@@ -150,12 +129,9 @@ def test_gate_passes_when_entry_present(tmp_path: Path, monkeypatch: pytest.Monk
     assert gate.find_missing_entries("feat/y", touched, repo) == []
 
 
-def test_resolve_diff_base_refuses_head_collision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_diff_base_refuses_head_collision(tmp_path: Path) -> None:
     """When main == HEAD (e.g. a fresh clone with no distinct base), the gate
     must raise rather than diff against HEAD and pass vacuously."""
-    _isolate_base_ref_env(monkeypatch)
     repo = _init_repo(tmp_path)
     # Still on main, so main resolves to HEAD; no other base ref exists.
     with pytest.raises(RuntimeError):
@@ -172,7 +148,6 @@ def test_resolve_diff_base_refuses_an_unresolvable_named_base(
     presented as flakiness -- the same files green on one run and red on the
     next -- because the answer was confidently wrong rather than absent.
     """
-    _isolate_base_ref_env(monkeypatch)
     repo = _init_repo(tmp_path)
     (repo / "README.md").write_text("changed\n")
     _git(repo, "commit", "-qam", "move HEAD off the base")
@@ -188,7 +163,6 @@ def test_resolve_diff_base_refuses_an_unresolvable_named_base(
 def test_resolve_diff_base_uses_a_named_base_that_does_resolve(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _isolate_base_ref_env(monkeypatch)
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "stacked-base")
     (repo / "README.md").write_text("changed\n")
@@ -208,7 +182,6 @@ def test_changelog_base_ref_overrides_the_reserved_github_variable(
     On a stacked PR that value was `main` instead of the parent branch, so the
     only way to pass the payload's answer through is a name GitHub does not own.
     """
-    _isolate_base_ref_env(monkeypatch)
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "stacked-base")
     (repo / "README.md").write_text("changed\n")

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="240" height="160" role="img" aria-labelledby="t d">
+  <title id="t">Orchard</title>
+  <desc id="d">A recruiter's candidate pipeline board: candidates moving through outreach stages, with email open-tracking.</desc>
+
+  <!-- card -->
+  <rect x="3" y="3" width="234" height="154" rx="15" fill="#F6F8EF" stroke="#E3E8D6" stroke-width="1.5"/>
+
+  <!-- header: apple mark + wordmark -->
+  <g>
+    <path d="M24 15 C24 12 26 11 28 12" fill="none" stroke="#6E7A4F" stroke-width="1.6" stroke-linecap="round"/>
+    <ellipse cx="30" cy="14" rx="4.2" ry="2.3" fill="#57993F" transform="rotate(-32 30 14)"/>
+    <circle cx="24" cy="26" r="8.5" fill="#4E9A55"/>
+    <circle cx="21.4" cy="23.4" r="2.6" fill="#6BB56F" opacity="0.7"/>
+    <text x="40" y="30.5" font-family="'Space Grotesk', 'Trebuchet MS', sans-serif" font-size="15.5" font-weight="700" fill="#33372B" letter-spacing="0.4">orchard</text>
+  </g>
+
+  <!-- open-tracking eye motif (top right) -->
+  <g>
+    <path d="M197 26 Q206 19 215 26 Q206 33 197 26 Z" fill="#E7F1DF" stroke="#57993F" stroke-width="1.6"/>
+    <circle cx="206" cy="26" r="2.6" fill="#57993F"/>
+  </g>
+
+  <!-- divider -->
+  <line x1="18" y1="44" x2="222" y2="44" stroke="#E3E8D6" stroke-width="1.4"/>
+
+  <!-- column hint labels -->
+  <rect x="50" y="50" width="34" height="4" rx="2" fill="#AAB29A" opacity="0.7"/>
+  <rect x="180" y="50" width="30" height="4" rx="2" fill="#AAB29A" opacity="0.7"/>
+
+  <!-- row 1: replied (green) -->
+  <g>
+    <circle cx="32" cy="70" r="10" fill="#E7F1DF" stroke="#4E9A55" stroke-width="1.6"/>
+    <circle cx="32" cy="66.5" r="3" fill="#4E9A55"/>
+    <path d="M25.5 76 Q32 70.5 38.5 76" fill="none" stroke="#4E9A55" stroke-width="1.6" stroke-linecap="round"/>
+    <rect x="50" y="63.5" width="94" height="7" rx="3.5" fill="#33372B" opacity="0.82"/>
+    <rect x="50" y="74" width="62" height="5" rx="2.5" fill="#AAB29A"/>
+    <rect x="176" y="63" width="48" height="16" rx="8" fill="#E7F1DF"/>
+    <circle cx="186" cy="71" r="3.4" fill="#57993F"/>
+    <rect x="193" y="68.5" width="24" height="5" rx="2.5" fill="#57993F" opacity="0.55"/>
+  </g>
+
+  <!-- row 2: reached out (amber) -->
+  <g>
+    <circle cx="32" cy="98" r="10" fill="#F7EEDA" stroke="#C58A2C" stroke-width="1.6"/>
+    <circle cx="32" cy="94.5" r="3" fill="#C58A2C"/>
+    <path d="M25.5 104 Q32 98.5 38.5 104" fill="none" stroke="#C58A2C" stroke-width="1.6" stroke-linecap="round"/>
+    <rect x="50" y="91.5" width="84" height="7" rx="3.5" fill="#33372B" opacity="0.82"/>
+    <rect x="50" y="102" width="54" height="5" rx="2.5" fill="#AAB29A"/>
+    <rect x="176" y="91" width="48" height="16" rx="8" fill="#F7EEDA"/>
+    <circle cx="186" cy="99" r="3.4" fill="#C58A2C"/>
+    <rect x="193" y="96.5" width="24" height="5" rx="2.5" fill="#C58A2C" opacity="0.55"/>
+  </g>
+
+  <!-- row 3: not contacted (muted) -->
+  <g>
+    <circle cx="32" cy="126" r="10" fill="#F1E7E6" stroke="#C0504A" stroke-width="1.6"/>
+    <circle cx="32" cy="122.5" r="3" fill="#C0504A"/>
+    <path d="M25.5 132 Q32 126.5 38.5 132" fill="none" stroke="#C0504A" stroke-width="1.6" stroke-linecap="round"/>
+    <rect x="50" y="119.5" width="90" height="7" rx="3.5" fill="#33372B" opacity="0.82"/>
+    <rect x="50" y="130" width="48" height="5" rx="2.5" fill="#AAB29A"/>
+    <rect x="176" y="119" width="48" height="16" rx="8" fill="#EEF1E6"/>
+    <circle cx="186" cy="127" r="3.4" fill="#AAB29A"/>
+    <rect x="193" y="124.5" width="24" height="5" rx="2.5" fill="#AAB29A" opacity="0.7"/>
+  </g>
+</svg>

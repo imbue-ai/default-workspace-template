@@ -1,0 +1,1 @@
+Fixes restored tabs reading "This tab's app no longer lists it." while the shell's app list had not arrived yet (seen on shared workspaces, where the WebSocket can take longer than the restore's wait). Until the first app list lands, no address counts as unlisted, so the tabs say they are waiting instead, and an empty first push can no longer prune them.

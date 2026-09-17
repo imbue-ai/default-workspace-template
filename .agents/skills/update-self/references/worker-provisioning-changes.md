@@ -92,8 +92,10 @@ directory: `git cat-file -e "$TARGET_REF":<path>` for its files).
   code against it. If leaving it unapplied would break the running workspace,
   that is `stuck`.
 
-For either case, **research the version change online** -- the dependency's
-release notes for the exact old -> new delta (breaking changes, removed flags,
-new minimum runtimes); do not rely on memory -- and **report the coupling**
-explicitly: which dependent, built-in or user-created, what you could and
-could not validate, and your apply / rebuild-only / `stuck` call.
+For a user-created dependent, **research the version change online** -- the
+dependency's release notes for the exact old -> new delta (breaking changes,
+removed flags, new minimum runtimes); do not rely on memory. For a built-in
+dependent the verdict is fixed by provenance, so there is nothing to research:
+the merged changelog entries are the what's-new. In either case **report the
+coupling** explicitly: which dependent, built-in or user-created, what you
+could and could not validate, and your apply / rebuild-only / `stuck` call.

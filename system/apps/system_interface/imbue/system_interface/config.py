@@ -1,54 +1,27 @@
-from functools import cached_property
-from pathlib import Path
+from typing import Final
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
-
-class DuplicateStaticBasenameError(ValueError):
-    pass
+# Where the shipped catalog lives: the raw file on the template repository.
+# CLEANUP: point this at ``main`` (and update ``catalog/README.md``,
+# ``system/changelog/mngr-new-tab-page.md``, and
+# ``docs/system/blueprint/new-tab-page/plan-new-tab-page.md``, which name the branch too) once
+# the new-tab-page work has merged to ``main``.
+DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
+    "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/mngr/new-tab-page/catalog/new-tab-templates.json"
+)
 
 
 class Config(BaseSettings):
+    """The shell's settings, read from ``SYSTEM_INTERFACE_*`` environment variables."""
+
     model_config = {"frozen": False}
 
-    system_interface_javascript_plugins: list[str] | None = None
-    system_interface_static_paths: list[str] | None = None
     system_interface_host: str = "127.0.0.1"
     system_interface_port: int = 8000
-
-    @field_validator("system_interface_javascript_plugins", "system_interface_static_paths", mode="before")
-    @classmethod
-    def split_comma_separated(cls, value: object) -> list[str] | None:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        if isinstance(value, list):
-            return [str(item) for item in value]
-        return None
-
-    @cached_property
-    def javascript_plugin_basenames(self) -> list[str]:
-        if not self.system_interface_javascript_plugins:
-            return []
-        return [Path(plugin_path).name for plugin_path in self.system_interface_javascript_plugins]
-
-    @cached_property
-    def static_file_basename_to_path(self) -> dict[str, str]:
-        all_paths = [
-            *(self.system_interface_javascript_plugins or []),
-            *(self.system_interface_static_paths or []),
-        ]
-        if not all_paths:
-            return {}
-        result: dict[str, str] = {}
-        for file_path in all_paths:
-            basename = Path(file_path).name
-            if basename in result:
-                raise DuplicateStaticBasenameError(
-                    f"Duplicate basename '{basename}': '{result[basename]}' and '{file_path}'"
-                )
-            result[basename] = file_path
-        return result
+    # Where the New Tab page's template catalog is fetched from; empty leaves the page without
+    # a templates section.
+    system_interface_template_catalog_url: str = DEFAULT_TEMPLATE_CATALOG_URL
 
 
 def load_config() -> Config:

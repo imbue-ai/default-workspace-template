@@ -51,7 +51,9 @@ def _valid_subcommands() -> frozenset[str]:
 
 
 def _code_regions(text: str) -> list[str]:
-    return _FENCED_CODE.findall(text) + [m.group(1) for m in _INLINE_CODE.finditer(text)]
+    return _FENCED_CODE.findall(text) + [
+        m.group(1) for m in _INLINE_CODE.finditer(text)
+    ]
 
 
 def _iter_skill_markdown() -> list[Path]:
@@ -68,7 +70,9 @@ def test_skill_markdown_mngr_subcommands_exist() -> None:
             for match in _MNGR_SUBCOMMAND.finditer(region):
                 subcommand = match.group(1)
                 if subcommand not in valid:
-                    offenders.append(f"{md.relative_to(_REPO_ROOT)}: `mngr {subcommand}`")
+                    offenders.append(
+                        f"{md.relative_to(_REPO_ROOT)}: `mngr {subcommand}`"
+                    )
 
     # Vacuity guard: the skills genuinely use mngr, so the scan must have walked
     # real files. (A zero here would mean the globs broke, not that all is well.)

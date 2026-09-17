@@ -5,9 +5,9 @@
 """Deterministic helpers for the safe, background-worker-driven update-self flow.
 
 The update-self orchestration is mostly agent judgement (triage conflicts,
-decide validation depth, work the report's impact analysis). This script owns
-the parts that are *deterministic* and therefore belong in tested code rather
-than agent prose:
+judge whether the user's creations survived, work the report's impact
+analysis). This script owns the parts that are *deterministic* and therefore
+belong in tested code rather than agent prose:
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
@@ -48,7 +48,12 @@ than agent prose:
     necessary but not sufficient to skip the gates -- the worker's impact
     analysis must also find no user-created code affected, and the worker must
     have authored no in-branch edits of its own (which this diff cannot see at
-    all); the worker reference owns that half.
+    all); the worker reference owns that half. ``local_only`` lists the files
+    only the workspace changed, and ``has_local_footprint`` says whether any
+    local content (merged or local-only) is outside the docs class -- the
+    mechanical answer to "does this workspace have code of its own that the
+    update could break", which scopes the worker's impact analysis and its
+    validation.
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -113,7 +118,7 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Minds app, bootstrap and the system interface read),
+verdict and record the Mind app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``, and
 ``update_apply`` (the apply and recover orchestration). All of it is covered
@@ -146,6 +151,8 @@ from update_apply_contract import (
 )
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
+from update_environment import default_sweep_homes
+from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
     CeilingUnavailableError,
@@ -295,6 +302,8 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
                 "reveal_classes_pulled_in": result.reveal_classes_pulled_in,
                 "projects_to_validate": result.projects_to_validate,
                 "has_merge_work": result.has_merge_work,
+                "local_only": result.local_only,
+                "has_local_footprint": result.has_local_footprint,
             },
             indent=2,
         )
@@ -363,9 +372,14 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_name: str) -> bool:
+def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
     result = subprocess.run(
-        [sys.executable, "system/scripts/layout.py", "open", f"chat:{chat_name}"],
+        [
+            sys.executable,
+            "system/scripts/layout.py",
+            "open",
+            f"app:chat?instance={chat_id}",
+        ],
         cwd=repo_root,
         capture_output=True,
     )
@@ -378,7 +392,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.name),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -392,8 +406,8 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
             sys.executable,
             str(Path(__file__).resolve()),
             "surface-chat-tab",
-            "--name",
-            args.name,
+            "--chat-id",
+            args.chat_id,
             "--repo-root",
             str(repo_root),
             "--wait",
@@ -478,16 +492,37 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
+    """``--worker-bundle APP=PATH`` occurrences as a mapping; None when none were given."""
+    if not values:
+        return None
+    apps = {bundle.app for bundle in FRONTEND_BUNDLES}
+    bundles: dict[str, str] = {}
+    for value in values:
+        app, separator, path = value.partition("=")
+        if separator == "" or app not in apps or path == "":
+            raise SystemExit(
+                f"error: --worker-bundle takes APP=PATH with APP one of {sorted(apps)}, got {value!r}"
+            )
+        if app in bundles:
+            raise SystemExit(
+                f"error: --worker-bundle names {app} twice ({bundles[app]!r} and {path!r})"
+            )
+        bundles[app] = path
+    return bundles
+
+
 def _cmd_apply(args: argparse.Namespace) -> int:
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
         ff_only=args.ff_only,
-        worker_bundle=args.worker_bundle,
+        worker_bundles=_parse_worker_bundles(args.worker_bundle),
         target_ref=args.target_ref,
         runner=Runner(),
         http=HttpClient(),
         spawner=Spawner(),
+        sweep_homes=default_sweep_homes(),
     )
 
 
@@ -654,7 +689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     classify_parser = sub.add_parser(
         "classify-merge",
-        help="Split upstream-changed files into merged vs pulled-in and classify each.",
+        help="Split the changed files into merged, pulled-in and local-only, and classify each.",
         parents=[common],
     )
     classify_parser.add_argument(
@@ -688,7 +723,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parents=[common],
     )
     surface_parser.add_argument(
-        "--name", required=True, help="This run's chat agent name ($MNGR_AGENT_NAME)."
+        "--chat-id",
+        required=True,
+        help="This run's chat id ($MINDS_CHAT_ID, or $MNGR_AGENT_ID for an agent that is its own chat).",
     )
     surface_parser.add_argument(
         "--wait",
@@ -738,16 +775,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     apply_parser.add_argument(
         "--worker-bundle",
+        action="append",
         default=None,
-        help="Path to the worker's already-built static/ bundle (the artifact "
-        "the worker validated); a live build is the fallback.",
+        metavar="APP=PATH",
+        help="An app's already-built static/ bundle from the worker (the artifact "
+        "the worker validated): system_interface=<path> or chat=<path>, once per "
+        "app. Installed as-is only when every app's is given and verified; a live "
+        "build is the fallback.",
     )
     apply_parser.add_argument(
         "--target-ref",
         default=None,
         help="The release this update lands (update-self mode): enables the "
         "VERSION_HISTORY.md ledger entry and the post-success "
-        "`env-converge upgrade`.",
+        "`env-converge upgrade`, and refuses a merge ref that re-merges this "
+        "target after a rollback of it without reverting the rollback first.",
     )
     apply_parser.set_defaults(func=_cmd_apply)
 
@@ -781,7 +823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Minds app (data/.state/update-apply/run.json).",
+        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -816,7 +858,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Minds app's modal.",
+        help="One plain-language line for the Mind app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",

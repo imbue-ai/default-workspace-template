@@ -22,8 +22,9 @@ grep -A1 '<name>' data/.state/apps.toml
 
 The service name must appear with the URL you expect. If it is
 missing, `forward_port.py` was not run, failed (e.g. an invalid,
-non-DNS-safe name), or was passed the wrong `--name` -- the tab would
-show the forwarder's loading page forever.
+non-DNS-safe name), or registered a different name (the manifest's
+`name` for a `--manifest` line, the `--name` flag otherwise) -- the tab
+would show the forwarder's loading page forever.
 
 ## Step 1: curl the registered backend
 
@@ -32,7 +33,7 @@ curl -sf http://127.0.0.1:<port>/ -o /dev/null -w "%{http_code}\n"
 ```
 
 `<port>` is the port in the service's `forward_port.py --url` (see
-`system/supervisord.conf` or `data/.state/apps.toml`). Expected: `200`.
+`system/supervisord.conf.d/<name>.conf` or `data/.state/apps.toml`). Expected: `200`.
 
 Common failures:
 

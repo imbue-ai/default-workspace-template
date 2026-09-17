@@ -5,6 +5,10 @@ description = "Live Chromium with human-in-the-loop control, streamed, driven by
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # The instances API of the workspace app model (the /_instances routes the shell
+    # reads), and the manifest primitives the daemon names itself with.
+    "app-instances",
+    "app-manifest",
     "flask>=3.0",
     "flask-sock>=0.7",
     "oom-priority",

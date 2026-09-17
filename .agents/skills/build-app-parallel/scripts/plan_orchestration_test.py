@@ -229,7 +229,6 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     text = plan_orchestration.render_node_task(
         plan=plan,
         node_idx=2,
-        task_path=Path("data/.tasks/build-app-parallel/todo/nodes/2/task.md"),
         finish_report_path=report_path,
         report_by_node_idx={
             0: "Spec: items have a title.",
@@ -238,9 +237,6 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     )
 
     assert text.startswith(f"---\nfinish_report_path: {report_path}\n---\n")
-    assert (
-        "This task file: `data/.tasks/build-app-parallel/todo/nodes/2/task.md`" in text
-    )
     assert (
         "## Your subtask\n\nBuild the mock.\n\nDo this subtask and nothing else."
         in text
@@ -257,7 +253,6 @@ def test_render_node_task_without_dependencies_says_so() -> None:
     text = plan_orchestration.render_node_task(
         plan=plan,
         node_idx=0,
-        task_path=Path("r/task.md"),
         finish_report_path=Path("r/report.md"),
         report_by_node_idx={},
     )
@@ -272,7 +267,6 @@ def test_render_node_task_refuses_interactive_and_missing_reports() -> None:
         plan_orchestration.render_node_task(
             plan=plan,
             node_idx=3,
-            task_path=Path("t"),
             finish_report_path=Path("r"),
             report_by_node_idx={},
         )
@@ -280,7 +274,6 @@ def test_render_node_task_refuses_interactive_and_missing_reports() -> None:
         plan_orchestration.render_node_task(
             plan=plan,
             node_idx=2,
-            task_path=Path("t"),
             finish_report_path=Path("r"),
             report_by_node_idx={0: "spec"},
         )

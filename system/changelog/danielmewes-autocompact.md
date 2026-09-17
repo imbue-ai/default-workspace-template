@@ -1,0 +1,1 @@
+Add `imbue-mngr-autocompact` as an editable dev dependency in the root `pyproject.toml` and update `uv.lock`. Register `system/vendor/mngr/libs/mngr_autocompact` for the `mngr` tool in `system/config/mngr_plugins.toml` and copy its manifest in `system/Dockerfile`.

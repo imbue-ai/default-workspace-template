@@ -2,7 +2,7 @@
 
 ## Refined prompt
 
-> **Spec a new `migrate-workspace` skill for the default-workspace-template: a general main SKILL.md for pulling a user's creations/data/agents from an old Minds workspace into the newly-created one, plus a reference doc for the pre-declutter (minds v0.3.9 and earlier) layout mapping.**
+> **Spec a new `migrate-workspace` skill for the default-workspace-template: a general main SKILL.md for pulling a user's creations/data/agents from an old Mind workspace into the newly-created one, plus a reference doc for the pre-declutter (minds v0.3.9 and earlier) layout mapping.**
 >
 > * The skill runs in the newly-created workspace and pulls in; the escape hatch, invoked from the old workspace, creates the new workspace and then tells the user to open it and ask its agent to migrate — a clean, human-visible handoff.
 > * The flow reaches the old workspace over a live SSH session and therefore requires it to be online; the backup-export path is covered in prose rather than by the tooling.

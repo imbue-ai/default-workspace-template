@@ -163,6 +163,41 @@ actual published version) before any update. (The shipped ledger records the
 source sha, not the published snapshot sha, so this version-and-shape check is
 the integrity gate in place of a recorded-snapshot-sha comparison.)
 
+Then confirm the published repo does not carry this mind's own history. A
+template published on the wrong base -- an `update-self:` merge commit instead of
+its upstream parent -- shipped everything the mind had built before that update,
+in its tree and in its history. The published base is the newest commit under
+the `template:` snapshots, and it must not descend from this workspace's own
+`Initial workspace commit` (being that commit is fine). `--origin` resolves that
+marker, and takes the NEWEST for the reason the script documents: a mind created
+from a published template also carries the source mind's marker further down,
+and a correct base descends from that one:
+
+```bash
+PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
+    | awk '$2 != "template:" {print $1; exit}')"
+INITIAL="$(uv run .agents/shared/scripts/resolve_template_base.py --origin)"
+if [ -z "$PUBLISHED_BASE" ]; then
+    echo "NO BASE"
+elif [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \
+    && git merge-base --is-ancestor "$INITIAL" "$PUBLISHED_BASE"; then
+    echo "CONTAINS $INITIAL"
+fi
+```
+
+A clean published repo prints nothing and exits 0; read the output, not the exit
+code. `NO BASE` means the tip is `template:` snapshots all the way down -- a
+parentless publish that `publish-template` §8's own guard rejects -- and the
+question cannot be answered at all, so STOP and surface that rather than
+reading it as clean.
+
+If it prints `CONTAINS`, **STOP and tell the user plainly**: the published repo
+contains this workspace's own commits (other apps and anything else committed
+before its base), and an update cannot remove them -- a new commit on top leaves
+the history in place. The remedy is theirs to choose: make the repo private or
+delete it, then publish afresh with `publish-template`. Do not update,
+force-push, or rewrite the repo yourself.
+
 **2c. Read the recipe** out of the fetched tip -- the `include` /
 `data_include` paths, the `exclude` list, and the `modification_rules`. These are
 the update's inputs: the paths whose changes are eligible, and the rules to
@@ -188,11 +223,13 @@ This is the **forward** delta -- only what changed in the source workspace since
 v(n). NEVER diff the workspace against the published repo: the published tree has
 had personal data stripped and modifications applied, so a workspace-vs-published
 diff would try to re-add exactly the things the recipe deliberately removed. Also
-note the **base delta**: compare the ledger's recorded base against the current
-resolved base (`publish-template` §2's marker walk). If `BASE_REF` moved, the
-template substrate advanced too -- report it, but an app-delta update re-publishes
-on the existing published base; re-cutting on a newer base is a separate, larger
-operation (surface it as an option, default to not doing it).
+note the **base delta**: compare the published base (`PUBLISHED_BASE` from 2b)
+against the current resolved base (`uv run
+.agents/shared/scripts/resolve_template_base.py`, as in `publish-template` §2).
+If `BASE_REF` moved, the template substrate advanced too -- report it, but an
+app-delta update re-publishes on the existing published base; re-cutting on a
+newer base is a separate, larger operation (surface it as an option, default to
+not doing it).
 
 **If the delta is empty and the base is unchanged**, the published version is
 already current -- tell the user so and STOP. There is nothing to update.
@@ -262,9 +299,13 @@ description of what changed for the changelog entry.
 Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
-1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
-   `.agents/shared/references/worker-reporting.md` -- before any reset that could
-   remove the task file.
+1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` /
+   `FINISH_REPORT_PATH`) per `.agents/shared/references/worker-reporting.md`,
+   from the exact task-file path `data/.tasks/launch-task/<slug>/task.md` --
+   before any reset that could remove the task file. Deliver the report itself
+   by hand at the end, per `publish-template` §3's copy and for the same reason:
+   the reset leaves your checkout at the published tip, whose launcher may
+   predate the `report` subcommand.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
@@ -328,7 +369,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
 8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
-   `build_template.sh` step 9 uses. If it fails, report `stuck`. Then run
+   `build_template.sh` step 9 uses. Like step 9, a clean parse is not enough:
+   `configroot.supervisord.process_group_configs` must be non-empty, since every
+   program lives in a `supervisord.conf.d` drop-in and an `[include]` glob that
+   matches nothing yields a valid config with no services. If it fails, report
+   `stuck`. Then run
    `.agents/skills/publish-template/scripts/validate_template.py` (per
    that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
    disagreement introduced by the version bump and re-resolves every declared
@@ -428,7 +473,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
   A NON-fast-forward rejection means the published `main` moved since §2b's check
   (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
   the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
-  push-protection on the baked-in Minds Google OAuth client) exactly as
+  push-protection on the baked-in Mind Google OAuth client) exactly as
   `publish-template` §8's "Failure handling" list does.
 
 - **Move / create the version tag** (the design's `template/<slug>/v<n>` tag

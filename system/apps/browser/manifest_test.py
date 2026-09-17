@@ -53,6 +53,23 @@ def test_read_corrupt_returns_none() -> None:
     assert manifest.read_manifest() is None
 
 
+def test_read_falls_back_to_the_legacy_path_until_the_new_path_is_written() -> None:
+    # A workspace upgraded across the move to data/.apps/browser/instances.json has its
+    # saved fleet only at the old path: reads must find it there, and the first write
+    # to the new path then takes precedence over whatever the old file still says.
+    legacy = manifest._LEGACY_MANIFEST_PATH
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-1")]).model_dump_json())
+    loaded = manifest.read_manifest()
+    assert loaded is not None
+    assert [e.id for e in loaded.browsers] == ["browser-1"]
+    manifest.write_manifest(manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-2")]))
+    reloaded = manifest.read_manifest()
+    assert reloaded is not None
+    assert [e.id for e in reloaded.browsers] == ["browser-2"]
+    assert legacy.exists()
+
+
 def test_read_rejects_old_version_manifest() -> None:
     # A pre-name v1 manifest (int ids + next_id) must be IGNORED, not silently coerced
     # into string ids -- the version gate is what makes the int->name upgrade a clean
@@ -61,3 +78,17 @@ def test_read_rejects_old_version_manifest() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "next_id": 3, "browsers": [{"id": 0, "tabs": []}]}))
     assert manifest.read_manifest() is None
+
+
+def test_manifest_keeps_a_stopped_flag_and_reads_entries_written_without_one() -> None:
+    manifest.write_manifest(
+        manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-1", tabs=["https://x"], stopped=True)])
+    )
+    loaded = manifest.read_manifest()
+    assert loaded is not None and loaded.browsers[0].stopped is True
+
+    manifest.manifest_path().write_text(
+        '{"version": 2, "browsers": [{"id": "browser-2", "tabs": [], "active_tab": 0}]}'
+    )
+    older = manifest.read_manifest()
+    assert older is not None and older.browsers[0].stopped is False

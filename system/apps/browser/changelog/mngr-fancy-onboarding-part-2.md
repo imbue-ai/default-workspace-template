@@ -1,0 +1,1 @@
+Carries phase 7 of the chat-agent split (`mngr/chat-agent-refactor-8`) into this branch: a browser is owned by the chat that holds it, not by the agent that claimed it, so the fleet's wake-ups and nudges reach whichever agent runs the chat now. No further browser changes in this PR.

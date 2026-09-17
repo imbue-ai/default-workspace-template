@@ -3,7 +3,7 @@
 These tests exercise the contract the update flows depend on:
 
 - Both channels fire on every run, independently -- the WebSocket broadcast
-  reaches shared tunnel viewers the Minds app cannot, and the app call reaches
+  reaches shared tunnel viewers the Mind app cannot, and the app call reaches
   the desktop app without going through the workspace server at all.
 - One channel failing never suppresses the other, and no failure is fatal:
   a stale tab must not fail a reveal whose change already landed on disk.
@@ -148,7 +148,7 @@ def test_broadcast_asks_for_a_whole_interface_reload() -> None:
 def test_app_refresh_targets_the_primary_agent_not_the_caller() -> None:
     """A sub-agent must refresh its workspace's window, not its own agent id.
 
-    The Minds app identifies a workspace window by the primary agent's id, so a
+    The Mind app identifies a workspace window by the primary agent's id, so a
     refresh addressed to a sub-agent names no window at all.
     """
     http = _RecordingHttp({})
@@ -179,7 +179,7 @@ def test_app_refresh_still_runs_when_the_gateway_issues_no_override(
     """A VPS-hosted gateway injects no override, and must not lose this channel.
 
     Only a desktop-hosted gateway mints the per-agent JWT; a VPS-hosted one
-    forwards Minds API routes to the desktop and substitutes a target JWT of its
+    forwards Mind API routes to the desktop and substitutes a target JWT of its
     own, so the variable is simply absent on a remote workspace. Treating that as
     "no app attached" would leave every remote workspace with just the broadcast
     -- the channel the services restart has usually already disconnected.
@@ -246,7 +246,7 @@ def test_primary_lookup_skips_the_app_call_when_nothing_was_listed() -> None:
 def test_primary_lookup_selects_by_is_primary_alone() -> None:
     """The query must not re-acquire a ``workspace`` label conjunct.
 
-    The Minds app stopped setting that label on its agents, so a query carrying
+    The Mind app stopped setting that label on its agents, so a query carrying
     it matches nothing in any real workspace -- the lookup silently resolves
     nobody and the app channel goes dark. Nothing else pins this argv.
     """
@@ -321,7 +321,7 @@ def test_an_unexpected_broadcast_error_still_refreshes_the_app() -> None:
     raises ``http.client.InvalidURL`` -- an ``HTTPException``, not an
     ``OSError``, so ``post_json`` does not catch it. Guarding both channels
     together would swallow that *and* skip the app call, taking out the one
-    channel that reaches the common case (a user watching in the Minds app)
+    channel that reaches the common case (a user watching in the Mind app)
     while still exiting 0, so the caller reads it as a routine miss.
     """
     http = _RecordingHttp(

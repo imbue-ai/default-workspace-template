@@ -1,0 +1,1 @@
+The `agentic-browser-fleet` skill's exit-code table says the usage exit means no chat id was available (`MINDS_CHAT_ID` and `MNGR_AGENT_ID` both unset): the fleet CLI now identifies the caller by its chat id, phase 7 of the chat-agent split. Documentation only.

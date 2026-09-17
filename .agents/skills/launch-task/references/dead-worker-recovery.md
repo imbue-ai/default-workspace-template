@@ -2,6 +2,8 @@
 
 When a worker (sub-agent created via `launch-task`) is in `STOPPED` state -- claude session died mid-iteration, but the worktree (and any uncommitted work in it) is still intact -- the default path is to restart it, not to manually salvage. `mngr start` only re-creates the tmux session and re-execs claude in the existing worktree; it does not touch git state, so uncommitted changes survive the restart.
 
+This applies to a worker that *crashed*: STOPPED with no `archived_at` label in `mngr list --format jsonl`. A STOPPED worker that carries `archived_at` was stopped on purpose by its lead (`create_worker.py stop`, the failure flow's last step) and is not a restart candidate -- its lead has already reported the failure; read its branch and transcript instead.
+
 ## First: was the worker shed for memory pressure?
 
 A worker can die because the **OOM daemon** (earlyoom) shed it -- the container was running out of memory and earlyoom killed the most-expendable work first. Check the shed ledger before reviving:
@@ -15,7 +17,7 @@ grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/e
 
 Revival guidelines when a worker was shed:
 
-- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`mngr message <worker> -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or `mngr message` will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
+- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`uv run .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or a message will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
 - **If the same worker has already been shed twice** (two `process_shed` lines naming it): stop. Do not keep reviving -- surface to the user with the ledger details, because something about this worker's footprint is incompatible with the current memory budget. Reviving again will most likely just be shed a third time.
 
 If the worker was *not* in the ledger, it died for some other reason (e.g. a claude crash); proceed with the normal restart path below, where a plain `mngr start` suffices.
@@ -31,8 +33,12 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 2. Once it reaches `WAITING`, message it like any live agent -- ask it to continue, finish, or submit:
 
    ```bash
-   mngr message <worker> -m "your previous run died. inspect git status and continue / submit as appropriate."
+   uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+       --task-file data/.tasks/launch-task/<worker>/task.md \
+       -m "your previous run died. inspect git status and continue / submit as appropriate."
    ```
+
+   `reply` reaches the worker's chat through the chat app by the agent id `launch` stamped into the task file (never by the worker's name); a task file from an older launcher takes `--name <worker>`.
 
 3. From here it's a normal worker again -- finalize via `submit-upstream-changes` when done.
 
@@ -40,10 +46,11 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
 Only fall back to this path when the default doesn't apply: `mngr start` itself fails to bring the agent back, the worker is wedged in a way that another claude session can't unstick, or the agent has already been destroyed and you're recovering from its leftover worktree. In normal "claude crashed once" cases, restart instead.
 
-1. Locate the worktree at `/home/user/worktrees/<worker>-<hash>/` and inspect what's there:
+1. Locate the worktree and inspect what's there. Do not assume a path: `mngr list --format jsonl` reports each agent's `work_dir`, and the record for `<worker>` is correct at any nesting level (a sub-worker's worktree hangs off its own lead's, not off the main checkout).
 
    ```bash
-   cd /home/user/worktrees/<worker>-<hash>/
+   mngr list --format jsonl        # read work_dir from the record for <worker>
+   cd <work_dir>
    git status
    git diff
    ```
@@ -61,12 +68,12 @@ Only fall back to this path when the default doesn't apply: `mngr start` itself 
    git commit -m "WIP: <substantive summary> (worker <name> killed mid-iteration)"
    ```
 
-4. Destroy the dead agent without dropping its branch:
+4. Destroy the dead agent (and any sub-workers it launched) without dropping its branch:
 
    ```bash
-   mngr destroy <worker> --force --no-allow-worktree-removal
+   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker>
    ```
 
-   `--no-allow-worktree-removal` is what keeps the branch alive once the agent is gone.
+   Destroy keeps the branch unless `--delete-branches` is passed, and mngr preserves the transcript, so the WIP commit you just made stays reachable.
 
 5. The branch lives on. Finalize it like any other worker branch: cherry-pick onto your working branch, address ratchet/test fixups in follow-up commits, then push to `submit/<name>` per the `submit-upstream-changes` skill.

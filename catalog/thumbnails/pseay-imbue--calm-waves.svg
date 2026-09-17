@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Calm Waves">
+  <defs>
+    <clipPath id="frame">
+      <rect width="240" height="160" rx="12"/>
+    </clipPath>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1a2f"/>
+      <stop offset="34%" stop-color="#123152"/>
+      <stop offset="62%" stop-color="#3f4a68"/>
+      <stop offset="82%" stop-color="#6d5f78"/>
+      <stop offset="100%" stop-color="#e8a598"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="100%" r="62%">
+      <stop offset="0%" stop-color="#f5c9a8" stop-opacity="0.85"/>
+      <stop offset="42%" stop-color="#f5c9a8" stop-opacity="0.22"/>
+      <stop offset="72%" stop-color="#f5c9a8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="240" height="160" fill="url(#sky)"/>
+    <rect x="0" y="58" width="240" height="52" fill="url(#glow)"/>
+    <!-- centered mock quote lines (placeholder, not a real quote) -->
+    <g fill="#f4f6f8">
+      <rect x="66" y="40" width="108" height="6" rx="3" opacity="0.92"/>
+      <rect x="84" y="54" width="72" height="6" rx="3" opacity="0.78"/>
+      <rect x="102" y="70" width="36" height="4" rx="2" opacity="0.5"/>
+    </g>
+    <!-- three layered wave silhouettes deepening toward the bottom -->
+    <path d="M0 108 C 40 98, 80 118, 120 108 C 160 98, 200 118, 240 108 L240 160 L0 160 Z" fill="#4f6f88"/>
+    <path d="M0 124 C 48 116, 84 134, 132 124 C 176 115, 208 132, 240 124 L240 160 L0 160 Z" fill="#2c4f6b"/>
+    <path d="M0 140 C 44 133, 92 148, 140 140 C 184 133, 212 147, 240 140 L240 160 L0 160 Z" fill="#122f47"/>
+  </g>
+</svg>

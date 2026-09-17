@@ -37,9 +37,9 @@ def _provisioned_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _run_guarded_step(repo: Path, marker_dir: Path, **extra_env: str) -> str:
+def _run_step(step: str, repo: Path, marker_dir: Path, **extra_env: str) -> str:
     result = subprocess.run(
-        ["bash", "-c", _GUARDED_STEP],
+        ["bash", "-c", step],
         env={
             **os.environ,
             "PROVISION_REPO_ROOT": str(repo),
@@ -51,6 +51,42 @@ def _run_guarded_step(repo: Path, marker_dir: Path, **extra_env: str) -> str:
         check=True,
     )
     return result.stdout
+
+
+def _run_guarded_step(repo: Path, marker_dir: Path, **extra_env: str) -> str:
+    return _run_step(_GUARDED_STEP, repo, marker_dir, **extra_env)
+
+
+# A pinned step, as setup_system.sh reads its versions: drop what was inherited,
+# then the tree's `:=` default.
+_PINNED_STEP = (
+    f'. "{_GUARD}"\n'
+    "provision_drop_inherited_pins\n"
+    ': "${CLAUDE_CODE_VERSION:=2.1.269}"\n'
+    'echo "claude=$CLAUDE_CODE_VERSION"\n'
+)
+
+
+def test_an_inherited_pin_yields_to_the_trees_unless_the_override_is_deliberate(
+    tmp_path: Path,
+) -> None:
+    # A container built when the image still exported its pins as ENV hands
+    # every process the image's version, and a `:=` default yields to it.
+    repo = _provisioned_repo(tmp_path)
+    marker_dir = tmp_path / "markers"
+
+    inherited = _run_step(_PINNED_STEP, repo, marker_dir, CLAUDE_CODE_VERSION="2.1.227")
+    overridden = _run_step(
+        _PINNED_STEP,
+        repo,
+        marker_dir,
+        CLAUDE_CODE_VERSION="2.1.227",
+        PROVISION_PIN_OVERRIDE="1",
+    )
+
+    assert "claude=2.1.269" in inherited
+    assert "ignoring inherited CLAUDE_CODE_VERSION=2.1.227" in inherited
+    assert "claude=2.1.227" in overridden
 
 
 def test_a_forced_run_goes_past_the_marker_the_rollback_tree_already_has(

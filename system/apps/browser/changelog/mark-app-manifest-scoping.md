@@ -1,0 +1,1 @@
+The browser's manifest declares `xvfb` under `[wiring] programs`: the virtual display exists only for the browser, so its supervisord block is part of the browser's footprint for review, testing, the merge freshness check, and template publishing.
