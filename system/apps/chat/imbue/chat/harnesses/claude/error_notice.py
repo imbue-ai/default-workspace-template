@@ -59,9 +59,9 @@ class ErrorNotice(FrozenModel):
 
     The two families are mutually exclusive as CLASSIFICATIONS: one message says one thing
     about what went wrong, so it never carries both the named-cause note and the credential
-    one. They are no longer exclusive as offered ACTIONS -- the recovery links render under
-    every provider failure, since a spent quota and a rejected token are the same dead end
-    from the composer and the classification cannot always tell them apart.
+    one. They are not exclusive as offered ACTIONS -- the recovery links render under every
+    provider failure, since a spent quota and a rejected token are the same dead end from the
+    composer and the classification cannot always tell them apart.
     """
 
     # The credential is the problem. Renders as a failure even with no api-error stamp, and marks

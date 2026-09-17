@@ -15,10 +15,10 @@ The kind set and the provider-fault split are ordinary HTTP semantics, so they a
 harness-agnostic; only the surface-form regexes differ, and both live below.
 
 Auth-family failures are handled by :mod:`auth_errors`, which describes them in its own words
--- so they are deliberately NOT classified here. (Its recovery actions are no longer its own:
-they render under every provider failure, because the classification cannot reliably tell a
-dead end from a transient one and both families end the turn the same way for the reader.)
-That is enforced rather than left to the tables:
+-- so they are deliberately NOT classified here. (The split is about the DESCRIPTION only: the
+recovery actions belong to neither family and render under every provider failure, because the
+classification cannot reliably tell a dead end from a transient one and both end the turn the
+same way for the reader.) That is enforced rather than left to the tables:
 :func:`classify_api_error` returns ``None`` for anything the auth vocabulary claims, so a
 message can never carry both subtexts. Without it the two families overlap by construction --
 Anthropic reports exhausted third-party usage as a 400 ``invalid_request_error``, which is in

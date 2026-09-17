@@ -156,8 +156,8 @@ describe("renderAssistantMessageChildren API errors", () => {
     );
     expect(collectClasses(children)).toContain("message-api-error");
     // Asserted on the wording, not on `message-api-error-note`: the recovery actions share
-    // that class and now render under every provider failure, so the class no longer tells
-    // the two notes apart.
+    // that class and render under every provider failure, so the class does not tell the two
+    // notes apart.
     expect(allText(children)).not.toContain("isn't Mind's fault");
   });
 
