@@ -13,6 +13,7 @@
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
+import { asSendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { addChatsUpdatedListener } from "./Chats";
 import type { ChatSnapshot } from "./Chats";
 import { prependToComposer, raiseFailureNotice } from "../views/MessageInput";
@@ -72,7 +73,7 @@ function raiseUndeliveredNotice(chatId: string, detail: string, kind: string): v
   raiseFailureNotice(chatId, {
     title: "Your message wasn't sent",
     detail: `${detail}\n\nIt's back in the composer.`,
-    kind: kind === "rejected_by_agent" ? "rejected_by_agent" : "unknown",
+    kind: asSendFailureKind(kind),
   });
 }
 

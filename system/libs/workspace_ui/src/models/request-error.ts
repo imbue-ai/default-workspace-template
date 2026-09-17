@@ -76,10 +76,15 @@ const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set([
   "rejected_by_agent",
 ]);
 
+/** The kind a backend named, or "unknown" for one this build does not recognise. */
+export function asSendFailureKind(kind: string): SendFailureKind {
+  return KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
+}
+
 export function describeRequestErrorKind(error: unknown): SendFailureKind {
   if (error === null || typeof error !== "object") {
     return "unknown";
   }
   const kind = (error as { response?: { kind?: unknown } | null }).response?.kind;
-  return typeof kind === "string" && KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
+  return typeof kind === "string" ? asSendFailureKind(kind) : "unknown";
 }
