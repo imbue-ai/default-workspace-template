@@ -130,8 +130,9 @@ class Outcome(Enum):
     BLOCKED = "blocked"
     REFUSED = "refused"
     UNREACHABLE = "unreachable"
-    # A 404 that outlasted its window: a chat the app does not know, or a chat app from
-    # before the route.
+    # Nothing here can take the request, so the backoff does: a 404 that outlasted its
+    # window (a chat the app does not know, or a chat app from before the route), or a
+    # create route from before the fields a create sends, which refuses them by name.
     NOT_FOUND = "not_found"
 
 
