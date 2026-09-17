@@ -19,6 +19,7 @@ import {
   isProviderChooserOpen,
   loadAccountsWithRetry,
   openProviderChooser,
+  pickAccount,
   startFlow,
   submitKey,
 } from "./Providers";
@@ -155,6 +156,21 @@ describe("the provider chooser's hooks", () => {
 
     await submitKey("sk-test", null);
 
+    expect(onSignedIn).toHaveBeenCalledWith("acct-1");
+    expect(onDismissed).not.toHaveBeenCalled();
+    closeProviderChooser();
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(onSignedIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the sign-in hook when a signed-in account is picked, and the close that follows runs no dismissal", () => {
+    const onSignedIn = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onSignedIn, onDismissed });
+
+    pickAccount("acct-1");
+
+    expect(isProviderChooserOpen()).toBe(false);
     expect(onSignedIn).toHaveBeenCalledWith("acct-1");
     expect(onDismissed).not.toHaveBeenCalled();
     closeProviderChooser();

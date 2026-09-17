@@ -359,15 +359,16 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
-// What to do once a sign-in succeeds. Signing in from the page of a chat that awaits an
-// account means the user was trying to start that chat and had to authenticate on the way, so
-// it launches on the account they just added. Signing in from inside a running chat means they
+// What to do once a sign-in succeeds or a signed-in account is picked. Opening the chooser from
+// the page of a chat that awaits an account means the user was trying to start that chat, so it
+// launches on the account they end up with. Signing in from inside a running chat means they
 // were adding a provider for later and should not be moved. The caller knows which it is;
 // nothing here can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // What to do if the chooser closes with the sign-in hook still armed: the caller that was
-// waiting on a sign-in (a seeded chat's first send) puts its message back.
+// waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
+let chooserBrokenAccountId: string | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -376,10 +377,13 @@ export function isProviderChooserOpen(): boolean {
 export interface ProviderChooserIntent {
   /** Re-authenticate THIS account rather than add a provider. */
   accountId?: string;
-  /** Run once a sign-in succeeds, with the account it produced. */
+  /** Run once a sign-in succeeds, with the account it produced. Also run when a signed-in
+   *  account is picked instead, which is why its presence makes those rows pickable. */
   onSignedIn?: (accountId: string) => void;
-  /** Run if the chooser closes before any sign-in succeeded. */
+  /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
+  /** The account the caller is moving away from because it failed. Listed, but not pickable. */
+  brokenAccountId?: string;
 }
 
 /** Open the chooser, optionally saying why it was opened. */
@@ -389,7 +393,27 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
+  chooserBrokenAccountId = intent.brokenAccountId ?? null;
   m.redraw();
+}
+
+/** Whether the chooser was opened to pick an account, so a signed-in one can be used as is. */
+export function isPickingAccount(): boolean {
+  return chooserOnSignedIn !== null;
+}
+
+export function getBrokenAccountId(): string | null {
+  return chooserBrokenAccountId;
+}
+
+/** Use an account that is already signed in: what a finished sign-in does, minus the sign-in. */
+export function pickAccount(accountId: string): void {
+  const run = chooserOnSignedIn;
+  // Both hooks stand down before the close, as after a sign-in: a pick is not a dismissal.
+  chooserOnSignedIn = null;
+  chooserOnDismissed = null;
+  closeProviderChooser();
+  run?.(accountId);
 }
 
 /** The account the chooser was opened on, or null when it was opened to add a provider.
@@ -409,6 +433,7 @@ export function closeProviderChooser(): void {
   const dismissed = chooserOnSignedIn !== null ? chooserOnDismissed : null;
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
+  chooserBrokenAccountId = null;
   dismissed?.();
   m.redraw();
 }
