@@ -372,9 +372,10 @@ review gates rule-driven and the report evidence-bearing. It must show which
 branch of the 4a and 4b rules applied (the footprint evidence, and each
 validation item's condition and whether it held), and either show the
 clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits) or carry the gate
-run's own evidence (fix commits kept or reverted, or a clean run, plus
-architecture-gate verdicts); a side-picked conflict must carry the
+user-created code, no worker-authored in-branch edits beyond a retry's
+rollback revert, shown by an empty diff against the landed merge) or carry
+the gate run's own evidence (fix commits kept or reverted, or a clean run,
+plus architecture-gate verdicts); a side-picked conflict must carry the
 discarded-side accounting. A report missing any of this -- including one that
 openly discloses skipping a gate outside the rule -- goes back to the worker
 via the Step 4 cycle (say what is missing, consume the report into
