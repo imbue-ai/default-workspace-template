@@ -1,1 +1,0 @@
-The chat-agent-split plan now lists "switch to another provider" under an auth-failed turn, and "+ Add a provider", as ways to start a handoff or rebind. Both open the provider chooser, where an already signed-in account can be picked.
