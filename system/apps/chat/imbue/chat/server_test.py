@@ -6,6 +6,8 @@ import json
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -48,8 +50,11 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
+from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -3038,6 +3043,55 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     wait_for(lambda: (first, "and this") in messenger.sent, timeout=5.0)
     assert client.post(f"/api/chats/{first}/handoff/cancel").status_code == 400
     assert not log_path.exists()
+
+
+def test_the_undelivered_take_route_carries_a_parked_send_to_the_page_and_then_drops_it(tmp_path: Path) -> None:
+    """The round trip the composer makes: read the send off the chat listing, then say it has it.
+
+    The listing's shape is the whole contract the page reads, and the ack is keyed by message id
+    and tolerant of one already taken, since the page prepends the text before it acks and can
+    absorb the same send twice (a reload, a request it retried).
+    """
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    manager: AgentManager = state_of(app).agent_manager
+    manager._park_undelivered_send(
+        ChatId(first),
+        UndeliveredSend(
+            send=HeldSend(
+                message_id="m-2",
+                text="and this",
+                origin=HeldSendOrigin.CLIENT,
+                received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+            ),
+            detail="You've hit your session limit",
+            kind="rejected_by_agent",
+        ),
+    )
+
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["undelivered_sends"] == [
+        {
+            "message_id": "m-2",
+            "text": "and this",
+            "detail": "You've hit your session limit",
+            "kind": "rejected_by_agent",
+        }
+    ]
+
+    for body in ({}, {"message_id": ""}, {"message_id": 7}):
+        refused = client.post(f"/api/chats/{first}/undelivered/take", json=body)
+        assert refused.status_code == 400, body
+        assert refused.get_json() == {"detail": "message_id is required"}
+    assert client.post(f"/api/chats/{first}/undelivered/take", json={"message_id": "never-parked"}).status_code == 200
+    assert client.get("/api/chats").get_json()["chats"][0]["undelivered_sends"] != []
+
+    taken = client.post(f"/api/chats/{first}/undelivered/take", json={"message_id": "m-2"})
+    assert taken.status_code == 200 and taken.get_json() == {"status": "taken"}
+    # Acking it a second time answers ok rather than erroring: there is nothing to put right.
+    assert client.post(f"/api/chats/{first}/undelivered/take", json={"message_id": "m-2"}).status_code == 200
+    assert client.get("/api/chats").get_json()["chats"][0]["undelivered_sends"] == []
 
 
 def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat(

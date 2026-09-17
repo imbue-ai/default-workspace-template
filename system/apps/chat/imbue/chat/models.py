@@ -373,6 +373,20 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
+class UndeliveredSend(FrozenModel):
+    """A held send the agent refused, with the refusal that stopped it.
+
+    The reason travels with the message (``docs/specs/chat-send-failure-system.md``): handing
+    the text back with no word of why invites the user to press send again, which on the
+    commonest cause -- the account the chat moved to being out of usage too -- earns the same
+    refusal.
+    """
+
+    send: HeldSend = Field(description="The message, exactly as it was held")
+    detail: str = Field(description="Why it did not land, in the harness's own words")
+    kind: str = Field(default="unknown", description="mngr's classification of the failure, for what to offer")
+
+
 class HeldSendSnapshot(FrozenModel):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
@@ -478,6 +492,15 @@ class ActiveAgentSnapshot(FrozenModel):
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
 
 
+class UndeliveredSendSnapshot(FrozenModel):
+    """One undelivered send as a chat page reads it: the text to take back, and why it bounced."""
+
+    message_id: str = Field(description="The sender's stable send-time id")
+    text: str = Field(description="The message, verbatim")
+    detail: str = Field(description="Why it did not land, in the harness's own words")
+    kind: str = Field(description="mngr's classification of the failure")
+
+
 class ChatSnapshot(FrozenModel):
     """One chat as the chat pages see it: what the ``chats_updated`` WebSocket message carries."""
 
@@ -490,6 +513,10 @@ class ChatSnapshot(FrozenModel):
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(
         description="The in-progress handoff, or None while the chat is not converging"
+    )
+    undelivered_sends: tuple[UndeliveredSendSnapshot, ...] = Field(
+        default=(),
+        description="Sends a finished switch could not deliver, for the composer to take back and then ack",
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
 

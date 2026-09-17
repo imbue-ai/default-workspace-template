@@ -413,7 +413,8 @@ export function renderToolCallBlock(
   });
 }
 
-/** The "sign in again" affordance under an auth failure.
+/** The two ways out of a provider failure, under any turn rendered as one: sign in again, or
+ * switch this chat to another provider.
  *
  * Resolves the chat's own account from its `account` label, so the chooser opens ON that
  * account and re-authenticates it in place -- every chat bound to it recovers. Without the
@@ -426,7 +427,6 @@ function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
   const accountId = chat?.active_agent.account_id ?? "";
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
-    "This provider is no longer working. ",
     m(
       "button",
       {
@@ -545,10 +545,12 @@ export function renderAssistantMessageChildren(
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Mind's fault" note.
       //
-      // An auth error gets a button as well. It is the one failure the user can actually
-      // fix, and the fix is not obvious from the provider's wording -- which is usually a
-      // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
-      // throwing a sign-in screen over whatever the user was doing.
+      // The recovery actions are unconditional. A spent five-hour limit and a rejected token
+      // are the same dead end from the composer -- both end the turn, neither clears by
+      // resending -- and the classification cannot reliably tell which a failure is: Claude
+      // Code stamps an exhausted subscription as an ordinary 429. Inline rather than a modal,
+      // so they wait to be clicked instead of throwing a sign-in screen over what the user was
+      // doing, which is what makes offering them on a transient failure cost nothing.
       children.push(
         m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
           m(MarkdownContent, {
@@ -563,7 +565,7 @@ export function renderAssistantMessageChildren(
                 providerFaultNote(event.api_error_kind),
               )
             : null,
-          event.is_auth_error ? renderReauthAction(chatId) : null,
+          renderReauthAction(chatId),
         ]),
       );
     } else {

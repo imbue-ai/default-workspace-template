@@ -955,10 +955,44 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       function renderActionFailureNotice(detail: string): m.Children {
         const recovery = actionFailureRecovery;
         // A pane that is gone is not going to be there on the next attempt, so Retry is not
-        // offered at all rather than offered and guaranteed to fail. Every other kind -- and
-        // anything unclassified -- keeps it.
-        const canRetryHelp = actionFailureKind !== "agent_unreachable";
+        // offered at all rather than offered and guaranteed to fail. A refusal the agent
+        // already delivered its verdict on is withheld for the same reason and a stronger
+        // one: the same text sent again earns the same refusal until the condition behind it
+        // clears, which for a spent usage limit is hours away and not something the reader
+        // can do anything about from here. Every other kind -- and anything unclassified --
+        // keeps it.
+        const canRetryHelp = actionFailureKind !== "agent_unreachable" && actionFailureKind !== "rejected_by_agent";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
+        const actions = [
+          ...(isRepeatable
+            ? [
+                {
+                  label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
+                  tooltip: "Tries the same thing again",
+                  isDisabled: actionFailureInFlight !== null,
+                  run: () => void retryFailedSend(),
+                },
+              ]
+            : []),
+          // Force needs a message to send afterwards, so it is offered only for our own send --
+          // and never for an agent that is merely still starting, where restarting would
+          // discard the session it was about to finish bringing up. It is the only thing that
+          // helps an agent that is GONE, which is why it survives Retry being withheld.
+          // Withheld for a refusal too: restarting the agent does not refill a spent quota
+          // or mint a working credential, so it would spend the session to earn the same
+          // refusal again.
+          ...(recovery === null || actionFailureKind === "not_ready" || actionFailureKind === "rejected_by_agent"
+            ? []
+            : [
+                {
+                  label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
+                  tooltip: "Restarts agent to reset it & resends message",
+                  isDestructive: true,
+                  isDisabled: actionFailureInFlight !== null,
+                  run: () => void forceFailedSend(),
+                },
+              ]),
+        ];
         return m(actionFailureNotice, {
           title: actionFailureTitle,
           body: [
@@ -969,40 +1003,19 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             // told the reader to go look at their terminal.
             actionFailureKind === "agent_unreachable"
               ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-              : isRepeatable && actionFailureKind !== "input_blocked"
-                ? "You can open the agent's terminal, fix it there, then Retry."
-                : null,
+              : actionFailureKind === "rejected_by_agent"
+                ? "Your message is still in the composer. Nothing here will get it through on this " +
+                  "provider -- use the link under the failure in the conversation to switch to another one."
+                : isRepeatable && actionFailureKind !== "input_blocked"
+                  ? "You can open the agent's terminal, fix it there, then Retry."
+                  : null,
           ],
-          dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
+          // "Cancel" calls off the actions beside it, so it is only that when there are some:
+          // a refusal withholds both Retry and Force, leaving closing the only thing to do.
+          dismissLabel: actions.length > 0 ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
-          actions: [
-            ...(isRepeatable
-              ? [
-                  {
-                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
-                    tooltip: "Tries the same thing again",
-                    isDisabled: actionFailureInFlight !== null,
-                    run: () => void retryFailedSend(),
-                  },
-                ]
-              : []),
-            // Force needs a message to send afterwards, so it is offered only for our own send --
-            // and never for an agent that is merely still starting, where restarting would
-            // discard the session it was about to finish bringing up. It is the only thing that
-            // helps an agent that is GONE, which is why it survives Retry being withheld.
-            ...(recovery === null || actionFailureKind === "not_ready"
-              ? []
-              : [
-                  {
-                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    tooltip: "Restarts agent to reset it & resends message",
-                    isDestructive: true,
-                    isDisabled: actionFailureInFlight !== null,
-                    run: () => void forceFailedSend(),
-                  },
-                ]),
-          ],
+          actions,
         });
       }
 

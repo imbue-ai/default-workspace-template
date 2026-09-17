@@ -34,6 +34,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.concurrency_group.event_utils import ShutdownEvent
@@ -88,6 +89,17 @@ class _FakeWorkspace(MutableModel):
             self.store.write(updated)
             return updated
 
+    def park_undelivered_send(self, chat_id: ChatId, undelivered: UndeliveredSend) -> None:
+        """The manager's park: onto the record, where the composer reads it off the snapshot."""
+        with self._lock:
+            record = self.store.read(chat_id)
+            assert record is not None, "a send was parked on a chat with no record"
+            self.store.write(
+                record.model_copy_update(
+                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, undelivered))
+                )
+            )
+
     def take_next_held_send(self, chat_id: ChatId, rebind_id: str) -> HeldSend | None:
         with self._lock:
             record = self._require(chat_id, rebind_id)
@@ -97,8 +109,9 @@ class _FakeWorkspace(MutableModel):
                 remaining = rebind.model_copy_update(to_update(rebind.field_ref().held_sends, rebind.held_sends[1:]))
                 self.store.write(record.with_converging(remaining))
                 return rebind.held_sends[0]
-            # The manager drops a one-agent chat's record with the finished rebind.
-            if len(record.agents) == 1:
+            # The manager drops a one-agent chat's record with the finished rebind -- unless a
+            # send is parked on it, which is the only thing left holding the chat's words.
+            if len(record.agents) == 1 and not record.undelivered_sends:
                 self.store.delete(chat_id)
             else:
                 self.store.write(record.with_converging(None))
@@ -249,6 +262,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> RebindRunner:
         read_record=workspace.read_record,
         update_record=workspace.update_record,
         take_next_held_send=workspace.take_next_held_send,
+        park_undelivered_send=workspace.park_undelivered_send,
         get_agent_state=workspace.get_agent_state,
         get_agent_info=workspace.get_agent_info,
         resolve_account=workspace.resolve_account,
@@ -595,8 +609,20 @@ def test_a_refused_held_send_does_not_stop_the_ones_behind_it(tmp_path: Path) ->
 
     _runner(workspace).run(workspace.chat_id, "rebind-1")
 
-    # Both were popped (a refusal is logged, not raised), and the rebind finished.
-    assert workspace.delivered == [] and workspace.record() is None
+    # Both were popped (a refusal is reported, not raised) and the rebind finished, so one
+    # refusal did not strand the send behind it.
+    assert workspace.delivered == []
+    # ...and neither was lost. The user was answered 202 for both, so the app holds the only
+    # copy; they wait on the record for the composer, in the order they were sent. The record
+    # itself survives for them -- a one-agent chat's rebind otherwise takes it along.
+    record_after = workspace.record()
+    assert record_after is not None and record_after.rebind is None
+    assert [(parked.send.message_id, parked.send.text) for parked in record_after.undelivered_sends] == [
+        ("trigger-1", "Carry on on the other account"),
+        ("m-2", "and this"),
+    ]
+    # The reason travels with the text, so the composer can say why rather than sliding it back silently.
+    assert all(parked.detail != "" for parked in record_after.undelivered_sends)
 
 
 def test_a_runner_for_a_rebind_that_is_gone_does_nothing(tmp_path: Path) -> None:

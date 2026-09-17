@@ -1,0 +1,3 @@
+The shared send-failure vocabulary the workspace apps read now includes `rejected_by_agent`: an agent that received a message and refused it, which is what mngr reports when the model API turns a turn down for a spent session limit, a rejected credential, or an overloaded server.
+
+A kind the mirror does not know reads as `unknown`, and `unknown` is not a neutral default -- it is the value for which callers offer Retry and the destructive Force, both of which are the wrong answer for a refusal that resending cannot clear. A test now reads the vendored mngr's own enum and fails if it names a kind this mirror does not, so the next one added cannot arrive as `unknown` unnoticed.

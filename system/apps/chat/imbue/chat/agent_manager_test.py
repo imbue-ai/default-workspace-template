@@ -28,6 +28,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -80,6 +81,7 @@ from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
@@ -87,6 +89,7 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -2185,9 +2188,7 @@ def test_handle_observe_output_line_logs_stderr_as_warning(
     assert "something bad happened" in warnings[0]
 
 
-# ---------------------------------------------------------------------------
 # Activity-state integration
-# ---------------------------------------------------------------------------
 
 
 def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
@@ -3015,9 +3016,7 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
-# =============================================================================
 # Offline codex model-chip resolution from the persisted raw model-list sidecar
-# =============================================================================
 
 
 def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
@@ -4007,8 +4006,10 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         # Cancel: the trigger comes back, the other held send goes to the agent the chat stays on, and a
         # first-handoff record disappears so the chat is its one agent again.
         assert manager.cancel_handoff(chat_id) == "Carry on in Codex"
-        assert store.read(chat_id) is None
         wait_for(lambda: (first, "and this", "m-2") in sent, timeout=5.0)
+        # The record goes only once that delivery is done, not with the cancel: a send refused
+        # there has nowhere to be parked if its record is already gone.
+        wait_for(lambda: store.read(chat_id) is None, timeout=5.0)
         assert manager.get_chat_snapshot(first) is not None and manager.get_handoff_state(chat_id) is None
         with pytest.raises(HandoffError):
             manager.cancel_handoff(chat_id)
@@ -4398,5 +4399,171 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
             deps.take_next_held_send(ChatId(agent_id), "rebind-gone")
         with pytest.raises(RebindCancelledError):
             deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
+    finally:
+        manager.stop()
+
+
+# Undelivered sends: a send a finished switch could not hand over waits on the record for the composer.
+
+
+def _parked_send(message_id: str, text: str) -> UndeliveredSend:
+    return UndeliveredSend(
+        send=HeldSend(
+            message_id=message_id,
+            text=text,
+            origin=HeldSendOrigin.CLIENT,
+            received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+        detail="You've hit your session limit",
+        kind="rejected_by_agent",
+    )
+
+
+def test_a_parked_send_reaches_the_composer_and_leaves_once_taken(broadcaster: WebSocketBroadcaster) -> None:
+    """The whole round trip: a send the agent refused waits on the record, rides the snapshot to
+    the composer, and is gone once the composer says it has it.
+
+    The user was answered 202 when the switch held this, so nothing but the record holds their
+    words; before this they were logged and dropped.
+    """
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert [(held.message_id, held.text, held.kind) for held in snapshot.undelivered_sends] == [
+            ("m-1", "the thing I typed", "rejected_by_agent")
+        ]
+
+        manager.take_undelivered_send(ChatId(first), "m-1")
+
+        taken = manager.get_chat_snapshot(first)
+        assert taken is not None and taken.undelivered_sends == ()
+    finally:
+        manager.stop()
+
+
+def test_taking_a_send_that_is_already_gone_is_not_an_error(broadcaster: WebSocketBroadcaster) -> None:
+    """The composer prepends before it acks, so an ack can arrive twice (a reload that absorbed
+    the same send, a retried request). The second must not fail, and must not disturb a send
+    parked beside it."""
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "first"))
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-2", "second"))
+
+        manager.take_undelivered_send(ChatId(first), "m-1")
+        manager.take_undelivered_send(ChatId(first), "m-1")
+        manager.take_undelivered_send(ChatId(first), "never-parked")
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert [held.message_id for held in snapshot.undelivered_sends] == ["m-2"]
+    finally:
+        manager.stop()
+
+
+def test_parking_the_same_send_twice_keeps_one_copy(broadcaster: WebSocketBroadcaster) -> None:
+    """A resume can run a delivery step again, and the second refusal must not hand the user two
+    copies of one message to send."""
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        seed_agent_state(manager, second, name="Chat-1")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+        manager._park_undelivered_send(ChatId(first), _parked_send("m-1", "the thing I typed"))
+
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None
+        assert len(snapshot.undelivered_sends) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_cancelled_handoffs_refused_send_is_parked_rather_than_lost(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A send refused on the cancel path survives, on a chat whose record the cancel used to take.
+
+    The narrow case the ordering guards: the cancel dropped a first-handoff chat's record before
+    starting the delivery, so the guard could not see a send that was about to be refused and the
+    park had nothing to put it on. The record now waits for the delivery to finish.
+    """
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _ = _handoff_manager(broadcaster, tmp_path, sent)
+
+    def refuse(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        raise SendFailedError("You've hit your session limit", kind="rejected_by_agent")
+
+    capabilities = _handoff_capabilities(sent)
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=capabilities.ensure_watcher,
+            drain_to_composer=capabilities.drain_to_composer,
+            deliver=refuse,
+        )
+    )
+    try:
+        chat_id_str, _ = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+        chat_id = ChatId(chat_id_str)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SUMMARIZING
+
+        manager.cancel_handoff(chat_id)
+
+        wait_for(lambda: (record := store.read(chat_id)) is not None and record.undelivered_sends != (), timeout=5.0)
+        record = store.read(chat_id)
+        assert record is not None
+        assert [(parked.send.message_id, parked.send.text) for parked in record.undelivered_sends] == [
+            ("m-2", "and this")
+        ]
+        assert record.undelivered_sends[0].kind == "rejected_by_agent"
+        assert "session limit" in record.undelivered_sends[0].detail
+    finally:
+        manager.stop()
+
+
+def test_a_cancel_that_cannot_reach_the_agent_parks_its_held_sends(broadcaster: WebSocketBroadcaster) -> None:
+    """A send a cancelled handoff could not even attempt is parked rather than dropped.
+
+    The cancel hands its remaining sends to a thread that gives up when there is nothing to
+    deliver through -- no wired capabilities, or an agent mngr no longer tracks. Those sends were
+    answered 202 like any other, so they owe the composer a way back too.
+    """
+    store = InMemoryChatRecordStore()
+    # Deliberately unwired: this is the branch that cannot deliver.
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    try:
+        chat_id_str, _ = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+        chat_id = ChatId(chat_id_str)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SUMMARIZING
+
+        manager.cancel_handoff(chat_id)
+
+        # The record survives for it, though a cancelled first handoff otherwise takes it along.
+        wait_for(lambda: (record := store.read(chat_id)) is not None and record.undelivered_sends != (), timeout=5.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is None
+        assert [(parked.send.message_id, parked.send.text, parked.kind) for parked in record.undelivered_sends] == [
+            ("m-2", "and this", "agent_unreachable")
+        ]
     finally:
         manager.stop()

@@ -97,7 +97,17 @@ export interface ChatSnapshot {
   agent_ids: string[];
   // Null while the chat is not converging on a new agent.
   handoff: HandoffState | null;
+  /** Sends a finished switch could not deliver, waiting to go back to this chat's composer. */
+  undelivered_sends: UndeliveredSendSnapshot[];
   active_agent: ActiveAgent;
+}
+
+/** One send a switch could not deliver: the text to take back, and why it bounced. */
+export interface UndeliveredSendSnapshot {
+  message_id: string;
+  text: string;
+  detail: string;
+  kind: string;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend

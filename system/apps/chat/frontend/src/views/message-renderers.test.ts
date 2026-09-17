@@ -154,9 +154,11 @@ describe("renderAssistantMessageChildren API errors", () => {
       new Map(),
       "agent-1",
     );
-    const classes = collectClasses(children);
-    expect(classes).toContain("message-api-error");
-    expect(classes).not.toContain("message-api-error-note");
+    expect(collectClasses(children)).toContain("message-api-error");
+    // Asserted on the wording, not on `message-api-error-note`: the recovery actions share
+    // that class and render under every provider failure, so the class does not tell the two
+    // notes apart.
+    expect(allText(children)).not.toContain("isn't Mind's fault");
   });
 
   it("styles a failure whose kind is unnamed red, with no not-our-fault note", () => {
@@ -168,9 +170,8 @@ describe("renderAssistantMessageChildren API errors", () => {
       new Map(),
       "agent-1",
     );
-    const classes = collectClasses(children);
-    expect(classes).toContain("message-api-error");
-    expect(classes).not.toContain("message-api-error-note");
+    expect(collectClasses(children)).toContain("message-api-error");
+    expect(allText(children)).not.toContain("isn't Mind's fault");
   });
 
   it("leaves an ordinary assistant message unstyled", () => {
@@ -678,6 +679,49 @@ describe("the auth-error note's switch link", () => {
     expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
     expect(startChatOnAccount).not.toHaveBeenCalled();
     expect(isProviderChooserOpen()).toBe(false);
+  });
+
+  it("offers the switch on a spent session limit, which is not an auth error at all", () => {
+    // The failure this gating got wrong: Claude Code stamps an exhausted subscription as an
+    // ordinary 429 with no status in its wording, so it arrives classified as a rate limit.
+    // It is the same dead end as a rejected token -- nothing clears it but different
+    // credentials -- and gating the actions on the auth family left it with no way out.
+    const sessionLimit = apiErrorEvent(
+      "You've hit your session limit \u00b7 resets 3pm (America/Los_Angeles)",
+      "rate_limit",
+      false,
+    );
+    const children = renderAssistantMessageChildren(sessionLimit, new Map(), "chat-1");
+
+    expect(sessionLimit.is_auth_error).toBe(false);
+    findButton(children, "switch to another provider")!.attrs.onclick();
+    pickAccount(ANTHROPIC.id);
+
+    expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
+  });
+
+  it("offers the switch on an overloaded provider too", () => {
+    // Transient, and still offered: a provider whose servers are down is one a different
+    // provider routes around, and an inline link costs nothing if the user waits instead.
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 529 Overloaded", "overloaded", true),
+      new Map(),
+      "chat-1",
+    );
+
+    expect(findButton(children, "switch to another provider")).not.toBeNull();
+    expect(findButton(children, "Sign in again")).not.toBeNull();
+  });
+
+  it("offers nothing on an ordinary assistant message", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("Here's the fix.", null, false),
+      new Map(),
+      "chat-1",
+    );
+
+    expect(findButton(children, "switch to another provider")).toBeNull();
+    expect(findButton(children, "Sign in again")).toBeNull();
   });
 
   it("is not offered until the chat itself is known", () => {
