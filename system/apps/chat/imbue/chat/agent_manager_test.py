@@ -5,6 +5,7 @@ import os
 import queue
 import shutil
 import signal
+import threading
 import time
 import tomllib
 from datetime import datetime
@@ -1227,7 +1228,9 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
     with agent_manager._lock:
         assert created_id in agent_manager._activity_tracked_agents
-        assert created_id in agent_manager._model_watcher_by_agent
+    # Model tracking follows ``_agents`` membership: the shared poller lists its paths
+    # from it, so a held created agent is polled...
+    assert created_id in agent_manager._list_model_state_paths()
 
     for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
         agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
@@ -1235,7 +1238,8 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     assert agent_manager.get_agent_by_id(created_id) is None
     with agent_manager._lock:
         assert created_id not in agent_manager._activity_tracked_agents
-        assert created_id not in agent_manager._model_watcher_by_agent
+    # ...and a let-go one is not.
+    assert created_id not in agent_manager._list_model_state_paths()
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
@@ -3122,6 +3126,85 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
+
+
+# =============================================================================
+# The shared model-state poller (the bounded replacement for per-agent watchers)
+# =============================================================================
+
+
+def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """One poller pass after a ``model_state.json`` write lands the choice on the wire.
+
+    Regression guard for the per-agent-watcher replacement: the poller is now the only
+    thing that turns a harness's state-file write into a recompute + broadcast.
+    """
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    state_path = get_model_state_path(HarnessType.CODEX, agent_manager._get_agent_state_dir(agent_id))
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Settle the poller's stamps on the pre-write world, so the broadcast below is
+    # attributable to the write alone (not to first-sighting derivation).
+    agent_manager._model_state_poller.poll_once()
+    client_queue = broadcaster.register()
+
+    state_path.write_text(json.dumps({"model": "gpt-5.6-terra", "effort": "high", "fast": False}))
+    agent_manager._model_state_poller.poll_once()
+
+    choice = agent_manager._agents[agent_id].model_choice
+    assert choice is not None
+    assert choice.identity.model_id == "gpt-5.6-terra"
+    msg = _last_chats_updated(_drain(client_queue))
+    assert msg is not None
+    assert msg["chats"][0]["active_agent"]["model_choice"] is not None
+
+    # An unchanged file stays quiet: no further broadcast on the next pass.
+    agent_manager._model_state_poller.poll_once()
+    assert _last_chats_updated(_drain(client_queue)) is None
+
+
+def test_tracking_many_agents_spawns_no_per_agent_threads(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+) -> None:
+    """Folding a snapshot full of agents must not grow the thread count.
+
+    Regression guard for the long-run thread leak: every observed agent used to get its
+    own watchdog observer for model tracking (four OS threads per agent, held for the
+    agent's whole life), so a host accumulating agents grew the chat app to hundreds of
+    threads. Model tracking is now the one shared poller, started in ``start()``.
+    """
+    agents = [_agent_details(f"threadless-{i}") for i in range(8)]
+    for agent in agents:
+        (tmp_path / "agents" / str(agent.id)).mkdir(parents=True)
+
+    threads_before = set(threading.enumerate())
+    agent_manager._handle_observe_event(make_full_agent_state_event(agents))
+    assert len(agent_manager.get_agents()) == 8
+
+    new_threads = set(threading.enumerate()) - threads_before
+    assert new_threads == set(), f"Tracking agents spawned threads: {[t.name for t in new_threads]}"
+
+
+def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
+    """The poller's path set is re-resolved from ground truth, so an agent first tracked
+    under the default-harness guess is polled at its REAL state path once observe reports
+    the true harness -- the per-agent watcher used to bake the guessed path in forever."""
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
+    state_dir = agent_manager._get_agent_state_dir(agent_id)
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
+    }
+
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
+    }
 
 
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:

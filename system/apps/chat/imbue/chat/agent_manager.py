@@ -96,7 +96,7 @@ from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
-from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.model_state_poll import ModelStatePoller
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -831,13 +831,16 @@ class AgentManager:
     # around it -- per-harness behavior is the session implementation's.
     _session_by_agent: dict[str, AgentHarnessSession]
     # The alt-harness sign-in preflight (injectable so tests skip the real CLI).
-    # The last computed model choice per agent, and the filesystem watcher that
-    # re-derives it when the agent's model_state.json changes. The live read is
-    # harness-neutral (the shared reader + the harness's registered state-file path), so
-    # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
-    # None = the harness has recorded no model yet -> the bar renders no slots.
+    # The last computed model choice per agent. The live read is harness-neutral (the
+    # shared reader + the harness's registered state-file path), so there is no per-agent
+    # resolver to cache -- the switch endpoint builds one inline. None = the harness has
+    # recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
-    _model_watcher_by_agent: dict[str, PathWatcher]
+    # The ONE model-state poller for every tracked agent: re-derives an agent's choice
+    # whenever its ``model_state.json`` stamp changes. One thread total -- per-agent
+    # watchers cost four OS threads per agent and grew without bound with the host's
+    # agent count (see :mod:`imbue.chat.harnesses.model_state_poll`).
+    _model_state_poller: ModelStatePoller
     # The bounded tail of the observe subprocess's recent stderr, for the watchdog's exit
     # diagnostic -- the subprocess itself retains no output (see ``_start_observe``).
     _observe_stderr_tail: deque[str]
@@ -951,7 +954,10 @@ class AgentManager:
         manager._queue_idle_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
-        manager._model_watcher_by_agent = {}
+        manager._model_state_poller = ModelStatePoller.build(
+            list_model_state_paths=manager._list_model_state_paths,
+            on_model_state_changed=manager._on_model_state_changed,
+        )
         manager._observe_stderr_tail = deque(maxlen=_OBSERVE_STDERR_TAIL_LINES)
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
@@ -1018,6 +1024,7 @@ class AgentManager:
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
         self._autocompactor.start()
+        self._model_state_poller.start()
         self._start_session_sweep()
         self._start_observe()
         self._resume_handoffs()
@@ -1032,6 +1039,7 @@ class AgentManager:
         self._oom_prioritizer.stop()
         self._autocompactor.stop()
         self._auto_open.stop()
+        self._model_state_poller.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
@@ -1044,12 +1052,6 @@ class AgentManager:
             self._observe_cg = None
 
         self._creation_cg.__exit__(None, None, None)
-
-        with self._lock:
-            model_watchers = list(self._model_watcher_by_agent.values())
-            self._model_watcher_by_agent.clear()
-        for watcher in model_watchers:
-            watcher.stop()
 
         with self._lock:
             sessions = list(self._session_by_agent.values())
@@ -2503,12 +2505,9 @@ class AgentManager:
                 session = self._session_by_agent.get(agent_id)
             if session is not None:
                 session.ensure_live()
-            # Installs the state-file watcher once the agent's state dir exists, which it may
-            # not have when the agent was first tracked.
-            self._ensure_model_tracking(agent_id)
-            # ...and broadcast, which that does not: it recomputes silently, on the reasoning
-            # that its callers are already about to broadcast the whole agent list. Nothing
-            # follows this one, so a bar that just became resolvable would stay unrendered.
+            # Recompute AND broadcast: options arriving from a late connect change the
+            # derived choice with no state-file write to wake the poller, so this sweep
+            # is what turns a late connect into a rendered bar.
             self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
@@ -3724,40 +3723,43 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
-        """Watch the agent's live model-state file once its state dir exists.
+        """Derive the agent's current model choice, without broadcasting.
 
         The live read is harness-neutral -- the shared reader over the harness's
-        registered ``model_state.json`` -- so there is nothing to build per agent;
-        this just derives the current choice and, when the local state dir is present,
-        starts the one watch that drives every later recompute. Idempotent (the watch is
-        retried on later calls until the dir appears).
+        registered ``model_state.json`` -- so there is nothing to build per agent.
+        Later recomputes are driven by the ONE shared :class:`ModelStatePoller`
+        (started in ``start``), which re-lists every agent's state-file path from
+        ground truth each pass; nothing per-agent is installed here. Idempotent.
         """
-        agent_state = self.get_agent_by_id(agent_id)
-        if agent_state is None:
-            return
-        with self._lock:
-            needs_watcher = agent_id not in self._model_watcher_by_agent
         self._recompute_model_choice(agent_id, broadcast_on_change=False)
-        if needs_watcher and self._get_agent_state_dir(agent_id).exists():
-            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
-            new_watcher = PathWatcher.build(
-                (state_path,),
-                lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
-            )
-            with self._lock:
-                already_watched = agent_id in self._model_watcher_by_agent
-                if not already_watched:
-                    self._model_watcher_by_agent[agent_id] = new_watcher
-            if not already_watched:
-                new_watcher.start()
 
     def _stop_model_tracking(self, agent_id: str) -> None:
-        """Stop the model watcher and clear the cached choice for an agent."""
+        """Clear the cached model choice for an agent (the poller drops its own stamp
+        when the agent leaves ``_agents``)."""
         with self._lock:
-            watcher = self._model_watcher_by_agent.pop(agent_id, None)
             self._model_choice_by_agent.pop(agent_id, None)
-        if watcher is not None:
-            watcher.stop()
+
+    def _list_model_state_paths(self) -> dict[str, Path]:
+        """Every tracked agent's model-state file path, resolved from current ground truth.
+
+        The shared poller calls this each pass, so an agent whose harness heals after
+        first sight (the create path tracks before observe reports it) is polled at its
+        real path from the next pass on -- nothing bakes a guessed path in.
+        """
+        with self._lock:
+            return {
+                agent_id: get_model_state_path(agent.harness, self._get_agent_state_dir(agent_id))
+                for agent_id, agent in self._agents.items()
+            }
+
+    def _on_model_state_changed(self, agent_id: str) -> None:
+        """One agent's model-state file changed: re-derive and broadcast on change.
+
+        Runs on the poller thread. Safe for spurious calls (an agent that just left
+        ``_agents`` or a content-identical rewrite): the recompute no-ops for unknown
+        agents and suppresses unchanged broadcasts.
+        """
+        self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
         """Recompute an agent's model choice from its live state file, then cache/broadcast it.
