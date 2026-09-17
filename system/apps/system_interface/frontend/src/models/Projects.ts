@@ -6,7 +6,8 @@
  * arrangement of it, and a rail of shortcuts. The tab set is many-to-many: the same instance
  * can sit in any number of projects, and nothing owns anything. Opening an instance in a project
  * files it there; closing a tab changes nothing; the rail's "Remove from project" unfiles an
- * address from one project; and an address leaves every tab set when its app stops listing it.
+ * address from one project; and an address leaves every tab set only when its instance is deleted
+ * through the shell.
  *
  * "Everything" is the view with no filter and the home: every instance on the machine is in it.
  * It has an arrangement per client like any other view but no registry entry -- it never comes

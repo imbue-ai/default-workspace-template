@@ -237,6 +237,64 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     assert client.post("/api/apps/stub/instances/-not-a-key/rename", json={"title": "x"}).status_code == 400
 
 
+def test_a_relayed_delete_drops_the_instance_from_every_tab_set_and_layout(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    stub_1 = Address("app:stub?instance=stub-1")
+    stub_2 = Address("app:stub?instance=stub-2")
+    stub_source.records.extend([instance_record("stub-1"), instance_record("stub-2")])
+    inventory = build_inventory(
+        write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True)),
+        broadcaster,
+        fetcher=HttpInstanceFetcher(),
+    )
+    inventory.refetch_now("stub")
+    app = shell_application(tmp_path, inventory, broadcaster)
+    shell = _shell(app)
+    shell.projects.create_project("Alpha", "#111111", 0, ())
+    shell.projects.add_tab("alpha", stub_1)
+    shell.projects.add_tab("alpha", stub_2)
+    shell.layouts.save_browser_layout("alpha", "c1", layout_showing(stub_1, stub_2), None, TEST_NOW)
+    client_queue = broadcaster.register()
+
+    assert app.test_client().post("/api/apps/stub/instances/stub-1/delete").status_code == 204
+
+    assert shell.projects.get_project("alpha").tabs == (stub_2,)
+    remaining = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
+    assert addresses_by_panel_id(remaining.dockview) == {"p1": stub_2}
+    types = [message["type"] for message in drain_messages(client_queue)]
+    assert "projects_updated" in types and "layout_updated" in types
+
+
+def test_a_refused_delete_keeps_the_instance_in_its_tab_sets(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    stub_1 = Address("app:stub?instance=stub-1")
+    stub_source.records.append(instance_record("stub-1"))
+    inventory = build_inventory(
+        write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True)),
+        broadcaster,
+        fetcher=HttpInstanceFetcher(),
+    )
+    inventory.refetch_now("stub")
+    app = shell_application(tmp_path, inventory, broadcaster)
+    shell = _shell(app)
+    shell.projects.create_project("Alpha", "#111111", 0, ())
+    shell.projects.add_tab("alpha", stub_1)
+
+    stub_source.is_ready = False
+
+    assert app.test_client().post("/api/apps/stub/instances/stub-1/delete").status_code >= 400
+
+    assert shell.projects.get_project("alpha").tabs == (stub_1,)
+
+
 # ---------- section 6: stop and start ----------
 
 

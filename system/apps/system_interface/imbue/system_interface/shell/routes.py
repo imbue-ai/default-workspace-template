@@ -304,7 +304,14 @@ def _relay_keyed(
 
 
 def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
-    return _relay_keyed(name, key, lambda entry: relay_delete(_shell().http_client, entry, key))
+    """The one verb that takes an instance out of the tab sets and layouts: a list that merely lacks it never does."""
+    entry = _entry_or_raise(name)
+    instance_key = _instance_key_or_raise(key)
+    outcome = relay_delete(_shell().http_client, entry, key)
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+        _shell().forget_deleted_instance(address_for(entry.row.name, instance_key))
+    return _relay_response(outcome)
 
 
 def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
