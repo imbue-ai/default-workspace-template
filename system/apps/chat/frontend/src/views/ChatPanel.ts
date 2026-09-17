@@ -337,8 +337,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       }
       // Minted with nothing signed in. An account that exists by the time this page looks (a
       // sign-in finished in another tab, a reload after one) launches the chat at once, as
-      // ``new`` would have with one signed in: the chooser lists signed-in accounts as facts,
-      // not as something to pick, so there is no other way onto it.
+      // ``new`` would have with one signed in, rather than making the user pick it out of the
+      // chooser.
       const account = getSelectedAccount();
       // A launch this page started (on the selected account, or through the chooser) that is
       // in flight or waiting for the push that moves the record to the creating phase: the
