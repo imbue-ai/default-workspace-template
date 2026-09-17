@@ -500,10 +500,12 @@ ssh_bind_address = "127.0.0.1"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
-# by the aws-<region> provider start args and by the imbue_cloud slice bake's
-# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
-# slices run under runsc from the bake).
+# forever. A tmpfs /run makes the hard link work. This block covers the local
+# docker provider only: the cloud VM providers (aws / gcp / azure / vultr / ovh,
+# all on mngr_vps) add the same two mounts themselves whenever their
+# `docker_runtime` is runsc, and the imbue_cloud slice bake passes them through
+# its per-box `-S providers.imbue_cloud_slice.default_start_args` overrides
+# (gen-2 slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
