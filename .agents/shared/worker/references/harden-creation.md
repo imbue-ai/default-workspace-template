@@ -88,6 +88,7 @@ when you add a supervisord section -- and once more immediately before your
 final report, after committing everything, so the `diff` it carries includes
 every commit you made (the diff reads commits only; an uncommitted edit is
 invisible to it).
+
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
 the app's `app.toml` -- when the file genuinely belongs to the creation -- or
