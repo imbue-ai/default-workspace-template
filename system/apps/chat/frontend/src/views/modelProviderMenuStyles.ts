@@ -4,9 +4,9 @@
  * The menu's frame, rows, divider, sheet and submenus are the workspace's `Menu`
  * (`components/menu`), so this menu behaves and dresses like the tab menu and the
  * rail's row menus. What lives here is the part no other menu has: the composer
- * chip that opens it, the effort slider, the fast-mode switch, the model list's
- * search field, and the row geometry that reserves a lane for each of an account
- * row's trailing controls.
+ * chip that opens it, the effort slider, the model list's search field, and the
+ * row geometry that reserves a lane for each of an account row's trailing
+ * controls -- plus the switch the composer's under-bar borrows.
  *
  * Every colour, size and elevation below comes from the semantic utility layer,
  * the `type-*` roles and the shadow tokens. Tailwind v4 emits nothing for an
@@ -49,6 +49,10 @@ export const ROW_STATIC = "flex h-8 items-center gap-2 px-3";
 /** Labels sit at the values' own size, one colour step back -- the menu reads as a spec sheet. */
 export const ROW_LABEL = "text-secondary";
 export const ROW_VALUE_STATIC = "ml-auto flex items-center gap-2";
+/** The disclosure arrow on a row that opens a chooser of its own rather than a submenu -- the
+ *  shared menu draws its own on the rows it owns, and this is the same glyph at the same
+ *  weight, so the two kinds of row read alike. */
+export const ROW_CHEVRON = "shrink-0 text-faint";
 /** Marks a row group as a tooltip host. */
 export const ROW_WRAP = "group/conn relative";
 
@@ -89,20 +93,20 @@ export const SLIDER =
   "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-surface " +
   "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
 
-// The fast switch
+// The switch
 /** The switch comes in two sizes, and a size is a track plus its throw, handed out together:
  *  a track scaled on its own leaves the knob's `translate-x-[...]` throw sized for the old
  *  track, and the knob lands outside it.
  *
  *  Each row is arithmetic: the knob is the track's height less 2px of inset top and bottom,
- *  the on-position is `width - inset - knob`, which leaves the knob the same 2px from either
- *  end, and the tick is the fraction of the knob that leaves it a rim.
+ *  and the on-position is `width - inset - knob`, which leaves the knob the same 2px from
+ *  either end.
  *
- *  Both switches in the chat are `sm`: the composer's under-bar one, beside a line of helper
- *  text, and the menu's fast-mode row, in a column of values. `md` is the full-size step. */
+ *  The chat's one switch, the composer's under-bar "Source view", is `sm`: it sits beside a
+ *  line of helper text. `md` is the full-size step. */
 const SWITCH_SIZES = {
-  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]", check: 12 },
-  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]", check: 8 },
+  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
+  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
 } as const;
 
 export type SwitchSize = keyof typeof SWITCH_SIZES;
@@ -125,17 +129,10 @@ export function switchKnobClass(size: SwitchSize, on: boolean): string {
   );
 }
 
-/** The tick inside the knob, at the size that knob can hold: 12px in a 20px knob, 8px in a
- *  12px one, the same rim either way. */
-export function switchCheckSize(size: SwitchSize): number {
-  return SWITCH_SIZES[size].check;
-}
-
 export const SWITCH_ON = "bg-accent";
 export const SWITCH_OFF = "bg-fill-active";
 /** The same 2px at rest whatever the size, so it is not in the table. */
 const SWITCH_KNOB_OFF = "translate-x-[2px]";
-export const SWITCH_CHECK = "text-accent";
 
 // The submenus' own content
 /** The search field at the head of the model list. The wrapper positions the magnifier over the

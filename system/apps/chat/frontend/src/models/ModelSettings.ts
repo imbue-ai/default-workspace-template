@@ -161,6 +161,14 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
   }
 }
 
+/** Drop the optimistic pick for a chat that now runs on another agent: the pick was the old agent's,
+ *  and a live choice that could settle it will never come from the new one. */
+export function forgetPendingChoice(chatId: string): void {
+  if (pendingByChat.delete(chatId)) {
+    m.redraw();
+  }
+}
+
 function schedulePendingTimeout(chatId: string, identity: ModelIdentity): void {
   setTimeout(() => {
     const pending = pendingByChat.get(chatId);

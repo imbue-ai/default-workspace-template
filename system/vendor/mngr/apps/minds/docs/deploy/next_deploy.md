@@ -89,7 +89,10 @@ deploy was deliberately not done.
   `apply_pool_hosts_migrations`, release dispatch 34430115740 then built
   the CI env). dev-josh-2 and the throwaway dev-gen2mig env (deployed
   from minds-v0.5.2, then redeployed from this branch) applied 034-041
-  through `env deploy` in order.
+  through `env deploy` in order. The dev tier's standing registry
+  (`minds-dev-infra`, created 2026-09-16 with every migration through 043
+  applied) is the dev counterpart of the CI infra DB and is read the same
+  way by `import-boxes`, `env deploy`, and `wireguard sync-peers --tier dev`.
 
 - [ ] **Connector migration 042 (`042_workspace_stop_kind.sql`)**: adds
   `pool_hosts.stop_kind` (why a workspace was stopped, and so who may start
@@ -101,6 +104,20 @@ deploy was deliberately not done.
   staging on 2026-09-14 (deploy `20260914T135700Z`; see
   [history/minds-v0.6.0.md](./history/minds-v0.6.0.md)). Production gets it
   with its first phase-5.5 connector deploy (034-042 in one go).
+
+- [ ] **Connector migration 043 (`043_wireguard_address_unique.sql`)**: a
+  partial unique index on `bare_metal_servers.wireguard_address`, the
+  schema-level guard behind the locked allocation `server prep` / `setup` now
+  do (two concurrent production setups took the same overlay address on
+  2026-09-15). It refuses to apply while a tier's pool DB still holds a
+  duplicate, so before each tier's deploy run
+  `SELECT wireguard_address, count(*) FROM bare_metal_servers WHERE
+  wireguard_address IS NOT NULL GROUP BY 1 HAVING count(*) > 1;` and repair
+  any hit (restamp one box to a free address, renumber its wg0, re-prep it;
+  see the production repair in
+  [history/minds-v0.6.1.md](./history/minds-v0.6.1.md)). Production was
+  repaired the same day; staging and the dev envs are unchecked. Deploy after
+  the `mngr/production-ssh-ca` branch merges, with the next connector deploy.
 
 - [x] **Artifact mirror serving** (imbue-ai/mngr-internal#856, #851). Done
   2026-09-09 for production: `minds-admin artifacts upload` (14 artifacts),

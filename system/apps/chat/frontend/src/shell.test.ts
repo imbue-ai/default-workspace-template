@@ -129,7 +129,7 @@ describe("startChatOnAccount", () => {
     await startChatOnAccount("account-1");
 
     // Started from Everything, the chat is filed in no project.
-    expect(createChat).toHaveBeenCalledWith("", "account-1");
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
   });
 
@@ -142,7 +142,22 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    expect(createChat).toHaveBeenCalledWith("project-7", "account-1");
+    expect(createChat).toHaveBeenCalledWith("project-7", "account-1", "", null);
+  });
+
+  it("passes a first message through and reports whether the chat opened", async () => {
+    const parent = framed();
+    const { connectChatToShell, startChatOnAccount } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver(HANDSHAKE, parent);
+    createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+    expect(await startChatOnAccount("account-1", "Carry on here")).toBe(true);
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here", null);
+
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    createChat.mockRejectedValueOnce(new Error("no usable account"));
+    expect(await startChatOnAccount("account-1", "Carry on here")).toBe(false);
+    alertSpy.mockRestore();
   });
 
   it("tells the user when the create fails rather than opening nothing silently", async () => {
@@ -161,16 +176,26 @@ describe("startChatOnAccount", () => {
 });
 
 describe("openSubagentTab", () => {
-  /** A chat app whose instances route accepts every subagent create. */
-  function acceptingInstancesRoute(): ReturnType<typeof vi.fn> {
-    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  /** A chat app whose instances route accepts every subagent create, answering the record it made. */
+  function acceptingInstancesRoute(key: string): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ key }) }));
     vi.stubGlobal("fetch", fetchSpy);
     return fetchSpy;
   }
 
-  it("creates the view under the chat and its active agent, then asks the shell to open it", async () => {
+  /** A chat app whose instances route refuses every subagent create. */
+  function refusingInstancesRoute(): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ detail: "not yet" }) })),
+    );
+  }
+
+  it("creates the view under the chat, then asks the shell to open the key the app answered", async () => {
     const parent = framed();
-    const fetchSpy = acceptingInstancesRoute();
+    // The app keys the view on the agent it holds as active, which may not be the one the
+    // page's last snapshot showed.
+    const fetchSpy = acceptingInstancesRoute("agent-1.agent-7.sess-3");
     const { connectChatToShell, openSubagentTab } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver(HANDSHAKE, parent);
@@ -189,14 +214,30 @@ describe("openSubagentTab", () => {
       }),
     );
     expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "shell:open", address: "app:chat?instance=agent-1.agent-7.sess-3" },
+      "*",
+    );
+  });
+
+  it("falls back to the listed active agent's key when the create is refused", async () => {
+    const parent = framed();
+    refusingInstancesRoute();
+    const { connectChatToShell, openSubagentTab } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver(HANDSHAKE, parent);
+    getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { active_agent: { agent_id: "agent-9" } }));
+
+    await openSubagentTab("agent-1", "sess-3", "Explore the repo");
+
+    expect(parent.postMessage).toHaveBeenCalledWith(
       { type: "shell:open", address: "app:chat?instance=agent-1.agent-9.sess-3" },
       "*",
     );
   });
 
-  it("keys the view on the chat's own id while the page does not list the chat yet", async () => {
+  it("keys the view on the chat's own id while the page does not list the chat yet and the create is refused", async () => {
     const parent = framed();
-    acceptingInstancesRoute();
+    refusingInstancesRoute();
     const { connectChatToShell, openSubagentTab } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver(HANDSHAKE, parent);

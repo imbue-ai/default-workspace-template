@@ -93,8 +93,10 @@ CHAT_APP_FALLBACK_URL: Final[str] = "http://127.0.0.1:8010"
 CLAUDE_AUTH_STATUS_PATH: Final[str] = "/api/claude-auth/status"
 CLAUDE_AUTH_SUBMIT_PATH: Final[str] = "/api/claude-auth/submit-credentials"
 # The endpoint the product's new-tab screen posts to when a user starts a chat. A workspace boots
-# with no chat at all, so the driver's own chat is made here.
-CREATE_CHAT_PATH: Final[str] = "/api/agents/create-chat"
+# with no chat at all, so the driver's own chat is made here. It answers the chat's id as `chat_id`
+# (a chat is a sequence of agents; its id is its first agent's, and every chat-keyed route below
+# takes it), while the plain listing of every mngr agent stays agent-keyed.
+CREATE_CHAT_PATH: Final[str] = "/api/chats/create"
 AGENTS_PATH: Final[str] = "/api/agents"
 ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
@@ -116,7 +118,7 @@ _ACCOUNT_FLOW_STATE_OK: Final[str] = "ok"
 _ACCOUNT_FLOW_STATE_FAILED: Final[str] = "failed"
 # The endpoint the product's model picker posts to. It is harness-blind and validated against the
 # chat's own catalog, and it answers with nothing that reads the choice back.
-MODEL_CHOICE_PATH_TEMPLATE: Final[str] = "/api/agents/{agent_id}/model"
+MODEL_CHOICE_PATH_TEMPLATE: Final[str] = "/api/chats/{chat_id}/model"
 # Sent on every switch so the endpoint applies all three axes, rather than only the ones a client's
 # own diffing would have considered changed.
 MODEL_CHOICE_AXES: Final[tuple[str, ...]] = ("model", "effort", "fast")
@@ -699,7 +701,7 @@ async def create_chat_agent(
     poll_seconds: float,
 ) -> str | None:
     """Create the workspace's chat through the endpoint the product's new-tab screen posts to;
-    returns its agent id.
+    returns the chat's id.
 
     The screen sends no name and lets the workspace mint the next free "Chat N"; this names the
     chat itself, because the name is the only handle a create whose answer was lost can be
@@ -734,11 +736,11 @@ async def create_chat_agent(
             await asyncio.sleep(poll_seconds)
             continue
         if response.is_ok:
-            agent_id = body.get("agent_id")
-            if isinstance(agent_id, str) and agent_id:
-                logger.info("Created the workspace chat {!r} (agent {})", display_name, agent_id)
-                return agent_id
-            logger.error("The workspace created a chat but named no agent id: {}", response.text[:300])
+            chat_id = body.get("chat_id")
+            if isinstance(chat_id, str) and chat_id:
+                logger.info("Created the workspace chat {!r} ({})", display_name, chat_id)
+                return chat_id
+            logger.error("The workspace created a chat but named no chat id: {}", response.text[:300])
             return None
         # A conflict is the name being held already -- by an agent, or by a create still in flight.
         if response.status == HTTPStatus.CONFLICT:
@@ -1084,7 +1086,7 @@ async def switch_model_choice(
     configuration error the reader has to be able to see, not a workspace fault to retry.
     """
     payload = json.dumps({"model_id": model_id, "effort": effort, "fast": is_fast, "axes": list(MODEL_CHOICE_AXES)})
-    url_path = MODEL_CHOICE_PATH_TEMPLATE.format(agent_id=chat_agent_id)
+    url_path = MODEL_CHOICE_PATH_TEMPLATE.format(chat_id=chat_agent_id)
     response = await workspace_curl(environment, env, workspace_agent_id, url_path, payload)
     if response.is_ok:
         logger.info("The workspace took the model choice {} (effort {}, fast {})", model_id, effort, is_fast)
@@ -1354,7 +1356,7 @@ async def send_chat_message(
     second attempt would have run, while waiting one out costs a trial that was already lost.
     """
     body_json = json.dumps({"message": message})
-    url_path = "/api/agents/{}/message".format(chat_agent_id)
+    url_path = "/api/chats/{}/message".format(chat_agent_id)
     refusal_detail = ""
     while time.time() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
@@ -1387,7 +1389,7 @@ async def fetch_event_total(
     transient bridge failure. The driver polls this to decide whether new events exist before pulling
     the (potentially large) window of new events."""
     head = await workspace_curl_json(
-        environment, env, workspace_agent_id, "/api/agents/{}/events?offset=0&limit=1".format(chat_agent_id), None
+        environment, env, workspace_agent_id, "/api/chats/{}/events?offset=0&limit=1".format(chat_agent_id), None
     )
     if not isinstance(head, dict):
         return None
@@ -1411,7 +1413,7 @@ async def fetch_events_window(
         environment,
         env,
         workspace_agent_id,
-        "/api/agents/{}/events?offset={}&limit={}".format(chat_agent_id, offset, limit),
+        "/api/chats/{}/events?offset={}&limit={}".format(chat_agent_id, offset, limit),
         None,
     )
     if not isinstance(body, dict):

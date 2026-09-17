@@ -1,5 +1,6 @@
 import socket
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from inline_snapshot import snapshot
 from imbue.minds.config.data_types import ManagementPlaneConfig
 from imbue.minds_admin.slices.box_access import BoxManagementDial
 from imbue.minds_admin.slices.box_access import OperatorWireguardIdentity
+from imbue.minds_admin.slices.box_access import _DIAL_BY_BOX_KEY
+from imbue.minds_admin.slices.box_access import _DialCacheKey
 from imbue.minds_admin.slices.box_access import _resolve_single_flight
 from imbue.minds_admin.slices.box_access import _spawn_verified_tunnel_or_none
 from imbue.minds_admin.slices.box_access import build_onetun_command
@@ -285,9 +288,10 @@ def test_resolve_single_flight_resolves_a_contended_key_exactly_once() -> None:
     # Eight destroy threads dialing the same box at once must share ONE resolution
     # (one tunnel): the box's wg0 keeps a single session per operator peer, so a
     # tunnel per thread would drop each other's SSH sessions.
-    cache: dict[tuple[str, str | None, str | None], BoxManagementDial] = {}
+    cache: dict[_DialCacheKey, BoxManagementDial] = {}
     lock = threading.Lock()
-    key = ("203.0.113.10", "10.112.1.1", "boxpub=")
+    lock_by_key: dict[_DialCacheKey, threading.Lock] = {}
+    key = ("203.0.113.10", "10.112.1.1", "boxpub=", "dev")
     resolve_started = threading.Event()
     release_resolver = threading.Event()
     resolve_count = 0
@@ -305,7 +309,7 @@ def test_resolve_single_flight_resolves_a_contended_key_exactly_once() -> None:
     results_lock = threading.Lock()
 
     def worker() -> None:
-        dial = _resolve_single_flight(cache, lock, key, slow_resolve)
+        dial = _resolve_single_flight(cache, lock, lock_by_key, key, slow_resolve)
         with results_lock:
             results.append(dial)
 
@@ -332,3 +336,67 @@ def test_resolve_box_management_dial_without_an_overlay_identity_is_the_public_s
     finally:
         close_box_management_tunnels()
     assert dial == BoxManagementDial(host="203.0.113.77", port=22)
+
+
+def test_resolve_box_management_dial_keys_the_cache_on_the_resolved_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Naming the activated tier implicitly (None) or explicitly must share one
+    # cache entry: a second entry for the same box would mean a second tunnel,
+    # whose handshake drops the first tunnel's SSH sessions.
+    monkeypatch.setenv("MINDS_ROOT_NAME", "minds-dev-cache-key")
+    try:
+        implicit_dial = resolve_box_management_dial(
+            public_address="203.0.113.78", wireguard_address=None, wireguard_public_key=None
+        )
+        explicit_dial = resolve_box_management_dial(
+            public_address="203.0.113.78", wireguard_address=None, wireguard_public_key=None, tier="dev"
+        )
+        cached_keys_for_box = [key for key in _DIAL_BY_BOX_KEY if key[0] == "203.0.113.78"]
+    finally:
+        close_box_management_tunnels()
+    assert implicit_dial == explicit_dial == BoxManagementDial(host="203.0.113.78", port=22)
+    assert cached_keys_for_box == [("203.0.113.78", None, None, "dev")]
+
+
+def test_resolve_single_flight_resolves_different_keys_concurrently() -> None:
+    # A fleet-wide fan-out must bring its tunnels up in parallel: two misses on
+    # two boxes must both be mid-resolution at the same time, not queued behind
+    # one shared lock.
+    cache: dict[_DialCacheKey, BoxManagementDial] = {}
+    lock = threading.Lock()
+    lock_by_key: dict[_DialCacheKey, threading.Lock] = {}
+    both_started = threading.Barrier(2, timeout=5.0)
+
+    def make_resolver(port: int) -> Callable[[], BoxManagementDial]:
+        def resolve() -> BoxManagementDial:
+            # Blocks until the OTHER key's resolver is also running; a shared
+            # lock would deadlock here and the barrier would time out.
+            both_started.wait()
+            return BoxManagementDial(host="127.0.0.1", port=port)
+
+        return resolve
+
+    results: dict[int, BoxManagementDial] = {}
+    results_lock = threading.Lock()
+
+    def worker(box_address: str, port: int) -> None:
+        dial = _resolve_single_flight(
+            cache, lock, lock_by_key, (box_address, f"10.112.1.{port % 10}", "boxpub=", "dev"), make_resolver(port)
+        )
+        with results_lock:
+            results[port] = dial
+
+    threads = [
+        threading.Thread(target=worker, args=("203.0.113.11", 43131), name="dial-a"),
+        threading.Thread(target=worker, args=("203.0.113.12", 43132), name="dial-b"),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10.0)
+        assert not thread.is_alive()
+
+    assert results == {
+        43131: BoxManagementDial(host="127.0.0.1", port=43131),
+        43132: BoxManagementDial(host="127.0.0.1", port=43132),
+    }
+    assert len(cache) == 2

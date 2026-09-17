@@ -145,6 +145,8 @@ from imbue.minds_admin.envs.recover import recover_env
 from imbue.minds_admin.envs.recover import recover_target_exists
 from imbue.minds_admin.envs.recover import recover_target_path
 from imbue.minds_admin.envs.secret_lifecycle import list_modal_secrets as real_list_modal_secrets
+from imbue.minds_admin.slices.box_registry import BoxRegistryImportReport
+from imbue.minds_admin.slices.box_registry import import_registry_boxes as real_import_registry_boxes
 
 # Reserved env names that map to named tiers; names starting with
 # ``ci-`` map to the ``ci`` tier (CI-orchestrator-minted ephemeral envs),
@@ -337,6 +339,12 @@ def _seed_paid_list_defaults_for_provider(
     real_seed_paid_list_defaults(host_pool_dsn, domains=domains, emails=emails, parent_cg=cg)
 
 
+def _import_registry_boxes_for_provider(
+    registry_dsn: SecretStr, host_pool_dsn: SecretStr, cg: ConcurrencyGroup
+) -> BoxRegistryImportReport:
+    return real_import_registry_boxes(registry_dsn, host_pool_dsn)
+
+
 def _write_plan_defaults_for_provider(
     host_pool_dsn: SecretStr,
     plan_rows_by_name: dict[str, dict[str, float]],
@@ -422,6 +430,7 @@ def _build_real_providers() -> Providers:
         apply_pool_hosts_migrations=_apply_pool_hosts_migrations_for_provider,
         apply_analytics_migrations=_apply_analytics_migrations_for_provider,
         seed_paid_list_defaults=_seed_paid_list_defaults_for_provider,
+        import_registry_boxes=_import_registry_boxes_for_provider,
         write_plan_defaults=_write_plan_defaults_for_provider,
         get_modal_app_latest_version=_get_modal_app_latest_version_for_provider,
         rollback_modal_app=_rollback_modal_app_for_provider,

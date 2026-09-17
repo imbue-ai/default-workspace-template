@@ -96,7 +96,7 @@ The start flow's titlebar mark is not a link, so this cannot loop.
 
 ### The start flow
 
-The start route renders a bare titlebar: the traffic-light spacer or window controls, and the lockup centered, in brand blue (`#1717F0`), 16px tall, not clickable.
+The start route renders a bare titlebar: the traffic-light spacer or window controls, and the lockup centered, in the brand color (`#0c8106`), 16px tall, not clickable.
 No home button, breadcrumb, bell, or bug button.
 The content is a transcript column 720px wide, anchored to the top and scrolling, with 100px of air above the first turn and below the last, and 48px between turns.
 Every new turn scrolls the column to the end.
@@ -211,8 +211,9 @@ Pressing the permissions, settings, or share button opens a small dialog: "Check
 The buttons are not disabled.
 
 **Transcript.**
-When the page is reached from the start flow in the same session, the start flow's transcript is shown above, unchanged, and the creation turns append to it.
-When it is reached any other way (a later create, a reload, a relaunch), the transcript holds only the creation turns.
+Every creation page opens with the manifesto exchange (the question, the heading, and the five toggles), already on the page with no arrival: every workspace's conversation starts there, whichever page it started on.
+When the page is reached from the start flow in the same session, the start flow's transcript follows the exchange, unchanged, and the creation turns append to it.
+When it is reached any other way (a later create, a reload, a relaunch), the creation turns follow the exchange directly.
 
 The creation turns are:
 
@@ -236,7 +237,7 @@ The creation turns are:
 3. The reading material, 250ms after the agent turn lands, fading in as one block: five `Disclosure` toggles (`SETUP_SECTIONS` in `models/creationTranscript.ts`), closed by default:
 
    - What a workspace is
-   - What is happening right now
+   - What’s happening right now
    - What you can do with it
    - How your data is handled
    - Changing it later
@@ -250,7 +251,11 @@ The creation turns are:
    "Show details" expands the existing log panel inside the box, streamed over the existing log SSE; the panel keeps today's height cap (`max-h-[22vh]`) and scrolls.
 
 **Ready.**
-When the operation reports done, the bar fills, the agent turn "Your workspace is ready." streams, and 900ms after it lands the wash begins (below).
+When the operation reports done, the bar fills and the agent turn "Your workspace is ready! What would you like to do first?" streams; 250ms after it lands, a numbered list of five ways to start, each a title with a line under it (`START_OPTIONS` in `models/creationTranscript.ts`) fades in as one block.
+At the same moment the whole conversation so far (the manifesto exchange, the flow's questions and answers, the settings turn, the setup line with its reading material as `<details>` toggles, and the ready turn with its list) is handed to the new workspace as its first chat: `POST /ui/api/create/attempts/<create-attempt-id>/welcome-chat` (`models/welcomeChat.ts` builds the body) runs the template's `system/scripts/seed_welcome_chat.py` inside the workspace through `mngr exec` and answers the seeded chat's id.
+The hand-off is best effort: a workspace that cannot take the chat (its chat app not up, an older template) is entered all the same, on its plain landing page, with the reason in the console.
+900ms after the list arrives, once the hand-off has settled either way, the wash begins (below); leaving the page while the hand-off is still in flight cancels the entry.
+The workspace opens on the seeded chat, where the user's first message picks the provider account and starts the workspace's first agent.
 
 **Failure.**
 When the operation reports failed, the agent turn reads "Could not create <name>: <error>", followed by the existing recognized-error guidance where applicable (the private-repository and git-authentication notices), and on the user side a filled green "Retry" button and a ghost "Dismiss" button.
@@ -271,13 +276,13 @@ A disc of the workspace's accent color, positioned on the loading box's accent b
 At 950ms, while the cover is whole, the shell enters the workspace through the creating page's existing `enterWorkspaceFromRedirect` helper (which parses the operation's `redirect_url` and calls `shell.enterWorkspace`), so the workspace frame is what the fade reveals.
 The disc is mounted at the shell level, above the titlebar and the modals, because the whole window has to be covered while the screen changes underneath it.
 The wash runs for first-run and later creates alike, and in plain-browser mode.
-Under reduced motion there is no disc: the shell enters the workspace when the ready turn has landed.
+Under reduced motion there is no disc: the shell enters the workspace once the ready turn's list has arrived and the hand-off has settled.
 The titlebar's piece-by-piece entrance from the prototype is not included.
 
 ### Later creates
 
 The Machines page's Create button and the `/create` route keep today's create form.
-Submitting it lands on the creation page described above, with no preceding transcript.
+Submitting it lands on the creation page described above: the manifesto exchange opens it, followed by the create's own turns, and the conversation is handed to the workspace as its first chat the same way.
 Nothing else about later creates changes.
 
 ### Resuming
@@ -316,7 +321,7 @@ The submit request itself moves out of the page component into the create model 
   Agent turns use a line height of 1.5 and preserve newlines.
   User bubbles are `bg-fill-subtle`, 18px radius with a 4px bottom-right corner, max 80% of the column.
 - The two intro lines are the only serif text, set from one CSS variable in the loading document.
-- The start route and creation page use the theme tokens throughout, so they follow the app's light or dark mode; the lockup stays brand blue in both.
+- The start route and creation page use the theme tokens throughout, so they follow the app's light or dark mode; the lockup stays the brand color in both.
   The loading document is light only, as today.
 - Every start-flow and creation-page animation honors `prefers-reduced-motion: reduce` by resolving to its finished state at once.
 
@@ -373,6 +378,7 @@ The SPA keeps an in-memory copy seeded from the bootstrap and flips it to true i
 - `LiveCreateAttemptDetail` and `RecordCreateAttemptDetail` gain a `request` field carrying the attempt's persisted request in wire form (display name, launch mode, cloud account, backup provider, region, instance type, repository, branch), so the creation page can rebuild its summary turn on reload.
   For a live attempt the record is read as it is today for the display name.
 - Remove `onboarding_services` from the live detail, and `desktop_client/onboarding_services.py` with its tests, once nothing else reads it.
+- `POST /api/create/attempts/<create_attempt_id>/welcome-chat`: validates the body (`desktop_client/welcome_chat.py`, `WelcomeChatRequest`: a title and at least one turn), resolves the finished attempt's workspace agent id from the live attempt or its DONE record, and runs the template's seeding script through `MngrCaller` (`mngr exec ... --no-start`, the transcript as base64 on the command line, a 150s timeout past the script's own 120s retry window). Answers `{"chat_id": ...}`, 409 while the attempt has no workspace yet, and 502 with the script's own verdict under `detail` when the workspace refused or could not be reached.
 
 The `/api/v1/workspaces` create endpoint and the attempt status and log endpoints are unchanged.
 
@@ -398,7 +404,8 @@ New start-flow files:
 - `views/pages/start/transcript.ts`: the shared chat primitives, used by both the start flow and the creation page: `userTurn` (with the undo control inside an answered bubble), `agentTurn` (streamed through `streamedText`), `answerRow` (right-aligned buttons), `asideLink`, `choiceTable`, and the `TranscriptScroller` behind `scrollAnchor`.
 - `models/startFlow.ts` (under `frontend/src/models/`): the conversation as an append-only list of entries with a pure reducer for answer, undo, redirect-after-dismiss, and account-observed events, plus the manifesto schedule as numbers.
   The model holds the transcript at module scope (like `webLogin`) so the creation page can render it when reached from the flow in the same session.
-- `models/creationTranscript.ts`: builds the summary turn's lines from an attempt request, and formats the failure and interrupted turns.
+- `models/creationTranscript.ts`: builds the summary turn's lines from an attempt request, holds the ready line and the ways to start, and formats the failure and interrupted turns.
+- `models/welcomeChat.ts`: turns the transcript (the manifesto exchange, the flow's entries, the creation turns) into the welcome chat's turns as markdown, and posts them to the attempt's `welcome-chat` route.
 
 `views/pages/CreatingPage.ts`: rewritten on the shared transcript primitives per [The creation page](#the-creation-page).
 `views/pages/creating/OnboardingWalkthrough.ts`, `graphics.ts`, `symbols.ts`, `models/walkthrough.ts`, and their tests are deleted, along with the walkthrough's CSS in `style.css` (the `#onboarding`, `.gfx*`, `.onboarding-*`, `.cloud-wheel*`, `.connect-*`, `.publish-*`, `.devices-*`, `#theme-demo` blocks).
@@ -441,8 +448,8 @@ New start-flow files:
 - `apps/minds/test/unit/intro-timing.test.js`: the derived schedule (line start times, hold, travel, and the parked instant) from the numbers.
 - `frontend/src/models/startFlow.test.ts`: the reducer under answer, undo, dismissed-modal redirect, account observed, and the manifesto schedule.
 - `frontend/src/models/creationTranscript.test.ts`: summary lines for the cloud preset, a custom form, and a bring-your-own-key account; omission of region and machine size where the mode has none.
-- `frontend/src/views/pages/StartPage.test.ts`: the rendered transcript (question, table, answers, the existing-account way out, the undo control, the read-only form) and the cloud create body; `CreatingPage.test.ts`: the recognized-error guidance and the failure turn's ids; `start/transcript.test.ts`: the transcript scroller.
-- Python unit tests for the config flag, the app-status field, the `complete` route, the create-path write of the flag, and the attempt detail's `request` field.
+- `frontend/src/views/pages/StartPage.test.ts`: the rendered transcript (question, table, answers, the existing-account way out, the undo control, the read-only form) and the cloud create body; `CreatingPage.test.ts`: the recognized-error guidance, the failure turn's ids, the manifesto prelude on a page the flow did not submit, and the hand-off before the entry (and its cancellation when the page is left); `welcomeChat.test.ts`: the seeded body's turns and the post's success and refusal paths; `start/transcript.test.ts`: the transcript scroller.
+- Python unit tests for the config flag, the app-status field, the `complete` route, the create-path write of the flag, the attempt detail's `request` field, and the `welcome-chat` route (the seed's argv and outcome parsing in `welcome_chat_test.py`; the 200, 400, 409, and 502 answers in `ui_api_create_test.py`).
 - `apps/minds/test_creating_page_layout.py` is deleted; it verified the walkthrough fit the window.
 - The behavior corpus's home-page scenarios are updated and their witnesses re-linked.
 - Manual verification: `just minds-start` on a Mac against a dev env for the Electron intro and hand-off, and a plain-browser run for the start flow and creation page.

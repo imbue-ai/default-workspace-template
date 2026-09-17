@@ -57,11 +57,17 @@ vi.mock("../models/Providers", () => ({
 }));
 
 vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTab: vi.fn() }));
+const begun: string[] = [];
+vi.mock("./SwitchDialog", () => ({
+  beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  openSwitchDialog: vi.fn(),
+}));
 
 import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { getPendingAccountId } from "../models/PendingLane";
 import { ModelProviderMenu } from "./ModelProviderMenu";
 
 const OPUS = {
@@ -301,20 +307,23 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
-  it("ignores a press on a locked provider, without closing anything", async () => {
+  it("hands a press on another harness's account to the switch dialog and closes the whole stack", async () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
     ];
     await press(".model-selector-trigger");
     await press('[data-menu-row="providers"]');
-    const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
-    if (locked === undefined) throw new Error("no locked row");
-    locked.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    locked.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const other = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
+    if (other === undefined) throw new Error("no row for the other account");
+    other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    other.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(begun).toEqual(["acct-2"]);
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {

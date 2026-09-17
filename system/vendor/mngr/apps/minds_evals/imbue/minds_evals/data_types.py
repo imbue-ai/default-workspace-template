@@ -717,7 +717,7 @@ class HarnessConfigRecord(FrozenModel):
     effort: str = Field(default="", description="The effort level the run asked for")
     fast: bool = Field(default=False, description="The speed tier the run asked for")
     # Named for the product's own name for the call that sets model, effort and fast together
-    # (`POST /api/agents/<id>/model`), since one such call is what this field reports on.
+    # (`POST /api/chats/<chat_id>/model`), since one such call is what this field reports on.
     model_choice_switch: str = Field(
         default="",
         description="'applied', 'skipped' when the config named no model, the failure that stopped the trial, or "

@@ -48,7 +48,7 @@ function open(): void {
 const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error };
+  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error, is_seeded: false };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A
@@ -96,6 +96,25 @@ describe("the provisional chats over the socket", () => {
     await expect(registered).resolves.toBeUndefined();
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
     expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
+  });
+
+  it("tells the active-agent listeners when a chat runs on a different agent than before", () => {
+    const changes: [string, string, string][] = [];
+    manager.addActiveAgentChangedListener((chatId, previous, current) => changes.push([chatId, previous, current]));
+    push({ type: "chats_updated", chats: [chat("agent-1", { active_agent: { agent_id: "agent-1" } })] });
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1", { active_agent: { agent_id: "agent-1", state: "STOPPED" } })],
+    });
+    expect(changes).toEqual([]);
+    push({ type: "chats_updated", chats: [chat("agent-1", { active_agent: { agent_id: "agent-2" } })] });
+    expect(changes).toEqual([["agent-1", "agent-1", "agent-2"]]);
+    // A chat seen for the first time has no previous agent to compare against.
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1", { active_agent: { agent_id: "agent-2" } }), chat("agent-9")],
+    });
+    expect(changes).toHaveLength(1);
   });
 
   it("resolves at once for a chat the app already lists", async () => {

@@ -24,6 +24,7 @@ from imbue.minds_evals.minds_bridge import AccountRecord
 from imbue.minds_evals.minds_bridge import AccountSignIn
 from imbue.minds_evals.minds_bridge import CHAT_APP_FALLBACK_URL
 from imbue.minds_evals.minds_bridge import CLAUDE_AUTH_STATUS_PATH
+from imbue.minds_evals.minds_bridge import CREATE_CHAT_PATH
 from imbue.minds_evals.minds_bridge import MODEL_CHOICE_PATH_TEMPLATE
 from imbue.minds_evals.minds_bridge import ModelSwitchOutcome
 from imbue.minds_evals.minds_bridge import WORKSPACE_APPS_REGISTRY
@@ -211,9 +212,9 @@ def test_resolve_chat_agent_id_matches_the_true_name_a_display_name_becomes() ->
 
 
 def test_parse_curl_response_separates_the_status_from_the_body() -> None:
-    response = parse_curl_response('{"agent_id": "chat-1"}\n201')
+    response = parse_curl_response('{"chat_id": "chat-1"}\n201')
 
-    assert (response.status, response.body) == (201, {"agent_id": "chat-1"})
+    assert (response.status, response.body) == (201, {"chat_id": "chat-1"})
     # A body-less answer still carries its status, and a capture with no status line at all is the
     # call never having reached the endpoint.
     body_less = parse_curl_response("\n204")
@@ -238,7 +239,7 @@ def test_workspace_curl_targets_the_chat_app_at_the_url_the_registry_holds() -> 
     assert command.endswith('"$chat_url"{}'.format(AGENTS_PATH))
     assert "-X POST" not in command
 
-    posted = workspace_curl_command("/api/agents/create-chat", '{"name": "x"}')
+    posted = workspace_curl_command("/api/chats/create", '{"name": "x"}')
     assert "-X POST" in posted and '-d \'{"name": "x"}\'' in posted
 
 
@@ -364,7 +365,7 @@ def test_run_in_workspace_reports_failure_on_unparseable_output(tmp_path: Path) 
 
 
 def _create_chat_rule(*results: ExecResult) -> ScriptedExecRule:
-    return ScriptedExecRule("/api/agents/create-chat", list(results))
+    return ScriptedExecRule("/api/chats/create", list(results))
 
 
 # The budget a create-chat call gets in these tests. Bounded rather than effectively infinite: the
@@ -398,18 +399,18 @@ def _run_create_chat(
 
 
 def _create_chat_call_count(environment: MockBoxEnvironment) -> int:
-    return len([command for command in environment.exec_commands if "create-chat" in command])
+    return len([command for command in environment.exec_commands if CREATE_CHAT_PATH in command])
 
 
 def test_create_chat_agent_returns_the_created_agent_id(tmp_path: Path) -> None:
-    created = json.dumps({"agent_id": "chat-1", "name": "eval-todo-app", "display_name": "EVAL-todo-app"})
+    created = json.dumps({"chat_id": "chat-1", "name": "eval-todo-app", "display_name": "EVAL-todo-app"})
     environment = MockBoxEnvironment(tmp_path, [_create_chat_rule(ok_result(curl_stdout(created, status=201)))])
 
     assert _run_create_chat(environment) == "chat-1"
 
     # The chat is created under the requested name and bound to the account the sign-in minted; a
     # chat bound to no account can never take a turn.
-    create_command = next(command for command in environment.exec_commands if "create-chat" in command)
+    create_command = next(command for command in environment.exec_commands if CREATE_CHAT_PATH in command)
     assert '"name": "{}"'.format(_CHAT_DISPLAY_NAME) in create_command
     assert '"account_id": "{}"'.format(_CHAT_ACCOUNT_ID) in create_command
 
@@ -417,18 +418,18 @@ def test_create_chat_agent_returns_the_created_agent_id(tmp_path: Path) -> None:
 def test_create_chat_agent_leaves_out_an_account_it_was_not_given(tmp_path: Path) -> None:
     # No account id means the workspace picks the one it used most recently, which it does for an
     # absent field exactly as for an empty one.
-    created = json.dumps({"agent_id": "chat-1"})
+    created = json.dumps({"chat_id": "chat-1"})
     environment = MockBoxEnvironment(tmp_path, [_create_chat_rule(ok_result(curl_stdout(created, status=201)))])
 
     assert _run_create_chat(environment, account_id="") == "chat-1"
-    create_command = next(command for command in environment.exec_commands if "create-chat" in command)
+    create_command = next(command for command in environment.exec_commands if CREATE_CHAT_PATH in command)
     assert "account_id" not in create_command
 
 
 def test_create_chat_agent_retries_only_while_the_endpoint_is_not_answering(tmp_path: Path) -> None:
     # A chat app that is still coming up answers nothing at all; that is the one case worth
     # waiting out, since the workspace is still on its way up.
-    created = json.dumps({"agent_id": "chat-1"})
+    created = json.dumps({"chat_id": "chat-1"})
     environment = MockBoxEnvironment(
         tmp_path,
         [_create_chat_rule(failed_result("mngr exec: not reachable"), ok_result(curl_stdout(created, status=201)))],
@@ -879,7 +880,7 @@ def test_fetch_account_reports_a_listing_it_could_not_read(tmp_path: Path, captu
     assert any("nothing readable" in message for message in captured_log_messages)
 
 
-_MODEL_CHOICE_PATH: Final[str] = MODEL_CHOICE_PATH_TEMPLATE.format(agent_id="chat-1")
+_MODEL_CHOICE_PATH: Final[str] = MODEL_CHOICE_PATH_TEMPLATE.format(chat_id="chat-1")
 
 
 def _run_switch_model_choice(environment: MockBoxEnvironment) -> ModelSwitchOutcome:
@@ -945,7 +946,7 @@ def test_switch_model_choice_reports_a_workspace_that_could_not_apply_it(tmp_pat
     assert "not reachable" in unreachable_outcome.detail
 
 
-_MESSAGE_PATH: Final[str] = "/api/agents/chat-1/message"
+_MESSAGE_PATH: Final[str] = "/api/chats/chat-1/message"
 
 
 def _run_send_chat_message(environment: MockBoxEnvironment, budget_seconds: float) -> bool:

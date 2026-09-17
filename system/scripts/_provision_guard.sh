@@ -28,10 +28,11 @@
 #   provision_mark_done <name>      # call at the end, after a successful run
 #
 # PROVISION_FORCE=1 runs the step even when the marker matches. The update
-# apply's rollback re-runs the provisioner from the restored tree to put the
-# global toolchain back -- and that tree is exactly the one whose marker was
-# written when it was first provisioned, so without the override the re-run
-# would skip and leave the tools at the rolled-back-away versions.
+# apply sets it on every provisioner run: its rollback re-runs the provisioner
+# from the restored tree to put the global toolchain back, and that tree is
+# exactly the one whose marker was written when it was first provisioned; and
+# the merged tree's own marker outlives that rollback, so a retry of the same
+# merge would otherwise skip the run that installs the merged pins.
 
 # Strict mode. This file is sourced by callers that already set this (e.g.
 # setup_system.sh), so re-asserting it here is a no-op for them and keeps the
@@ -68,4 +69,22 @@ provision_mark_done() {
     [ -n "$_fp" ] || return 0
     mkdir -p "$_PROVISION_MARKER_DIR"
     : > "$_PROVISION_MARKER_DIR/$_fp.$_name.done"
+}
+
+# The version pins a guarded step reads are `:=` defaults, so an exported
+# *_VERSION in the caller's environment wins over the tree's. An image built
+# before minds-v0.4.3 exported its pins as ENV, and every process in such a
+# container still inherits the image's versions; a by-hand re-provision there
+# reinstalls the old version and passes the step's own pin check. Drop them
+# all before the defaults are read, unless the caller says the override is
+# deliberate (PROVISION_PIN_OVERRIDE=1).
+provision_drop_inherited_pins() {
+    if [ "${PROVISION_PIN_OVERRIDE:-}" = "1" ]; then
+        return 0
+    fi
+    _name=""
+    for _name in $(compgen -A export | grep '_VERSION$' || true); do
+        echo "[provision-guard] ignoring inherited $_name=${!_name}; the tree's pin applies (PROVISION_PIN_OVERRIDE=1 keeps it)."
+        unset "$_name"
+    done
 }

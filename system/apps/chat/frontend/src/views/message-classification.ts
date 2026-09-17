@@ -102,6 +102,16 @@ export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
 }
 
+/** The slash command the chat app sends a retiring agent for its handoff summary (the backend's
+ *  ``HANDOFF_SUMMARY_COMMAND``); the transcript walk opens the handoff node on it. */
+const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
+
+/** True for the chat app's own summary request: the user message that starts a handoff's summary turn. */
+export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean {
+  const content = event.content.trim();
+  return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
+}
+
 // --- Permission REQUEST (a tool call) ---------------------------------------
 
 /** True when a tool call is an agent permission request (a POST to the reserved

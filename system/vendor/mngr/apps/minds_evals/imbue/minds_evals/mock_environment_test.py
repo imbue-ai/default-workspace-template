@@ -135,6 +135,12 @@ class ConversationModel:
         # The 1-based client message the message endpoint refuses to accept, if any. The driver
         # retries a send until its deadline, so this is how a send that never lands is exercised.
         self.refused_send_index: int | None = None
+        # The 1-based client message after which every events poll answers unparseably, the way a
+        # transient bridge failure does. The driver gives up on a reply after a run of those, so
+        # this is how a message that went out and was never answered is exercised without a
+        # wall-clock budget in play.
+        self.events_poll_failing_after_message: int | None = None
+        self._sent_message_count = 0
         self.signed_in_account_ids: list[str] = []
         # The lane the workspace was signed in on, which decides the harness it lists the minted
         # account under. Empty until a sign-in has happened.
@@ -216,7 +222,7 @@ class ConversationModel:
         if self._is_first_create_answer_lost:
             self._is_first_create_answer_lost = False
             return mngr_exec_json("")
-        created = {"agent_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
+        created = {"chat_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
         return curl_stdout(json.dumps(created), status=201)
 
     def _handle_accounts_call(self, command: str) -> str:
@@ -266,20 +272,20 @@ class ConversationModel:
                 # No status line at all is what the bridge sees while the endpoint is still coming up.
                 return mngr_exec_json("")
             return curl_stdout(json.dumps({"logged_in": False, "auth_mode": "none"}))
-        if "/api/agents" in command and not self.is_agents_endpoint_up:
+        if ("/api/agents" in command or "/api/chats" in command) and not self.is_agents_endpoint_up:
             # No status line at all: the bridged call reached nothing that could answer it.
             return mngr_exec_json("")
-        if "/api/agents/create-chat" in command:
+        if "/api/chats/create" in command:
             return self._handle_create_chat(command)
-        if "/api/agents/{}/model".format(self.chat_agent_id) in command:
+        if "/api/chats/{}/model".format(self.chat_agent_id) in command:
             self.model_choice_commands.append(command)
             if self.model_choice_status != 200:
                 return curl_stdout(json.dumps({"detail": self.model_choice_detail}), status=self.model_choice_status)
             if self.chat_state_after_model_choice:
                 self.chat_state = self.chat_state_after_model_choice
             return curl_stdout(json.dumps({"status": "ok"}))
-        if "/api/agents/{}/message".format(self.chat_agent_id) in command:
-            if self.refused_send_index == self._turn_index + 1:
+        if "/api/chats/{}/message".format(self.chat_agent_id) in command:
+            if self.refused_send_index == self._sent_message_count + 1:
                 # An unparseable body is what the bridge sees when a send does not land.
                 return mngr_exec_json("")
             # The welcome turn is queued ahead of anything sent afterwards, so a send that beats it
@@ -289,11 +295,17 @@ class ConversationModel:
             if self._turn_index < len(self._turn_reply_events):
                 self.events.extend(self._turn_reply_events[self._turn_index])
                 self._turn_index += 1
+            self._sent_message_count += 1
             return curl_stdout(json.dumps({"ok": True}))
         events_match = re.search(
-            r"/api/agents/{}/events\?offset=(\d+)&limit=(\d+)".format(re.escape(self.chat_agent_id)), command
+            r"/api/chats/{}/events\?offset=(\d+)&limit=(\d+)".format(re.escape(self.chat_agent_id)), command
         )
         if events_match:
+            if (
+                self.events_poll_failing_after_message is not None
+                and self._sent_message_count >= self.events_poll_failing_after_message
+            ):
+                return mngr_exec_json("")
             self._deliver_welcome_if_due()
             offset, limit = int(events_match.group(1)), int(events_match.group(2))
             served = self.events[offset : offset + limit]

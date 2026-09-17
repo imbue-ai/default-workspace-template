@@ -221,7 +221,7 @@ These are the **fleet's** exit codes. `playwright-cli` has its own and they are 
 | `2` | preempted (human took control, or you ran `handoff`) | **Stop and end your turn.** You'll be messaged to resume; re-`snapshot` first. |
 | `3` | busy (another agent holds it, or fleet full / still restoring / still launching) | Use a different browser (or `new`); for "restoring"/"starting up", wait a few seconds and retry. |
 | `4` | timed out waiting for another agent | Try later, or pick a different browser. |
-| `64` | usage (`MNGR_AGENT_ID` unset / bad arguments / invalid name) | Run from inside an agent shell; fix the command. |
+| `64` | usage (no chat id: `MINDS_CHAT_ID` and `MNGR_AGENT_ID` both unset / bad arguments / invalid name) | Run from inside an agent shell; fix the command. |
 | `69` | no daemon (can't reach the browser service) | The service isn't running -- report it; don't blindly retry. |
 
 ## Quick recipes

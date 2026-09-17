@@ -1,0 +1,105 @@
+/**
+ * A chat's fast mode (the backend's ``ChatFastModeState``, at ``/api/chats/<id>/fast-mode``):
+ * off, auto or on, and for auto whether the chat has run its fast turns and been switched to
+ * standard speed. The choice belongs to the chat, so it lives on the backend beside the chat's
+ * record and this page keeps one copy per chat, loaded on demand and replaced whole by every
+ * write.
+ */
+
+import m from "mithril";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+
+export type FastModeMode = "off" | "auto" | "on";
+
+export interface ChatFastModeState {
+  mode: FastModeMode;
+  // Auto only: the chat has run its fast turns and was switched to standard speed.
+  is_switched: boolean;
+}
+
+const stateByChat = new Map<string, ChatFastModeState>();
+const loadingByChat = new Map<string, Promise<ChatFastModeState | null>>();
+// After a failed load, when the backend may be asked again for that chat; the callers ask on
+// every render, so a failure has to hold them off rather than be retried by the next redraw.
+const retryNotBeforeByChat = new Map<string, number>();
+export const RETRY_DELAY_MS = 30_000;
+
+/** The chat's fast mode as this page last saw it, or null before the first load answered. */
+export function getFastModeState(chatId: string): ChatFastModeState | null {
+  return stateByChat.get(chatId) ?? null;
+}
+
+/**
+ * Load the chat's fast mode once and redraw when it lands; later calls share the first load. A
+ * load that fails is warned about and resolves null, leaving nothing loaded until
+ * ``RETRY_DELAY_MS`` has passed.
+ */
+export function ensureFastModeState(chatId: string): Promise<ChatFastModeState | null> {
+  const known = stateByChat.get(chatId);
+  if (known !== undefined) return Promise.resolve(known);
+  const loading = loadingByChat.get(chatId);
+  if (loading !== undefined) return loading;
+  if (Date.now() < (retryNotBeforeByChat.get(chatId) ?? 0)) return Promise.resolve(null);
+  const request = m
+    .request<{ state: ChatFastModeState }>({
+      method: "GET",
+      url: apiUrl("/api/chats/:chatId/fast-mode"),
+      params: { chatId },
+    })
+    .then((response) => {
+      stateByChat.set(chatId, response.state);
+      m.redraw();
+      return response.state;
+    })
+    .catch((error: unknown) => {
+      console.warn(`Failed to load the fast mode of chat ${chatId}`, error);
+      retryNotBeforeByChat.set(chatId, Date.now() + RETRY_DELAY_MS);
+      return null;
+    })
+    .finally(() => {
+      loadingByChat.delete(chatId);
+    });
+  loadingByChat.set(chatId, request);
+  return request;
+}
+
+/**
+ * Replace the chat's fast mode, on the page at once and on the backend; the backend's answer is
+ * what stays. A write the backend refuses or never receives puts the previous state back.
+ */
+export async function updateFastModeState(chatId: string, next: ChatFastModeState): Promise<ChatFastModeState | null> {
+  const previous = stateByChat.get(chatId);
+  stateByChat.set(chatId, next);
+  m.redraw();
+  try {
+    const response = await m.request<{ state: ChatFastModeState }>({
+      method: "PUT",
+      url: apiUrl("/api/chats/:chatId/fast-mode"),
+      params: { chatId },
+      body: next,
+    });
+    stateByChat.set(chatId, response.state);
+    return response.state;
+  } catch (error) {
+    console.warn(`Failed to save the fast mode of chat ${chatId}`, error);
+    if (previous === undefined) stateByChat.delete(chatId);
+    else stateByChat.set(chatId, previous);
+    return previous ?? null;
+  } finally {
+    m.redraw();
+  }
+}
+
+/** What the model picker's fast row says for a state. */
+export function fastModeLabel(state: ChatFastModeState): string {
+  if (state.mode === "off") return "Off";
+  if (state.mode === "on") return "On";
+  return state.is_switched ? "Auto (off now)" : "Auto";
+}
+
+/** Forget every chat's state, so a test starts clean. */
+export function resetFastModeForTests(): void {
+  stateByChat.clear();
+  loadingByChat.clear();
+  retryNotBeforeByChat.clear();
+}

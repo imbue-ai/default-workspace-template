@@ -32,6 +32,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -43,6 +44,7 @@ from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.create_defaults import write_create_defaults
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import LaneNotFoundError
+from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -59,11 +61,6 @@ _INDEX_FILENAME: Final = "index.json"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
-
-# Marks that this workspace has had its first chat. Beside the accounts root rather than in
-# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the chat that
-# answers it is created on demand rather than at boot.
-_FIRST_CHAT_FILENAME: Final = "first_chat_started"
 
 _INDEX_THREAD_LOCK = threading.Lock()
 _LOCK_FILENAME: Final = "index.lock"
@@ -149,37 +146,6 @@ def accounts_root(home: Path | None = None) -> Path:
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
-
-
-def claim_first_chat(home: Path | None = None) -> bool:
-    """True exactly once per workspace, for the first chat anyone starts.
-
-    The caller stacks the `first` create template on that chat -- which is what delivers
-    `/welcome`. It is claimed here rather than by bootstrap because a chat needs a provider
-    account, and a fresh workspace has none until someone signs in.
-
-    Claim-and-mark in one call so two creates racing cannot both be first.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        if marker.exists():
-            return False
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
-        return True
-
-
-def release_first_chat(home: Path | None = None) -> None:
-    """Give the claim back, for a create that claimed it and then failed.
-
-    There is exactly one `/welcome` per workspace and no way to ask for another, so a claim
-    spent on a create that died -- a rejected credential, an OOM, a container restart -- would
-    cost the user their first-run experience permanently. Only the claimant calls this, and
-    only on a failure path, so it cannot race a second create into being first as well.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        marker.unlink(missing_ok=True)
 
 
 def index_path(home: Path | None = None) -> Path:
@@ -475,6 +441,52 @@ def rename_account(account_id: str, name: str, home: Path | None = None) -> Acco
             raise AccountError(f"no such account: {account_id}")
         _write_index(index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))), home)
     return renamed
+
+
+class NumberedAccount(FrozenModel):
+    """An account as the picker shows it: numbered among the accounts that read the same, with its harness."""
+
+    account: Account
+    harness: HarnessType
+    # The provider noun, or the user's own name for the account when it has one.
+    display: str
+    # 1-based among the accounts sharing ``display`` and ``harness``, in index order.
+    number: int
+
+    @property
+    def label(self) -> str:
+        return account_label(self.display, self.harness, self.number)
+
+
+def number_accounts(rows: Sequence[Account]) -> list[NumberedAccount]:
+    """Number the accounts the way every surface shows them; an account on a lane this build lacks is left out.
+
+    The stored ``seq`` counts per lane, but a label names a provider and a harness, and those
+    do not line up: two lanes run on pi and can both mint an OpenRouter account, so lane
+    numbering gives two rows reading "OpenRouter (Pi)" with nothing between them, while a lane
+    that offers many providers numbers its only Groq account "Groq 2" because an OpenRouter one
+    came first. A renamed account is numbered under the name the user gave it, since that is
+    what the row reads.
+    """
+    shown: dict[tuple[str, str], int] = {}
+    numbered: list[NumberedAccount] = []
+    for account in rows:
+        harness = harness_for(account)
+        if harness is None:
+            continue
+        display = account.name if account.name != "" else account.display
+        key = (display, harness.value)
+        shown[key] = shown.get(key, 0) + 1
+        numbered.append(NumberedAccount(account=account, harness=harness, display=display, number=shown[key]))
+    return numbered
+
+
+def account_label_for(account_id: str, home: Path | None = None) -> str:
+    """The label the picker shows for one signed-in account. Raises ``AccountError`` when the index lacks it."""
+    for numbered in number_accounts(read_index(home).accounts):
+        if numbered.account.id == account_id:
+            return numbered.label
+    raise AccountError(f"no such account: {account_id}")
 
 
 def set_mru(account_id: str, home: Path | None = None) -> None:

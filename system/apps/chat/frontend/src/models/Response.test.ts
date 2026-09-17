@@ -36,10 +36,13 @@ import {
   hasMoreBefore,
   hasMoreAfter,
   isConversationNotFound,
+  isMessageCarriedBySwitch,
+  noteLoadedArrivals,
   type AssistantMessageEvent,
   type ToolCall,
   type TranscriptEvent,
 } from "./Response";
+import { addOutgoing, getOutgoingMessages } from "./OutgoingMessages";
 
 function makeEvent(id: string): TranscriptEvent {
   return {
@@ -126,6 +129,98 @@ afterEach(() => {
 function ids(chatId: string): string[] {
   return getEventsForChat(chatId).map((e) => e.event_id);
 }
+
+describe("appendEvents and the optimistic bubbles", () => {
+  it("drops a bubble for a user turn's arrival but not for a successor's handoff prompt", () => {
+    const chat = `chat-${Math.random()}`;
+    addOutgoing(chat, "first");
+    addOutgoing(chat, "second");
+    appendEvents(chat, [
+      {
+        timestamp: "2026-01-01T00:00:00Z",
+        type: "user_message",
+        event_id: "prompt",
+        source: "test",
+        role: "user",
+        content: 'You are continuing the chat "X" (chat id a). Hi',
+        display: "chip",
+        display_label: "Handoff prompt",
+      },
+    ]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["first", "second"]);
+    appendEvents(chat, [makeEvent("turn")]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["second"]);
+  });
+
+  it("stands a bubble down by id when the switch marker carrying its message lands", () => {
+    const chat = `chat-${Math.random()}`;
+    addOutgoing(chat, "Carry on", "m-trigger");
+    addOutgoing(chat, "and this", "m-2");
+    appendEvents(chat, [
+      {
+        timestamp: "2026-01-01T00:00:01Z",
+        type: "agent_switch",
+        event_id: "sw1",
+        source: "chat",
+        from_agent_id: "agent-a",
+        to_agent_id: "agent-b",
+        from_harness: "claude",
+        to_harness: "codex",
+        seq: 1,
+        message_id: "m-trigger",
+        message: "Carry on",
+        is_fresh_start: false,
+      },
+    ]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
+  });
+
+  it("stands bubbles down for the user turns a loaded snapshot holds, but not the seed's, and each once", async () => {
+    // A seeded chat's first send rode its agent's create, so it is in the snapshot the reload
+    // places once the agent lands, never on the stream.
+    const chat = `chat-${Math.random()}`;
+    addOutgoing(chat, "Let's build something");
+    addOutgoing(chat, "and then this");
+    const seedTurn: TranscriptEvent = { ...makeEvent("seed-0"), source: "seed" };
+    mockRequest.mockResolvedValueOnce({
+      events: [seedTurn, makeEvent("first-send")],
+      offset: 0,
+      total: 2,
+    });
+    await fetchEvents(chat);
+
+    noteLoadedArrivals(chat);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and then this"]);
+    // The same window noted again (or its turn arriving on the stream after all) counts once.
+    noteLoadedArrivals(chat);
+    appendEvents(chat, [makeEvent("first-send")]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and then this"]);
+  });
+
+  it("tells whether a switch marker on the transcript carries a message by its send-time id", () => {
+    const chat = `chat-${Math.random()}`;
+    appendEvents(chat, [
+      makeEvent("a"),
+      {
+        timestamp: "2026-01-01T00:00:01Z",
+        type: "agent_switch",
+        event_id: "sw1",
+        source: "chat",
+        from_agent_id: "agent-a",
+        to_agent_id: "agent-b",
+        from_harness: "claude",
+        to_harness: "codex",
+        seq: 1,
+        message_id: "m-trigger",
+        message: "Carry on",
+        is_fresh_start: false,
+      },
+    ]);
+    expect(isMessageCarriedBySwitch(chat, "m-trigger")).toBe(true);
+    expect(isMessageCarriedBySwitch(chat, "m-other")).toBe(false);
+    expect(isMessageCarriedBySwitch("no-such-chat", "m-trigger")).toBe(false);
+  });
+});
 
 describe("appendEvents subagent_metadata merge", () => {
   it("merges late subagent_metadata onto an already-stored assistant message", () => {

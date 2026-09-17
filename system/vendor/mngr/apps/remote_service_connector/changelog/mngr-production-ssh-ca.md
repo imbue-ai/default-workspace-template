@@ -1,0 +1,1 @@
+Migration 043 adds a partial unique index on `bare_metal_servers.wireguard_address` (non-NULL values), so no writer can leave two gen-2 boxes on one management overlay address; it refuses to apply while a tier still carries a duplicate (repair with a restamp plus `minds-admin server prep` first).

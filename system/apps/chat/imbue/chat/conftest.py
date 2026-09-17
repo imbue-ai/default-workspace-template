@@ -247,7 +247,8 @@ def agent_manager(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    return AgentManager.build(broadcaster)
+    # A create writes the chat's fast mode under this root; the default is this package's own data/.
+    return AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
 
 
 @pytest.fixture
