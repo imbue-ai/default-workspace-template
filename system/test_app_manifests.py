@@ -140,8 +140,8 @@ def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) 
 )
 def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: Path) -> None:
     # The footprint's wiring is read off the real tree here, where every program block
-    # is a drop-in: a finder that only read the daemon's config came back empty for
-    # every app, and the library's own tests, which write their own layout, never saw it.
+    # is a drop-in: a finder that reads the daemon's config alone finds nothing for any
+    # app, and the library's own tests write their own layout, so none of them sees that.
     manifest = load_manifest(manifest_path, repo_root=_REPO_ROOT)
     scope = compute_app_scope(_REPO_ROOT, manifest_path, manifest)
     sections_by_path = {entry.path: list(entry.sections) for entry in scope.wiring}
