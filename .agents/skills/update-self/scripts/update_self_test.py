@@ -5044,7 +5044,7 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
         f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
         f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
         f"; installing '{update_layout.TOOL_NAME}' into the build's pinned tool "
-        f"directory ({tool_env.bin_dir(pinned)})"
+        f"home ({tool_env.bin_dir(pinned)})"
     ) in capsys.readouterr().err
 
 

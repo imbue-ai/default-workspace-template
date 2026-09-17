@@ -342,7 +342,7 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
                 f"refresh: could not identify the uv tool behind '{executable}' "
                 f"(not an installed uv tool on PATH) nor the one behind "
                 f"'{MNGR_EXECUTABLE}'; installing '{tool_name}' into the build's "
-                f"pinned tool directory ({location[1]}).\n"
+                f"pinned tool home ({location[1]}).\n"
             )
         else:
             sys.stderr.write(
