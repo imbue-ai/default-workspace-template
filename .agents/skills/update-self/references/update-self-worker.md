@@ -303,18 +303,17 @@ in your report.
   `.update.json` both list files inside its footprint, checked over the files
   the `.update.json` names -- and a creation 4a found coupled through an
   interface joins it whether or not its footprint shows a change. Suites
-  passing is not the bar. For a
-  visual surface, screenshot the merged instance you booted and the running
-  workspace's surface (read-only) for the before picture, and actually look at
-  the pair; for an app or integration, exercise its hook points. Classify
-  each: **intact**; **intact-but-changed** (moved, restyled -- never blocks;
-  record it with the before/after evidence so the lead can offer to restore
-  the old arrangement); **cannot be kept** (no place for it on the new base,
-  or broken and your attempts to re-fit it failed -- "tried and failed", never
-  "looks hard"). Cannot-be-kept is the one verdict that stops the pass: raise
-  it as a `question` gate (Step 6) with the evidence and options; never let it
-  ride into `done`. A conflict where every resolution breaks the creation
-  lands here too.
+  passing is not the bar. For a visual surface, screenshot the merged instance
+  you booted and the running workspace's surface (read-only) for the before
+  picture, and actually look at the pair; for an app or integration, exercise
+  its hook points. Classify each: **intact**; **intact-but-changed** (moved,
+  restyled -- never blocks; record it with the before/after evidence so the
+  lead can offer to restore the old arrangement); **cannot be kept** (no place
+  for it on the new base, or broken and your attempts to re-fit it failed --
+  "tried and failed", never "looks hard"). Cannot-be-kept is the one verdict
+  that stops the pass: raise it as a `question` gate (Step 6) with the
+  evidence and options; never let it ride into `done`. A conflict where every
+  resolution breaks the creation lands here too.
 
 ### 4c. Review gates
 

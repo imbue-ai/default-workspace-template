@@ -76,19 +76,18 @@ plus its supervisord section, and the run carries no scope file.
 
 The file records `primary` (the creation's own directories), `wiring` (the
 supervisord program blocks that run it, in the files that declare them),
-`references` (what its
-manifest claims outside its directory -- a skill that drives it, a script, a
-doc), `context` (paths to read but never change), `conventions`, `exclude` (a
-hard denylist of globs), and `diff` (the branch's changed files, split into
-those inside the footprint and `outside_footprint`). Two consumers read it:
-the test selection in `type-app.md`, and the freshness check the lead runs
-before merging (`.agents/shared/references/harden-contention.md`). Regenerate
-it whenever the footprint
-moves under you -- when you register a `[[references]]` entry, or when you add a
-supervisord section -- and once more immediately before your final report, after
-committing everything, so the `diff` it carries includes every commit you made
-(the diff reads commits only; an uncommitted edit is invisible to it).
-
+`references` (what its manifest claims outside its directory -- a skill that
+drives it, a script, a doc), `context` (paths to read but never change),
+`conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
+changed files, split into those inside the footprint and `outside_footprint`).
+Two consumers read it: the test selection in `type-app.md`, and the freshness
+check the lead runs before merging
+(`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
+footprint moves under you -- when you register a `[[references]]` entry, or
+when you add a supervisord section -- and once more immediately before your
+final report, after committing everything, so the `diff` it carries includes
+every commit you made (the diff reads commits only; an uncommitted edit is
+invisible to it).
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
 the app's `app.toml` -- when the file genuinely belongs to the creation -- or
