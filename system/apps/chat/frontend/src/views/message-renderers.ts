@@ -413,7 +413,8 @@ export function renderToolCallBlock(
   });
 }
 
-/** The "sign in again" affordance under an auth failure.
+/** The two ways out of a provider failure, under any turn rendered as one: sign in again, or
+ * switch this chat to another provider.
  *
  * Resolves the chat's own account from its `account` label, so the chooser opens ON that
  * account and re-authenticates it in place -- every chat bound to it recovers. Without the
