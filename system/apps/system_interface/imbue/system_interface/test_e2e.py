@@ -1193,9 +1193,6 @@ def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_
         expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
         expect(page.locator('.dv-tab-process-dot[data-status="unavailable"]')).to_have_count(1)
 
-        page.reload()
-        _wait_for_view(page, STARTER_PROJECT_ID)
-        _serve_stub_pages(page, server)
         stub_page_requests: list[str] = []
         page.on(
             "request",
@@ -1203,6 +1200,8 @@ def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_
             if request.url.startswith(server.stub_url)
             else None,
         )
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
         expect(placeholder).to_be_visible(timeout=15000)
         expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
         page.wait_for_timeout(3000)
