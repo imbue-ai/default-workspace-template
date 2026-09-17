@@ -624,7 +624,7 @@ def _recover_running_state(
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
@@ -1447,7 +1447,7 @@ def recover(
         failed = restore_snapshots(marker.snapshots)
         _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
         if marker.provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "

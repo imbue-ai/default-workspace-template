@@ -3509,10 +3509,11 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
         assert "CLAUDE_CODE_VERSION" not in env
         assert "NODE_VERSION" not in env
-    # Only the recovery re-run is forced past the provision guard: the rolled-
-    # back tree is the one the guard's marker was written for, so an unforced
-    # re-run would skip and leave the global tools at the merged versions.
-    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == [None, "1"]
+    # Both runs are forced past the provision guard. The recovery re-run lands
+    # on the tree the guard's marker was written for; and that marker outlives
+    # the rollback, so a retry of the same merge would otherwise skip the
+    # provisioner and report UPDATED with the toolchain still rolled back.
+    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == ["1", "1"]
 
 
 def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None:

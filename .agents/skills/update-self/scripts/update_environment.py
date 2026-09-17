@@ -38,12 +38,16 @@ ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
 _PROVISIONER_TIMEOUT_SECONDS = 1800.0
 
 
-def provisioner_env(*, is_forced: bool = False) -> dict:
+def provisioner_env() -> dict:
     """The canonical environment for a live provisioner run (see
     :data:`PROVISIONER_HOME`).
 
-    ``is_forced`` sets ``PROVISION_FORCE=1``, which runs the script past its
-    content-addressed skip guard (``system/scripts/_provision_guard.sh``).
+    ``PROVISION_FORCE=1`` runs the script past its content-addressed skip guard
+    (``system/scripts/_provision_guard.sh``). The apply only runs the
+    provisioner when a file it reads changed, so the guard has nothing to
+    save it; the one tree the guard can match is one a rollback re-provisioned
+    away from, and skipping there leaves the retry's toolchain at the
+    rolled-back versions.
     """
     # The script's version pins are `:=` defaults, so an inherited *_VERSION
     # (an image built when the Dockerfile still exported its pins as ENV) would
@@ -54,21 +58,13 @@ def provisioner_env(*, is_forced: bool = False) -> dict:
     }
     env["HOME"] = PROVISIONER_HOME
     env["PATH"] = PROVISIONER_PATH
-    if is_forced:
-        env["PROVISION_FORCE"] = "1"
+    env["PROVISION_FORCE"] = "1"
     return env
 
 
-def run_provisioner(
-    runner: Runner, repo_root: Path, *, is_forced: bool = False
-) -> str | None:
+def run_provisioner(runner: Runner, repo_root: Path) -> str | None:
     """Re-run the pinned-toolchain provisioner live; return why it failed, or
     ``None`` on success.
-
-    ``is_forced`` is for the rollback re-run: it runs from the restored tree,
-    which is exactly the tree the provision guard's marker was written for, so
-    without forcing it the guard would skip the very run that is meant to put
-    the global toolchain back.
 
     Never raises -- a hang and a spawn failure (no ``bash``, an exec error)
     both come back as the reason: the forward apply carries on past a failed
@@ -81,7 +77,7 @@ def run_provisioner(
         result = runner.run_process_group(
             ["bash", PROVISIONER_SCRIPT],
             cwd=str(repo_root),
-            env=provisioner_env(is_forced=is_forced),
+            env=provisioner_env(),
             timeout=_PROVISIONER_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
