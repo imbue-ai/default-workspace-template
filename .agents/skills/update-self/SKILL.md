@@ -293,8 +293,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ```
 
 Once the poll is armed, **end your turn**; its completion wakes you with the
-report. Never sleep on the worker, and never poll its reports directory or its
-pane by hand -- see "Never sleep on a worker" in
+report. Never wait on the worker any other way -- no `sleep`, no polling its
+reports directory or its pane -- see "Never sleep on a worker" in
 `.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
