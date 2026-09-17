@@ -13,3 +13,5 @@ The agy shim's open-steps reminder no longer depends on GNU `stat`, and its test
 The test that checks the reminder returns on a new turn used to recreate the marker and hope for a different inode, holding the freed number down with 64 files. When the kernel reused it anyway the reminder correctly stayed quiet and the test failed -- a red that was reported as a shim bug. It now renames a confirmed-new inode into place, and says so plainly if it cannot get one.
 
 The fixture those tests share also never started the step it created, so the tickets dir held a declared-but-unstarted step rather than an open one, and the shim emitted the "none is currently in_progress" reminder instead. It now starts the step, and checks both tk calls rather than discarding their output.
+
+AGENTS.md now states that finding a defect in built-in code is itself a reason to escalate it upstream, names the two channels (a report when you have a diagnosis, a PR when you have a fix), and says plainly that a local ticket is not a valid end state for one.
