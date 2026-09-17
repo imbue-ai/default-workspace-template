@@ -35,7 +35,8 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
-  `[program:*]` blocks out of `system/supervisord.conf`;
+  `[program:*]` blocks out of `system/supervisord.conf` and every
+  `system/supervisord.conf.d/*.conf` drop-in its `[include]` glob names;
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
   `app.toml` is skipped, and so is a manifest that fails to load, with a warning
@@ -76,7 +77,7 @@ goes to stdout; with it, the parent directories are created.
 {
   "creation": {"type": "app", "name": "slack-inbox", "package": "slack_inbox", "manifest": "system/apps/slack_inbox/app.toml"},
   "primary": ["system/apps/slack_inbox/"],
-  "wiring": [{"path": "system/supervisord.conf", "sections": ["program:slack-inbox"]}],
+  "wiring": [{"path": "system/supervisord.conf.d/slack-inbox.conf", "sections": ["program:slack-inbox"]}],
   "references": [{"path": ".agents/skills/slack-inbox-refresh", "note": "...", "kind": "skill"}],
   "context": [],
   "conventions": ["system/apps/README.md", ".agents/shared/worker/references/type-app.md", "docs/system/style_guide.md"],
@@ -89,14 +90,17 @@ goes to stdout; with it, the parent directories are created.
   null and its `name` is the directory's name.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
-- `wiring` is the `system/supervisord.conf` sections the app owns: its own
+- `wiring` is the supervisord sections the app owns: its own
   `program:<program>` block, every `program:<name>-<role>` sidecar, and every
   program the manifest's `[wiring] programs` declares (the browser declares
   `xvfb`, which exists only for it; a declared program with no block is an
   error). The first label of every standalone program is a reserved app name,
-  so the sidecar prefix cannot claim an unrelated program. Empty
-  when the conf runs none of them, which is the normal state before an app is
-  first registered.
+  so the sidecar prefix cannot claim an unrelated program. One entry per file a
+  block is written in, so a footprint names the file a change would have to
+  edit: the template declares every program in its own
+  `system/supervisord.conf.d/<name>.conf`, so an app with a sidecar of its own
+  usually has two. Empty when nothing runs any of them, which is the normal
+  state before an app is first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a
