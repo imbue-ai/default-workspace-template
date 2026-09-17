@@ -566,8 +566,7 @@ describe("the combo card", () => {
   });
 
   it("drops a failed switch's pick, which the chat keeps for the retry but never applied", () => {
-    // The failure notice stands over the composer while the chip sits under it, so a chip still
-    // promising the picked model would contradict it -- and the agent is on the model it always was.
+    // The failed switch still carries its pick, for the retry; the agent never took it.
     agentState.agent = chatSnapshotFixture("a1", {
       active_agent: { harness: "claude", account_id: "acct-1" },
       handoff: rebindStateFixture({

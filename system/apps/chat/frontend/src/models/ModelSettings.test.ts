@@ -197,7 +197,7 @@ describe("effectiveChoice", () => {
   it("keeps a switch's pick when the chat moves to the new agent, unlike the bar's own", async () => {
     // What a handoff does: the successor becomes the chat's agent before the harness has reported
     // the model applied to it. The pick was made FOR that successor, so it is not the old agent's
-    // to forget -- forgetting it is what put the successor's own startup model on the chip.
+    // to forget.
     mockGetChatById.mockReturnValue(chatSnapshotFixture("a12", { active_agent: { agent_id: "successor" } }));
     showSwitchChoice("a12", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
     forgetPendingChoice("a12");
