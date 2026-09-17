@@ -493,10 +493,16 @@ def create_through_mngr(request: CreateRequest) -> int:
         return EXIT_FAILED
     if completed.returncode != 0:
         return _script_exit_for_mngr_exit(completed.returncode)
+    chat_id = _created_agent_id(completed.stdout)
+    if not chat_id:
+        # The chat is made -- mngr exited 0 -- so this is not a failure, but the JSON line
+        # below is the caller's only handle on it and it is about to carry an empty id.
+        print(
+            "`mngr create` named no chat in its output; the chat exists but its id is unknown",
+            file=sys.stderr,
+        )
     created = CreatedChat(
-        chat_id=_created_agent_id(completed.stdout),
-        name=request.name,
-        display_name=request.name,
+        chat_id=chat_id, name=request.name, display_name=request.name
     )
     print(created.as_json_line())
     return EXIT_DELIVERED
