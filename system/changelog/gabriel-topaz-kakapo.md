@@ -1,0 +1,1 @@
+The safe-update-apply plan describes the environment snapshots the way the apply resolves them -- from the console script behind a tool, else the mngr tool's directory, else the build's pinned tool home -- instead of via `uv tool dir`, a command the apply no longer runs anywhere and never used to pick a snapshot target.
