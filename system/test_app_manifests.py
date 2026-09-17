@@ -147,7 +147,11 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: 
     sections_by_path = {entry.path: list(entry.sections) for entry in scope.wiring}
 
     for program in (manifest.program, *manifest.wiring.programs):
-        assert sections_by_path[f"system/supervisord.conf.d/{program}.conf"] == [f"program:{program}"]
+        dropin = f"system/supervisord.conf.d/{program}.conf"
+        assert sections_by_path.get(dropin) == [f"program:{program}"], (
+            f"{manifest_path} runs program {program!r}, whose drop-in the footprint does not "
+            f"carry as wiring: {sections_by_path}"
+        )
 
 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
