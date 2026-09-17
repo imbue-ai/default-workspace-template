@@ -4690,16 +4690,15 @@ def test_only_apply_and_recover_band_themselves(
 # tool those extras ARE its plugins.
 
 
-def _with_receipt(tool: str, body: str) -> Path:
+def _with_receipt(tool: str, body: str) -> None:
     """Give ``tool`` a receipt in the directory the refresh will install into.
 
     With nothing resolvable on PATH that is the build's pinned tool home, which
-    ``_isolate_tool_home`` points at this test's ``tmp_path``. Returns it.
+    ``_isolate_tool_home`` points at this test's ``tmp_path``.
     """
     tool_dir = tool_env.tools_dir(tool_env.tool_home())
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
     (tool_dir / tool / update_layout.RECEIPT).write_text(body)
-    return tool_dir
 
 
 def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
