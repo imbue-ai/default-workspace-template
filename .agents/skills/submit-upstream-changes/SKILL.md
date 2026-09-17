@@ -28,8 +28,7 @@ Do **not** push agent-specific content:
 
 mngr changes are not template changes: mngr is installed here from the commit
 `pyproject.toml` pins, and a change to it gets its own PR on the mngr repo. See
-[references/mngr-changes.md](references/mngr-changes.md) for the flow (a
-standalone checkout at `.external_worktrees/mngr`).
+[references/mngr-changes.md](references/mngr-changes.md) for the flow.
 
 ## PR conventions
 

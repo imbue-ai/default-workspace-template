@@ -855,7 +855,7 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 
 # --- mngr CLI argv contract ---
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
-# so a system/vendor/mngr subcommand/flag rename fails here at merge time rather than
+# so a subcommand/flag rename arriving with an mngr pin bump fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 

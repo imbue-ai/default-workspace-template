@@ -1,4 +1,4 @@
-# Vendored snapshots (mngr, etc.) -- not authored here; collapse in PR diffs.
+# Vendored snapshots (tk, etc.) -- not authored here; collapse in PR diffs.
 vendor/** linguist-generated=true
 
 # Generated lockfiles: git's line-level auto-merge can silently interleave two

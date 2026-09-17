@@ -156,8 +156,8 @@ def test_prevent_num_prefix() -> None:
     # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
     # them would make the documented signature wrong, and no identifier in our code is
     # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in the vendored imbue_common, so narrowing
-    # it here would diverge the subtree from mngr. Should a real violation ever land,
+    # docstring from a declaration; it lives in the pinned imbue-common package, so it
+    # cannot be narrowed here. Should a real violation ever land,
     # it will push this to 3 and be caught.
     rc.check_num_prefix(_DIR, snapshot(2))
 

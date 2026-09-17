@@ -734,8 +734,8 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # bucket, not only the legacy top-level ``changelog/``. The command must
     # surface entries from every bucket -- else the update-self "what's new"
     # digest silently drops everything on the current (bucketed) convention --
-    # while ignoring the vendored subtree's separate changelog system and files
-    # that only happen to sit next to a changelog dir.
+    # while ignoring system/vendor's separate changelog system and files that
+    # only happen to sit next to a changelog dir.
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
@@ -755,7 +755,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
 
-    # Target commit: newly-added entries across every bucket, a vendored-subtree
+    # Target commit: newly-added entries across every bucket, a system/vendor
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")

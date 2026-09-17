@@ -465,7 +465,7 @@ def _tool_extras(
     for requirement in parsed.get("tool", {}).get("requirements", []):
         name = requirement.get("name", "")
         if _canonical(name) == _canonical(tool_name):
-            continue  # the base package, which we re-pin to its in-tree source
+            continue  # the base package, which we re-pin to the commit pyproject.toml gives it
         editable = requirement.get("editable") or requirement.get("directory")
         if editable:
             extras.extend(["--with-editable", editable])

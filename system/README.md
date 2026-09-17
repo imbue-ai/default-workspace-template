@@ -10,8 +10,9 @@ day-to-day, but every part is inspectable and the mind maintains it.
   automations machinery.
 - `scripts/` - Provisioning and utility scripts (image build, boot, Claude
   Code hooks).
-- `vendor/` - Vendored external repos: `mngr` (the agent manager this
-  workspace runs on) and `tk` (the ticket tracker).
+- `vendor/` - `tk` (the vendored ticket tracker) and gitignored `mngr-assets/`
+  (the few non-Python files fetched at build time from the mngr commit
+  `pyproject.toml` pins). mngr itself is installed as packages from that commit.
 - `config/` - Tracked workspace configuration (`parent.toml`, the upstream
   template pointer). Runtime-written config lives in `data/system/` instead.
 - `changelog/` - Per-change entries for template development.

@@ -22,9 +22,9 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// A named import of an export the vendored embed_contract snapshot lacks fails
+// A named import of an export the fetched embed_contract snapshot lacks fails
 // the rollup build (this repo does not edit system/vendor by hand; the snapshot
-// moves with the mngr release sync), so these probe the namespace and fall
+// moves with the mngr pin, system/scripts/fetch_mngr_assets.sh), so these probe the namespace and fall
 // back to the literal. A snapshot without the export drops the type it does
 // not know at its validator.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
