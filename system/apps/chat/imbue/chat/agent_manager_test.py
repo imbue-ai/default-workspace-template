@@ -767,13 +767,20 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     """A create that never reaches the stream (the agent died before observe saw it) must not be held
     for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
     created_id = str(MngrAgentId())
+    (tmp_path / "agents" / created_id).mkdir(parents=True)
     _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+    with agent_manager._lock:
+        assert created_id in agent_manager._activity_tracked_agents
+        assert created_id in agent_manager._model_watcher_by_agent
 
     for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
         agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
 
     assert agent_manager.get_agent_by_id(created_id) is None
+    with agent_manager._lock:
+        assert created_id not in agent_manager._activity_tracked_agents
+        assert created_id not in agent_manager._model_watcher_by_agent
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(

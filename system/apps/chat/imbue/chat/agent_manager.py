@@ -3099,12 +3099,15 @@ class AgentManager:
                 if updates:
                     new_agents[agent_id] = agent_state.model_copy_update(*updates)
             still_awaited: dict[str, _CreatedAgentAwaitingObserve] = {}
+            let_go_agent_ids: list[str] = []
             for agent_id, created in self._created_unobserved_by_id.items():
                 if agent_id in details_by_id:
                     continue
                 counted = created.after_a_snapshot_without_it() if is_full_snapshot else created
                 if counted.is_still_awaited:
                     still_awaited[agent_id] = counted
+                else:
+                    let_go_agent_ids.append(agent_id)
             self._created_unobserved_by_id = still_awaited
             for agent_id, created in self._created_unobserved_by_id.items():
                 new_agents[agent_id] = self._agents.get(agent_id, created.agent)
@@ -3117,6 +3120,12 @@ class AgentManager:
                 continue
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
+
+        # A created agent the stream never reported had its trackers started by its create.
+        for agent_id in let_go_agent_ids:
+            self._stop_activity_tracking(agent_id)
+            self._stop_model_tracking(agent_id)
+            self._evict_watcher(agent_id)
 
         for agent_id in removed_agent_ids:
             self._stop_activity_tracking(agent_id)
