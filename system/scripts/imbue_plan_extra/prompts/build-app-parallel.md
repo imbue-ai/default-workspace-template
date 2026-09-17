@@ -101,9 +101,8 @@ matters more than what it costs.
 ### Subtasks
 
 A subtask sets scope, not mechanism. This plan routes the work at a high level.
-The agent orchestrating the plan, which is not you, supplies the implementation
-details -- which script, which port, which command, which flag -- at the moment
-it creates each worker. Leave all of that out however well you know it.
+Each worker works out the implementation details itself -- which script, which
+port, which command, which flag. Leave all of that out however well you know it.
 
 Spend the words on the boundary of the work instead: what this node builds, what
 it deliberately leaves alone, what it should stub rather than finish, and what
