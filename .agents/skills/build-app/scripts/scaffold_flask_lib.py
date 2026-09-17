@@ -46,8 +46,13 @@ from typing import Iterable
 
 import tomlkit
 
-# Both kebab and snake forms are reserved so a kebab name that converts to
-# a snake-cased existing app or service name is also rejected.
+# The template's own app and service names, which forward_port.py has no reason
+# to know about: it refuses names that can never be an origin label, while these
+# are perfectly good labels already taken by something built in. Both kebab and
+# snake forms are listed so a kebab name that converts to a snake-cased existing
+# name is also rejected. Everything the registry itself refuses -- reserved
+# names, reserved prefixes, length, character set -- is asked of forward_port.py
+# at validation time rather than copied here.
 RESERVED_NAMES = frozenset(
     {
         "system-interface",
@@ -61,22 +66,10 @@ RESERVED_NAMES = frozenset(
         "terminal",
         "deferred-install",
         "imbue-common",
-        # forward_port.py rejects ``localhost`` at registration time (it is
-        # the local origin's root domain); reserve it here too so the scaffold
-        # never mints an app that cannot register.
-        "localhost",
-        # ``auth`` is reserved for the share stack's dedicated ``auth-<rand>``
-        # origin label (the sole public ``/_auth/*`` origin); forward_port.py
-        # rejects it, so the scaffold must too.
-        "auth",
     }
 )
-# Workspace hostnames carry their coordinate as a ``host-<hex>`` label
-# (``agent-`` is the legacy spelling); a service name starting with either
-# prefix could collide with that coordinate label, so forward_port.py rejects
-# both and the scaffold must too.
-RESERVED_NAME_PREFIXES = ("host-", "agent-")
-# forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
+# forward_port.py owns the registration rule (names and icons alike); reuse it so
+# a name it would refuse, or a bad icon, fails here instead of at registration.
 _FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
@@ -87,11 +80,17 @@ def _kebab_to_snake(name: str) -> str:
     return name.replace("-", "_")
 
 
-def _read_and_validate_icon(path: Path) -> str:
+def load_forward_port():
+    """The registration script, loaded by path: it is stdlib-only and not importable."""
     spec = importlib.util.spec_from_file_location("_forward_port", _FORWARD_PORT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _read_and_validate_icon(path: Path) -> str:
+    module = load_forward_port()
     markup, error = module.read_icon_file(path)
     if error is not None:
         sys.exit(f"error: {error}")
@@ -99,25 +98,23 @@ def _read_and_validate_icon(path: Path) -> str:
 
 
 def _validate_name(name: str) -> None:
-    # The name becomes the leading label of the service's origin hostname
-    # (the app is served at http://<name>.<workspace-host>/), so it must be
-    # DNS-safe kebab-case and stay out of the reserved coordinate prefix
-    # space. forward_port.py accepts a superset (underscores are tolerated
-    # there for legacy names like ``system_interface``), so every name the
-    # scaffold mints registers cleanly -- a drift test in
-    # system/scripts/forward_port_test.py pins that subset relation.
+    # The name becomes the leading label of the service's origin hostname (the
+    # app is served at http://<name>.<workspace-host>/), so the scaffold is
+    # deliberately stricter than the registry: kebab-case only, letter-start, no
+    # underscores, where forward_port.py still tolerates legacy names like
+    # ``system_interface``. Strictness is all this adds. Whether the registry
+    # would accept the name is asked of forward_port.py itself, so a name the
+    # scaffold mints always registers -- rather than being pinned by a copy of
+    # its reserved list that can drift out from under the check.
     if not KEBAB_RE.match(name):
         sys.exit(
             f"error: --name {name!r} is not valid kebab-case "
             "(lowercase letters/digits with single hyphens, "
             "starting with a letter)"
         )
-    for prefix in RESERVED_NAME_PREFIXES:
-        if name.startswith(prefix):
-            sys.exit(
-                f"error: --name {name!r} starts with {prefix!r}, which is "
-                "reserved for workspace hostnames"
-            )
+    registration_problem = load_forward_port().validate_service_name(name)
+    if registration_problem is not None:
+        sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 

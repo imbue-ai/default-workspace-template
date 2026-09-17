@@ -48,6 +48,17 @@ def write_supervisord_conf(repo_root: Path, section_names: Sequence[str]) -> Pat
     return conf_path
 
 
+def write_supervisord_dropin(
+    repo_root: Path, file_stem: str, section_names: Sequence[str]
+) -> Path:
+    """Create a ``system/supervisord.conf.d/<stem>.conf`` holding one empty block per section."""
+    conf_path = repo_root / "system" / "supervisord.conf.d" / f"{file_stem}.conf"
+    conf_path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = "".join(f"[{section_name}]\ncommand=/bin/true\n\n" for section_name in section_names)
+    conf_path.write_text(blocks, encoding="utf-8")
+    return conf_path
+
+
 def write_repo_file(repo_root: Path, relative_path: str, content: str) -> Path:
     """Create a file at a repo-relative path, making the directories above it."""
     file_path = repo_root / relative_path
