@@ -50,6 +50,25 @@ def test_a_codex_that_exits_without_binding_is_reported_at_once_in_its_own_words
     assert elapsed < 5.0, f"the probe took {elapsed:.1f}s to notice a codex that had already exited"
 
 
+def test_the_probe_is_bound_to_the_account_and_cannot_see_an_ambient_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child has to be a codex signed in as THIS account: bound to the folder by ``CODEX_HOME``, and
+    with no inherited ``OPENAI_API_KEY`` for it to answer on instead. Either failure is silent and wrong
+    rather than loud -- the picker would show another subscription's models, which is the bug the whole
+    account probe exists to fix, arriving by a different route."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-key-for-another-account")
+    seen = tmp_path / "child_env.txt"
+    _stub_codex_on_path(
+        tmp_path / "bin",
+        monkeypatch,
+        f'#!/bin/sh\necho "home=$CODEX_HOME key=${{OPENAI_API_KEY-unset}}" > "{seen}"\nexit 1\n',
+    )
+    with pytest.raises(AccountModelProbeError):
+        probe_codex_account_models(tmp_path)
+    assert seen.read_text().strip() == f"home={tmp_path} key=unset"
+
+
 def test_two_probes_of_one_account_do_not_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Both probes of an account want the same socket path, so an overlap has each unlinking the other's
     live socket. The stub records when it is running; the two runs must not interleave."""
