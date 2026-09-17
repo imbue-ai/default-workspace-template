@@ -1,1 +1,1 @@
-- Refreshed `system/vendor/mngr` from mngr `ec19602ca3` for the minds 0.6.2 release (`minds-v0.6.2`), carrying the welcome-chat onboarding flow and the rest of the changes since `minds-v0.6.1`.
+- Refreshed `system/vendor/mngr` from mngr `253e087a58` for the minds 0.6.2 release (`minds-v0.6.2`), carrying the welcome-chat onboarding flow and the rest of the changes since `minds-v0.6.1`.
