@@ -10,4 +10,6 @@ Phase 9 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`).
 
 - The rebind record's `claude_sessions_config_dir` is now the harness-neutral `sessions_dir`. A record written under the old name still reads.
 
+- The switch dialog now offers a model for a Codex account the chat has not run on. Before, a Codex account's models were read off an existing agent of that account, so switching between two Codex accounts offered no choice at all when the destination had never run one: the dialog said the agent would keep its current model and left it there, while switching from Claude to Codex, or between two Claude accounts, did offer a picker. The account is now asked for its own models instead -- a short-lived `codex app-server` bound to the account folder, one `model/list`, no agent and no conversation. That also fixes a quieter half of the same bug: two accounts of one provider can be on different subscriptions and genuinely offer different models, so an answer borrowed from another account both hid models the destination has and offered ones it cannot run, which a rebind then failed on at its model step. A successful read is kept beside the account's credential, so the picker still has a set when Codex cannot be reached at all; an account with neither offers only the default.
+
 - `HarnessCatalog.popups` is required in the frontend, like `label`.

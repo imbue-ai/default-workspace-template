@@ -1,0 +1,117 @@
+"""The models a codex ACCOUNT offers, asked of the account itself rather than of one of its agents.
+
+Codex's picker is DYNAMIC: the model set, each model's efforts, and its fast support are all
+account-derived (subscription tier), so -- unlike a static catalog -- there is nothing to offer for
+an account until a codex signed in AS that account has been asked. The switch dialog needs exactly
+that for an account the chat is not on yet: a rebind's destination, or a handoff's.
+
+So the account is asked directly. ``CODEX_HOME`` IS the account folder -- that is the account
+binding's own scope (:class:`~imbue.chat.harnesses.codex.account_binding.CodexAccountBinding`) -- so
+a ``codex app-server`` launched against it is a fully bound codex. It answers ``model/list`` after
+the ``initialize`` handshake alone: that call is account-scoped and binds no thread, so the probe
+needs no agent, no tmux session and no conversation.
+
+Measured against codex-cli 0.154.0: the whole exchange takes well under a second, and the two
+accounts of one provider genuinely differ (one offered a model and a service tier the other did
+not), which is why an agent of a DIFFERENT account is not an acceptable stand-in.
+
+The daemon is spawned into a ConcurrencyGroup owned by this call and torn down before it returns,
+so no probe outlives the request that asked.
+"""
+
+import os
+import time
+from pathlib import Path
+from typing import Final
+
+from loguru import logger as _loguru_logger
+
+from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
+from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.concurrency_group.errors import ConcurrencyGroupError
+from imbue.mngr_codex.app_server_client import CodexAppServerClient
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import CodexModel
+from imbue.mngr_codex.app_server_client import connect_app_server_transport
+from imbue.mngr_codex.codex_config import get_codex_app_server_socket_path
+
+logger = _loguru_logger
+
+_PROBE_CLIENT_NAME: Final[str] = "minds-chat-account-models"
+_PROBE_CLIENT_VERSION: Final[str] = "1"
+# The daemon binds its socket in well under a second; the ceiling is for a loaded host.
+_SOCKET_WAIT_SECONDS: Final[float] = 15.0
+_SOCKET_POLL_INTERVAL_SECONDS: Final[float] = 0.05
+# A ceiling on the whole probe, so a wedged daemon cannot hold the dialog's request open.
+_PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
+# Layered over the server's own environment, never used alone: the child needs PATH to find codex.
+# But the server's environment is not neutral -- a workspace can carry an ambient OPENAI_API_KEY,
+# and a codex that reads one answers for THAT key rather than for the folder we are asking about,
+# which is the one thing this probe must never do. Same reasoning as the signed-in probe's.
+_AMBIENT_AUTH_KEYS: Final[frozenset[str]] = frozenset(("OPENAI_API_KEY",))
+
+
+class AccountModelProbeError(RuntimeError):
+    """The account's models could not be read: codex would not start, bind, or answer."""
+
+
+def _probe_environment(account_dir: Path) -> dict[str, str]:
+    environment = {key: value for key, value in os.environ.items() if key not in _AMBIENT_AUTH_KEYS}
+    environment.update(CodexAccountBinding().account_env(account_dir))
+    return environment
+
+
+def _wait_for_socket(socket_path: Path, deadline: float) -> None:
+    """Block until the daemon has bound ``socket_path``.
+
+    Polled rather than awaited: codex prints nothing when it binds (verified against 0.154.0 --
+    its only startup line is an unrelated sandbox warning), so there is no readiness signal to
+    block on. mngr's own launcher waits the same way.
+    """
+    while time.monotonic() < deadline:
+        if socket_path.exists():
+            return
+        time.sleep(_SOCKET_POLL_INTERVAL_SECONDS)
+    raise AccountModelProbeError(f"codex app-server did not bind {socket_path} within {_SOCKET_WAIT_SECONDS:.0f}s")
+
+
+def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
+    """The raw ``model/list`` the account's own codex answers, or raise :class:`AccountModelProbeError`.
+
+    Raw entries, not mapped options: the caller persists exactly what the daemon said, so a later
+    change to the mapping needs no second probe.
+    """
+    socket_path = get_codex_app_server_socket_path(account_dir)
+    # A socket left behind by a probe that was killed would otherwise be taken for a live daemon,
+    # and every later probe of this account would connect to nothing.
+    socket_path.unlink(missing_ok=True)
+    command = ["codex", "app-server", "--listen", f"unix://{socket_path}"]
+    deadline = time.monotonic() + _SOCKET_WAIT_SECONDS
+    try:
+        with ConcurrencyGroup(name="codex-account-model-options") as group:
+            # Unchecked and explicitly terminated: the probe ends by killing a daemon that would
+            # otherwise run forever, and SIGTERM is not a failure to report.
+            process = group.run_process_in_background(
+                command=command,
+                env=_probe_environment(account_dir),
+                is_checked_by_group=False,
+                timeout=_PROBE_TIMEOUT_SECONDS,
+                name="codex account model-options probe",
+            )
+            try:
+                _wait_for_socket(socket_path, deadline)
+                client = CodexAppServerClient(transport=connect_app_server_transport(socket_path))
+                try:
+                    client.initialize(_PROBE_CLIENT_NAME, _PROBE_CLIENT_VERSION)
+                    return client.model_list()
+                finally:
+                    client.close()
+            finally:
+                process.terminate()
+    # A failure inside the group (codex missing, a daemon that died on launch) reaches the caller
+    # only when the group exits, re-raised as its ExceptionGroup rather than as itself.
+    except (CodexAppServerError, ConcurrencyExceptionGroup, ConcurrencyGroupError, OSError) as e:
+        raise AccountModelProbeError(f"could not read the models of the codex account at {account_dir}: {e}") from e
+    finally:
+        socket_path.unlink(missing_ok=True)
