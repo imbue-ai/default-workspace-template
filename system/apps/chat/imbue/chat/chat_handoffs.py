@@ -63,6 +63,7 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.event_utils import ShutdownEvent
@@ -346,7 +347,7 @@ class HandoffDeps(FrozenModel):
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
     # Park a send that could not be delivered on the chat record, for the composer to take
     # back. The switch entry is gone by then, so its ``returned_block`` cannot carry this.
-    park_undelivered_send: Callable[[ChatId, HeldSend], None]
+    park_undelivered_send: Callable[[ChatId, UndeliveredSend], None]
     get_agent_state: Callable[[str], AgentStateItem | None]
     get_agent_info: Callable[[str], AgentInfo | None]
     resolve_account: Callable[[str], Account]
@@ -949,14 +950,15 @@ class HandoffRunner:
 
 def deliver_held_send(
     deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
-) -> HeldSend | None:
+) -> UndeliveredSend | None:
     """Hand one held send to an agent through the message route's path.
 
-    Returns the send when it did not land, and None when it did. A refusal or a miss is
-    reported rather than raised: the send was answered 202 when it was held, and one that
-    cannot land must not stop the ones behind it. Returning it is what keeps it from being
-    lost -- the caller owes it a way back to the composer, since the user was told it was
-    accepted and nothing else holds a copy.
+    Returns the send WITH the refusal that stopped it when it did not land, and None when it
+    did. A refusal or a miss is reported rather than raised: the send was answered 202 when it
+    was held, and one that cannot land must not stop the ones behind it. Returning it is what
+    keeps it from being lost -- the caller owes it a way back to the composer, since the user
+    was told it was accepted and nothing else holds a copy. The reason travels with it so the
+    caller can say why, rather than sliding the text back with no explanation.
     """
     try:
         outcome = deliver(agent_info, held.text, held.message_id)
@@ -968,7 +970,7 @@ def deliver_held_send(
             agent_info.id,
             e.detail,
         )
-        return held
+        return UndeliveredSend(send=held, detail=e.detail, kind=e.kind)
     if outcome is not SendOutcome.OK:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
@@ -977,7 +979,7 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
-        return held
+        return UndeliveredSend(send=held, detail=f"the agent could not take it ({outcome.value})")
     return None
 
 

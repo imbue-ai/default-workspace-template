@@ -34,6 +34,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.concurrency_group.event_utils import ShutdownEvent
@@ -88,14 +89,14 @@ class _FakeWorkspace(MutableModel):
             self.store.write(updated)
             return updated
 
-    def park_undelivered_send(self, chat_id: ChatId, held: HeldSend) -> None:
+    def park_undelivered_send(self, chat_id: ChatId, undelivered: UndeliveredSend) -> None:
         """The manager's park: onto the record, where the composer reads it off the snapshot."""
         with self._lock:
             record = self.store.read(chat_id)
             assert record is not None, "a send was parked on a chat with no record"
             self.store.write(
                 record.model_copy_update(
-                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, held))
+                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, undelivered))
                 )
             )
 
@@ -616,10 +617,12 @@ def test_a_refused_held_send_does_not_stop_the_ones_behind_it(tmp_path: Path) ->
     # itself survives for them -- a one-agent chat's rebind otherwise takes it along.
     record_after = workspace.record()
     assert record_after is not None and record_after.rebind is None
-    assert [(parked.message_id, parked.text) for parked in record_after.undelivered_sends] == [
+    assert [(parked.send.message_id, parked.send.text) for parked in record_after.undelivered_sends] == [
         ("trigger-1", "Carry on on the other account"),
         ("m-2", "and this"),
     ]
+    # The reason travels with the text, so the composer can say why rather than sliding it back silently.
+    assert all(parked.detail != "" for parked in record_after.undelivered_sends)
 
 
 def test_a_runner_for_a_rebind_that_is_gone_does_nothing(tmp_path: Path) -> None:

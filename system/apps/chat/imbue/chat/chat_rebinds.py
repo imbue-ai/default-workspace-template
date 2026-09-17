@@ -47,6 +47,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -114,7 +115,7 @@ class RebindDeps(FrozenModel):
     # the message route's hold. Raises ``RebindCancelledError`` for another rebind.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
     # Park a send the restarted agent refused, for the composer to take back.
-    park_undelivered_send: Callable[[ChatId, HeldSend], None]
+    park_undelivered_send: Callable[[ChatId, UndeliveredSend], None]
     get_agent_state: Callable[[str], AgentStateItem | None]
     get_agent_info: Callable[[str], AgentInfo | None]
     resolve_account: Callable[[str], Account]
