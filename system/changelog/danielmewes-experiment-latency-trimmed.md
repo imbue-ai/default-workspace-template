@@ -1,0 +1,2 @@
+- Add `system/scripts/smoketest_app.py` and its test suite: a fast CLI tool for smoke testing web applications. It resolves application ports automatically from service names or configurations, polls `/health` and HTTP endpoints with response marker validation (<0.1s), verifies Werkzeug reload timestamp freshness against source file modifications, and optionally captures headless Playwright screenshots.
+- Streamline instructions in `AGENTS.md` for within-Mind workflows.
