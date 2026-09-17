@@ -10,7 +10,9 @@ metadata:
 You orchestrate. You do not build the app yourself:
 
 - **A planner** reads `build-app` and the workspace and writes a plan: a small
-  graph of nodes, each one piece of the build, with what each depends on.
+  graph of nodes, each one piece of the build, with what each depends on. It is
+  the offline plan recorder's planner, run in the foreground with the prompt
+  `system/scripts/imbue_plan_extra/prompts/build-app-parallel.md`.
 - **Workers** build the nodes, several at once, all inside one git checkout made
   for this build (the build folder). Each follows
   `references/worker-node.md` and reports back.
@@ -92,7 +94,7 @@ Tell the user in one line that you are planning the build, then run the planner
 as a background task (`run_in_background: true`); it takes a few minutes:
 
 ```bash
-.agents/skills/build-app-parallel/scripts/run_planner.sh "$RUN"
+system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" build-app-parallel
 ```
 
 When it exits 0, check the plan:
@@ -105,7 +107,7 @@ If `parse` exits 2, the message names what is wrong. Move `plan.md` aside to
 `plan.rejected-1.md`, append one line to the brief quoting the problem ("Your
 previous plan was rejected: <message>"), and run the planner once more. If the
 second plan is also rejected, or the planner itself fails twice, stop and tell
-the user the build could not be planned, pointing at `$RUN/planner.log`. Do not
+the user the build could not be planned, pointing at `$RUN/log`. Do not
 fall back to building the app yourself without asking.
 
 Read `plan.json` yourself before starting. You will need each node's subtask to
