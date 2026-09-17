@@ -20,6 +20,7 @@ import { ChatPanel } from "./views/ChatPanel";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, isFrameRendered } from "./shell";
+import { connectUndeliveredSends } from "./models/UndeliveredSends";
 
 declare global {
   interface Window {
@@ -54,6 +55,9 @@ async function bootstrap(): Promise<void> {
   const sessionId = getChatSessionId();
   // The chat app's own WebSocket, read for this page's own chat.
   initChats();
+  // Before anything else reads the chat list: a send the switch could not deliver goes back
+  // into the composer on the first snapshot that carries it.
+  connectUndeliveredSends();
   trackBackendArrivals(isMessageCarriedBySwitch);
   trackPendingLaneSettlement();
   // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an

@@ -131,6 +131,17 @@ class _FakeWorkspace(MutableModel):
             self.store.write(updated)
             return updated
 
+    def park_undelivered_send(self, chat_id: ChatId, held: HeldSend) -> None:
+        """The manager's park: onto the record, where the composer reads it off the snapshot."""
+        with self._lock:
+            record = self.store.read(chat_id)
+            assert record is not None, "a send was parked on a chat with no record"
+            self.store.write(
+                record.model_copy_update(
+                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, held))
+                )
+            )
+
     def take_next_held_send(self, chat_id: ChatId, handoff_id: str) -> HeldSend | None:
         with self._lock:
             record = self._require(chat_id, handoff_id)
@@ -337,6 +348,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         read_record=workspace.read_record,
         update_record=workspace.update_record,
         take_next_held_send=workspace.take_next_held_send,
+        park_undelivered_send=workspace.park_undelivered_send,
         get_agent_state=workspace.get_agent_state,
         get_agent_info=workspace.get_agent_info,
         resolve_account=lambda account_id: _OPENAI_ACCOUNT,

@@ -243,6 +243,13 @@ class ChatRecord(FrozenModel):
         default=None,
         description="The display name a seeded chat was minted with, shown until its first agent carries one; None otherwise",
     )
+    undelivered_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description=(
+            "Sends a finished switch could not hand to the agent, waiting to go back to the composer. Held here "
+            "rather than on the switch, which is cleared the moment the held list empties"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_agents_are_the_chats_in_order(self) -> Self:

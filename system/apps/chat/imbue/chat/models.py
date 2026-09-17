@@ -491,6 +491,10 @@ class ChatSnapshot(FrozenModel):
     handoff: HandoffState | None = Field(
         description="The in-progress handoff, or None while the chat is not converging"
     )
+    undelivered_sends: tuple[HeldSendSnapshot, ...] = Field(
+        default=(),
+        description="Sends a finished switch could not deliver, for the composer to take back and then ack",
+    )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
 
 

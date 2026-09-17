@@ -1116,6 +1116,24 @@ def _cancel_handoff_endpoint(chat_id: str) -> Response:
     return json_response(response.model_dump())
 
 
+def _take_undelivered_send_endpoint(chat_id: str) -> Response:
+    """Drop a parked undelivered send once the composer has it back.
+
+    The composer prepends first and acks after, so this is idempotent by message id: an ack
+    for one already taken (a reload that absorbed it twice, a retried request) answers ok
+    rather than erroring, since there is nothing to put right.
+    """
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
+        return _chat_not_found_response(chat_id)
+    body = request.get_json(silent=True) or {}
+    message_id = body.get("message_id")
+    if not isinstance(message_id, str) or message_id == "":
+        return json_response(ErrorResponse(detail="message_id is required").model_dump(), status_code=400)
+    get_state().agent_manager.take_undelivered_send(parsed, message_id)
+    return json_response({"status": "taken"})
+
+
 def _retry_handoff_endpoint(chat_id: str) -> Response:
     """Run a failed switch's last step again on an account: a handoff's create (spec 5.10) or a rebind's restart (spec 6).
 
@@ -1599,6 +1617,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("handoff", _switch_chat_endpoint, ("POST",)),
     ("handoff/cancel", _cancel_handoff_endpoint, ("POST",)),
     ("handoff/retry", _retry_handoff_endpoint, ("POST",)),
+    ("undelivered/take", _take_undelivered_send_endpoint, ("POST",)),
 )
 
 
