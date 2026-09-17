@@ -61,9 +61,11 @@ export class UndeliveredSendAbsorber {
 async function postTakeUndeliveredSend(chatId: string, messageId: string): Promise<void> {
   try {
     await postJson(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/undelivered/take`), { message_id: messageId });
-  } catch {
+  } catch (error) {
     // Left on the record deliberately: it rides the next snapshot, where the take is issued
-    // again and the pasted ids keep the text from reaching the composer twice.
+    // again and the pasted ids keep the text from reaching the composer twice. Logged because
+    // one that never lands holds the record open for good, with nothing else to say so.
+    console.warn(`Failed to take undelivered send ${messageId} of chat ${chatId}`, error);
   }
 }
 
