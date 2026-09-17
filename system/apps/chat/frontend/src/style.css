@@ -126,8 +126,14 @@
 .markdown-content pre code {
   background-color: transparent;
   padding: 0;
+  /* The inline-code chip's border has to go too, not just its fill: a <code>
+     inside a <pre> is still an inline box, so the border was drawn once per
+     wrapped LINE -- a fenced block came out as a stack of outlined strips.
+     (Only fences the tool-call wrapper claims get `display: block`; a plain
+     one in agent prose stays inline.) */
+  border: none;
   border-radius: 0;
-  font-size: var(--font-size-row);
+  font-size: var(--font-size-helper);
   line-height: 1.55;
 }
 
@@ -167,7 +173,7 @@
   font-family: var(--font-mono);
   /* Same size and leading as the code it points at, so the two line boxes start
      together and the glyph sits on the first line rather than under it. */
-  font-size: var(--font-size-row);
+  font-size: var(--font-size-helper);
   line-height: 1.55;
   color: var(--c-text-faint);
   transition: transform 150ms;
@@ -473,7 +479,7 @@
      as a caption under it (the settled one below keeps the gap). */
   margin-top: 0;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-row);
+  font-size: var(--font-size-helper);
   font-style: italic;
   color: var(--c-text-primary);
   line-height: 1.5;
@@ -516,7 +522,7 @@
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-row);
+  font-size: var(--font-size-helper);
   font-style: italic;
   color: var(--c-text-secondary);
   line-height: 1.5;
