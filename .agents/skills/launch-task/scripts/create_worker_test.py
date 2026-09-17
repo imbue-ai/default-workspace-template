@@ -244,6 +244,30 @@ def test_happy_path_no_artifacts(
     assert f"worker_agent_id: {_WORKER_ID}" in task.read_text()
 
 
+def test_launch_pins_agent_type_when_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``agent_type`` appends ``--type`` to the create call; omitted (the
+    default), the argv is unchanged from the happy path -- mngr's own default
+    harness resolution applies, which is the pre-existing behavior."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        agent_type="claude",
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_call = next(c for c in runner.calls if c.argv[:2] == ["mngr", "create"])
+    assert create_call.argv == [*_create_argv(runtime), "--type", "claude"]
+
+
 def test_launch_falls_back_to_mngr_message_by_name_when_the_create_reports_no_id(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
