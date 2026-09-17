@@ -4543,3 +4543,31 @@ def test_a_cancelled_handoffs_refused_send_is_parked_rather_than_lost(
         assert "session limit" in record.undelivered_sends[0].detail
     finally:
         manager.stop()
+
+
+def test_a_cancel_that_cannot_reach_the_agent_parks_its_held_sends(broadcaster: WebSocketBroadcaster) -> None:
+    """A send a cancelled handoff could not even attempt is parked rather than dropped.
+
+    The cancel hands its remaining sends to a thread that gives up when there is nothing to
+    deliver through -- no wired capabilities, or an agent mngr no longer tracks. Those sends were
+    answered 202 like any other, so they owe the composer a way back too.
+    """
+    store = InMemoryChatRecordStore()
+    # Deliberately unwired: this is the branch that cannot deliver.
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    try:
+        chat_id_str, _ = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+        chat_id = ChatId(chat_id_str)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SUMMARIZING
+
+        manager.cancel_handoff(chat_id)
+
+        # The record survives for it, though a cancelled first handoff otherwise takes it along.
+        wait_for(lambda: (record := store.read(chat_id)) is not None and record.undelivered_sends != (), timeout=5.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is None
+        assert [(parked.send.message_id, parked.send.text, parked.kind) for parked in record.undelivered_sends] == [
+            ("m-2", "and this", "agent_unreachable")
+        ]
+    finally:
+        manager.stop()
