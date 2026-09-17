@@ -239,7 +239,7 @@ def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> li
     addressed by id (an agent address accepts either an id or a name, and the id
     cannot go stale under a rename), and it is given the *canonical* form of the
     typed name plus the typed name itself as a ``display_name`` label. Sending
-    the pair explicitly is what makes this work against a vendored mngr that
+    the pair explicitly is what makes this work against a pinned mngr that
     predates free-form names, exactly as the create path does; the label rides
     the same atomic write as the rename, so no observer sees the renamed agent
     without it.

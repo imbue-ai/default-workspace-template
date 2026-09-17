@@ -33,12 +33,14 @@ from pathlib import Path
 from typing import Protocol
 
 import tool_env
-from list_mngr_plugins import MANIFEST_PATH
-from list_mngr_plugins import PYPROJECT_PATH
-from list_mngr_plugins import MngrSource
-from list_mngr_plugins import base_arguments
-from list_mngr_plugins import plugin_arguments_for_tool
-from list_mngr_plugins import read_mngr_source
+from list_mngr_plugins import (
+    MANIFEST_PATH,
+    PYPROJECT_PATH,
+    GitPin,
+    base_arguments,
+    plugin_arguments_for_tool,
+    read_mngr_source,
+)
 
 # How the plugin manifest names the mngr tool's own plugin set.
 MNGR_PLUGIN_KEY = "mngr"
@@ -67,7 +69,7 @@ class Run(Protocol):
     ) -> object: ...
 
 
-def build_install_command(source: MngrSource, plugin_arguments: Sequence[str]) -> list[str]:
+def build_install_command(source: GitPin, plugin_arguments: Sequence[str]) -> list[str]:
     """The single ``uv tool install`` that lands mngr and its plugins, all from ``source``.
 
     ``--reinstall`` because a from-scratch rebuild is what the apply does too
@@ -80,7 +82,14 @@ def build_install_command(source: MngrSource, plugin_arguments: Sequence[str]) -
             "the base package alone leaves an mngr that cannot parse [agent_types.*], which "
             "breaks `mngr create --template chat` and with it the app's update path."
         )
-    return ["uv", "tool", "install", *base_arguments(source), *plugin_arguments, "--reinstall"]
+    return [
+        "uv",
+        "tool",
+        "install",
+        *base_arguments(source),
+        *plugin_arguments,
+        "--reinstall",
+    ]
 
 
 def install_environment(base_env: Mapping[str, str]) -> dict[str, str]:
@@ -103,9 +112,11 @@ def install_mngr(
     repo_root: Path, base_env: Mapping[str, str], run: Run = subprocess.run
 ) -> list[str]:
     """Run the install under ``base_env``, pinned; return the command that was run."""
-    source = read_mngr_source((repo_root / PYPROJECT_PATH).read_text(), repo_root)
+    source = read_mngr_source((repo_root / PYPROJECT_PATH).read_text())
     manifest = (repo_root / MANIFEST_PATH).read_text()
-    command = build_install_command(source, plugin_arguments_for_tool(manifest, source, MNGR_PLUGIN_KEY))
+    command = build_install_command(
+        source, plugin_arguments_for_tool(manifest, source, MNGR_PLUGIN_KEY)
+    )
     run(command, cwd=repo_root, env=install_environment(base_env), check=True)
     return command
 

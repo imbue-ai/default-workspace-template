@@ -59,9 +59,8 @@ FRONTEND_TOOLING_PATHS = frozenset(
 # Every directory whose change re-emits a bundle: the two frontends and the library they share.
 FRONTEND_SOURCE_DIRS = (FRONTEND_DIR, CHAT_FRONTEND_DIR, FRONTEND_LIB_DIR)
 
-# mngr is installed from the source pyproject.toml gives it in [tool.uv.sources]:
-# the public repo at a pinned commit, or a local tree at system/vendor/mngr in a
-# workspace built against an mngr checkout. A merge that moves the pin shows up as
+# mngr is installed from the public repo at the commit pyproject.toml pins in
+# [tool.uv.sources]. A merge that moves the pin shows up as
 # a pyproject.toml / uv.lock change, which is already a manifest change, so the
 # refresh re-resolves the tools.
 PYPROJECT_PATH = "pyproject.toml"

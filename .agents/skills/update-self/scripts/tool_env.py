@@ -41,7 +41,7 @@ from pathlib import Path
 # is what distinguishes a tool environment from a venv that merely holds a console script.
 RECEIPT = "uv-receipt.toml"
 
-# The vendored mngr distribution's name (its ``[project] name``), which is what uv names
+# The mngr distribution's name (its ``[project] name``), which is what uv names
 # its environment directory -- not the ``mngr`` console script, which is the executable.
 MNGR_TOOL_NAME = "imbue-mngr"
 MNGR_EXECUTABLE = "mngr"
