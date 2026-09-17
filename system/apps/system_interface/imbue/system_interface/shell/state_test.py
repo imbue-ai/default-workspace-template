@@ -20,7 +20,6 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
-from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import layout_showing
 from imbue.system_interface.shell.testing import registry_row_toml
