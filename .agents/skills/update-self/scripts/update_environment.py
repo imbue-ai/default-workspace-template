@@ -299,9 +299,22 @@ def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> lis
     return tool_env.remove_shadowing_mngr_installs(canonical[0], homes)
 
 
+def _pinned_tool_location() -> tuple[Path, Path]:
+    """``(tool_dir, bin_dir)`` of the installation the build pins, resolved from
+    nothing on this machine.
+
+    This is the same pair ``install_mngr.py`` sets ``UV_TOOL_DIR`` /
+    ``UV_TOOL_BIN_DIR`` to, taken from the one module both trees share, so the
+    apply's floor cannot drift from the build's target.
+    """
+    home = tool_env.tool_home()
+    return tool_env.tools_dir(home), tool_env.bin_dir(home)
+
+
 def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     """The environment for a ``uv tool`` call, aimed at ``executable``'s own
-    installation when we can confirm which that is, else at the mngr tool's.
+    installation when we can confirm which that is, else at the mngr tool's,
+    else at the one the build pins.
 
     A tool the merge adds (an app this workspace has never run) is on no PATH
     yet, and uv's own default tool directory follows ``$HOME`` -- which at
@@ -310,58 +323,52 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     fine and is never found. So a tool with no installation of its own goes
     beside the mngr tool, whose bin directory every program line resolves its
     entry point through.
+
+    When neither resolves there is still a right answer, and it is never uv's
+    default: the build installs under a pinned home regardless of the ``$HOME``
+    it runs beneath, so that is where a reachable copy goes. Falling through to
+    uv instead put the tool under ``/home/user/.local`` and exited 0, which the
+    apply read as success -- a workspace whose ``mngr`` had been deleted, or an
+    old lease that never had a uv-tool ``mngr`` to resolve, updated itself into
+    having no ``mngr`` on any PATH at all.
     """
     env = dict(os.environ)
     location = _installed_tool_location(executable, tool_name, runner)
     if location is None:
         beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
         if beside_mngr is None:
+            location = _pinned_tool_location()
             sys.stderr.write(
                 f"refresh: could not identify the uv tool behind '{executable}' "
                 f"(not an installed uv tool on PATH) nor the one behind "
-                f"'{MNGR_EXECUTABLE}'; letting uv choose the tool directory, which may "
-                "install a copy that nothing on PATH runs.\n"
+                f"'{MNGR_EXECUTABLE}'; installing '{tool_name}' into the build's "
+                f"pinned tool directory ({location[1]}).\n"
             )
-            return env
-        sys.stderr.write(
-            f"refresh: '{executable}' is not an installed uv tool on PATH; installing "
-            f"'{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n"
-        )
-        location = beside_mngr
+        else:
+            sys.stderr.write(
+                f"refresh: '{executable}' is not an installed uv tool on PATH; "
+                f"installing '{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n"
+            )
+            location = beside_mngr
     env["UV_TOOL_DIR"] = str(location[0])
     env["UV_TOOL_BIN_DIR"] = str(location[1])
     return env
 
 
-def _tool_extras(
-    tool_name: str, repo_root: Path, runner: Runner, env: dict
-) -> list[str]:
+def _tool_extras(tool_name: str, env: dict) -> list[str]:
     """Return the ``--with``/``--with-editable`` args a tool was installed with.
 
     A ``uv tool install --reinstall`` rebuilds the environment from the base
     package alone, dropping every extra -- for the mngr tool those extras *are*
     its plugins. uv records them in the tool's receipt; read them back rather
     than keeping a second copy of the plugin list to drift.
+
+    ``env`` is :func:`_uv_tool_env`'s, so ``UV_TOOL_DIR`` is the directory this
+    install is about to write to and the receipt to read is the one already
+    there. Asking ``uv tool dir`` instead would answer for ``$HOME``, which is
+    the directory we are overriding.
     """
-    tool_dir = env.get("UV_TOOL_DIR")
-    if tool_dir is None:
-        try:
-            result = runner.run(
-                ["uv", "tool", "dir"],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                env=env,
-            )
-        except OSError as exc:
-            _warn_extras_lost(tool_name, f"'uv tool dir' could not be run ({exc})")
-            return []
-        if getattr(result, "returncode", 0) != 0:
-            _warn_extras_lost(tool_name, f"'uv tool dir' exited {result.returncode}")
-            return []
-        tool_dir = (getattr(result, "stdout", "") or "").strip()
-    receipt = Path(tool_dir) / tool_name / RECEIPT
+    receipt = Path(env["UV_TOOL_DIR"]) / tool_name / RECEIPT
     try:
         parsed = tomllib.loads(receipt.read_text())
     except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -491,7 +498,7 @@ def _reinstall_tool(
         "-e",
         source_dir,
         *_merge_extras(
-            _tool_extras(tool_name, repo_root, runner, env),
+            _tool_extras(tool_name, env),
             _manifest_extras(plugin_key, repo_root),
         ),
         "--reinstall",
