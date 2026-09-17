@@ -502,9 +502,7 @@ def create_through_mngr(request: CreateRequest) -> int:
             "`mngr create` named no chat in its output; the chat exists but its id is unknown",
             file=sys.stderr,
         )
-    created = CreatedChat(
-        chat_id=chat_id, name=request.name, display_name=request.name
-    )
+    created = CreatedChat(chat_id=chat_id, name=request.name, display_name=request.name)
     print(created.as_json_line())
     return EXIT_DELIVERED
 
