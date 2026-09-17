@@ -16,6 +16,7 @@ from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
 from app_manifest.scope import APP_CONVENTIONS
 from app_manifest.scope import SKILL_CONVENTIONS
+from app_manifest.scope import compute_app_scope
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -134,12 +135,32 @@ def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) 
     assert (_REPO_ROOT / convention_path).is_file(), convention_path
 
 
+@pytest.mark.parametrize(
+    "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
+)
+def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: Path) -> None:
+    # The footprint's wiring is read off the real tree here, where every program block
+    # is a drop-in: a finder that reads the daemon's config alone finds nothing for any
+    # app, and the library's own tests write their own layout, so none of them sees that.
+    manifest = load_manifest(manifest_path, repo_root=_REPO_ROOT)
+    scope = compute_app_scope(_REPO_ROOT, manifest_path, manifest)
+    sections_by_path = {entry.path: list(entry.sections) for entry in scope.wiring}
+
+    for program in (manifest.program, *manifest.wiring.programs):
+        dropin = f"system/supervisord.conf.d/{program}.conf"
+        assert sections_by_path.get(dropin) == [f"program:{program}"], (
+            f"{manifest_path} runs program {program!r}, whose drop-in the footprint does not "
+            f"carry as wiring: {sections_by_path}"
+        )
+
+
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _command_by_program()
     for manifest_path in _every_manifest_path():
         for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
             assert program in command_by_program, (
-                f"{manifest_path} declares wiring program {program!r}, which supervisord.conf does not define"
+                f"{manifest_path} declares wiring program {program!r}, which neither "
+                "system/supervisord.conf nor a drop-in beside it defines"
             )
 
 

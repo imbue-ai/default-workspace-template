@@ -196,7 +196,7 @@ include paths yourself.
 
 For an app, the paths are declared rather than deduced: `uv run app-manifest
 footprint system/apps/<package>/app.toml` prints the app's footprint -- its own
-directory (`primary`), the `system/supervisord.conf` sections that run it
+directory (`primary`), the supervisord program blocks that run it
 (`wiring`), and the skills, scripts and docs its manifest claims
 (`references`). Propose that set as the include paths, plus anything the user
 named that the manifest does not claim. The user still confirms it in plain

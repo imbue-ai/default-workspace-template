@@ -35,7 +35,8 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
-  `[program:*]` blocks out of `system/supervisord.conf`;
+  `[program:*]` blocks out of `system/supervisord.conf` and the
+  `supervisord.conf.d/` drop-ins its include glob reads;
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
   `app.toml` is skipped, and so is a manifest that fails to load, with a warning
@@ -64,8 +65,8 @@ test, freshness, or publish pass may treat as that creation's own. Every path in
 it is repo-root-relative, and `--repo-root` (default: the current directory, the
 same convention `registry_path()` follows) is what they are relative to.
 
-    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF] [--out FILE]
-    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF] [--out FILE]
+    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
+    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
     app-manifest references --for-path <path> [--repo-root DIR]
 
 The positional manifest and `--for-path` are alternatives: the first describes
@@ -76,7 +77,7 @@ goes to stdout; with it, the parent directories are created.
 {
   "creation": {"type": "app", "name": "slack-inbox", "package": "slack_inbox", "manifest": "system/apps/slack_inbox/app.toml"},
   "primary": ["system/apps/slack_inbox/"],
-  "wiring": [{"path": "system/supervisord.conf", "sections": ["program:slack-inbox"]}],
+  "wiring": [{"path": "system/supervisord.conf.d/slack-inbox.conf", "sections": ["program:slack-inbox"]}],
   "references": [{"path": ".agents/skills/slack-inbox-refresh", "note": "...", "kind": "skill"}],
   "context": [],
   "conventions": ["system/apps/README.md", ".agents/shared/worker/references/type-app.md", "docs/system/style_guide.md"],
@@ -89,14 +90,16 @@ goes to stdout; with it, the parent directories are created.
   null and its `name` is the directory's name.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
-- `wiring` is the `system/supervisord.conf` sections the app owns: its own
-  `program:<program>` block, every `program:<name>-<role>` sidecar, and every
-  program the manifest's `[wiring] programs` declares (the browser declares
-  `xvfb`, which exists only for it; a declared program with no block is an
-  error). The first label of every standalone program is a reserved app name,
-  so the sidecar prefix cannot claim an unrelated program. Empty
-  when the conf runs none of them, which is the normal state before an app is
-  first registered.
+- `wiring` is the supervisord program blocks the app owns, one entry per file
+  that declares any of them (the daemon's `system/supervisord.conf`, then its
+  `supervisord.conf.d/` drop-ins in name order, which is how the include glob
+  reads them): its own `program:<program>` block, every `program:<name>-<role>`
+  sidecar, and every program the manifest's `[wiring] programs` declares (the
+  browser declares `xvfb`, which exists only for it; a declared program with no
+  block anywhere is an error). The first label of every standalone program is a
+  reserved app name, so the sidecar prefix cannot claim an unrelated program.
+  Empty when no file declares any of them, which is the normal state before an
+  app is first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a
@@ -109,12 +112,16 @@ goes to stdout; with it, the parent directories are created.
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
-  sha, every file the diff changed (from the three-dot form, so what the base
-  branch did after the fork is not the creation's change), and
-  `outside_footprint`: the changed files that are neither under a `primary` path,
-  nor a `wiring` file, nor under a reference, nor a `context` entry's
-  `app.toml`, nor matched by `exclude`. A non-empty `outside_footprint` means either a missing
-  reference or a change that does not belong on the branch.
+  sha, the full sha of the `ref` the diff runs to (HEAD, or what `--diff-ref`
+  names, so one tree can answer for a range that ends elsewhere -- what a merge
+  commit's first parent changed since the fork, say), every file the diff
+  changed (from the three-dot form, so what the base branch did after the fork
+  is not the creation's change), and that list split in two:
+  `inside_footprint`, the changed files under a `primary` path, a `wiring`
+  file, a reference, or a `context` entry's `app.toml`, and `outside_footprint`,
+  the changed files under none of those. A file matched by `exclude` is in
+  neither. A non-empty `outside_footprint` means either a missing reference or a
+  change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that

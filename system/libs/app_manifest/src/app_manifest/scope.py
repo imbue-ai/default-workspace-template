@@ -30,8 +30,11 @@ from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 
-# The shared wiring file where every supervised app has its block.
+# The daemon's own configuration, and the directory its ``[include]`` glob reads every
+# program block from, one file per program (``system/test_supervisord_layout.py`` pins
+# that the glob resolves to exactly this directory).
 _SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
+_SUPERVISORD_DROPIN_DIRECTORY: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf.d")
 
 # Applied to every footprint and never written in a manifest: vendored subtrees, gitignored
 # runtime state, installed dependencies, and build output are nobody's creation.
@@ -116,12 +119,16 @@ class ScopeReference(FrozenModel):
 
 
 class DiffSummary(FrozenModel):
-    """A branch's changed files, and the ones the footprint does not account for."""
+    """The files changed between a base and a ref, split by whether the footprint accounts for them."""
 
     base: NonEmptyStr = Field(
-        description="The full sha of the requested base; the diff runs from its merge base with HEAD"
+        description="The full sha of the requested base; the diff runs from its merge base with the ref"
     )
+    ref: NonEmptyStr = Field(description="The full sha of the ref the diff runs to (HEAD unless asked otherwise)")
     files: tuple[RepoRelativePath, ...] = Field(description="Every file the diff changed")
+    inside_footprint: tuple[RepoRelativePath, ...] = Field(
+        description="The changed files the footprint accounts for and the excludes do not swallow"
+    )
     outside_footprint: tuple[RepoRelativePath, ...] = Field(
         description="The changed files that are neither in the footprint nor excluded"
     )
@@ -162,42 +169,65 @@ def _deduplicated(globs: Sequence[ExcludeGlob]) -> tuple[ExcludeGlob, ...]:
     return tuple(dict.fromkeys(globs))
 
 
+def _read_sections(config_path: Path) -> list[str]:
+    """The section names one supervisord config file declares; none when the file is absent."""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(config_path)
+    except configparser.Error as e:
+        raise ScopeComputationError(f"cannot parse {config_path}: {e}") from e
+    return parser.sections()
+
+
+def _supervisord_config_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
+    """The daemon's config followed by its drop-ins in name order, which is the order the
+    ``[include]`` glob reads them in."""
+    dropin_directory = repo_root / _SUPERVISORD_DROPIN_DIRECTORY
+    dropins = sorted(dropin_directory.glob("*.conf")) if dropin_directory.is_dir() else []
+    return (
+        _SUPERVISORD_CONF,
+        *(RepoRelativePath(f"{_SUPERVISORD_DROPIN_DIRECTORY}/{dropin.name}") for dropin in dropins),
+    )
+
+
 def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[WiringSection, ...]:
     """The supervisord blocks that run the app: its own program, every ``<app name>-<role>``
-    sidecar, and every program its manifest's ``[wiring] programs`` declares.
+    sidecar, and every program its manifest's ``[wiring] programs`` declares, wherever the
+    daemon's config or one of its ``supervisord.conf.d/`` drop-ins declares them -- one
+    entry per file that holds any, in the order the daemon reads the files.
 
-    A conf with none of the derived ones (an app that is not registered yet) yields no wiring
+    A tree with none of the derived ones (an app that is not registered yet) yields no wiring
     rather than an error; a declared program with no block is an error, since the declaration
     is explicit.
     """
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read(repo_root / _SUPERVISORD_CONF)
-    except configparser.Error as e:
-        raise ScopeComputationError(f"cannot parse {repo_root / _SUPERVISORD_CONF}: {e}") from e
-    sections = parser.sections()
     own_section = f"program:{manifest.program}"
     # The sidecar rule is a prefix match; the app-name rule reserves the first label of every
     # standalone program (`share` for `share-gateway`), which is what keeps an unrelated
     # program from being claimed here.
     sidecar_prefix = f"program:{manifest.name}-"
     declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
+    wiring: list[WiringSection] = []
+    seen_sections: set[str] = set()
+    for config_path in _supervisord_config_paths(repo_root):
+        sections = _read_sections(repo_root / config_path)
+        seen_sections.update(sections)
+        owned_sections = tuple(
+            NonEmptyStr(section)
+            for section in sections
+            if section == own_section
+            or section.startswith(sidecar_prefix)
+            or section in declared_sections
+        )
+        if owned_sections:
+            wiring.append(WiringSection(path=config_path, sections=owned_sections))
     for declared_section in declared_sections:
-        if declared_section not in sections:
+        if declared_section not in seen_sections:
             raise ScopeComputationError(
                 f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
-                f"{repo_root / _SUPERVISORD_CONF} does not define"
+                f"neither {repo_root / _SUPERVISORD_CONF} nor a drop-in under "
+                f"{repo_root / _SUPERVISORD_DROPIN_DIRECTORY} defines"
             )
-    owned_sections = tuple(
-        NonEmptyStr(section)
-        for section in sections
-        if section == own_section
-        or section.startswith(sidecar_prefix)
-        or section in declared_sections
-    )
-    if not owned_sections:
-        return ()
-    return (WiringSection(path=_SUPERVISORD_CONF, sections=owned_sections),)
+    return tuple(wiring)
 
 
 def find_referencing_manifests(
@@ -336,17 +366,13 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
 
 
 @pure
-def is_accounted_for_by_scope(
-    candidate: RepoRelativePath, scope: CreationScope, exclude_spec: pathspec.PathSpec
-) -> bool:
-    """Whether a changed file sits inside the footprint or is excluded outright.
+def is_accounted_for_by_scope(candidate: RepoRelativePath, scope: CreationScope) -> bool:
+    """Whether a changed file sits inside the footprint.
 
     Of each context directory only its manifest counts as inside: a skill's one sanctioned
     edit outside its own directory is the ``[[references]]`` entry it adds to the owning
     app's ``app.toml``; a change to the app's code stays outside the skill's footprint.
     """
-    if exclude_spec.match_file(candidate):
-        return True
     if any(wiring.path == candidate for wiring in scope.wiring):
         return True
     if any(candidate == f"{context.rstrip('/')}/{MANIFEST_FILENAME}" for context in scope.context):
@@ -385,27 +411,42 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
     return completed.stdout
 
 
-def with_diff_against_base(scope: CreationScope, repo_root: Path, diff_base: str) -> CreationScope:
-    """The same scope with its diff filled in from the changed files between a base and HEAD."""
+def with_diff_against_base(
+    scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str = "HEAD"
+) -> CreationScope:
+    """The same scope with its diff filled in from the changed files between a base and a ref.
+
+    The ref defaults to HEAD; naming another lets one tree answer for a range that does not
+    end at it, such as what a merge commit's first parent changed since the fork point.
+    """
     base_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_base}^{{commit}}")).strip())
+    ref_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_ref}^{{commit}}")).strip())
     # A NUL-separated listing with quoting off is the only form every filename survives: git
     # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
     # path it changed, and a name with a newline in it would split across lines.
     diff_output = _run_git(
         repo_root,
-        ("-c", "core.quotePath=false", "diff", "--name-only", "-z", f"{base_sha}...HEAD"),
+        ("-c", "core.quotePath=false", "diff", "--name-only", "-z", f"{base_sha}...{ref_sha}"),
     )
     changed_files = tuple(
         RepoRelativePath(entry) for entry in diff_output.split("\0") if entry
     )
     exclude_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, scope.exclude)
-    outside_footprint = tuple(
-        changed_file
-        for changed_file in changed_files
-        if not is_accounted_for_by_scope(changed_file, scope, exclude_spec)
-    )
+    inside_footprint: list[RepoRelativePath] = []
+    outside_footprint: list[RepoRelativePath] = []
+    for changed_file in changed_files:
+        if exclude_spec.match_file(changed_file):
+            continue
+        if is_accounted_for_by_scope(changed_file, scope):
+            inside_footprint.append(changed_file)
+        else:
+            outside_footprint.append(changed_file)
     diff_summary = DiffSummary(
-        base=base_sha, files=changed_files, outside_footprint=outside_footprint
+        base=base_sha,
+        ref=ref_sha,
+        files=changed_files,
+        inside_footprint=tuple(inside_footprint),
+        outside_footprint=tuple(outside_footprint),
     )
     return scope.model_copy_update(to_update(scope.field_ref().diff, diff_summary))
 

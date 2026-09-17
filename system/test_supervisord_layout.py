@@ -3,7 +3,8 @@
 Programs live one per file there, reached via the ``[include] files`` glob in
 ``system/supervisord.conf``. Several readers depend on that -- the OOM band
 checks in ``system/services/oom_priority``, the ``build-app`` scaffolder's port
-pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan, and
+pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan, the
+``app_manifest`` footprint library, which reads the blocks that run an app, and
 (cross-repo) the minds evals evidence capture, which joins each registered app
 to the program that supervises it. Neither ``configparser`` nor a plain ``cat``
 follows supervisord's ``[include]``, so each of them reads that directory by
@@ -79,13 +80,14 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
 
 
 # Every in-repo reader of this config, by the path it lives at. They cannot share a helper: they
-# sit in four separate uv workspace members, and two of them are standalone scripts. migrate-
+# sit in separate uv workspace members, and two of them are standalone scripts. migrate-
 # workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite runs that
 # shell against a local workspace instead.
 _READER_PATHS: dict[str, Path] = {
     "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
     "migrate_workspace": _REPO_ROOT / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
     "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
+    "app_manifest_footprint": _REPO_ROOT / "system/libs/app_manifest/src/app_manifest/scope.py",
     "oom_bands": _REPO_ROOT / "system/services/oom_priority/bin/oom_tag_service_test.py",
 }
 
@@ -108,7 +110,7 @@ def _program_names_in(paths: list[Path]) -> set[str]:
 
 
 def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
-    """All four in-repo readers see the programs the config's own ``[include]`` glob reaches.
+    """All five in-repo readers see the programs the config's own ``[include]`` glob reaches.
 
     The readers name ``supervisord.conf.d/`` outright; this file expands the glob the config
     declares. If the two ever come apart -- the glob moved, a reader's spelling drifted -- the
@@ -121,6 +123,12 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
 
     assert _declared_in(_load("scaffolder")._supervisord_conf_files(_SUPERVISORD_CONF)) == canonical
     assert _declared_in(_load("migrate_workspace")._local_supervisord_configs(_REPO_ROOT)) == canonical
+    # The footprint library answers in repo-root-relative paths, being what its scope files carry.
+    footprint_reader = _load("app_manifest_footprint")
+    assert (
+        _declared_in([_REPO_ROOT / path for path in footprint_reader._supervisord_config_paths(_REPO_ROOT)])
+        == canonical
+    )
     # These two return command-by-name rather than a file list; the names are the shared claim.
     # The band reader covers event listeners as well, the manifest reader programs only.
     assert set(_load("oom_bands")._command_by_supervisord_program()) == canonical

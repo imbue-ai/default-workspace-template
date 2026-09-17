@@ -1,0 +1,5 @@
+The footprint command now finds an app's supervisord blocks where the template actually declares them, and its diff can run to a ref other than HEAD.
+
+Before, `find_wiring_sections` read only `system/supervisord.conf`, which declares no programs at all: every block lives in its own `system/supervisord.conf.d/<name>.conf` drop-in. So a footprint carried no wiring for any real app, and `app-manifest footprint system/apps/browser/app.toml` failed outright because the `xvfb` program the browser declares was "not defined".
+
+Now the finder reads the daemon's config and then its drop-ins in name order, reporting one `wiring` entry per file that holds any of the app's blocks, and a declared program only errors when no file declares it. The scope file's `diff` also gains `ref` (the full sha the diff runs to) and `inside_footprint` (the changed files the footprint accounts for, excluded files in neither list), and `footprint` takes `--diff-ref` beside `--diff-base`, so one tree can answer for a range that does not end at HEAD -- which is what the update-self worker needs to read a merge commit's two sides over the same footprint.

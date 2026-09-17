@@ -369,20 +369,21 @@ carry on into §5 and get their verdict there.
 The worker contract (the staged copy's `references/update-self-worker.md`,
 §4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
 review gates rule-driven and the report evidence-bearing. It must show which
-branch of the 4a and 4b rules applied (the footprint evidence, and each
-validation item's condition and whether it held), and either show the
-clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond a retry's
-rollback revert, shown by an empty diff against the landed merge) or carry
-the gate run's own evidence (fix commits kept or reverted, or a clean run,
-plus architecture-gate verdicts); a side-picked conflict must carry the
+branch of the 4a and 4b rules applied (the footprint evidence --
+`has_local_footprint`, and per creation the scope files' verdicts when it is
+true -- and each validation item's condition and whether it held), and either
+show the clean-pull skip's three conditions held (`has_merge_work: false`, no
+impacted user-created code, no worker-authored in-branch edits beyond a
+retry's rollback revert, shown by an empty diff against the landed merge) or
+carry the gate run's own evidence (fix commits kept or reverted, or a clean
+run, plus architecture-gate verdicts); a side-picked conflict must carry the
 discarded-side accounting. A report missing any of this -- including one that
 openly discloses skipping a gate outside the rule -- goes back to the worker
 via the Step 4 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
-cannot be closed from here, and then the results message states it plainly
-as a caveat.
+cannot be closed from here, and then the results message states it plainly as
+a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
