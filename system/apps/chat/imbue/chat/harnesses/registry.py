@@ -56,6 +56,7 @@ from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
+from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
 from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
@@ -529,6 +530,15 @@ def build_account_binding(harness: HarnessType) -> AccountBinding:
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     """Build the model resolver for ``agent_info``'s harness."""
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def list_account_options(harness: HarnessType, account_dir: Path) -> tuple[ModelOption, ...] | None:
+    """The models the account at ``account_dir`` offers for ``harness``, or None to offer its whole catalog.
+
+    Asks the resolver CLASS, not an instance: the question is about an account, which has no agent
+    to build one from (and may never have had one).
+    """
+    return get_harness_spec(harness).resolver_class.list_account_options(account_dir)
 
 
 def build_interrupt_to_composer(agent_info: AgentInfo) -> InterruptToComposer:

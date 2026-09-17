@@ -21,17 +21,14 @@ from imbue.chat import accounts
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
-from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import numbered_provider
-from imbue.chat.harnesses.model import ModelOption
-from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
-from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import get_catalog
+from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.models import ErrorResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.request_helpers import parse_json_object_body
@@ -127,20 +124,18 @@ def list_accounts() -> Response:
     return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
 
 
-def is_picker_dynamic(harness: HarnessType) -> bool:
-    """Whether the harness's picker options are per agent rather than a catalog."""
-    return get_catalog(harness).picker_mode is PickerMode.DYNAMIC
-
-
 def account_model_options(account_id: str) -> Response:
     """The models a switch onto ``account_id`` can pick from: the switch dialog's offer for a handoff or a rebind.
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
-    catalog (``models`` null). A harness whose set is per agent (codex) has no catalog to offer,
-    so the answer is the set an existing agent of this account was last offered, read off its
-    sidecar, and ``options`` is empty when the account has run no agent yet: the dialog then
-    offers only the default. A harness whose model the chat app cannot switch offers nothing
-    (``options`` empty).
+    catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
+    has no catalog to offer, so the account's own codex is asked for it. A harness whose model the
+    chat app cannot switch offers nothing (``options`` empty).
+
+    The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
+    provider can be on different subscriptions and genuinely offer different models, so an answer
+    borrowed from one would mis-describe the other -- both by hiding a model it has and by offering
+    one it cannot run, which a rebind then fails on at its model step.
     """
     try:
         account = accounts.resolve_account(account_id)
@@ -151,23 +146,8 @@ def account_model_options(account_id: str) -> Response:
         return _error_response(f"Account {account_id} is on a lane this build does not have", status_code=404)
     if get_catalog(harness).switch_mode is SwitchMode.READ_ONLY:
         return _json_response(ModelOptionsResponse(models=None, options=()).model_dump())
-    manager = get_state().agent_manager
-    persisted: tuple[ModelOption, ...] | None = None
-    for agent in manager.get_agents():
-        if agent.harness is not harness or agent.labels.get("account") != account_id:
-            continue
-        agent_info = manager.get_agent_info_by_id(agent.id)
-        if agent_info is None:
-            continue
-        options = build_resolver(agent_info).list_persisted_options()
-        if options is None:
-            return _json_response(ModelOptionsResponse(models=None).model_dump())
-        persisted = options
-        if persisted:
-            break
-    if persisted is None and is_picker_dynamic(harness):
-        persisted = ()
-    return _json_response(ModelOptionsResponse(models=None, options=persisted).model_dump())
+    options = list_account_options(harness, accounts.account_dir(account_id))
+    return _json_response(ModelOptionsResponse(models=None, options=options).model_dump())
 
 
 def start_flow() -> Response:
