@@ -14,11 +14,11 @@ its branch (`mngr/$NAME`), and the local runtime path
 
 ## 0. Open a single tk step for the whole delegation
 
-The progress view treats each delegation as **one** step in your timeline, regardless of how much work the sub-agent does internally. Before doing anything else, create one step record that describes the delegation in user-facing terms and start it. `tk create --step` prints `Created <id>: <title>`; use that id literally in `tk start`/`tk close`:
+The progress view treats each delegation as **one** step in your timeline, regardless of how much work the sub-agent does internally. Before doing anything else, create one step record that names the work in user-facing terms (what gets done, not who does it; "background agent" is the user's word for the worker if it must come up, never "sub-agent" or "worker") and start it. `tk create --step` prints `Created <id>: <title>`; use that id literally in `tk start`/`tk close`:
 
 ```bash
-tk create --step "Delegate <plain-english description of what the sub-agent will do> to a sub-agent"
-# -> Created cod-step-XXXX: Delegate ...
+tk create --step "<plain-english description of the outcome, e.g. Rebuild the login flow> (in the background)"
+# -> Created cod-step-XXXX: Rebuild the login flow (in the background)
 tk start cod-step-XXXX
 ```
 

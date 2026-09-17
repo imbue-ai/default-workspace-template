@@ -23,6 +23,10 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
 from imbue.chat.auto_open import ShellLayoutClient
+from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
+from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import DEFAULT_SETTINGS_PATH
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -99,6 +103,7 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
+    chat_settings = ChatSettingsStore(path=DEFAULT_SETTINGS_PATH)
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
@@ -107,9 +112,12 @@ def build_production_state(
         auto_open=AutoOpenReactor(
             ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
         ),
+        # Which agents each chat has run on, for the chats that have had a handoff.
+        chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
+        chat_settings=chat_settings,
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
-    # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
+    # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
@@ -119,6 +127,7 @@ def build_production_state(
         include_filters=include_filters,
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
+        chat_settings=chat_settings,
         event_queues=event_queues,
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the agents

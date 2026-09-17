@@ -624,7 +624,7 @@ def _recover_running_state(
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
@@ -797,10 +797,14 @@ def apply_update(
     today: str | None = None,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
     expend: ExpendWrapper = as_expendable,
+    sweep_homes: Sequence[Path],
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
+
+    ``sweep_homes`` are the homes swept for a stale mngr install after the
+    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -1021,7 +1025,7 @@ def apply_update(
                 expend,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
-        for stale in remove_shadowing_mngr_installs(runner):
+        for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
             )
@@ -1443,7 +1447,7 @@ def recover(
         failed = restore_snapshots(marker.snapshots)
         _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
         if marker.provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "

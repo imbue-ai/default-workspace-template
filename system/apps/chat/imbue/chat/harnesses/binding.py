@@ -25,6 +25,7 @@ chat app adds on top of that default when it binds a chat to a chosen account.
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Final
@@ -143,3 +144,61 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
 def has_usable_account(home: Path | None = None) -> bool:
     """Whether any signed-in account is on a lane this build runs: what ``resolve_binding("")`` needs."""
     return any(harness_for(account) is not None for account in accounts.read_index(home).accounts)
+
+
+# The harnesses a chat may change account on in place (a rebind, spec 6): every one with an
+# account scope. A same-harness target on a harness outside this set takes the handoff path,
+# which is the fallback the spec names for a harness that cannot resume under a swapped
+# credential; drop a harness here to route it that way.
+REBIND_VERIFIED_HARNESSES: Final[frozenset[HarnessType]] = frozenset(
+    {HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY}
+)
+
+# mngr's per-agent env file, sourced into the agent's tmux session on every start.
+AGENT_ENV_FILENAME: Final = "env"
+
+
+def is_rebind_supported(harness: HarnessType) -> bool:
+    return harness in REBIND_VERIFIED_HARNESSES
+
+
+def rebind_agent(harness: HarnessType, account_dir: Path, agent_state_dir: Path) -> None:
+    """Repoint an existing, stopped agent's binding at ``account_dir``: the rebind's edit (spec 6).
+
+    The same two mechanisms ``create_args`` uses, applied to the agent's own files: claude's
+    ``CLAUDE_CONFIG_DIR`` line in the env file mngr sources on the next start, and the
+    credential link in the state dir for the others. Idempotent, and each write lands whole
+    (a temp file or link renamed into place), so a resume that runs it again changes nothing.
+    Raises ``BindingError`` for a harness with nothing to repoint.
+    """
+    if harness is HarnessType.CLAUDE:
+        _rewrite_env_var(agent_state_dir / AGENT_ENV_FILENAME, "CLAUDE_CONFIG_DIR", str(account_dir))
+        return
+    source = account_credential_path(harness, account_dir)
+    dest = agent_credential_path(harness, agent_state_dir)
+    if source is None or dest is None:
+        raise BindingError(f"{harness} has no credential link to repoint")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _replace_symlink(source, dest)
+
+
+def _rewrite_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set one ``KEY=VALUE`` line in an env file mngr wrote, keeping every other line as it is."""
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    kept = [line for line in lines if not line.startswith(f"{key}=")]
+    # mngr's own quoting rule for the values it writes.
+    is_quoted = any(character in value for character in (" ", '"', "'", "\n"))
+    written = '"' + value.replace('"', '\\"') + '"' if is_quoted else value
+    temp_path = env_path.with_name(f"{env_path.name}.rebind-tmp")
+    temp_path.write_text("\n".join([*kept, f"{key}={written}"]) + "\n")
+    if env_path.exists():
+        temp_path.chmod(env_path.stat().st_mode & 0o777)
+    os.replace(temp_path, env_path)
+
+
+def _replace_symlink(source: Path, dest: Path) -> None:
+    """Point ``dest`` at ``source`` in one rename, whatever ``dest`` was before (a link, a copy, or nothing)."""
+    temp_path = dest.with_name(f"{dest.name}.rebind-tmp")
+    temp_path.unlink(missing_ok=True)
+    os.symlink(source, temp_path)
+    os.replace(temp_path, dest)

@@ -1,106 +1,151 @@
 /**
- * Asks whether to keep fast mode after the first chat's grace period.
- *
- * Asked once per agent: every way out records the answer (see
- * models/FastModePrompt.ts). Every way out other than "Keep fast mode on" also
- * turns fast mode off -- the buttons, the backdrop, and Escape -- because the
- * cheaper outcome is the one nobody can be surprised by. It is also the button
- * the modal opens focused on. The answer applies only to this agent; no other
- * chat launches fast in the first place.
+ * The fast-mode chooser: a small modal, opened from the model picker's fast row, with the
+ * chat's three modes (models/FastMode.ts). Choosing applies at once (views/fast-mode-limit.ts),
+ * so the modal needs no confirm; under Auto the workspace's turn limit is editable, and any mode
+ * can be made the default for new chats.
  */
 
 import m from "mithril";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
-import { getChatById } from "../models/Chats";
-import { getFastModePromptChatId, resolveFastModePrompt } from "../models/FastModePrompt";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { BTN_SELECTED, Button } from "@imbue/workspace-ui/src/components/Button";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  ensureChatSettings,
+  getChatSettings,
+  updateChatSettings,
+} from "../models/ChatSettings";
+import type { ChatFastModeState, FastModeMode } from "../models/FastMode";
+import { ensureFastModeState, getFastModeState } from "../models/FastMode";
+import { getEventsForChat } from "../models/Response";
+import { chooseFastMode } from "./fast-mode-limit";
 
-const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
+const OPTION_CLASS =
+  "fast-mode-option flex w-full cursor-pointer items-start gap-3 rounded-md border px-3 py-2 text-left " +
+  "hover:bg-fill-hover focus-visible:outline-2 focus-visible:outline-accent";
+const OPTION_SELECTED_CLASS = "border-accent bg-fill-subtle";
+const OPTION_UNSELECTED_CLASS = "border-default";
 
-/** The name of the chat that raised the prompt, for the modal copy. */
-function promptingChatName(): string | null {
-  const chatId = getFastModePromptChatId();
-  if (chatId === null) {
-    return null;
-  }
-  return getChatById(chatId)?.name ?? null;
+/** The line under each mode; auto's names the limit it runs to. */
+export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
+  if (mode === "off") return "Standard speed for the whole chat.";
+  if (mode === "on") return "Fast for the whole chat.";
+  const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
+  return `Fast for the first ${turns}, then standard speed.`;
 }
 
-export function FastModeModal(): m.Component {
+const MODES: readonly { mode: FastModeMode; label: string }[] = [
+  { mode: "off", label: "Off" },
+  { mode: "auto", label: "Auto" },
+  { mode: "on", label: "On" },
+];
+
+export function FastModeModal(): m.Component<{ chatId: string; onClose: () => void }> {
+  // What the turn-limit field shows while it is being typed into, or null when it shows the
+  // settings' limit: mithril re-asserts `value` on every redraw, and every keystroke causes one.
+  let limitDraft: string | null = null;
+
   return {
-    view() {
+    view(vnode) {
+      const { chatId, onClose } = vnode.attrs;
+      const settings = getChatSettings();
+      if (settings === null) void ensureChatSettings();
+      const known = getFastModeState(chatId);
+      if (known === null) void ensureFastModeState(chatId);
+      const effectiveSettings = settings ?? DEFAULT_CHAT_SETTINGS;
+      const state: ChatFastModeState = known ?? { mode: effectiveSettings.fast_mode_default, is_switched: false };
+      const limit = effectiveSettings.fast_mode_turn_limit;
+      const applyLimit = (raw: string): void => {
+        const current = getChatSettings();
+        if (current === null) return;
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isNaN(parsed) || parsed < 1 || parsed === current.fast_mode_turn_limit) return;
+        void updateChatSettings({ ...current, fast_mode_turn_limit: parsed });
+      };
+      const isDefault = effectiveSettings.fast_mode_default === state.mode;
+
       return m(
         Modal,
         {
-          onDismiss: () => resolveFastModePrompt(false),
-          onEscape: () => resolveFastModePrompt(false),
-          width: 460,
-          card: {
-            role: "dialog",
-            "aria-modal": "true",
-            "aria-label": "Keep fast mode on?",
-          },
-          header: [
-            m(
-              "span",
-              {
-                class:
-                  "fast-mode-modal-icon inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent",
-              },
-              m.trust(icon("zap", { size: 16 })),
-            ),
-            m("h3", { class: MODAL_TITLE_CLASS }, "Keep fast mode on?"),
-          ],
-          actions: [
-            m(Button, { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
-            m(
-              Button,
-              {
-                variant: "primary",
-                onclick: () => resolveFastModePrompt(false),
-                // The default action, so Enter takes it without a reach for the mouse.
-                oncreate: (vnode) => {
-                  (vnode.dom as HTMLButtonElement).focus();
-                },
-              },
-              "Switch to standard speed",
-            ),
-          ],
+          onDismiss: onClose,
+          onEscape: onClose,
+          title: "Fast Mode",
+          card: { class: "", "data-e2e": "fast-mode-modal", role: "dialog", "aria-label": "Fast Mode" },
+          actions: [m(Button, { variant: "primary", extra: "fast-mode-done", onclick: onClose }, "Done")],
         },
         [
-          m("p", { class: MODAL_MESSAGE_CLASS }, [
-            promptingChatName() !== null ? [m("strong", promptingChatName()), " has Fast Mode on. "] : null,
-            "Fast Mode is 2.5x faster and 2x more expensive (",
-            m(
-              "a",
-              {
-                class: "fast-mode-modal-link inline-flex items-center gap-1 whitespace-nowrap text-accent underline",
-                href: FAST_MODE_DOC_URL,
-                target: "_blank",
-                rel: "noopener noreferrer",
+          m("p", { class: MODAL_MESSAGE_CLASS }, "How fast this chat's agent answers."),
+          m(
+            "div",
+            { class: "fast-mode-options flex flex-col gap-2", role: "radiogroup", "aria-label": "Fast mode" },
+            MODES.map(({ mode, label }) => {
+              const isSelected = state.mode === mode;
+              return m(
+                "button",
+                {
+                  type: "button",
+                  role: "radio",
+                  "aria-checked": isSelected ? "true" : "false",
+                  "data-fast-mode": mode,
+                  class: `${OPTION_CLASS} ${isSelected ? OPTION_SELECTED_CLASS : OPTION_UNSELECTED_CLASS}`,
+                  onclick: () => {
+                    if (!isSelected) chooseFastMode(chatId, mode, getEventsForChat(chatId));
+                  },
+                },
+                [
+                  m("span", { class: "flex flex-col" }, [
+                    m("span", { class: "font-medium text-primary" }, [
+                      label,
+                      isSelected && mode === "auto" && state.is_switched
+                        ? m("span", { class: "ml-1.5 type-helper text-faint" }, "(off now)")
+                        : null,
+                    ]),
+                    m("span", { class: "type-helper text-secondary" }, fastModeDetail(mode, limit)),
+                  ]),
+                ],
+              );
+            }),
+          ),
+          state.mode === "auto"
+            ? m("label", { class: "fast-mode-limit mt-3 flex items-center gap-2 text-secondary" }, [
+                "Turn off after",
+                m("input", {
+                  type: "number",
+                  min: 1,
+                  step: 1,
+                  class: inputClass({ extra: "fast-limit-input w-16 py-1 text-right" }),
+                  "aria-label": "Fast mode turn limit",
+                  value: limitDraft ?? String(limit),
+                  disabled: settings === null,
+                  oninput: (event: Event) => {
+                    limitDraft = (event.target as HTMLInputElement).value;
+                  },
+                  onchange: (event: Event) => {
+                    limitDraft = null;
+                    applyLimit((event.target as HTMLInputElement).value);
+                  },
+                  onblur: () => {
+                    limitDraft = null;
+                  },
+                  onkeydown: (event: KeyboardEvent) => {
+                    if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                  },
+                }),
+                limit === 1 ? "turn" : "turns",
+              ])
+            : null,
+          m("label", { class: "fast-mode-default mt-4 flex items-center gap-2 type-helper text-secondary" }, [
+            m("input", {
+              type: "checkbox",
+              checked: isDefault,
+              disabled: settings === null || isDefault,
+              onchange: (event: Event) => {
+                const current = getChatSettings();
+                if (current === null || !(event.target as HTMLInputElement).checked) return;
+                void updateChatSettings({ ...current, fast_mode_default: state.mode });
               },
-              [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
-            ),
-            ")",
-          ]),
-          m("p", { class: MODAL_MESSAGE_CLASS }, [
-            "You can toggle Fast Mode at any time with the ",
-            // A non-interactive copy of the composer's fast-mode button in its
-            // on state (the Button selected tint), sized down to sit in running
-            // text, so "the button" has something to point at. Decorative:
-            // hidden from assistive tech, which gets the sentence on its own.
-            m(
-              "span",
-              {
-                class:
-                  "fast-mode-modal-toggle-glyph inline-flex h-[26px] w-[26px] items-center justify-center " +
-                  `rounded-md border align-[-0.45em] ${BTN_SELECTED}`,
-                "aria-hidden": "true",
-              },
-              m.trust(icon("zap", { size: 16 })),
-            ),
-            " button",
+            }),
+            `Use ${MODES.find((option) => option.mode === state.mode)?.label ?? ""} for new chats`,
           ]),
         ],
       );

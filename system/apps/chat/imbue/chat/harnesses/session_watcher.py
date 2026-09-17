@@ -94,6 +94,29 @@ class TranscriptReader(ABC):
         """Metadata for a subagent's session, or None when the harness has no subagents."""
 
 
+class TranscriptLoader(TranscriptReader, ABC):
+    """A reader over one agent's transcript files with nothing watching them.
+
+    What an archived segment of a chat is read through: the same discovery and parsing the
+    agent's watcher runs, without the thread or the filesystem watches, since the files no
+    longer change. ``build_loader`` is named apart from the watcher's ``build`` so one class
+    can be both (the watchers subclass their harness's loader).
+    """
+
+    @classmethod
+    @abstractmethod
+    def build_loader(cls, agent_info: AgentInfo) -> "TranscriptLoader":
+        """Construct a loader for ``agent_info``, ready to answer reads.
+
+        Whether it reads the files here or on the first read is the harness's choice: a
+        store-backed loader refreshes on every read, while one whose reads never refresh
+        (antigravity) primes itself at build.
+        """
+
+    def close(self) -> None:
+        """Release whatever the loader holds open. Idempotent; a no-op for a loader that holds nothing."""
+
+
 class AgentSessionWatcher(TranscriptReader, ABC):
     """Watches one agent's transcript and emits parsed events."""
 
