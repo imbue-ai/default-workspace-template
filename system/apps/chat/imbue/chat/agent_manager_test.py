@@ -2112,10 +2112,14 @@ def test_start_observe_spawns_long_lived_subprocess(
             timeout=1.5,
             poll_interval=0.1,
         )
+        # The subprocess runs with output accumulation OFF (retaining a days-long
+        # JSONL stream grew the app's memory without bound), so the stderr in the
+        # failure message comes from the manager's bounded tail.
+        assert manager._observe_process.is_output_accumulated is False
         assert not exited, (
             "mngr observe subprocess exited within 1.5s of startup "
             f"(returncode={manager._observe_process.returncode}); stderr: "
-            f"{manager._observe_process.read_stderr()!r}"
+            f"{list(manager._observe_stderr_tail)!r}"
         )
     finally:
         manager.stop()
@@ -2183,6 +2187,35 @@ def test_handle_observe_output_line_logs_stderr_as_warning(
     warnings = [r for r in loguru_records if r.startswith("WARNING") and "mngr observe stderr" in r]
     assert warnings, f"Expected a stderr warning; got: {loguru_records}"
     assert "something bad happened" in warnings[0]
+
+
+def test_observe_watchdog_reports_stderr_from_the_bounded_tail(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    loguru_records: list[str],
+) -> None:
+    """The watchdog's exit diagnostic carries the subprocess's stderr even though the
+    subprocess retains no output (``is_output_accumulated=False``): the bounded tail the
+    output handler keeps is what feeds it."""
+    marker = "observe exploded 73194"
+    script = tmp_path / "fake-mngr-observe"
+    script.write_text(f"#!/bin/sh\necho '{marker}' >&2\nexit 3\n")
+    script.chmod(0o755)
+
+    manager = AgentManager.build(broadcaster, mngr_binary=str(script))
+    try:
+        manager._start_observe()
+        logged = poll_until(
+            lambda: any(r.startswith("ERROR") and marker in r for r in loguru_records),
+            timeout=5.0,
+            poll_interval=0.05,
+        )
+        assert logged, (
+            f"Expected the watchdog's ERROR to carry the stderr tail; got: "
+            f"{[r for r in loguru_records if r.startswith('ERROR')]}"
+        )
+    finally:
+        manager.stop()
 
 
 # ---------------------------------------------------------------------------

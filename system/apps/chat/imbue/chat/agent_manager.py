@@ -2,6 +2,7 @@ import os
 import shlex
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -171,6 +172,13 @@ _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
 # real mngr calls, so one shared instance is the default for every built manager.
 _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
+
+
+# How many recent stderr lines from the ``mngr observe`` subprocess are kept for the
+# watchdog's exit diagnostic. The subprocess itself runs with output accumulation OFF
+# (it streams full agent-state JSONL for the process's whole life, so retaining it all
+# grew the app's memory without bound); this bounded tail is the only record kept.
+_OBSERVE_STDERR_TAIL_LINES: Final[int] = 20
 
 
 # How often the session sweep retries the live backend of every tracked agent that does not
@@ -830,6 +838,9 @@ class AgentManager:
     # None = the harness has recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
+    # The bounded tail of the observe subprocess's recent stderr, for the watchdog's exit
+    # diagnostic -- the subprocess itself retains no output (see ``_start_observe``).
+    _observe_stderr_tail: deque[str]
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
@@ -941,6 +952,7 @@ class AgentManager:
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
+        manager._observe_stderr_tail = deque(maxlen=_OBSERVE_STDERR_TAIL_LINES)
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
@@ -3201,12 +3213,19 @@ class AgentManager:
             # ProcessError when the concurrency group exits. The watchdog thread
             # below is responsible for distinguishing graceful shutdown from
             # unexpected early exit.
+            # `is_output_accumulated=False` because this subprocess streams full
+            # agent-state JSONL for the app's entire life: with accumulation on (the
+            # default), every line ever printed is retained in the parent -- hundreds of
+            # megabytes per day on an active host, the chat app's dominant long-run
+            # memory growth. Output is consumed line-by-line via `on_output`; the only
+            # record kept is the bounded stderr tail for the watchdog's diagnostics.
             process = self._observe_cg.run_process_in_background(
                 command=cmd,
                 cwd=self._resolve_observe_cwd(),
                 on_output=self._handle_observe_output_line,
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,
+                is_output_accumulated=False,
             )
         except (OSError, InvalidConcurrencyGroupStateError):
             _loguru_logger.warning(
@@ -3242,7 +3261,9 @@ class AgentManager:
         if self._shutdown_event.is_set():
             return
 
-        stderr = process.read_stderr().strip()
+        # The subprocess retains no output (see `_start_observe`), so the diagnostic
+        # comes from the bounded tail `_handle_observe_output_line` keeps.
+        stderr = "\n".join(self._observe_stderr_tail).strip()
         _loguru_logger.error(
             "mngr observe subprocess exited unexpectedly (returncode={}). "
             "Agent lifecycle events will no longer be detected. stderr: {}",
@@ -3260,6 +3281,7 @@ class AgentManager:
         if not stripped:
             return
         if not is_stdout:
+            self._observe_stderr_tail.append(stripped)
             _loguru_logger.warning("mngr observe stderr: {}", stripped)
             return
         event = parse_observe_event_line(stripped)
