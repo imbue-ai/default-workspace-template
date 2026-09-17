@@ -144,9 +144,9 @@ provisioning paragraph at its end, record the footprint evidence
 go to 4b. Every impacted consumer is then built-in, restarted by the apply and
 tested upstream. Enumerating consumers, grepping for retired names, and
 reasoning about coupling all exist to find user code, and with none to find
-they only spend the user's time. If you believe the analysis should run anyway in a
-situation this rule does not cover, that is a `question` gate (Step 6), never
-a silent widening. When `has_local_footprint` is true, run all of it.
+they only spend the user's time. If you believe the analysis should run anyway
+in a situation this rule does not cover, that is a `question` gate (Step 6),
+never a silent widening. When `has_local_footprint` is true, run all of it.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
