@@ -139,7 +139,8 @@ def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     for manifest_path in _every_manifest_path():
         for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
             assert program in command_by_program, (
-                f"{manifest_path} declares wiring program {program!r}, which supervisord.conf does not define"
+                f"{manifest_path} declares wiring program {program!r}, which neither "
+                "system/supervisord.conf nor a drop-in beside it defines"
             )
 
 
