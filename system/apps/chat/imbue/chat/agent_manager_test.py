@@ -28,6 +28,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import _SwitchTarget
@@ -758,6 +759,21 @@ def test_a_created_chat_stays_listed_through_observe_events_that_predate_it(
     agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
 
     assert created_id in {snapshot.chat_id for snapshot in agent_manager.get_chat_snapshots()}
+
+
+def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A create that never reaches the stream (the agent died before observe saw it) must not be held
+    for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
+    created_id = str(MngrAgentId())
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+
+    for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
+        agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
+
+    assert agent_manager.get_agent_by_id(created_id) is None
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(

@@ -185,6 +185,10 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 # generous cap only converts spurious kills into patience. ``mngr stop`` rides
 # the same CLI startup and host-lock path, so it shares the bound.
 DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
+# How many of the observe stream's full snapshots may omit an agent this server created before it
+# is let go. A create lands seconds before the stream reports it, so one snapshot can legitimately
+# predate the agent; two say it is not there at all (it died before the stream ever saw it).
+FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
 def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
@@ -630,6 +634,23 @@ def is_primary_agent(agent: AgentStateItem) -> bool:
     return agent.labels.get("is_primary") == "true"
 
 
+class _CreatedAgentAwaitingObserve(FrozenModel):
+    """An agent this server created, held in the tracked view until the observe stream reports it."""
+
+    agent: AgentStateItem = Field(frozen=True, description="The agent as its create left it")
+    snapshots_without_it: int = Field(
+        default=0, frozen=True, description="Full snapshots that have arrived without this agent"
+    )
+
+    @property
+    def is_still_awaited(self) -> bool:
+        return self.snapshots_without_it < FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
+
+    @pure
+    def after_a_snapshot_without_it(self) -> "_CreatedAgentAwaitingObserve":
+        return self.model_copy_update(to_update(self.field_ref().snapshots_without_it, self.snapshots_without_it + 1))
+
+
 class HandoffCapabilities(FrozenModel):
     """What a handoff needs from the app state and the routes, bound by the composition root."""
 
@@ -687,9 +708,11 @@ class AgentManager:
     # before/after key diff starts and stops the per-agent tracking.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
-    # Agents this server created that the observe stream has not reported yet. A rebuild keeps
-    # them: observe reports a new agent seconds after its create returns.
-    _created_unobserved_by_id: dict[str, AgentStateItem]
+    # Agents this server created that the observe stream has not reported yet, with the number of
+    # its full snapshots that have omitted each. A rebuild keeps them (observe reports a new agent
+    # seconds after its create returns) until the stream reports one or omits it from enough
+    # snapshots to say it never existed.
+    _created_unobserved_by_id: dict[str, _CreatedAgentAwaitingObserve]
     # The session sweep's lifecycle: ``_session_sweep_stop`` ends the loop.
     _session_sweep_stop: threading.Event
     _session_sweep_thread: threading.Thread | None
@@ -1963,7 +1986,7 @@ class AgentManager:
     def _track_created_agent_locked(self, agent_state: AgentStateItem) -> None:
         self._agents[agent_state.id] = agent_state
         if agent_state.id not in self._agent_details_by_id:
-            self._created_unobserved_by_id[agent_state.id] = agent_state
+            self._created_unobserved_by_id[agent_state.id] = _CreatedAgentAwaitingObserve(agent=agent_state)
 
     def _build_successor_create_command(self, spec: SuccessorCreateSpec) -> list[str]:
         """The successor's ``mngr create``: the same builder every chat create uses, plus its membership labels."""
@@ -3008,6 +3031,7 @@ class AgentManager:
         and stops the per-agent tracking (activity, model choice, the resident
         watcher).
         """
+        is_full_snapshot = isinstance(event, FullAgentStateEvent)
         with self._lock:
             before_details = dict(self._agent_details_by_id)
             was_agent_list_known = self._is_agent_list_known
@@ -3074,10 +3098,16 @@ class AgentManager:
                     updates.append(to_update(agent_state.field_ref().queued_messages, cached_queued))
                 if updates:
                     new_agents[agent_id] = agent_state.model_copy_update(*updates)
-            for agent_id in [agent_id for agent_id in self._created_unobserved_by_id if agent_id in details_by_id]:
-                del self._created_unobserved_by_id[agent_id]
+            still_awaited: dict[str, _CreatedAgentAwaitingObserve] = {}
             for agent_id, created in self._created_unobserved_by_id.items():
-                new_agents[agent_id] = self._agents.get(agent_id, created)
+                if agent_id in details_by_id:
+                    continue
+                counted = created.after_a_snapshot_without_it() if is_full_snapshot else created
+                if counted.is_still_awaited:
+                    still_awaited[agent_id] = counted
+            self._created_unobserved_by_id = still_awaited
+            for agent_id, created in self._created_unobserved_by_id.items():
+                new_agents[agent_id] = self._agents.get(agent_id, created.agent)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
 

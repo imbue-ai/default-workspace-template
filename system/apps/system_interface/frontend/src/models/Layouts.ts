@@ -41,16 +41,6 @@ export function parsePanelParams(value: unknown): PanelParams | null {
   return { kind: "instance", address: record.address, tabId: record.tabId, lastFocusedMs };
 }
 
-/** The params of every panel a serialized dockview names, keyed by panel id; panels with no readable params are skipped. */
-export function panelParamsInDocument(dockview: SerializedDockview): Record<string, PanelParams> {
-  const found: Record<string, PanelParams> = {};
-  for (const [panelId, entry] of Object.entries(dockview.panels ?? {})) {
-    const params = parsePanelParams(entry.params);
-    if (params !== null) found[panelId] = params;
-  }
-  return found;
-}
-
 /** One client's arrangement of one view. */
 export interface LayoutRecord {
   dockview: SerializedDockview | null;

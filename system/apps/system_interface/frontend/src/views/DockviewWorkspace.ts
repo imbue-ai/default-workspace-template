@@ -732,7 +732,11 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     if (resolved === null) {
       const isUnavailable = params?.kind === "instance" && isAddressUnlisted(params.address);
       statusDot.style.display = isUnavailable ? "" : "none";
-      statusDot.setAttribute("data-status", UNAVAILABLE_STATUS);
+      if (isUnavailable) {
+        statusDot.setAttribute("data-status", UNAVAILABLE_STATUS);
+      } else {
+        statusDot.removeAttribute("data-status");
+      }
       setHoverTooltip(statusDot, isUnavailable ? UNAVAILABLE_STATUS : null);
       return;
     }
