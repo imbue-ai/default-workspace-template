@@ -4,7 +4,7 @@ The reserved-name set is carried in three places, because two of them cannot imp
 
 `github` is now reserved. Enabling GitHub sync writes a `github-sync` supervisord program, and an app named `github` would have claimed it as a sidecar -- so turning GitHub sync on would have failed the manifest suite in that workspace.
 
-Apps can no longer collide with each other's programs: an app named `pr` would have claimed a second app's `pr-review` program as its own sidecar. The existing guard only covered collisions with programs that belong to no app.
+Apps can no longer collide with *another* app's programs: an app named `pr` would have claimed a second app's `pr-review` program as its own sidecar. The existing guard only covered collisions with programs that belong to no app. An app matching itself is not a collision -- a manifest may set `program` to its own `<name>-<role>` form, and that program is its sidecar.
 
 `layout.py`'s tests now run without the ambient agent identity. They set `MNGR_AGENT_ID` but read `MINDS_CHAT_ID` first, and every Minds chat agent runs with both set -- so they passed in CI and failed for every agent that ran them.
 
