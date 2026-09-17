@@ -158,8 +158,10 @@ Repeat until every node is done.
    It prints comma-separated node indices. It never starts more than 5 workers at
    once, and interactive nodes take no worker slot.
 
-2. **Launch each worker node it printed.** Look up the node's `model` in
-   `$RUN/plan.json`, then:
+2. **Launch each worker node it printed, one node per command.** Never put two
+   launches in one shell command: they run one after the other anyway, and a
+   batched launch hides every worker after the first from the evidence an eval
+   collects. Look up the node's `model` in `$RUN/plan.json`, then:
 
    ```bash
    python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py write-task \
