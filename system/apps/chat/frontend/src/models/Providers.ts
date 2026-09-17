@@ -358,11 +358,9 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
-// What to do once a sign-in succeeds or a signed-in account is picked. Opening the chooser from
-// the page of a chat that awaits an account launches that chat on the account the user ends up
-// with; opening it from inside a running chat begins switching that chat to it. Opened with no
-// callback (the composer's sign-in prompt), the user is adding a provider and nothing moves. The
-// caller knows which it is; nothing here can tell.
+// What to do once a sign-in succeeds or a signed-in account is picked: launch a chat waiting for
+// an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
+// can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 let chooserUnpickable: UnpickableAccount | null = null;
 

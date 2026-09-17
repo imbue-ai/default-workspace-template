@@ -119,9 +119,6 @@ def e2e_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
         yield server
 
 
-# ---------- helpers ----------
-
-
 def _client_layout_files(state_dir: Path, view_id: str) -> list[Path]:
     """The per-client layout files a view holds (the seeds beside them are not counted)."""
     view_dir = state_dir / "layouts" / view_id
@@ -264,9 +261,6 @@ def _serve_stub_pages(page: Page, server: RunningWorkspace) -> None:
         f"{server.stub_url}/**",
         lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
     )
-
-
-# ---------- the chat page ----------
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -488,9 +482,6 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
 
-# ---------- layout ops ----------
-
-
 def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for i in range(pair_count):
@@ -628,9 +619,6 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
         )
 
 
-# ---------- projects and views ----------
-
-
 @pytest.mark.timeout(120, func_only=False)
 def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
     """A chat pane restored by a view switch still shows its own transcript.
@@ -659,9 +647,6 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
         expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
-
-
-# ---------- starting a chat ----------
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -731,9 +716,6 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
         chat.locator(".message-list-create-retry").click()
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=20000)
         expect(chat.locator(".message-list-create-failed")).to_have_count(0, timeout=15000)
-
-
-# ---------- switching a chat to another harness (the handoff, spec section 5) ----------
 
 
 def _open_provider_menu(chat: FrameLocator) -> None:
