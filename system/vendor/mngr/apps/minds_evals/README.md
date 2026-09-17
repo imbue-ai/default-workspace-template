@@ -31,7 +31,7 @@ slated to change, so do not build new names on it.
    That is the default `anthropic` lane; a run on another
    [lane](#harness-and-model-arms) signs in through the workspace's accounts flow instead, which is
    the same user path for the harness that lane serves.
-4. It then **creates the workspace's chat** through `/api/agents/create-chat`, named after the
+4. It then **creates the workspace's chat** through `/api/chats/create`, named after the
    workspace host and bound to that account, and waits for it to reach WAITING. A workspace boots
    with no chat at all -- a chat binds to an account when it is created, and a fresh workspace has
    none -- which is why the sign-in has to come first: a create issued before it is refused for want
@@ -372,7 +372,7 @@ to run and what it was observed running:
 - `model_choice_switch` is `applied`, `skipped` (the run named no `model`), or the failure that
   stopped the trial. It is empty on a trial that named a model and gave up before the switch could
   be applied. The switch is a single call setting model, effort and fast at once, which is the
-  product's own model choice (`POST /api/agents/<id>/model`).
+  product's own model choice (`POST /api/chats/<chat_id>/model`).
 - `observed_models` are the model names on the transcript's agent steps after the client's first
   turn, and `welcome_model` the one on the greeting step. The greeting and the conversation are
   separated at the step carrying the driver's own first message -- the first `user` step whose
@@ -543,7 +543,7 @@ the conversation from, exactly as for any other harbor eval: the judge-transcrip
 structural gates, and the message-length guard read its ATIF steps, and the judges read the rendering.
 Nothing at grade time knows the workspace UI feed exists.
 
-Two transcripts of the workspace agent exist: the workspace UI feed (`/api/agents/<id>/events`),
+Two transcripts of the workspace agent exist: the workspace UI feed (`/api/chats/<chat_id>/events`),
 which the driver polls to detect each reply and price its usage, and mngr's own **common
 transcript** (the ATIF-shaped `header`/`step`/`observation` stream at full fidelity, see
 `specs/atif-transcript-alignment/spec.md`). The trajectory comes from the latter whenever the

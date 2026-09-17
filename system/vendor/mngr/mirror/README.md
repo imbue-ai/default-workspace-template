@@ -9,11 +9,11 @@ Design and rollout plan: `specs/private-repo-public-mirror/spec.md`.
 
 ## Status
 
-The sync is validated end-to-end against local scratch repositories only,
-including a full cutover rehearsal (`rehearse_cutover.sh`). It is NOT enabled
-against the real public repository, no GitHub Actions workflow invokes it, and
-nothing here changes `imbue-ai/mngr`. The export is strictly one-way (private
-to public); there is no reverse import of public PRs.
+The sync is LIVE. `mirror-push.yml` runs on every push to `main` and exports the
+filtered tree to `imbue-ai/mngr`; `mirror-gate.yml` runs on every pull request and
+every push to `main`, and checks that the tree still materializes and builds, and that
+`mirror/overlay/uv.lock` is fresh. The export is strictly one-way (private to
+public); there is no reverse import of public PRs.
 
 ## Files
 
@@ -36,6 +36,25 @@ to public); there is no reverse import of public PRs.
   first sync, steady-state exports (scrubbing, block-strip, private-skip, tag
   creation, trailer-based baseline), and optionally (`--build`) the
   public-tree buildability checks.
+- `pypi_trusted_publishers.md` — the PyPI trusted-publisher checklist for
+  every publishable package.
+
+## Adding a lib to the public subset
+
+A `libs/*` package belongs on the mirror when it is publishable (absent from
+`UNPUBLISHED_PACKAGES` in `libs/mngr/imbue/mngr/plugin_catalog.py`) or public
+tests import it. A package that should stay private goes in
+`UNPUBLISHED_PACKAGES` instead. Adding one takes three edits in one PR:
+
+1. Its `"libs/<name>/**"` entry in `copy.bara.sky`'s `PUBLIC_FILES`.
+   `scripts/release_test.py` fails when a publishable lib has no entry.
+2. Its `--cov=imbue.<name>` flag in `overlay/pyproject.toml`'s `addopts`
+   (`scripts/release_test.py` fails without it), plus any other setting the
+   root `pyproject.toml` carries for the lib.
+3. A regenerated `overlay/uv.lock`:
+   `mirror/materialize_public_tree.sh <jar> <out-dir> --lock --check`. The
+   script reads committed state; set `MATERIALIZE_REF` to a snapshot ref to
+   materialize uncommitted edits.
 
 ## How the sync runs
 
@@ -59,18 +78,23 @@ iterating on rules), `--last-rev <sha>` (explicit baseline for a first run),
 The workflow is ITERATIVE: one public commit per private commit whose diff
 touches the allowlist. Commits touching only private paths produce no public
 commit at all. Mixed commits export only the public part of their diff, with
-the full commit message (message scrubbing is not yet configured; do not put
-secrets in commit messages).
+the commit message after the message transforms (`INTERNAL:` sections deleted,
+bare `#N` rewritten to `mngr-internal#N`). Never put secrets in commit
+messages.
 
 State: none on our side. Each synced public commit carries a
 `GitOrigin-RevId: <private-sha>` trailer; the next run finds the newest
 trailer on public `main` and migrates everything after it. Any machine with
 the config and credentials produces the same result.
 
-Once the ENABLE BLOCKERS below clear, a GitHub Actions workflow in THIS repo
-(on push to `main`) downloads the pinned jar and runs the migrate command,
-authenticated as a GitHub App that is the only identity allowed to push to
-public `main`. The public repo runs nothing.
+`.github/workflows/mirror-push.yml` (on push to `main`) downloads the pinned jar
+and runs the migrate command, authenticated as the `imbue-codesync` GitHub App,
+the only identity allowed to push to public `main`. This repo holds the App's
+ID in `vars.MIRROR_SYNC_APP_ID` and its private key in
+`secrets.MIRROR_SYNC_APP_PRIVATE_KEY`; the workflow mints a token scoped to
+`imbue-ai/mngr`. The workflow's manual dispatch (confirmation phrase,
+`--dry-run` default) is for repair. The public repo runs
+only its own CI, `overlay/.github/workflows/ci.yml`.
 
 ## The rule API (for boundary reviews)
 
@@ -84,12 +108,12 @@ Four layers, smallest to largest:
    everything), the public tree is forced to equal the filtered private tree —
    files the filtered origin does not produce are DELETED on sync; nothing on
    public `main` is hand-maintained. Public-only files (root pyproject, public
-   CI) will be hand-authored here under `mirror/overlay/` and mapped to the
+   CI) are hand-authored here under `mirror/overlay/` and mapped to the
    public root with `core.move("mirror/overlay", "", overwrite = True)`.
 3. **`transformations`** — content/message rewriting applied to each exported
    change: `core.replace` (strip `BEGIN-INTERNAL`/`END-INTERNAL` blocks from
    file contents), `metadata.scrubber` (delete `INTERNAL:` sections from
-   commit messages), `metadata.map_references` (rewrite `#123` so private
+   commit messages, and rewrite bare `#123` to `mngr-internal#123` so private
    numbering cannot close the wrong public issue), `core.verify_match` (hard-
    fail the sync if a forbidden pattern appears).
 4. **`authoring` and safety** — `authoring.pass_thru` keeps each dev as the
@@ -98,11 +122,11 @@ Four layers, smallest to largest:
    the bot.
 
 Reviewing the boundary means answering, per path: should it exist on the
-mirror at all (include list)? for a new lib, is it part of the open-source
-product (published to PyPI or needed by public tests)? does an exported file
-need content redaction (`core.replace` markers — or better, restructure so the
-private part is a separate non-synced file)? is there message risk (scrubber /
-map_references policy)? Everything else is plumbing. Full reference:
+mirror at all (include list; for a new lib, see "Adding a lib to the public
+subset")? does an exported file need content redaction (`core.replace`
+markers — or better, restructure so the private part is a separate non-synced
+file)? is there message risk (scrubber policy)? Everything else is plumbing.
+Full reference:
 https://github.com/google/copybara/blob/master/docs/reference.md
 
 ## Running the validation
@@ -134,10 +158,8 @@ with `file://` URLs substituted for the GitHub URLs, and asserts:
   originating private SHA.
 
 The first migrated commit into a full-tree destination also carries the
-deletion of every non-allowlisted path. In the real rollout that deletion lands
-as a separate hand-authored, human-reviewed cutover commit on public `main`
-before the sync is enabled, and the first real sync run must then be a
-near-noop (see the spec's cutover plan).
+deletion of every non-allowlisted path. On the real public repo that deletion
+is the hand-authored cutover commit `76adfb04d7` (see the spec's cutover plan).
 
 ## Bootstrap and repair
 
@@ -154,53 +176,21 @@ the destination `main`. `check_last_rev_state = True` makes the run fail loudly
 if the destination moved underneath the bot; repair by re-running with an
 explicit `--last-rev` after investigating the drift.
 
-## ENABLE BLOCKERS
+A noop sync writes no `GitOrigin-RevId` trailer, so after a `--force`
+bootstrap, runs keep needing `--last-rev <sha> --force` until the first real
+export lands. Land a trivial public-touching commit to write that trailer.
 
-The `push` workflow must NOT be pointed at the real public repository until
-every item below is done:
+## Operational notes
 
-1. DONE — `mirror/overlay/` (pruned root pyproject, generated public uv.lock,
-   slim public CI, mapped to the root via `core.move`).
-2. DONE — message transforms (`INTERNAL:` scrubber, `#N` rewritten to inert
-   `mngr-internal#N`) and `BEGIN-INTERNAL`/`END-INTERNAL` block stripping.
-3. DONE — justfile split (`private.just` via `import?`; `justfile` is back in
-   the allowlist).
-4. DONE — tag support (`tag_name = "${RELEASE_TAG}"`; `scripts/release.py`
-   writes the trailer). Note: copybara will not move an existing tag; a
-   re-cut release needs the mirror tag deleted manually first.
-5. DONE — release-flow overlay refresh: `scripts/release.py` advances the
-   overlay pyproject's `exclude-newer` cutoff and regenerates
-   `mirror/overlay/uv.lock` inside the release commit (working tree
-   snapshotted to a temporary ref, materialized with `--lock`; needs a JDK on
-   the release machine — the pinned jar auto-downloads). The Mirror gate
-   workflow (`.github/workflows/mirror-gate.yml`) additionally catches any
-   overlay drift on every PR/main push.
-6. DONE — pre-cutover content chores (capability-mixins doc moved into
-   `libs/mngr/future_specs/`, org-slug comments scrubbed from
-   `imbue_common.sentry.core`).
-7. **Public-repo ruleset + sync GitHub App**. The runner side is prepared:
-   `.github/workflows/mirror-push.yml` runs the export, dispatch-only with a
-   confirmation phrase and a `--dry-run` default until cutover (the push
-   trigger is added on the day). Still needed, org admin: create the sync
-   GitHub App (Contents read/write), install it on `imbue-ai/mngr`, set
-   `vars.MIRROR_SYNC_APP_ID` + `secrets.MIRROR_SYNC_APP_PRIVATE_KEY` on this
-   repo, and — cutover day only — the public `main` ruleset with the App as
-   sole bypass.
-8. **PyPI trusted publishers**: add `imbue-ai/mngr-internal` publishers for
-   all 37 projects (manual web UI; checklist and exact names in
-   `mirror/pypi_trusted_publishers.md`); removal of the public repo's
-   publishers is a cutover-day step.
-9. **Near-noop acceptance on the real repos**: the first real run (after the
-   hand-authored cutover commit on public `main`) must be verified near-noop
-   with `--dry-run` before the on-push trigger is enabled. The rehearsal
-   proves the flow; this step proves it against the real state on the day.
-
-Two operational facts the rehearsal established: (1) the noop first sync
-writes no `GitOrigin-RevId` trailer, so runs keep needing
-`--last-rev <final-merge-sha> --force` until the first real export lands —
-land a trivial public-touching probe commit right after enabling to write the
-first trailer, after which the sync is flagless (verified). (2) Message
-conventions: put trailers ABOVE any `INTERNAL:` section (the scrubber deletes
-from the marker to the end of the message), and write `imbue-ai/mngr#N` (the
-fully-qualified form) when a commit should close a public issue — bare `#N`
-is deliberately neutralized.
+- Message conventions: put trailers ABOVE any `INTERNAL:` section (the
+  scrubber deletes from the marker to the end of the message), and write
+  `imbue-ai/mngr#N` (the fully-qualified form) when a commit should close a
+  public issue. Bare `#N` is deliberately neutralized.
+- Tags: `scripts/release.py` writes a `RELEASE_TAG=v<version>` trailer, and the
+  `push` workflow creates that tag on the mirror. Copybara will not move an
+  existing tag; a re-cut release needs the mirror tag deleted manually first.
+- Releases refresh the overlay: `scripts/release.py` advances the overlay
+  pyproject's `exclude-newer` cutoff and regenerates `overlay/uv.lock` inside
+  the release commit (working tree snapshotted to a temporary ref,
+  materialized with `--lock`). It needs a JDK on the release machine; the
+  pinned jar auto-downloads.

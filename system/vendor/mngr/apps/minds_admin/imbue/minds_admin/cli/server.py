@@ -39,6 +39,7 @@ import psycopg2
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from pydantic import SecretStr
 from tabulate import tabulate
 
 from imbue.apt_mirror.cli import CURRENT_TIMESTAMP_PATH
@@ -85,6 +86,7 @@ from imbue.minds_admin.cli.paid import resolve_admin_api_key
 from imbue.minds_admin.primitives import SLICE_PROVIDER_INSTANCE_NAME
 from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_BAKING
 from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
+from imbue.minds_admin.slices.bare_metal_db import allocate_box_wireguard_address
 from imbue.minds_admin.slices.bare_metal_db import build_baking_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import claim_pool_host_for_removal
 from imbue.minds_admin.slices.bare_metal_db import delete_baking_slice_pool_host
@@ -104,7 +106,6 @@ from imbue.minds_admin.slices.bare_metal_db import finish_baking_slice_pool_host
 from imbue.minds_admin.slices.bare_metal_db import insert_baking_slice_pool_host
 from imbue.minds_admin.slices.bare_metal_db import insert_bare_metal_server
 from imbue.minds_admin.slices.bare_metal_db import update_server
-from imbue.minds_admin.slices.bare_metal_db import upsert_bare_metal_server
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_SHA512
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_URL
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
@@ -113,16 +114,19 @@ from imbue.minds_admin.slices.bare_metal_prep import build_gen2_box_prep_script
 from imbue.minds_admin.slices.bare_metal_prep import parse_storage_partition_gib_from_prep_output
 from imbue.minds_admin.slices.box_access import BoxManagementDial
 from imbue.minds_admin.slices.box_access import MANAGEMENT_SSH_PORT
+from imbue.minds_admin.slices.box_access import activated_management_tier_or_none
 from imbue.minds_admin.slices.box_access import close_box_management_tunnels
 from imbue.minds_admin.slices.box_access import resolve_box_management_dial
 from imbue.minds_admin.slices.box_access import resolve_server_management_dial
+from imbue.minds_admin.slices.box_registry import BoxRegistryImportError
+from imbue.minds_admin.slices.box_registry import fetch_ready_registry_servers
+from imbue.minds_admin.slices.box_registry import import_servers_into_pool_database
 from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepBoxReport
 from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepReport
 from imbue.minds_admin.slices.ci_slice_sweep import DEFAULT_CI_SLICE_MAX_AGE_HOURS
 from imbue.minds_admin.slices.ci_slice_sweep import sweep_ci_slices_on_box
 from imbue.minds_admin.slices.cutover_types import bake_tag_generation_error_or_none
 from imbue.minds_admin.slices.management_plane import parse_wireguard_public_key_from_prep_output
-from imbue.minds_admin.slices.management_plane import resolve_box_overlay_address
 from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolver
 from imbue.minds_admin.slices.operator_identity import management_identities
 from imbue.minds_admin.slices.ordering import DEFAULT_REINSTALL_OS_TEMPLATE
@@ -304,10 +308,14 @@ def box_management_identities(
     # Resolves the gen-1 pool key PEM when a gen-1 box is dialed; the default is
     # the activated tier's Vault entry (or the POOL_SSH_PRIVATE_KEY override).
     resolve_gen1_pool_private_key_pem: Callable[[], str] = resolve_pool_private_key_pem,
+    *,
+    # The tier whose SSH CA certifies the operator key; None means the activated
+    # env's tier (the default for every command but the tier-addressed ones).
+    tier: str | None = None,
 ) -> Iterator[ManagementIdentityResolver]:
     """The management keys this command dials boxes with: the operator's Vault-signed certificate for gen-2, the pool key for gen-1."""
-    env_name = active_env_name_or_none()
-    tier = tier_for_env_name(env_name) if env_name is not None else None
+    if tier is None:
+        tier = activated_management_tier_or_none()
     with management_identities(
         tier=tier, resolve_gen1_pool_private_key_pem=resolve_gen1_pool_private_key_pem
     ) as identities:
@@ -316,10 +324,10 @@ def box_management_identities(
 
 def resolve_tier_ssh_ca_public_key_or_none() -> str | None:
     """The activated tier's committed SSH CA public key (deploy.toml ``[ssh_ca]``), or None when absent."""
-    env_name = active_env_name_or_none()
-    if env_name is None:
+    tier = activated_management_tier_or_none()
+    if tier is None:
         return None
-    ssh_ca = load_deploy_config(tier_for_env_name(env_name)).ssh_ca
+    ssh_ca = load_deploy_config(tier).ssh_ca
     return str(ssh_ca.public_key) if ssh_ca is not None else None
 
 
@@ -327,8 +335,8 @@ def require_tier_ssh_ca_public_key(purpose: str) -> str:
     """The activated tier's SSH CA public key, refusing ``purpose`` with the bring-up pointer when it is not committed."""
     ca_public_key = resolve_tier_ssh_ca_public_key_or_none()
     if ca_public_key is None:
-        env_name = active_env_name_or_none()
-        tier_hint = f"tier '{tier_for_env_name(env_name)}'" if env_name is not None else "an activated env's tier"
+        tier = activated_management_tier_or_none()
+        tier_hint = f"tier '{tier}'" if tier is not None else "an activated env's tier"
         raise BareMetalProvisioningError(
             f"{purpose} needs the tier's SSH CA public key, but {tier_hint} has no [ssh_ca] block in its "
             "deploy.toml. Bring the tier's Vault SSH CA up and commit its public key first "
@@ -589,7 +597,9 @@ def _build_composed_prep_script(
 def _ensure_box_wireguard_address(dsn: str, server: BareMetalServer, allocation: ManagementOverlayAllocation) -> str:
     """Return the box's management overlay address, assigning + stamping one when unset or out of plan.
 
-    Sequential from the overlay's box block, across every recorded box (any
+    The read of the stamped set and the stamp are one locked transaction
+    (``allocate_box_wireguard_address``), so concurrent setups never take the
+    same address. Sequential from the overlay's box block, across every recorded box (any
     status -- a draining box keeps its address until its row is deleted, so a
     repaved box may come back with a different one; nothing pins addresses to
     hardware). A stamped address outside the tier's current allocation is
@@ -599,15 +609,11 @@ def _ensure_box_wireguard_address(dsn: str, server: BareMetalServer, allocation:
     """
     conn = psycopg2.connect(dsn)
     try:
-        assigned_addresses = {row.wireguard_address for row in fetch_servers(conn) if row.wireguard_address}
+        wireguard_address = allocate_box_wireguard_address(conn, server.id, server.wireguard_address, allocation)
     finally:
         conn.close()
-    wireguard_address = resolve_box_overlay_address(server.wireguard_address, assigned_addresses, allocation)
     if wireguard_address == server.wireguard_address:
         return wireguard_address
-    # CLEANUP: drop the legacy wg_address dual write once every tier's pool DB
-    # has applied migration 037 and no pre-rename checkout is in use.
-    _update_server_fields(dsn, str(server.id), wireguard_address=wireguard_address, wg_address=wireguard_address)
     if server.wireguard_address:
         logger.warning(
             "Renumbered server {} from overlay address {} (outside the box address range of the tier '{}' "
@@ -674,11 +680,11 @@ def _resolve_active_tier_overlay_allocation() -> ManagementOverlayAllocation:
     non-activated prep is a dev-only escape hatch, and the dev allocation
     keeps it functional rather than refusing outright.
     """
-    env_name = active_env_name_or_none()
-    if env_name is None:
+    tier = activated_management_tier_or_none()
+    if tier is None:
         logger.warning("No minds env is activated; assigning box overlay addresses from the dev tier's allocation")
         return management_overlay_for_tier(DEV_TIER)
-    return management_overlay_for_tier(tier_for_env_name(env_name))
+    return management_overlay_for_tier(tier)
 
 
 def _record_box_storage_partition_gib(dsn: str, server_id: str, prep_stdout: str) -> None:
@@ -1686,8 +1692,8 @@ def sweep_ci_slices_across_boxes(
     "--source-database-url",
     required=True,
     help=(
-        "Pool DSN holding the canonical bare_metal_servers rows to copy from (for the CI standing "
-        "boxes: the CI infra DB at secrets/minds/ci/neon/DATABASE_URL)."
+        "Pool DSN holding the canonical bare_metal_servers rows to copy from: the tier's box registry at "
+        "secrets/minds/<tier>/neon/DATABASE_URL (see 'Box registry' in apps/minds/docs/deploy/host-pool-setup.md)."
     ),
 )
 @click.option("--database-url", default=None, help=DATABASE_URL_HELP)
@@ -1702,31 +1708,19 @@ def import_boxes(source_database_url: str, database_url: str | None) -> None:
     Rows are copied whole, so the source DB must already carry connector migration
     040 (``uplink_mbps`` set on every row); there is no ``--uplink-mbps`` here.
     """
-    source_conn = psycopg2.connect(source_database_url)
     try:
-        ready_servers = [server for server in fetch_servers(source_conn) if str(server.status) == SERVER_STATUS_READY]
-    finally:
-        source_conn.close()
+        ready_servers = fetch_ready_registry_servers(SecretStr(source_database_url))
+    except BoxRegistryImportError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not ready_servers:
         raise click.ClickException(
             f"the source pool DB has no '{SERVER_STATUS_READY}' bare_metal_servers rows to import"
         )
-    # A box whose datacenter the region map does not know could never be
-    # matched by any lease label; refuse the whole import before any upsert.
-    unknown_datacenter_servers = [
-        server_row for server_row in ready_servers if server_row.region not in OVH_US_DATACENTER_CODES
-    ]
-    if unknown_datacenter_servers:
-        raise click.ClickException(
-            "refusing to import boxes whose datacenter is not in the region map "
-            f"{sorted(OVH_US_DATACENTER_CODES)}: "
-            + ", ".join(f"{server_row.id} ({server_row.region!r})" for server_row in unknown_datacenter_servers)
-        )
-    target_conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    target_dsn = SecretStr(resolve_pool_database_url(database_url))
     try:
-        imported, skipped = _import_ready_servers(target_conn, ready_servers)
-    finally:
-        target_conn.close()
+        report = import_servers_into_pool_database(target_dsn, ready_servers)
+    except BoxRegistryImportError as exc:
+        raise click.ClickException(str(exc)) from exc
     emit_json(
         {
             "imported": [
@@ -1736,38 +1730,18 @@ def import_boxes(source_database_url: str, database_url: str | None) -> None:
                     "public_address": server_row.public_address,
                     "slot_count": server_row.slot_count,
                 }
-                for server_row in imported
+                for server_row in report.imported
             ],
             "skipped": [
-                {"id": str(server_row.id), "public_address": server_row.public_address, "reason": reason}
-                for server_row, reason in skipped
+                {
+                    "id": str(skipped.server.id),
+                    "public_address": skipped.server.public_address,
+                    "reason": skipped.reason,
+                }
+                for skipped in report.skipped
             ],
         }
     )
-
-
-def _import_ready_servers(
-    target_conn: Any, ready_servers: Sequence[BareMetalServer]
-) -> tuple[list[BareMetalServer], list[tuple[BareMetalServer, str]]]:
-    """Upsert each box into the target; a box the target already registers under another row id is skipped, not fatal."""
-    imported: list[BareMetalServer] = []
-    skipped: list[tuple[BareMetalServer, str]] = []
-    for server_row in ready_servers:
-        try:
-            upsert_bare_metal_server(target_conn, server_row)
-        except psycopg2.errors.UniqueViolation as exc:
-            target_conn.rollback()
-            reason = (exc.diag.message_detail or str(exc)).strip()
-            logger.warning(
-                "Skipping box {} ({}): the target already registers it under another row ({})",
-                server_row.id,
-                server_row.public_address,
-                reason,
-            )
-            skipped.append((server_row, reason))
-            continue
-        imported.append(server_row)
-    return imported, skipped
 
 
 def build_registered_server(
@@ -2594,7 +2568,6 @@ def run_outcome_workers_in_bounded_threads(
 ) -> list[OutcomeT]:
     """Run one worker call per kwargs mapping in parallel threads, at most ``max_concurrency`` at once.
 
-    The shared fan-out used by both the slice bake and the pool-host destroy.
     Returns the outcomes in completion order. Workers must return their outcome
     rather than raising -- an exception escaping a worker aborts the whole batch
     at join time (``ObservableThread.join`` re-raises it).

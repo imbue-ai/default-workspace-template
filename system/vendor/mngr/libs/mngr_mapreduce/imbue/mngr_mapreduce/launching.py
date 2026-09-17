@@ -278,11 +278,12 @@ def _create_agent(
     if existing_host is not None:
         target_host: OnlineHostInterface | NewHostOptions = existing_host
     elif config.provider_name.lower() == LOCAL_PROVIDER_NAME:
-        # The local provider has a single fixed host ("localhost"); reuse the
+        # The local provider's single host already exists; reuse the
         # source_host (already the local host) instead of the new-host path.
         # That path would call _generate_unique_host_name, which never finds
         # a free name because the local provider's get_host_name always
-        # returns "localhost" and discover_hosts always reports it as taken.
+        # returns that host's recorded name and discover_hosts always reports
+        # it as taken.
         target_host = config.source_host
     else:
         build = _resolve_build_options(config, mngr_ctx)

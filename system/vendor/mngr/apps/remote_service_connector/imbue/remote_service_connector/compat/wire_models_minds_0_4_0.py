@@ -87,8 +87,11 @@ RELEASE_DATE = date(2026, 8, 18)
 # Also covers minds 0.6.1 (released 2026-09-14): the only wire_types.py change
 # since minds-v0.6.0 is the optional ``stop_kind`` field on the workspace entry
 # (defaulting to None) and the ``WorkspaceStopKind`` WireEnum it carries, which
-# adds no required field. Its support window ends 2026-10-14.
-SUPPORT_ENDS = date(2026, 10, 14)
+# adds no required field.
+# Also covers minds 0.6.2 (released 2026-09-16): wire_types.py is byte-unchanged
+# between minds-v0.6.1 and this tag, and no new strict-parse call sites were
+# added client-side. Its support window ends 2026-10-16.
+SUPPORT_ENDS = date(2026, 10, 16)
 
 
 class _TolerantModel(BaseModel):

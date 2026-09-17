@@ -251,14 +251,15 @@ def _create_chat_on_account(container_name: str, account_id: str) -> str:
     payload = json.dumps({"account_id": account_id})
     created = _exec_in_container(
         container_name,
-        f"curl -s -X POST {_CHAT_APP_URL}/api/agents/create-chat "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/chats/create "
         f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
     assert created.returncode == 0, f"create-chat curl failed: {created.stderr}"
     body = json.loads(created.stdout)
-    agent_id = str(body.get("agent_id", ""))
-    assert agent_id, f"create-chat returned no agent id: {created.stdout[:500]}"
+    # A chat's id is its first agent's id, so the chat just created runs on the agent of that id.
+    agent_id = str(body.get("chat_id", ""))
+    assert agent_id, f"create-chat returned no chat id: {created.stdout[:500]}"
 
     # The endpoint answers as soon as the background `mngr create` starts, so the agent is
     # a proto for a few seconds; messaging it before mngr registers it would fail.

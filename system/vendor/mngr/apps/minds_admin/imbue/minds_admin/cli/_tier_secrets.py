@@ -14,6 +14,10 @@ use working. (One deliberate asymmetry: the pool SSH key's Vault value wins
 over its env var -- see :func:`resolve_pool_private_key_pem`.) The storage
 recovery passphrase is the one entry this module also writes: the box prep
 mints it into the tier's Vault before the volume it opens is formatted.
+
+The tier-addressed commands (``minds-admin wireguard --tier <tier>``) are the
+exception to the activated-env rule: they name their tier explicitly and read
+its pool DSN through :func:`resolve_tier_pool_database_url` with no activation.
 """
 
 import os
@@ -129,29 +133,31 @@ def _read_activated_minds_host_pool_dsn() -> str | None:
     return dsn if dsn else None
 
 
-def _read_shared_tier_host_pool_dsn_from_vault(env_name: str) -> str:
-    """Read a shared tier's host_pool DSN from ``<vault_prefix>/neon/DATABASE_URL``.
+def resolve_tier_pool_database_url(tier: str) -> str:
+    """Read a tier's fleet pool DSN from ``<vault_prefix>/neon/DATABASE_URL``.
 
-    The shared tiers (staging / production) keep no local ``secrets.toml``, so
-    their DSN comes from the same Vault entry the connector and the deploy use.
+    For staging / production this is the tier's single pool database; for dev
+    and ci it is the tier's standing box registry (the "infra" database whose
+    ``bare_metal_servers`` rows are the fleet, which every dynamic env imports
+    at deploy time -- see ``slices/box_registry.py``).
 
     Raises ``click.ClickException`` if the Vault read fails or the entry lacks
     a non-empty ``DATABASE_URL``.
     """
-    tier = tier_for_env_name(env_name)
     deploy_config = load_deploy_config(tier)
     vault_prefix = str(deploy_config.vault_path_prefix).rstrip("/")
     try:
         secret = read_vault_kv(VaultPath(f"{vault_prefix}/neon"))
     except VaultReadError as exc:
         raise click.ClickException(
-            f"Could not read the host_pool DSN from Vault ({vault_prefix}/neon) for env '{env_name}': {exc}"
+            f"Could not read the pool DSN from Vault ({vault_prefix}/neon) for tier '{tier}': {exc}"
         ) from exc
     dsn = secret.get(_POOL_DSN_VAULT_FIELD, "")
     if not dsn:
         raise click.ClickException(
             f"Vault entry {vault_prefix}/neon is missing {_POOL_DSN_VAULT_FIELD!r}; "
-            "see apps/minds/docs/deploy/setup/vault.md for the schema."
+            "see apps/minds/docs/deploy/setup/vault.md for the schema (for dev/ci, the tier's standing "
+            "box registry -- see the 'Box registry' section of apps/minds/docs/deploy/host-pool-setup.md)."
         )
     return dsn
 
@@ -174,8 +180,9 @@ def resolve_pool_database_url(explicit: str | None) -> str:
         return env_value
     env_name = active_env_name_or_none()
     if env_name is not None:
-        if tier_for_env_name(env_name) in (PRODUCTION_ENV_NAME, STAGING_ENV_NAME):
-            return _read_shared_tier_host_pool_dsn_from_vault(env_name)
+        tier = tier_for_env_name(env_name)
+        if tier in (PRODUCTION_ENV_NAME, STAGING_ENV_NAME):
+            return resolve_tier_pool_database_url(tier)
         activated_dsn = _read_activated_minds_host_pool_dsn()
         if activated_dsn:
             return activated_dsn

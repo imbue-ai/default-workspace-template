@@ -113,7 +113,7 @@ export interface QueuedMessage {
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
-export type ProvisionalChatPhase = "awaiting_account" | "creating" | "failed";
+export type ProvisionalChatPhase = "awaiting_account" | "awaiting_first_send" | "creating" | "failed";
 
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
 export interface ProvisionalChat {
@@ -124,6 +124,10 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
+  // Whether the chat has a seed segment to show while it is created: the conversation the Mind
+  // app had before the workspace existed. Its page keeps the transcript and the composer up
+  // through the create rather than the provisional screens.
+  is_seeded: boolean;
 }
 
 type WsEvent =
@@ -433,8 +437,12 @@ export function createChat(
  * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
  * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
  */
-export function launchChat(chatId: string, accountId: string): Promise<CreatedChat> {
-  return postCreateChat({ chat_id: chatId, account_id: accountId });
+export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
+  // A seeded chat's launch brings the user's first message; a reserved chat keeps the one it
+  // was minted with, and a launch that names one for it is refused, so none is sent then.
+  return postCreateChat(
+    message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
+  );
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {

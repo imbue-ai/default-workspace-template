@@ -51,6 +51,17 @@ Ground facts this plan is built on (verified 2026-07-20):
   (`mirror/pypi_trusted_publishers.md`) are prepared. Still needing humans: sync App
   creation + repo credentials (org admin), the PyPI clicking session, the Mac-runner
   group grant, and everything marked cutover-day. Nothing has touched the public repo.
+- 2026-07-24: cutover executed. The hand-authored cutover commit (`76adfb04d7`,
+  "Restrict this repository to the open-source subset") landed on public `main`, and
+  `mirror-push.yml` has exported every push to private `main` since.
+- 2026-09-16: `libs/mngr_autocompact` added to the allowlist. It is publishable and
+  vendored into the default workspace template, but PR mngr-internal#703 landed it
+  without an allowlist entry, and nothing checked that every publishable lib is
+  allowlisted. `scripts/release_test.py` now fails on a publishable lib missing from
+  the allowlist, or on overlay `--cov` flags that drift from the mirrored libs and
+  apps. The private-libs row below now names every `UNPUBLISHED_PACKAGES`
+  member that stays private, and the private-apps rows name every app outside
+  `apps/minds`.
 
 ## Decision summary
 
@@ -72,7 +83,7 @@ Ground facts this plan is built on (verified 2026-07-20):
 5. Filtering is **allowlist-based**: the copybara config enumerates what leaves the private
    repo. Anything not listed never syncs, including new files added later.
 
-The resulting public repo is, in plain terms: `libs/*` (minus three internal libs),
+The resulting public repo is, in plain terms: `libs/*` (minus the internal libs),
 `apps/minds` (minus its deployment-testing subtrees), the handful of scripts that public
 code and docs depend on, the repo-root essentials, and a slim public CI — i.e. the
 open-source mngr product and the minds app with their full ongoing commit history, minus
@@ -132,7 +143,7 @@ default. Adding something to the public subset is a reviewed change to the confi
 | Path | Notes |
 |---|---|
 | `README.md`, `LICENSE`, `style_guide.md`, `conftest.py`, `.gitignore` | Repo root essentials. Root `conftest.py` imports only public libs (verified). |
-| `libs/*` except the private libs below | The product: all 37 published packages, their docs, tests, and per-project `changelog/` dirs. |
+| `libs/*` except the private libs below | The product: every publishable package (`libs/*` minus `UNPUBLISHED_PACKAGES`), their docs, tests, and per-project `changelog/` dirs. |
 | `libs/skitwright` | Unpublished on PyPI but required by `libs/mngr`'s own e2e tests. "Unpublished" is a PyPI concept, not a privacy concept — do not conflate the two lists. |
 | `apps/minds` (minus deployment subtrees) | The shipped desktop product (FCL-1.0-MIT fair-source). CTO call 2026-07-22: product apps are public. Its Sentry DSNs stay as-is (submission-only, ship in every .app regardless). |
 | `scripts/` public subset | `install.sh` (curled from `raw.githubusercontent.com/imbue-ai/mngr/main/scripts/install.sh` by the README — must stay at this exact path on public `main` forever), `post-source-setup.sh` (RUN by the Dockerfile shipped inside the imbue-mngr wheel), `make_tar_of_repo.sh` (runtime path of published `mngr_schedule`), `open_issue.py` (referenced by CLI error text), `mngr` + `check_mngr_shim.sh` (dev shim), `make_cli_docs.py`, `compile_style_guide.py`, `style_guide.py`, `make_agent_capabilities_doc.py`, `current_branch.sh`, and the changelog-gate modules `check_changelog_entries.py` + `changelog_projects.py` (+ their `_test.py` files; imported by root `test_meta_ratchets.py`). |
@@ -146,10 +157,11 @@ default. Adding something to the public subset is a reviewed change to the confi
 |---|---|
 | `apps/modal_litellm`, `apps/remote_service_connector`, `apps/observability` | Deployment/infra apps (LiteLLM proxy, cloud connectors, per-tier OpenObserve telemetry + Bugsink error-tracker instances) — CTO call 2026-07-22; observability added 2026-08-18 (its Vault schema, ingest-hostname layout, and fleet-credential machinery are operational knowledge, same category as the connector; the Bugsink instance tooling lives inside it for the same reason). |
 | `apps/slack_exporter` | Internal latchkey-authenticated tool; defaulted private pending explicit CTO word. |
+| `apps/share_relay`, `apps/oauth_redirector`, `apps/apt_mirror`, `apps/analytics`, `apps/minds_admin`, `apps/minds_evals` | Deployment/infra apps and internal tools: the self-hosted sharing relays, the per-tier OAuth callback redirector, the snapshot-pinned apt mirror, the DuckLake product-analytics app, the `minds-admin` operator CLI, and the harbor-based persona evals. |
 | `apps/minds` deployment subtrees | The runnable cloud suite `apps/minds/deployment_tests/`, `test_aws_workspace_release.py`, and `CLAUDE.md` — excluded from the otherwise-public minds tree. The env/config packages (`imbue/minds/envs`, `imbue/minds/config/envs`) and the `imbue/minds/deployment_tests` helper package stay public: the app conftest and core runtime code import them (verified by the buildability gate), and their contents are already public today. |
-| `libs/mngr_tmr`, `libs/mngr_mapreduce`, `libs/mngr_claude_subagent_proxy` | Internal CI machinery / experiments. `validate_package_graph` guarantees no published wheel depends on them. |
+| `libs/mngr_tmr`, `libs/mngr_mapreduce`, `libs/mngr_claude_subagent_proxy`, `libs/mngr_behaviors`, `libs/mngr_witness`, `libs/modal_app_kit` | Internal CI machinery, experiments, behavior-corpus tooling, and internal Modal-app conventions: every `UNPUBLISHED_PACKAGES` member except `skitwright`. `validate_package_graph` guarantees no published wheel depends on them. |
 | `scripts/` everything else | Release/ops/agent tooling (`release.py`, `verify_publish.py`, `modal_nuke.py`, cleanup crons, `claude_*.sh`, `qi/`, `josh/`, `lima_image/`, `authorized_github_users.toml`, ...). |
-| `.github/**` | All 12 workflows, composite actions, `tmr-authorized-keys`. The mirror gets a fresh slim CI via the overlay (below), never a filtered `ci.yml`. |
+| `.github/**` | All workflows, composite actions, `tmr-authorized-keys`. The mirror gets a fresh slim CI via the overlay (below), never a filtered `ci.yml`. |
 | `offload-*.toml`, `offload-history-modal.jsonl`, `.test_durations` | Modal offload configs and CI timing artifacts. |
 | `litellm_proxy/`, `.minds/`, `depot.json`, `.mngr/settings.toml`, `test_profiles.toml` | Infra config, Vault ACL policy source, team agent templates. |
 | `specs/`, `blueprint/`, `dev/` | Internal design docs and plan-session state. One pre-cutover chore: move `specs/agent-plugin-parity/capability-mixins.md` into `libs/mngr` (the only spec referenced by a public doc, `libs/mngr/docs/concepts/agent_capabilities.md:10`). |
@@ -164,8 +176,8 @@ pool-host, `release`, `deploy`, and `changelog-deploy` recipes move to `private.
 repos then share a byte-identical `justfile` and the filter simply excludes `private.just`
 — no fragile text transforms.
 
-**Sentry:** all six hardcoded DSNs live only in `apps/minds`, which goes private; the
-shared sentry code in `libs/imbue_common` and `libs/mngr_latchkey` is fully
+**Sentry:** all six hardcoded DSNs live only in `apps/minds`, which is public with its DSNs
+as-is (see its row above); the shared sentry code in `libs/imbue_common` and `libs/mngr_latchkey` is fully
 parameterized/env-driven and public-safe. No DSN rotation is needed (DSNs are
 submission-only by design, ship inside every installed .app regardless, and have been
 public for the repo's whole life). One cheap chore: scrub the two `generally-intelligent`
@@ -175,8 +187,9 @@ ships in a public wheel).
 ### Public-only files: the overlay directory
 
 Some files must exist on the mirror but differ from the private tree: a pruned root
-`pyproject.toml` (no `apps/*` testpaths/coverage/import-linter roots), a re-locked
-`uv.lock`, a reduced `.pre-commit-config.yaml`, and the mirror's own slim CI workflow.
+`pyproject.toml` (no coverage flags, import-linter roots or contracts, or other settings
+for the private libs and apps), a re-locked
+`uv.lock`, and the mirror's own slim CI workflow.
 Copybara cannot generate files, and nothing may be hand-pushed to public `main`.
 
 The established resolution (Google exports TensorFlow's public `.github/workflows` from
@@ -187,18 +200,21 @@ root with `core.move("mirror/overlay", "", overwrite=True)`. Humans edit them vi
 normal private PRs; the bot is still the only writer to public `main`; `destination_files`
 stays `glob(["**"])` so copybara owns the whole public tree.
 
-The overlay's `.github/workflows/` set is: the slim public CI, the copybara `pr`-import
-workflow, and `copy.bara.sky` itself — the reverse import runs on the mirror via
-`pull_request_target`, which is safe with secrets present as long as the workflow treats
-PR content strictly as data and never checks out or executes it (that property is a review
-requirement on the workflow, and imports are additionally gated on maintainer approval).
+The overlay's `.github/workflows/` set is the slim public CI. A copybara `pr`-import
+workflow would join it, with `copy.bara.sky` itself, only if the reverse import is built:
+it would run on the mirror via `pull_request_target`, which is safe with secrets present
+as long as the workflow treats PR content strictly as data and never checks out or
+executes it (that property is a review requirement on the workflow, and imports are
+additionally gated on maintainer approval).
 
-The one genuinely derived file is the public `uv.lock`: a private-repo CI job materializes
-the public tree (running the same copybara workflow into a `folder.destination`), runs
-`uv lock`, and auto-commits the refreshed lock to the overlay when it drifts. The same job
-is the **public-buildability gate**: `uv sync --locked`, import-linter, and
-`pytest --collect-only` must pass in the materialized public tree before private `main`
-changes are considered green. This is the ChromeOS invariant ("public code may never
+The one genuinely derived file is the public `uv.lock`, regenerated by
+`mirror/materialize_public_tree.sh --lock`: it materializes the public tree (running the
+same copybara config's `materialize` workflow into a `folder.destination`) and runs
+`uv lock`. The private-repo `mirror-gate.yml` job does this on every PR and push to `main`
+and fails when the committed overlay lock is stale; `scripts/release.py` refreshes the lock
+inside each release commit. The same job is the **public-buildability gate**:
+`uv sync --locked` and `pytest --collect-only` must pass in the materialized public tree
+before private `main` changes are considered green. This is the ChromeOS invariant ("public code may never
 reference private paths") enforced continuously, and it is what keeps the mirror from
 breaking silently.
 
@@ -248,7 +264,7 @@ Bootstrap: the first `push` run uses `--last-rev <fork-point-sha> --force` (the 
 repo has no `GitOrigin-RevId` labels yet). Never use `--init-history` against the existing
 public repo — it replays the entire history into the destination.
 
-Auth: a dedicated GitHub App ("mngr-sync"); its installation token is the only ruleset
+Auth: a dedicated GitHub App (`imbue-codesync`); its installation token is the only ruleset
 bypass on public `main`. No PATs on human accounts; humans (including admins) stay out of
 the bypass list.
 
@@ -376,8 +392,8 @@ protection enabled (free on public repos) as defense-in-depth on the bot's pushe
 
 - **Allowlist filtering** — new paths are private until explicitly added to the config.
 - **Filter unit test** in the private repo (exact expected file set for a synthetic tree).
-- **Public-buildability gate** in private CI (materialized public tree must lock, sync,
-  import-lint, and collect tests).
+- **Public-buildability gate** in private CI (materialized public tree must sync and
+  collect tests, and the committed overlay lock must be fresh).
 - **`check_last_rev_state = True`** + bot-only ruleset — public drift fails the sync
   loudly and nobody can push around the bot.
 - **Secret scanning + push protection** on the mirror (free); optionally GitHub Secret

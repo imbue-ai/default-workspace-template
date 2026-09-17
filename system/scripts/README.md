@@ -19,7 +19,11 @@ Provisioning and utility scripts:
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
-  replacement for `mngr message <agent>`), `require_create_account.py` (the
+  replacement for `mngr message <agent>`), `seed_welcome_chat.py` (open the
+  workspace's first chat on the conversation the Mind app had before the
+  workspace existed; run through `mngr exec` by the Mind app),
+  `welcome_count.py` (the number of times the welcome skill has run, which
+  varies its greeting), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration),
   `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent

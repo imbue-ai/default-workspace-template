@@ -25,10 +25,11 @@ implementation detail of the slice backend; other suppliers may be added later.)
 ## Step 1: Create the database schema
 
 **For dev envs:** skip this step. `minds-admin env deploy` (against a dev
-env) provisions a brand-new Neon project per env and applies the
+env) provisions a brand-new Neon project per env, applies the
 schema automatically by replaying
 `apps/remote_service_connector/migrations/*.sql` against the new
-`host_pool` database.
+`host_pool` database, and copies the dev tier's registered boxes into it
+(see "Box registry" below).
 
 **For staging / production:** apply the schema once, by hand, against
 the tier's pre-provisioned `host_pool` database. Use the **direct**
@@ -49,6 +50,48 @@ The `attributes` JSONB column carries whatever shape the operator wants
 to match leases against (`repo_branch_or_tag`, `cpus`, `memory_gb`,
 `gpu_count`, etc.); the connector's `/hosts/lease` endpoint matches
 `attributes @> request_attributes`.
+
+## Box registry: where a tier's bare-metal rows live
+
+A box is physical and belongs to exactly one tier, and every tier has one
+database whose `bare_metal_servers` rows are the fleet -- its **box
+registry**, the pool database at the tier's
+`secrets/minds/<tier>/neon/DATABASE_URL` Vault leaf:
+
+- **staging / production**: the tier's single pool database (the connector's
+  own), so the registry and the fleet database are the same thing.
+- **dev / ci**: a standing "infra" Neon project (`minds-dev-infra`,
+  `minds-ci-infra`; `host_pool` DB with every connector migration applied)
+  that no connector runs against. Dynamic envs each have their own pool
+  database, and `minds-admin env deploy` copies the registry's `ready`
+  rows into it (id-preserving, idempotent) right after migrating, so a fresh
+  env can lease slices on the tier's boxes from its first deploy. The CI
+  release flow re-runs that copy (`minds-admin server import-boxes`) before
+  each bake, after sweeping stale slices.
+
+Operate on a dev or ci box (order, setup, prep, list, audit, repave) from an
+activation-only scaffolding env with the registry DSN exported -- the same
+shape the standing CI boxes use (specs/remote-workspaces-in-ci.md):
+
+```bash
+eval "$(uv run minds-admin env activate --create dev-infra)"
+eval "$(just registry-dsn dev)"   # exports MINDS_HOST_POOL_DSN from the registry leaf
+just server-list                  # or server-audit / server-setup <id> / server-prep <id>
+```
+
+`just registry-dsn <tier>` reads `secrets/minds/<tier>/neon/DATABASE_URL`
+through the `minds-admin` Vault defaults, so it needs only a `vault login`;
+the raw equivalent is `export MINDS_HOST_POOL_DSN=$(vault kv get -field=value
+-mount=secrets minds/dev/neon/DATABASE_URL)` with `VAULT_ADDR` /
+`VAULT_NAMESPACE` exported.
+
+The `dev-infra` / `ci-infra` env roots hold no Modal env, no deploy, and no
+`client.toml`; they exist so the box commands know the tier (whose SSH CA
+signs the operator certificate). Never register a box in a personal dev
+env's database: rows there are invisible to every other env and vanish with
+`env destroy`. The tier-addressed `minds-admin wireguard` commands read the
+registry directly (`--tier dev`) and need neither the activation nor the
+export.
 
 ## Step 2: Bring up the tier's SSH certificate authority
 
@@ -152,7 +195,11 @@ Pool hosts are baked as bare-metal slices. A slice bake carves a lima VM on a
 First order + set up the bare-metal box(es) the slices will be carved on (the
 box must be `ready` and have a free slot). All of these are env-aware: with the
 tier activated they resolve the OVH credentials, pool DSN, and pool SSH key
-from Vault / the env's local state, so nothing is hand-exported:
+from Vault / the env's local state, so nothing is hand-exported. On the dev
+and ci tiers, run every box command from the tier's registry activation
+(`dev-infra` / `ci-infra` with `MINDS_HOST_POOL_DSN` exported, see "Box
+registry" above) rather than from a personal env, so the box lands in the
+registry every env imports from:
 
 ```bash
 just order-server --dry-run --plan-code ... --region ...  # price/spec preview, no charge

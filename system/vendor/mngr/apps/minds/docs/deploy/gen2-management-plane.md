@@ -60,9 +60,20 @@ Gen-1 boxes keep authorizing the tier's static pool key until the cutover retire
 
 Ordering matters: 3 before 4 (the connector must already egress from the allowlisted IPs when the first lockdown lands), and your operator entry must be committed before the prep that locks you out of the public address.
 
-## Peer changes
+## Peer changes (adding an operator)
 
-Edit the committed operator list, then run `minds-admin wireguard sync-peers`. It re-renders each prepped gen-2 box's `wg0.conf` from the committed list and restarts the interface only where the config actually changed (an unchanged box never bounces live sessions). It resolves each box's dial automatically (the userspace tunnel, else a reachable overlay route, else the public address — see Operator transport above), so a post-lockdown sync just works. The box you are adding *yourself* to is the exception: your tunnel cannot reach it until its peers include you and its locked public `:22` drops you, so another allowed path (an existing operator, or the bounce host under Break-glass) must run that sync.
+Adding a developer to a tier's overlay is one committed edit plus one command run by someone already on the overlay:
+
+1. The developer generates their key (`mkdir -p -m 700 ~/.mindsadmin/<tier> && wg genkey | tee ~/.mindsadmin/<tier>/wireguard.key | wg pubkey`) and opens a PR adding a `[[management_plane.wireguard.operators]]` block (public key + a free address in the tier's operator `/24`) to `envs/<tier>/deploy.toml`.
+2. Once merged, an existing operator runs:
+
+   ```bash
+   uv run minds-admin wireguard sync-peers --tier dev
+   ```
+
+The wireguard commands address a **tier**, not an env: `--tier` picks the committed operator list, the tier's SSH CA, and the tier's box registry (the pool database at the tier's `secrets/minds/<tier>/neon/DATABASE_URL` Vault leaf -- the shared tiers' single pool DB, the dev and ci tiers' standing "infra" registry, see the "Box registry" section of [host-pool-setup.md](./host-pool-setup.md)). No env activation is needed; without `--tier`, the activated env's tier is used. Because the registry holds every box in the tier, one run puts the new key on every gen-2 box at once; a box prepped later reads the same committed list, so it needs no sync.
+
+`sync-peers` re-renders each prepped gen-2 box's `wg0.conf` from the committed list (all boxes in parallel; `--max-concurrency` bounds it) and restarts the interface only where the config actually changed (an unchanged box never bounces live sessions). It resolves each box's dial automatically (the userspace tunnel, else a reachable overlay route, else the public address — see Operator transport above), so a post-lockdown sync just works. The box you are adding *yourself* to is the exception: your tunnel cannot reach it until its peers include you and its locked public `:22` drops you, so another allowed path (an existing operator, or the bounce host under Break-glass) must run that sync. A restart can drop the syncing operator's own tunnel session mid-run and report that box as failed; re-running converges (the config is already in place, so the second pass restarts nothing).
 
 ## Rollback
 

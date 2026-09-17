@@ -23,6 +23,7 @@ from scripts.release import _pluralize_entry  # noqa: E402
 from scripts.release import _realign_dep_string  # noqa: E402
 from scripts.release import temp_ref_of_working_tree  # noqa: E402
 from scripts.release import update_exclude_newer  # noqa: E402
+from scripts.utils import PACKAGES  # noqa: E402
 from scripts.utils import REPO_ROOT  # noqa: E402
 from scripts.utils import iter_standalone_project_dirs  # noqa: E402
 
@@ -235,6 +236,52 @@ def test_standalone_projects_use_the_rolling_supply_chain_cooldown() -> None:
     )
 
 
+def _mirror_allowlist() -> set[str]:
+    """Return the path patterns in ``mirror/copy.bara.sky``'s ``PUBLIC_FILES`` include list."""
+    sky = (REPO_ROOT / "mirror" / "copy.bara.sky").read_text()
+    include_block = sky[sky.index("include = [") : sky.index("exclude = [")]
+    return set(re.findall(r'"([^"]+)"', include_block))
+
+
+def test_every_publishable_lib_is_in_the_mirror_allowlist() -> None:
+    """Every publishable lib must be in ``PUBLIC_FILES``.
+
+    The Mirror gate cannot catch a missing one: the materialized tree still builds without it.
+    """
+    mirrored = _mirror_allowlist()
+    missing = sorted(pkg.dir_name for pkg in PACKAGES if f"libs/{pkg.dir_name}/**" not in mirrored)
+    assert not missing, (
+        "Publishable libs missing from PUBLIC_FILES in mirror/copy.bara.sky (follow 'Adding a lib to "
+        "the public subset' in mirror/README.md, or add the package to UNPUBLISHED_PACKAGES if it "
+        "must stay private):\n" + "\n".join(f"  - libs/{name}/**" for name in missing)
+    )
+
+
+def _cov_flags(pyproject_path: Path) -> set[str]:
+    """Return the X in every ``--cov=X`` entry of a pyproject's pytest addopts."""
+    addopts = tomllib.loads(pyproject_path.read_text())["tool"]["pytest"]["ini_options"]["addopts"]
+    return {opt.removeprefix("--cov=") for opt in addopts if opt.startswith("--cov=")}
+
+
+def test_overlay_cov_flags_are_the_mirrored_root_cov_flags() -> None:
+    """The overlay pyproject must carry exactly the root ``--cov`` flags of the mirrored libs and apps.
+
+    Only the public repo's ``test_meta_ratchets.py`` would otherwise catch a missing flag, after the sync.
+    """
+    mirrored = _mirror_allowlist()
+    expected: set[str] = set()
+    for cov in _cov_flags(REPO_ROOT / "pyproject.toml"):
+        package_dir = cov.removeprefix("imbue.")
+        if f"libs/{package_dir}/**" in mirrored or f"apps/{package_dir}/**" in mirrored:
+            expected.add(cov)
+    actual = _cov_flags(REPO_ROOT / "mirror" / "overlay" / "pyproject.toml")
+    assert actual == expected, (
+        "mirror/overlay/pyproject.toml --cov flags do not match the root pyproject's flags for the mirrored "
+        "libs and apps (see 'Adding a lib to the public subset' in mirror/README.md).\n"
+        f"  missing: {sorted(expected - actual)}\n  extra: {sorted(actual - expected)}"
+    )
+
+
 def test_mirrored_python_files_only_import_mirrored_scripts_modules() -> None:
     """A file the public mirror carries must not import a ``scripts`` module it does not.
 
@@ -249,9 +296,7 @@ def test_mirrored_python_files_only_import_mirrored_scripts_modules() -> None:
     boundary wholesale, so an import of those cannot dangle; the ``scripts`` subset is
     hand-picked file by file, which is what makes it easy to fall out of.
     """
-    sky = (REPO_ROOT / "mirror" / "copy.bara.sky").read_text()
-    include_block = sky[sky.index("include = [") : sky.index("exclude = [")]
-    mirrored = set(re.findall(r'"([^"]+)"', include_block))
+    mirrored = _mirror_allowlist()
 
     dangling: list[str] = []
     for relative_path in sorted(mirrored):
