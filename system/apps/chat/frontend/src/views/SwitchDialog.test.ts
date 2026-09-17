@@ -211,6 +211,7 @@ describe("the switch dialog", () => {
     expect(getPendingPick("agent-1")).toEqual({
       identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
       label: "GPT-6 Astra · High",
+      option: ASTRA,
     });
     expect(state.switches).toEqual([]);
     render();
@@ -318,6 +319,7 @@ describe("the switch dialog", () => {
     expect(getPendingPick("agent-1")).toEqual({
       identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
       label: "GPT-6 Astra · High",
+      option: ASTRA,
     });
 
     // Reopened, the dialog starts from what is armed, so confirming it again does not drop the pick.

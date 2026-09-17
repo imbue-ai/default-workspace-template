@@ -67,6 +67,10 @@ export interface HandoffState {
   target_label: string;
   // The messages held for after the switch, the confirming one first.
   held_sends: HeldSend[];
+  // The model the chat runs on once the switch lands, applied on the far side of the restart or
+  // the create; null when none was picked. Read by a page that has no armed switch of its own to
+  // name it -- one reloaded mid-switch -- since the pushed live choice does not carry it yet.
+  model_pick: ModelIdentity | null;
   // Why the switch failed, in the failed phase; null otherwise.
   error: string | null;
   // Which step failed, in the failed phase: the agent's start, or the model picked for it.

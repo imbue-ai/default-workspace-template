@@ -48,6 +48,7 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
@@ -2974,7 +2975,9 @@ def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
     return create_application(state), log_path
 
 
-def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> tuple[str, str]:
+def _converging_claude_chat(
+    app: Flask, tmp_path: Path, phase: HandoffPhase, model_pick: ModelPick | None = None
+) -> tuple[str, str]:
     """A running claude chat of one agent whose record carries a handoff in ``phase``; returns the two agent ids."""
     first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
     state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
@@ -2987,11 +2990,30 @@ def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> 
         ChatRecord(
             chat_id=ChatId(first),
             agents=(make_chat_agent_entry(1, first, is_archived=False),),
-            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=phase),
+            handoff=make_chat_handoff_record(
+                retiring_seq=1, next_agent_id=successor, phase=phase, model_pick=model_pick
+            ),
         )
     )
     manager.refresh_chat_records()
     return first, successor
+
+
+def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) -> None:
+    # The model bar reads the pick off the chat while the switch runs: the pushed live choice is the
+    # agent the chat is leaving until the harness on the far side has taken the pick, so a page with
+    # no armed switch of its own to name it -- one reloaded mid-switch -- has only this.
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    pick = ModelPick(model_id="gpt-6-astra", effort="high", fast=False)
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING, model_pick=pick)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["model_pick"] == {"model_id": "gpt-6-astra", "effort": "high", "fast": False}
+
+    # A switch that picked no model leaves the bar on the live choice.
+    other, _ = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
