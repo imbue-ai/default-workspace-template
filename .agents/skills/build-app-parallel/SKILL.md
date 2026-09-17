@@ -28,11 +28,17 @@ are restated below.
 **You speak to the user only when an interactive node says to.** The plan names
 every conversation the build has, and those are the only messages you send: no
 acknowledgement when the request arrives, no note that planning has started, no
-progress while nodes run. While workers run you stay in your turn: read reports
-as their polls wake you, and launch whatever became ready. If the user writes to
-you meanwhile, answer only what they asked, in one line, and carry on. Three runs
-were lost to this: each turn that ended with a progress note drew another "any
-update?", which ate the conversation the build's own review needed.
+progress while nodes run. If the user writes to you meanwhile, answer only what
+they asked, in one line, and carry on.
+
+**One turn carries the whole build.** From the moment you start planning until
+an interactive node is due, you stay inside a single turn: you wait for each
+worker with a foreground `await` (Step 4), read its report, launch whatever
+became ready, and wait again. Ending the turn is how you hand the floor back to
+the user, so every end mid-build invites a "how's it going?" that you must then
+answer -- three runs were lost that way, with the conversation exhausted before
+the app was live. The only turn ends in a build are the ones an interactive node
+asks for, plus the final handoff.
 
 `scripts/plan_orchestration.py` does the bookkeeping with a single right answer:
 checking the plan, listing which nodes can start, and writing each worker's task.
@@ -108,8 +114,9 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-Run the planner as a background task (`run_in_background: true`); it takes a few
-minutes. Send the user nothing while it runs:
+Run the planner in the foreground, with the longest tool timeout you can give
+it; it takes a few minutes, and waiting it out inside your turn keeps the floor.
+Send the user nothing while it runs:
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" build-app-parallel
@@ -184,27 +191,42 @@ Repeat until every node is done.
        --task-file "$RUN/nodes/N/task.md"
    ```
 
-   Then arm its report poll as a background task:
-
-   ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py await \
-       --name "$APP-node-N" --task-file "$RUN/nodes/N/task.md" --timeout 60m
-   ```
-
-   Add N to `running` in `$RUN/progress.txt`. Arm one poll per worker you
-   launched: each completion wakes you separately, so you act on whichever
-   reports first while the others run. Never sleep on a worker or poll its state
-   -- see `lead-proxy.md`, "Never sleep on a worker".
-
-   End your turn once every ready node is launched and its poll is armed, and end
-   it **silently** unless an interactive node is due. A turn that ends with a
-   progress note asks the user for a reply the build does not need.
+   Add N to `running` in `$RUN/progress.txt`. `launch` returns as soon as the
+   worker is up, so launch every ready node before you wait for any of them --
+   that is what makes them run at once.
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
-4. **Handle each report as its poll finishes.** Follow
+4. **Wait for the running workers, in the foreground, one at a time.** Take them
+   in the order you launched them:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py await \
+       --name "$APP-node-N" --task-file "$RUN/nodes/N/task.md" --timeout 9m
+   ```
+
+   Run it as an ordinary foreground command with the longest tool timeout you
+   can give it, and keep your turn open. The wait is a poll on the worker's
+   report, not a sleep: the other workers keep building throughout, and a node
+   that finished while you were waiting on an earlier one returns immediately
+   when its turn comes.
+
+   `--timeout 9m` is short on purpose -- it fits inside one tool call. **Exit 124
+   means only that the 9 minutes elapsed**, so re-run the same command; a worker
+   that takes half an hour just takes several of these. Give up on a node only
+   when the worker itself is gone (`stuck`, below).
+
+   Do not put this wait in the background, and do not end your turn to wait it
+   out. Both hand the floor back to the user in the middle of a build. This is
+   the one place a build departs from `lead-proxy.md`, whose "Never sleep on a
+   worker" arms the poll in the background and ends the turn: that keeps a chat
+   answerable between short delegations, while a build is many workers deep and
+   an hour long, and each turn it ends costs it a conversation.
+
+5. **Handle each report as its `await` returns.** Follow
    `.agents/shared/references/lead-proxy.md` for reading the report, diagnosing
-   a timeout, and a worker stopped for memory (exit 75). The reports dir is
+   a timeout, and a worker stopped for memory (exit 75) -- everything but its
+   polling advice, which item 4 replaces. The reports dir is
    `$RUN/nodes/N/reports/`.
    - **`done`:** leave the report where it is -- later nodes' task files quote
      it. Move N from `running` to `done`. If a later interactive node reviews
@@ -212,7 +234,7 @@ Repeat until every node is done.
      changes. Otherwise destroy it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
      Destroying a worker leaves `$BUILD` intact.
-   - **The poll exits 76 (the worker went idle without reporting).** A worker
+   - **Exit 76 (the worker went idle without reporting).** A worker
      that has not started its turn yet looks idle, and the check gives up after
      about fifteen seconds of it, so this is usually a worker that was still
      getting going rather than a broken one. Look for a delivered report first
@@ -224,7 +246,7 @@ Repeat until every node is done.
          -m "Start your subtask now and report when it is done."
      ```
 
-     Re-arm the poll. Treat a second 76 on the same node as `stuck` below.
+     Then wait on it again. Treat a second 76 on the same node as `stuck` below.
    - **`stuck`:** stop the worker
      (`uv run .agents/skills/launch-task/scripts/create_worker.py stop --name "$APP-node-N"`),
      which keeps its work for inspection, stop launching new nodes, let running
@@ -233,7 +255,7 @@ Repeat until every node is done.
      what the node could not do, in plain terms, and ask how to proceed. Do not
      retry silently.
 
-5. **Commit when no worker is running:**
+6. **Commit when no worker is running:**
 
    ```bash
    git -C "$BUILD" add -A
@@ -283,8 +305,9 @@ For a review:
           --task-file "$RUN/nodes/K/task.md" -m "<the change>"
       ```
 
-      Then re-arm its poll. The `await` that printed the builder's last report
-      already archived it, so its next report lands cleanly.
+      Then wait on it again (Step 4, item 4). The `await` that printed the
+      builder's last report already archived it, so its next report lands
+      cleanly.
    2. When its new report lands, run
       `python3 system/scripts/layout.py refresh "$APP-preview"` and show the user
       the change visibly applied.
@@ -312,7 +335,7 @@ lock it in?"), and only an explicit confirmation ends it.
 After the working-site conversation is confirmed and every node is done:
 
 1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, then
-   commit the build folder (Step 4, item 5).
+   commit the build folder (Step 4, item 6).
 2. **Merge into main** from the main checkout:
    `git merge --no-ff "build-app-parallel/$APP"`. The plan keeps workers out of
    each other's files, so a conflict here means main changed during the build --
@@ -335,8 +358,8 @@ After the working-site conversation is confirmed and every node is done:
 ## When things go wrong
 
 - **The planner or plan fails twice:** Step 2.
-- **A worker reports `stuck`, or its poll times out and the worker is dead:**
-  Step 4, item 4.
+- **A worker reports `stuck`, or its worker is gone while you are waiting on it:**
+  Step 4, item 5.
 - **`$BUILD` disappears:** the mngr bug in Step 3.
 - **Two workers edited the same file** (a report says so, or the preview shows
   one piece overwriting another): stop launching, tell the user, and have the
