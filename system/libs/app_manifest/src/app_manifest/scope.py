@@ -222,7 +222,7 @@ def _supervisord_conf_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
     return (
         _SUPERVISORD_CONF,
         *(
-            RepoRelativePath(str(path.relative_to(repo_root)))
+            RepoRelativePath(path.relative_to(repo_root).as_posix())
             for path in dropins
         ),
     )

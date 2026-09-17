@@ -168,10 +168,10 @@ def _wait_for_next_completion(
 def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> list[str]:
     """The last `max_lines` lines of `events_path`, reading at most `max_bytes` from its end.
 
-    Never reads the whole file. Backup events embed the full stdout of the restic
-    command they report, so a single line runs to hundreds of kilobytes and the log
-    reaches gigabytes on an old workspace -- reading it whole is what got this command
-    killed by the OOM watchdog before it did anything at all.
+    Reads `max_bytes` at most, however large the file is. Backup events embed the full
+    stdout of the restic command they report, so a single line runs to hundreds of
+    kilobytes and the log reaches gigabytes on an old workspace -- reading it whole is
+    what got this command killed by the OOM watchdog before it did anything at all.
 
     The byte ceiling binds first on such a workspace, yielding fewer than `max_lines`
     events. That is the right trade for the one question asked of this: only a tick
