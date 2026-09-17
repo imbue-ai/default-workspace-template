@@ -252,9 +252,15 @@ def _installed_tool_location(
 # of targeting the installation on PATH).
 def default_sweep_homes() -> list[Path]:
     """The homes a live apply sweeps for a stale mngr install: the caller's
-    ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the image
-    build's."""
-    homes = [Path(PROVISIONER_HOME)]
+    ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the one the
+    build installs tools under.
+
+    The build's comes from ``tool_env``, the module that also names where a
+    last-resort install lands, so the home being swept and the installation
+    being kept cannot be pointed apart -- and a test that reaches here sweeps
+    whatever ``TOOL_ENV_HOME`` gave it rather than the real ``/root``.
+    """
+    homes = [tool_env.tool_home()]
     if os.environ.get("HOME"):
         homes.insert(0, Path(os.environ["HOME"]))
     return homes

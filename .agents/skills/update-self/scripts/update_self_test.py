@@ -4966,12 +4966,10 @@ def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
     monkeypatch.setenv("HOME", "/home/user")
     assert update_environment.default_sweep_homes() == [
         Path("/home/user"),
-        Path(update_layout.PROVISIONER_HOME),
+        tool_env.tool_home(),
     ]
     monkeypatch.delenv("HOME")
-    assert update_environment.default_sweep_homes() == [
-        Path(update_layout.PROVISIONER_HOME)
-    ]
+    assert update_environment.default_sweep_homes() == [tool_env.tool_home()]
 
 
 def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
