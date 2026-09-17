@@ -54,7 +54,7 @@ describe("UndeliveredSendAbsorber", () => {
     expect(prepended).toEqual([["chat-1", "the thing I typed"]]);
   });
 
-  it("takes only this page's own chat's sends, in order", () => {
+  it("takes only this page's own chat's sends, in the order they were sent", () => {
     const { absorber, prepended } = makeAbsorber();
 
     absorber.absorb([
@@ -62,11 +62,10 @@ describe("UndeliveredSendAbsorber", () => {
       snapshotHolding("chat-2", [held("m-3", "elsewhere")]),
     ]);
 
+    // One paste, not one per send: a prepend goes in above what the composer already holds, so
+    // pasting them one at a time would hand the user "second" above "first".
     // The other chat's send is left for the page that owns it.
-    expect(prepended).toEqual([
-      [OWN_CHAT, "first"],
-      [OWN_CHAT, "second"],
-    ]);
+    expect(prepended).toEqual([[OWN_CHAT, "first\n\nsecond"]]);
   });
 
   it("re-issues the take for a send it has already pasted", () => {
