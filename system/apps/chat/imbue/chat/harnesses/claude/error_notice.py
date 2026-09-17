@@ -64,8 +64,8 @@ class ErrorNotice(FrozenModel):
     from the composer and the classification cannot always tell them apart.
     """
 
-    # The credential is the problem. No longer what decides whether the recovery action is
-    # offered (it always is); it decides the wording the failure is described with.
+    # The credential is the problem. Renders as a failure even with no api-error stamp, and marks
+    # the turn as one a chat's pre-login run can hide once the user signs in successfully.
     is_auth_error: bool = False
     # The turn failed against the model API: renders as a failure rather than as prose.
     is_api_error: bool = False
