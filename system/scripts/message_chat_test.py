@@ -209,7 +209,7 @@ def test_a_not_ready_answer_that_outlasts_the_window_is_a_failure_not_a_backoff(
     assert _mngr_calls(fake_mngr) == []
 
 
-def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_code_through(
+def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_keeps_its_blocked_status(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A registry row pointing at a port nothing listens on: the connection fails outright.
@@ -220,13 +220,32 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
 
     rc, slept = _run("--system", "-m", "wake up")
 
-    assert rc == 7
+    assert rc == message_chat.EXIT_DELIVERED_BUT_BLOCKED
     assert slept == []
     [call] = _mngr_calls(fake_mngr)
     assert call["argv"][:4] == ["message", _CHAT_ID, "--start", "--message-file"]
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
     # The argv is hand-built, so the live CLI, not the fake, is what says it is well-formed.
     assert_mngr_argv_valid(["mngr", *call["argv"]])
+
+
+@pytest.mark.parametrize("mode", ["send", "create"])
+def test_a_backoff_mngr_that_timed_out_is_a_failure_not_this_scripts_absence(
+    fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """mngr exits 2 on a timeout, and 2 out of this script means it never ran or never
+    understood the request -- what the Minds app reads as "this template has no such script"
+    before running its own `mngr`. Pass mngr's 2 through and a timed-out backoff create is
+    answered with a second create of the same chat."""
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    monkeypatch.setenv("FAKE_MNGR_EXIT", "2")
+
+    rc, _ = _run("-m", "x") if mode == "send" else _run_create("-m", "x")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert len(_mngr_calls(fake_mngr)) == 1
 
 
 def test_a_backoff_with_no_mngr_on_path_is_a_failure_not_a_traceback(
@@ -540,8 +559,7 @@ def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
         "-m", "/assist", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS / 4
     )
 
-    # A failed backoff create passes mngr's exit status through, as the message backoff does.
-    assert rc == 3
+    assert rc == message_chat.EXIT_FAILED
     assert slept and all(
         interval == message_chat.UNKNOWN_RETRY_INTERVAL_SECONDS for interval in slept
     )

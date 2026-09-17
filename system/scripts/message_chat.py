@@ -431,12 +431,32 @@ def _run_mngr(
             os.unlink(message_path)
 
 
+def _script_exit_for_mngr_exit(returncode: int) -> int:
+    """A backoff ``mngr`` run's status in THIS script's vocabulary: 0 landed, 7 landed behind a
+    dialog, 1 for every other way it did not.
+
+    mngr has statuses this script's does not, and one of them collides: mngr exits 2 on a
+    timeout, while 2 from this script means it never ran or never understood the request
+    (python's on a missing file, argparse's on an argument an older copy lacks). A caller
+    reads that 2 as "this template has no such script" and runs its own ``mngr`` instead --
+    so passing mngr's own 2 through would answer a timed-out create with a second create.
+    mngr's account of the failure still reaches the caller on stderr either way.
+    """
+    if returncode in (EXIT_DELIVERED, EXIT_DELIVERED_BUT_BLOCKED):
+        return returncode
+    return EXIT_FAILED
+
+
 def send_through_mngr(chat_id: str, text: str) -> int:
-    """The backoff: ``mngr message --start`` straight to the agent, its exit status passed through."""
+    """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes."""
     completed = _run_mngr(
         ["mngr", "message", chat_id, "--start"], text, [], capture_stdout=False
     )
-    return EXIT_FAILED if completed is None else completed.returncode
+    return (
+        EXIT_FAILED
+        if completed is None
+        else _script_exit_for_mngr_exit(completed.returncode)
+    )
 
 
 def _created_agent_id(create_stdout: str) -> str:
@@ -472,7 +492,7 @@ def create_through_mngr(request: CreateRequest) -> int:
     if completed is None:
         return EXIT_FAILED
     if completed.returncode != 0:
-        return completed.returncode
+        return _script_exit_for_mngr_exit(completed.returncode)
     created = CreatedChat(
         chat_id=_created_agent_id(completed.stdout),
         name=request.name,
