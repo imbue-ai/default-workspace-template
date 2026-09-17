@@ -36,7 +36,7 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 const providerState: { accounts: unknown[] } = { accounts: [] };
-const chooserOpens: number[] = [];
+const chooserOpens: { unpickable?: { accountId: string; note: string; isFailing: boolean } }[] = [];
 const deleted: string[] = [];
 const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
@@ -45,7 +45,7 @@ vi.mock("../models/Providers", () => ({
   setDefaultAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
-  openProviderChooser: () => chooserOpens.push(1),
+  openProviderChooser: (intent: (typeof chooserOpens)[number] = {}) => chooserOpens.push(intent),
   deleteAccount: (id: string) => {
     deleted.push(id);
     return Promise.resolve();
@@ -302,7 +302,11 @@ describe("the card without a hand-cranked redraw", () => {
     add.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(chooserOpens).toEqual([1]);
+    // The chooser lists signed-in accounts to pick from, so the one this chat already runs on is
+    // refused there: picking it would be a switch to nowhere.
+    expect(chooserOpens).toEqual([
+      expect.objectContaining({ unpickable: { accountId: ACCOUNT.id, note: "Current", isFailing: false } }),
+    ]);
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
   });
