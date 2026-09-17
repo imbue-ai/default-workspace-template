@@ -1437,7 +1437,7 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 
 # --- mngr CLI argv contract ---
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
-# so a subcommand/flag rename arriving with an mngr pin bump fails here at merge time rather than
+# so a subcommand/flag rename in a new mngr fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
@@ -1575,7 +1575,7 @@ def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
 def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> None:
     """A chat is created under its true name with the typed name as a label.
 
-    Both are sent explicitly so the create works against any pinned mngr,
+    Both are sent explicitly so the create works against any mngr,
     including one predating free-form names -- and the pair is what newer mngr
     derives for itself, so its "true name is the canonical form of the display
     name" rule holds either way.
@@ -1589,7 +1589,7 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
 
 
 def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
-    """A handoff's create adds the chat membership labels after the account args, which the vendored mngr has
+    """A handoff's create adds the chat membership labels after the account args, which mngr has
     to accept.
 
     That the successor's create carries no message -- the prompt follows through the send path once the
@@ -1609,7 +1609,7 @@ def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
     """A rename carries the same name pair a create does: canonical name + typed label.
 
-    The canonical name is what an older pinned mngr accepts, and the typed
+    The canonical name is what an older mngr accepts, and the typed
     name rides the same atomic write as the rename so no observer sees the
     renamed agent without its ``display_name``.
     """

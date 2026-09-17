@@ -79,7 +79,7 @@ def test_skill_markdown_mngr_subcommands_exist() -> None:
     assert scanned > 0, "no skill markdown found -- check _SKILL_MD_ROOTS"
     assert not offenders, (
         "Skill markdown references mngr subcommands that the live CLI does not "
-        "have (and that are not known plugin commands). The pinned mngr CLI "
+        "have (and that are not known plugin commands). The mngr CLI "
         "likely renamed/removed them -- update the skill prose (or, for a new "
         "plugin command, add it to _KNOWN_PLUGIN_SUBCOMMANDS):\n  "
         + "\n  ".join(offenders)

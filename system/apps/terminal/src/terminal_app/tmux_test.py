@@ -29,12 +29,8 @@ def test_parse_tmux_sessions_reads_the_activity_timestamp_and_skips_short_lines(
             created_epoch=1756899000,
             last_activity=datetime.fromtimestamp(1756900000, timezone.utc),
         ),
-        TmuxSession(
-            name="mngr-agent", session_id="$1", created_epoch=None, last_activity=None
-        ),
-        TmuxSession(
-            name="old-format", session_id="$2", created_epoch=None, last_activity=None
-        ),
+        TmuxSession(name="mngr-agent", session_id="$1", created_epoch=None, last_activity=None),
+        TmuxSession(name="old-format", session_id="$2", created_epoch=None, last_activity=None),
     ]
 
 
@@ -69,7 +65,9 @@ def test_list_clients_asks_for_the_tty_name_and_id(fake_tmux: FakeTmux) -> None:
 def test_kill_session_targets_the_exact_name_and_tolerates_an_absent_session(
     fake_tmux: FakeTmux,
 ) -> None:
-    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$3")])
+    fake_tmux.set_sessions(
+        [make_tmux_session("terminal-1", "$3")]
+    )
     tmux = SubprocessTmux()
 
     tmux.kill_session(TmuxSessionName("terminal-1"))
@@ -80,7 +78,9 @@ def test_kill_session_targets_the_exact_name_and_tolerates_an_absent_session(
 
 
 def test_kill_session_raises_when_the_session_survives(fake_tmux: FakeTmux) -> None:
-    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$3")])
+    fake_tmux.set_sessions(
+        [make_tmux_session("terminal-1", "$3")]
+    )
     fake_tmux.refuse_kills()
 
     with pytest.raises(TmuxCommandError, match="could not kill session 'terminal-1'"):
@@ -98,19 +98,11 @@ def test_create_session_returns_the_new_sessions_id_and_creation_time_and_runs_t
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$3")])
 
     created = SubprocessTmux().create_session(
-        TmuxSessionName("terminal-2"),
-        Workdir("/srv"),
-        ["python3", "tag.py", "bash", "-l"],
+        TmuxSessionName("terminal-2"), Workdir("/srv"), ["python3", "tag.py", "bash", "-l"]
     )
 
-    assert (created.session_id, created.created_epoch) == (
-        "$4",
-        fake_created_epoch("$4"),
-    )
-    assert [session.name for session in fake_tmux.sessions()] == [
-        "terminal-1",
-        "terminal-2",
-    ]
+    assert (created.session_id, created.created_epoch) == ("$4", fake_created_epoch("$4"))
+    assert [session.name for session in fake_tmux.sessions()] == ["terminal-1", "terminal-2"]
     assert fake_tmux.calls()[-1] == [
         "new-session",
         "-d",
@@ -132,14 +124,10 @@ def test_create_session_refuses_a_name_tmux_already_has(fake_tmux: FakeTmux) -> 
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$3")])
 
     with pytest.raises(TmuxCommandError, match="duplicate session"):
-        SubprocessTmux().create_session(
-            TmuxSessionName("terminal-1"), Workdir("/srv"), ["bash"]
-        )
+        SubprocessTmux().create_session(TmuxSessionName("terminal-1"), Workdir("/srv"), ["bash"])
 
 
-def test_kill_session_targets_a_name_exactly_or_an_id_verbatim(
-    fake_tmux: FakeTmux,
-) -> None:
+def test_kill_session_targets_a_name_exactly_or_an_id_verbatim(fake_tmux: FakeTmux) -> None:
     fake_tmux.set_sessions(
         [
             make_tmux_session("terminal-1", "$3"),

@@ -32,7 +32,7 @@ def canonical_agent_name(name: str) -> str:
 
     The workspace app model's naming rule, shared with every app through the
     instances library. It mirrors mngr's own canonicalization rather than
-    importing it: a workspace's pinned mngr may predate free-form names, and
+    importing it: a workspace's mngr may predate free-form names, and
     passing it a name it would reject fails the create outright. Sending the
     canonical name (plus the typed one as a ``display_name`` label) is accepted
     by every mngr version. Returns "" when nothing usable remains (e.g. the

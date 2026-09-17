@@ -1,7 +1,7 @@
 """A worker's lead address survives a rename because it is the lead's agent id.
 
 `create_worker.py launch` stamps `lead_agent` with the lead's id, and `worker-reporting.md`
-has the worker read `mngr transcript $LEAD_AGENT`. This runs the real installed mngr to pin
+has the worker read `mngr transcript $LEAD_AGENT`. This runs the real mngr to pin
 the fact it rests on: an agent stays reachable by its id across a `mngr rename`, and is
 not reachable by its old name. It costs a `uv run mngr create`.
 """

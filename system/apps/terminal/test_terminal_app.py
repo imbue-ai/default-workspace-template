@@ -149,9 +149,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     fake_tmux.set_sessions(
         [
-            make_tmux_session(
-                "terminal-2", "$5", datetime(2026, 9, 3, tzinfo=timezone.utc)
-            ),
+            make_tmux_session("terminal-2", "$5", datetime(2026, 9, 3, tzinfo=timezone.utc)),
             make_tmux_session("mngr-alice", "$1"),
         ]
     )
@@ -231,14 +229,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             "terminal-1",
         ]
         create_call = fake_tmux.creates()[0]
-        assert create_call[:6] == [
-            "new-session",
-            "-d",
-            "-s",
-            "terminal-1",
-            "-c",
-            os.getcwd(),
-        ]
+        assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]
         assert create_call[-5:] == [
             "python3",
             str(Path("system/services/oom_priority/bin/oom_tag_service.py").absolute()),
@@ -246,9 +237,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             "bash",
             "-l",
         ]
-        assert (
-            app.paths.sessions_dir / "terminal-1"
-        ).read_text() == expected_session_id_file("$6")
+        assert (app.paths.sessions_dir / "terminal-1").read_text() == expected_session_id_file("$6")
         # A create naming no workdir starts the shell where the app runs: the cwd it was
         # spawned with, which is this test's.
         default_directory = urllib.parse.quote(os.getcwd(), safe="")
