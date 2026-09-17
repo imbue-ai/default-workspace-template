@@ -32,8 +32,8 @@ Run it with bare `python3`.
 ## Conventions
 
 Pick the app's kebab-case name `$APP` up front (the rules are in `build-app`'s
-pre-flight: DNS-safe, not starting with `host-` or `agent-`, not already in
-`system/supervisord.conf`). Workers may refine the display name, but `$APP`
+pre-flight: DNS-safe, not starting with `host-` or `agent-`, and not a name an
+app already registers). Workers may refine the display name, but `$APP`
 names everything below.
 
 | Thing | Value |
@@ -48,6 +48,11 @@ Keep `$RUN/progress.txt` current after every launch, report and conversation. It
 is how you resume if your context is compacted mid-build.
 
 ## Progress timeline
+
+Everything the user reads here -- stage titles, summaries, the questions at each
+review -- follows `.agents/shared/references/user-facing-language.md`. Plans,
+nodes, workers, folders, merges and commits are machinery the user never hears
+about.
 
 Show the user stages, not nodes. Create these steps up front, in order, and
 close each when its stage ends:
@@ -164,14 +169,17 @@ Repeat until every node is done.
        --task-file "$RUN/nodes/N/task.md"
    ```
 
-   Then start its report poll as a background task:
+   Then arm its report poll as a background task:
 
    ```bash
    uv run .agents/skills/launch-task/scripts/create_worker.py await \
        --name "$APP-node-N" --task-file "$RUN/nodes/N/task.md" --timeout 60m
    ```
 
-   Add N to `running` in `$RUN/progress.txt`.
+   Add N to `running` in `$RUN/progress.txt`. Arm one poll per worker you
+   launched, then **end your turn**: each completion wakes you separately, so you
+   act on whichever reports first while the others run. Never sleep on a worker
+   or poll its state -- see `lead-proxy.md`, "Never sleep on a worker".
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
@@ -185,10 +193,13 @@ Repeat until every node is done.
      changes. Otherwise destroy it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
      Destroying a worker leaves `$BUILD` intact.
-   - **`stuck`:** stop launching new nodes, let running workers finish, and
-     follow `.agents/skills/launch-task/references/worker-failure.md`: tell the
-     user what the node could not do, in plain terms, and ask how to proceed. Do
-     not retry silently.
+   - **`stuck`:** stop the worker
+     (`uv run .agents/skills/launch-task/scripts/create_worker.py stop --name "$APP-node-N"`),
+     which keeps its work for inspection, stop launching new nodes, let running
+     workers finish, and follow
+     `.agents/skills/launch-task/references/worker-failure.md`: tell the user
+     what the node could not do, in plain terms, and ask how to proceed. Do not
+     retry silently.
 
 5. **Commit when no worker is running:**
 
@@ -273,9 +284,8 @@ After the working-site conversation is confirmed and every node is done:
 2. **Merge into main** from the main checkout:
    `git merge --no-ff "build-app-parallel/$APP"`. The plan keeps workers out of
    each other's files, so a conflict here means main changed during the build --
-   usually another app added to `system/supervisord.conf` or the root
-   `pyproject.toml`. Keep both sides, and never hand-resolve by dropping either
-   app's entry.
+   usually another app added to the root `pyproject.toml`. Keep both sides, and
+   never hand-resolve by dropping either app's entry.
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
