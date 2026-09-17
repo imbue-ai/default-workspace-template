@@ -25,6 +25,15 @@ here. The planner and the workers read it; do not follow its steps yourself. Its
 Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`) are yours, and
 are restated below.
 
+**You speak to the user only when an interactive node says to.** The plan names
+every conversation the build has; a message you send outside one is you departing
+from the plan. While worker nodes run you stay in your turn: read reports as their
+polls wake you, launch whatever became ready, and say nothing. If the user writes
+to you meanwhile, answer only what they asked -- in one line -- and carry on; do
+not volunteer progress. Three runs were lost to this: each turn that ended with
+nothing openable drew another "any update?", which ate the conversation the
+build's own review needed.
+
 `scripts/plan_orchestration.py` does the bookkeeping with a single right answer:
 checking the plan, listing which nodes can start, and writing each worker's task.
 Run it with bare `python3`.
@@ -99,7 +108,7 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-Tell the user in one line that you are planning the build, then run the planner
+Tell the user in one line that you are building, then run the planner
 as a background task (`run_in_background: true`); it takes a few minutes:
 
 ```bash
@@ -183,9 +192,13 @@ Repeat until every node is done.
    ```
 
    Add N to `running` in `$RUN/progress.txt`. Arm one poll per worker you
-   launched, then **end your turn**: each completion wakes you separately, so you
-   act on whichever reports first while the others run. Never sleep on a worker
-   or poll its state -- see `lead-proxy.md`, "Never sleep on a worker".
+   launched: each completion wakes you separately, so you act on whichever
+   reports first while the others run. Never sleep on a worker or poll its state
+   -- see `lead-proxy.md`, "Never sleep on a worker".
+
+   End your turn once every ready node is launched and its poll is armed, and end
+   it **silently** unless an interactive node is due. A turn that ends with a
+   progress note asks the user for a reply the build does not need.
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
