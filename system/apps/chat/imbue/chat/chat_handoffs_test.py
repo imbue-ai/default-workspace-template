@@ -25,6 +25,7 @@ from imbue.chat.chat_handoffs import INLINE_SUMMARY_MAX_BYTES
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
+from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
@@ -1158,3 +1159,36 @@ def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> Non
 
     assert workspace.delivered == [] and workspace.argv_lines() == []
     assert workspace.record().handoff is not None
+
+
+def test_a_held_send_that_does_not_land_comes_back_with_a_reason_a_reader_can_use(tmp_path: Path) -> None:
+    """A send the agent did not take is returned with words, not with the outcome's name.
+
+    Its detail is what the composer shows the user beside the text it hands back, and its kind is
+    what the notice answers with, so an outcome that already names the situation must carry it.
+    """
+    agent_info = AgentInfo(
+        id="agent-1",
+        name="Chat-1",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "agents" / "agent-1",
+        claude_config_dir=tmp_path / "claude",
+    )
+    held = HeldSend(
+        message_id="m-1",
+        text="the thing I typed",
+        origin=HeldSendOrigin.CLIENT,
+        received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+    )
+
+    landed = deliver_held_send(lambda *_: SendOutcome.OK, agent_info, held, ChatId("agent-1"))
+    starting_up = deliver_held_send(lambda *_: SendOutcome.NOT_READY, agent_info, held, ChatId("agent-1"))
+    failed = deliver_held_send(lambda *_: SendOutcome.FAILED, agent_info, held, ChatId("agent-1"))
+
+    assert landed is None
+    assert starting_up is not None and starting_up.send == held
+    assert (starting_up.detail, starting_up.kind) == (
+        "The agent was still starting up and could not take it.",
+        "not_ready",
+    )
+    assert failed is not None and (failed.detail, failed.kind) == ("The agent could not take it.", "unknown")
