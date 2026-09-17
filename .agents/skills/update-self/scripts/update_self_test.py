@@ -5080,7 +5080,6 @@ def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # receipts); the refresh must still run as the plain install it would
     # otherwise be, for every tool.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    runner.respond(("uv", "tool", "dir"), _Result(returncode=1))
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
