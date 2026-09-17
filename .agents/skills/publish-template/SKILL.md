@@ -354,7 +354,7 @@ then `git branch -D "mngr/<slug>"` once no worktree holds it).
 Per `launch-task`, the whole delegation is ONE step in your timeline:
 
 ```bash
-tk create --step "Delegate assembling the shareable template snapshot to a sub-agent"
+tk create --step "Assemble the shareable template snapshot (in the background)"
 # -> Created cod-step-XXXX: ...
 tk start cod-step-XXXX
 ```

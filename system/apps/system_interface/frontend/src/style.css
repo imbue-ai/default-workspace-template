@@ -547,6 +547,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: 1.5px solid currentColor;
 }
 
+/* Unavailable -- a dashed grey ring: the app does not list the instance right now. */
+.dv-tab-process-dot[data-status="unavailable"] {
+  background: transparent;
+  border: 1.5px dashed currentColor;
+}
+
 /* The inline rename editor, swapped in for the title on a double-click. It
    takes the title's own box so the tab neither grows nor jumps as it opens,
    and inherits the tab's type so the name reads the same while it is being

@@ -14,11 +14,9 @@ import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
 import { runHook } from "./hooks";
-import { getFastModePromptChatId } from "./models/FastModePrompt";
 import { trackBackendArrivals } from "./models/OutgoingMessages";
 import { isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
-import { FastModeModal } from "./views/FastModeModal";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, isFrameRendered } from "./shell";
@@ -45,7 +43,6 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
         // The provider chooser: the page of a chat awaiting an account offers it, and the model
         // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
-        getFastModePromptChatId() !== null ? m(FastModeModal) : null,
       ]);
     },
   };

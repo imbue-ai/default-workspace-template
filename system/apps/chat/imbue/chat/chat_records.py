@@ -41,7 +41,7 @@ logger = _loguru_logger
 
 # Bumped when the on-disk shape changes. A record whose version is newer than this refuses to
 # load, so an older build never reads a newer record wrong.
-RECORD_VERSION: Final[int] = 1
+RECORD_VERSION: Final[int] = 2
 
 DEFAULT_CHAT_RECORDS_ROOT: Final[Path] = Path("data/.apps/chat/chats")
 
@@ -240,14 +240,28 @@ class ChatRebindRecord(ChatTransitionRecord):
         return self.rebind_id
 
 
+def is_seed_entry(entry: ChatAgentEntry) -> bool:
+    """Whether a member is the seed segment's pseudo-agent rather than an agent mngr knows (``chat_seed.py``)."""
+    return entry.harness is HarnessType.SEED
+
+
 class ChatRecord(FrozenModel):
-    """A multi-agent chat: its agents in order, and its handoff or rebind state."""
+    """A multi-agent chat: its agents in order, and its handoff or rebind state.
+
+    A chat the Mind app seeded (``chat_seed.py``) has the seed as its first member, under the
+    chat's own id and already ended, so the record is well-formed before any real agent exists
+    and the seed reads as the first segment once one does.
+    """
 
     version: int = Field(default=RECORD_VERSION, description="The on-disk shape this record was written with")
     chat_id: ChatId = Field(description="The chat's id: its first agent's id")
     agents: tuple[ChatAgentEntry, ...] = Field(min_length=1, description="The chat's agents, in order")
     handoff: ChatHandoffRecord | None = Field(default=None, description="The in-progress handoff, or None")
     rebind: ChatRebindRecord | None = Field(default=None, description="The in-progress rebind, or None")
+    seed_title: str | None = Field(
+        default=None,
+        description="The display name a seeded chat was minted with, shown until its first agent carries one; None otherwise",
+    )
 
     @model_validator(mode="after")
     def _check_agents_are_the_chats_in_order(self) -> Self:
@@ -274,6 +288,11 @@ class ChatRecord(FrozenModel):
                 )
         if len(set(self.member_agent_ids)) != len(self.agents):
             raise InvalidChatRecordError(f"chat {self.chat_id} names an agent twice")
+        for index, entry in enumerate(self.agents):
+            if is_seed_entry(entry) and (index != 0 or entry.ended_at is None):
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: the seed segment can only be the chat's first, already ended, member"
+                )
         for entry in self.agents[:-1]:
             if entry.ended_at is None:
                 raise InvalidChatRecordError(
@@ -300,6 +319,20 @@ class ChatRecord(FrozenModel):
     @property
     def member_agent_ids(self) -> tuple[str, ...]:
         return tuple(entry.agent_id for entry in self.agents)
+
+    @property
+    def mngr_agent_ids(self) -> tuple[str, ...]:
+        """The members mngr knows: every agent but a seed segment's pseudo-agent."""
+        return tuple(entry.agent_id for entry in self.agents if not is_seed_entry(entry))
+
+    @property
+    def is_seeded(self) -> bool:
+        return is_seed_entry(self.agents[0])
+
+    @property
+    def is_seed_only(self) -> bool:
+        """Whether the chat has its seed segment and no agent yet: it waits for the user's first message."""
+        return self.is_seeded and len(self.agents) == 1
 
     @property
     def active_entry(self) -> ChatAgentEntry | None:

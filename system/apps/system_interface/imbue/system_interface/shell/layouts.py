@@ -3,7 +3,7 @@
 The client's layout file is the truth of the arrangement. A browser writes it through
 ``save_browser_layout`` for the user's own gestures (and that write alone rewrites the seed of
 its device kind); the shell writes it through ``write_client_layout`` for agent ops and its own
-bookkeeping, and edits the seed files directly when it prunes an address or rebinds a tab.
+bookkeeping, and edits the seed files directly when it drops a deleted address or rebinds a tab.
 """
 
 from collections.abc import Callable
@@ -223,7 +223,7 @@ class LayoutStore(MutableModel):
         return empty_layout(device_kind)
 
     def write_client_layout(self, view_id: str, client_id: str, layout: LayoutRecord, now: datetime) -> LayoutRecord:
-        """Write the client's arrangement (the shell's own writes: an op, a rebind, a prune). The seed is untouched."""
+        """Write the client's arrangement (the shell's own writes: an op, a rebind, a delete). The seed is untouched."""
         stamped = layout.model_copy_update(to_update(layout.field_ref().updated_at, now.astimezone(timezone.utc)))
         with STATE_FILES_LOCK:
             write_json_atomic(self._client_path(view_id, client_id), layout_wire_json(stamped))
@@ -360,7 +360,11 @@ class LayoutStore(MutableModel):
         return self._rewrite_layouts_everywhere(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
 
     def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:
-        """Strip the panels showing addresses no app lists any more from every client layout and every seed."""
+        """Strip the panels showing deleted addresses from every client layout and every seed.
+
+        Only a delete relayed through the shell reaches here: a panel whose address its app
+        merely stopped listing stays, and its window shows the instance as unavailable.
+        """
         return self._rewrite_layouts_everywhere(lambda layout: strip_addresses_from_layout(layout, addresses), now)
 
     def delete_client_layouts(self, client_id: ClientId) -> int:

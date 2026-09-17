@@ -1,6 +1,7 @@
 """Tests for the inventory: the registry read, liveness, the fetched lists, nudging, and the diffed broadcast."""
 
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 from app_instances.data_types import InstanceLifetime
@@ -13,7 +14,6 @@ from watchdog.events import DirModifiedEvent
 from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 
-from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
@@ -58,7 +58,7 @@ def test_the_registry_read_synthesizes_single_instance_records(
     assert [message["type"] for message in drain_messages(client_queue)] == ["apps_updated"]
 
 
-def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
+def test_a_fetched_list_replaces_the_apps_instances(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
@@ -66,8 +66,6 @@ def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
         TEST_TERMINAL_URL, instance_record("terminal-1", "Terminal 1"), instance_record("terminal-2", "Terminal 2")
     )
     inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
-    removed: list[list[Address]] = []
-    inventory.add_removed_listener(removed.append)
 
     inventory.refetch_now("terminal")
     assert inventory.listed_addresses() == {
@@ -75,11 +73,10 @@ def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
         Address("app:terminal?instance=terminal-2"),
         Address("app:files"),
     }
-    assert removed == []
 
     fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-2", "Terminal 2"))
     inventory.refetch_now("terminal")
-    assert removed == [[Address("app:terminal?instance=terminal-1")]]
+    assert inventory.listed_addresses() == {Address("app:terminal?instance=terminal-2"), Address("app:files")}
     # A single-instance app is never fetched.
     inventory.refetch_now("files")
     assert fetcher.fetched_urls == [TEST_TERMINAL_URL, TEST_TERMINAL_URL]
@@ -332,22 +329,25 @@ def test_refetch_all_fetches_every_running_app_with_instances(
     assert fetcher.fetched_urls == [TEST_TERMINAL_URL]
 
 
-def _raise_state_error(addresses: list[Address]) -> None:
-    raise ShellStateError(f"cannot write the tab sets after {addresses} left")
-
-
 def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
     fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
-    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
-    inventory.refetch_now("terminal")
-    inventory.add_removed_listener(_raise_state_error)
+    is_probe_failing = [False]
 
-    # The app dropped an instance, so folding the next list fires the listener, which raises.
+    def prober(targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
+        if is_probe_failing[0]:
+            raise OSError("the supervisor socket is gone")
+        return {name: True for name, _program, _url in targets}
+
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
+    inventory.refetch_now("terminal")
+
     fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-2"))
+    is_probe_failing[0] = True
     inventory.sweep_once(is_reconciling=True)
+    is_probe_failing[0] = False
     inventory.sweep_once(is_reconciling=True)
-    assert fetcher.fetched_urls == [TEST_TERMINAL_URL] * 3
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL] * 2
     assert inventory.listed_addresses() == {Address("app:terminal?instance=terminal-2"), Address("app:files")}
 
 
@@ -384,8 +384,6 @@ def test_the_folds_of_one_app_land_in_fetch_order(tmp_path: Path, broadcaster: W
     )
     fetcher = _GatedFetcher(outcomes=[stale, fresh])
     inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
-    removed: list[list[Address]] = []
-    inventory.add_removed_listener(removed.append)
 
     # The sweep's fetch is in flight (blocked on the gate) when a create's refetch arrives.
     sweep = threading.Thread(target=inventory.refetch_now, args=("terminal",))
@@ -404,4 +402,3 @@ def test_the_folds_of_one_app_land_in_fetch_order(tmp_path: Path, broadcaster: W
         Address("app:terminal?instance=terminal-2"),
         Address("app:files"),
     }
-    assert removed == []
