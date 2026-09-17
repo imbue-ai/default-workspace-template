@@ -366,17 +366,13 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
 
 
 @pure
-def is_accounted_for_by_scope(
-    candidate: RepoRelativePath, scope: CreationScope, exclude_spec: pathspec.PathSpec
-) -> bool:
-    """Whether a changed file sits inside the footprint or is excluded outright.
+def is_accounted_for_by_scope(candidate: RepoRelativePath, scope: CreationScope) -> bool:
+    """Whether a changed file sits inside the footprint.
 
     Of each context directory only its manifest counts as inside: a skill's one sanctioned
     edit outside its own directory is the ``[[references]]`` entry it adds to the owning
     app's ``app.toml``; a change to the app's code stays outside the skill's footprint.
     """
-    if exclude_spec.match_file(candidate):
-        return True
     if any(wiring.path == candidate for wiring in scope.wiring):
         return True
     if any(candidate == f"{context.rstrip('/')}/{MANIFEST_FILENAME}" for context in scope.context):
@@ -441,7 +437,7 @@ def with_diff_against_base(
     for changed_file in changed_files:
         if exclude_spec.match_file(changed_file):
             continue
-        if is_accounted_for_by_scope(changed_file, scope, exclude_spec):
+        if is_accounted_for_by_scope(changed_file, scope):
             inside_footprint.append(changed_file)
         else:
             outside_footprint.append(changed_file)
