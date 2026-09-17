@@ -114,12 +114,25 @@ def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
         return _probe_bound_codex(account_dir)
 
 
+def _remove_socket(socket_path: Path) -> None:
+    """Drop the account's socket path, warning rather than raising when it will not go.
+
+    Best effort at both ends of a probe: a socket a killed probe left behind is otherwise taken for
+    a live daemon, and one this probe bound would otherwise outlive it. Neither is worth failing the
+    caller over, and raising here would escape the translation below -- an ``OSError`` from the
+    removal is not an answer about the account's models, and the picker's sidecar fallback (which
+    only catches :class:`AccountModelProbeError`) would be skipped for it.
+    """
+    try:
+        socket_path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("Could not remove the codex account probe socket {}: {}", socket_path, e)
+
+
 def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
     """Launch a codex bound to ``account_dir``, ask it for its models, and tear it down."""
     socket_path = get_codex_app_server_socket_path(account_dir)
-    # A socket left behind by a probe that was killed would otherwise be taken for a live daemon,
-    # and every later probe of this account would connect to nothing.
-    socket_path.unlink(missing_ok=True)
+    _remove_socket(socket_path)
     command = ["codex", "app-server", "--listen", f"unix://{socket_path}"]
     deadline = time.monotonic() + _SOCKET_WAIT_SECONDS
     try:
@@ -149,4 +162,4 @@ def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
     except (CodexAppServerError, ConcurrencyExceptionGroup, ConcurrencyGroupError, OSError) as e:
         raise AccountModelProbeError(f"could not read the models of the codex account at {account_dir}: {e}") from e
     finally:
-        socket_path.unlink(missing_ok=True)
+        _remove_socket(socket_path)
