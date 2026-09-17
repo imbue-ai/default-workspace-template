@@ -19,6 +19,16 @@ import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantMessageChildren } from "./message-renderers";
 import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
+import {
+  TIMELINE_BODY_CLASS,
+  TIMELINE_BULLET_CLASS,
+  TIMELINE_CHEVRON_CLASS,
+  TIMELINE_NODE_CLASS,
+  timelineChevronStateClass,
+  timelineSpinnerBullet,
+  timelineTitleClass,
+  type TimelineTone,
+} from "./timeline-node";
 
 type HandoffNodeStatus = "active" | "done" | "failed" | "cancelled";
 
@@ -63,11 +73,7 @@ function statusIcon(status: HandoffNodeStatus): m.Children {
     case "done":
       return m.trust(statusDoneIcon());
     case "active":
-      return m(
-        "span",
-        { class: "pv-icon pv-icon--active inline-flex h-4 w-4 shrink-0 items-center justify-center text-accent" },
-        m("span.spinner.spinner--sm.spinner--current"),
-      );
+      return timelineSpinnerBullet();
     case "failed":
     case "cancelled":
       return m.trust(statusPendingIcon());
@@ -76,12 +82,13 @@ function statusIcon(status: HandoffNodeStatus): m.Children {
   }
 }
 
-const TITLE_CLASS =
-  "pv-tl-title inline-flex cursor-pointer items-center appearance-none border-0 bg-transparent p-0 text-left " +
-  "text-(length:--font-size-body) leading-[1.4] font-medium text-secondary disabled:cursor-default";
-
-const CHEV_CLASS =
-  "pv-chev ml-1.5 inline-block text-[18px] font-normal transition-transform duration-(--dur-base) ease-[ease]";
+/** A landed switch is finished work and greys out; one still running is the
+ *  current thing; a failed or called-off one stays at full strength so the
+ *  trouble does not fade into the timeline. */
+function titleTone(status: HandoffNodeStatus): TimelineTone {
+  if (status === "done") return "done";
+  return status === "active" ? "current" : "upcoming";
+}
 
 export interface HandoffNodeOptions {
   /** True on the last node of a timeline, which caps the thread. */
@@ -106,16 +113,16 @@ export function renderHandoffNode(
     "pv-tl-node--handoff",
     `pv-tl-node--handoff-${status}`,
     options.isLast ? "pv-tl-node--last pb-0" : "pb-[18px]",
-    "relative flex items-start gap-3.5",
+    TIMELINE_NODE_CLASS,
   ].join(" ");
   return m("div", { class: classes, key: `handoff-${node.key}`, "data-handoff-status": status }, [
-    m("div", { class: "pv-tl-bullet relative z-(--z-content) w-4 shrink-0 bg-chat py-px" }, statusIcon(status)),
-    m("div", { class: "pv-tl-body min-w-0 flex-1" }, [
+    m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon(status)),
+    m("div", { class: TIMELINE_BODY_CLASS }, [
       m(
         "button",
         {
           type: "button",
-          class: TITLE_CLASS,
+          class: timelineTitleClass(titleTone(status)),
           disabled: !canExpand,
           onclick: canExpand ? () => toggleBlockExpanded(options.expansionKey) : undefined,
         },
@@ -124,7 +131,7 @@ export function renderHandoffNode(
           canExpand
             ? m(
                 "span",
-                { class: `${CHEV_CLASS} ${isExpanded ? "pv-chev--open rotate-90 text-primary" : "text-secondary"}` },
+                { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
                 m.trust("&rsaquo;"),
               )
             : null,
@@ -133,11 +140,9 @@ export function renderHandoffNode(
       isExpanded
         ? m(
             "div",
-            {
-              class:
-                "pv-tl-expanded pv-expanded markdown-content mt-2.5 border-l-2 border-subtle py-1 pl-3.5 " +
-                "text-(length:--font-size-body)",
-            },
+            // Flush under the title, no indent or left rule -- see the same
+            // panel in ProgressBlock.
+            { class: "pv-tl-expanded pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" },
             [
               node.request === null
                 ? null

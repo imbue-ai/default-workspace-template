@@ -132,7 +132,7 @@ const PV_ICON_BASE = "inline-flex shrink-0 items-center justify-center";
 /** Completed step: filled disc with a white check. */
 export function statusDoneIcon(): string {
   return (
-    `<svg xmlns="${XMLNS}" class="pv-icon pv-icon--done ${PV_ICON_BASE} text-secondary" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
+    `<svg xmlns="${XMLNS}" class="pv-icon pv-icon--done ${PV_ICON_BASE} text-step-done" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
     `<circle cx="8" cy="8" r="7" fill="currentColor"/>` +
     `<path d="M4.5 8L7 10.5L11.5 6" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
   );
@@ -150,7 +150,7 @@ export function statusRingIcon(): string {
 /** Pending step: a dashed circle outline. */
 export function statusPendingIcon(): string {
   return (
-    `<svg xmlns="${XMLNS}" class="pv-icon pv-icon--pending ${PV_ICON_BASE} text-faint" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
+    `<svg xmlns="${XMLNS}" class="pv-icon pv-icon--pending ${PV_ICON_BASE} text-step-pending" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
     `<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/></svg>`
   );
 }

@@ -20,8 +20,20 @@
    rather than a resizing spacer. The app only writes scrollTop for the discrete
    tail-follow and jump pins. */
 
+/* The agent's prose stops short of the column's right edge (--width-agent-gutter),
+   left-aligned, so a reply reads as one side of a conversation rather than as
+   full-bleed text. A contextual rule rather than a utility: the prose element is
+   MarkdownContent's own div, shared with the user bubble and every other render
+   site, so the cap has to come from the context it sits in. The timeline's task
+   rows carry the same inset as a utility (see ProgressBlock / handoff-node);
+   tool blocks are chrome and keep the full width. */
+.message-assistant .message-content.markdown-content,
+.pv-final .message-content.markdown-content {
+  max-width: calc(100% - var(--width-agent-gutter));
+}
+
 .markdown-content {
-  line-height: 1.5;
+  line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
 }
@@ -115,7 +127,7 @@
   background-color: transparent;
   padding: 0;
   border-radius: 0;
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-row);
   line-height: 1.55;
 }
 
@@ -153,7 +165,9 @@
   left: 10px;
   top: 14px;
   font-family: var(--font-mono);
-  font-size: var(--font-size-body);
+  /* Same size and leading as the code it points at, so the two line boxes start
+     together and the glyph sits on the first line rather than under it. */
+  font-size: var(--font-size-row);
   line-height: 1.55;
   color: var(--c-text-faint);
   transition: transform 150ms;
@@ -447,22 +461,34 @@
 }
 
 /* Progress view (the per-turn task timeline rendered from tk tickets).
-   The timeline's structure lives as utilities in views/ProgressBlock.ts and the
-   library's components/icons.ts. What stays here is what utilities cannot carry: the
-   narration classes (they style markdown-rendered children, and the live
-   one's shimmer is a keyframe + background-clip machine) and the expanded
-   panel's markdown/tool-block child rules. */
+   The timeline's structure lives as utilities in views/timeline-node.ts and
+   views/ProgressBlock.ts, and the bullets in the library's components/icons.ts.
+   What stays here is what utilities cannot carry: the narration classes (they
+   style markdown-rendered children), the live task's shimmer (a keyframe +
+   background-clip machine, shared by its title and its narration) and the
+   expanded panel's markdown/tool-block child rules. */
 
 .pv-tl-narration {
-  margin-top: 3px;
+  /* No top gap: the live narration reads as the second line of its title, not
+     as a caption under it (the settled one below keeps the gap). */
+  margin-top: 0;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-row);
   font-style: italic;
-  color: var(--c-text-secondary);
+  color: var(--c-text-primary);
   line-height: 1.5;
-  /* The "glint" that sweeps across active-step narration: the faint tone as
-     the moving highlight over the muted caption color. */
-  background: linear-gradient(90deg, var(--c-text-secondary) 0%, var(--c-text-faint) 40%, var(--c-text-secondary) 80%);
+}
+
+/* The glint that sweeps across the live task -- its title AND its narration, so
+   the one thing being worked on right now pulses as a unit rather than as two
+   parts. A moving highlight over the text colour; the title's own colour
+   utility is the fallback where background-clip:text is unsupported. */
+.pv-tl-title--current,
+.pv-tl-narration {
+  /* #bcbcbc: the highlight, deliberately lighter than --c-text-faint. A
+     design-system-exception -- it is one end of a moving gradient, not a text
+     role, and at faint the sweep barely showed against the text it crosses. */
+  background: linear-gradient(90deg, var(--c-text-primary) 0%, #bcbcbc 40%, var(--c-text-primary) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -478,12 +504,19 @@
   }
 }
 
+/* The expand chevron is an affordance, not narration: it takes back a solid
+   fill inside the shimmering title, which would otherwise sweep it too and
+   leave the one clickable thing on the row flickering. */
+.pv-tl-title--current .pv-chev {
+  -webkit-text-fill-color: currentColor;
+}
+
 /* Static (settled) narration: an unclosed step that went idle still shows
    its mid-work narration, but without the live shimmer -- muted italic. */
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-row);
   font-style: italic;
   color: var(--c-text-secondary);
   line-height: 1.5;

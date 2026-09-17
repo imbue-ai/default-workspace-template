@@ -31,8 +31,8 @@ export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-
  *  bubble instead of overflowing past its edge. Code inside a bubble is
  *  markdown-rendered content and takes .markdown-content's own rules. */
 export const USER_BUBBLE_CLASS =
-  "message-user-bubble max-w-[80%] rounded-xl rounded-br-sm bg-user-bubble px-[18px] py-3 " +
-  "text-(length:--font-size-body) leading-normal text-primary wrap-break-word";
+  "message-user-bubble max-w-[80%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-2 " +
+  "text-(length:--font-size-body) leading-[1.4] text-primary wrap-break-word";
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
