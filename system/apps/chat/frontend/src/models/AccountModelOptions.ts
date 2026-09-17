@@ -4,8 +4,10 @@
  * for a new chat.
  *
  * Read from ``GET /api/accounts/:id/model-options``, the account-level twin of the per-chat
- * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the options an agent
- * of the account was last offered (empty when the account has run none). Unlike the per-chat twin,
+ * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the models the
+ * account's own codex answers with, asked of the account rather than of one of its agents -- so an
+ * account no agent has ever run on has a set too, and an account is never described by another
+ * account's models, which its subscription may not match. Unlike the per-chat twin,
  * this route names no model ids of its own -- the agent the pick is for is not on the account yet, so
  * it has no set that could narrow the catalog.
  */
