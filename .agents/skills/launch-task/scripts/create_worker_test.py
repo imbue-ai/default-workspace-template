@@ -312,7 +312,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(
     live mngr CLI surface.
 
     Rather than re-asserting a hand-written expected argv (which mirrors the
-    production assumption and so can never catch a divergence when an mngr pin bump
+    production assumption and so can never catch a divergence when a new mngr
     changes its CLI), we take exactly what ``launch`` hands the runner and
     confront it with ``imbue.mngr.main.cli``. It exercises the broadest argv set
     (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.

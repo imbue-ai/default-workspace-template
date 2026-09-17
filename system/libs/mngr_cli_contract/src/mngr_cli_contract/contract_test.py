@@ -2,7 +2,7 @@
 
 These pin the validator's own behaviour against the live mngr CLI: it must
 accept the real invocations the repo emits and reject the kinds of drift a
-an mngr pin bump's CLI change introduces -- a removed subcommand, a removed or renamed
+a new mngr's CLI change introduces -- a removed subcommand, a removed or renamed
 flag, or a bogus flag.
 """
 
@@ -29,25 +29,9 @@ from mngr_cli_contract.contract import (
         ["mngr", "rsync", "/x/", "demo:/x/", "--uncommitted-changes=merge"],
         ["mngr", "observe", "--discovery-only", "--events-dir", "/tmp/e"],
         # The chat-create fast-mode override, in every -S spelling.
-        [
-            "mngr",
-            "create",
-            "demo",
-            "-S",
-            "agent_types.claude.settings_overrides.fastMode=false",
-        ],
-        [
-            "mngr",
-            "create",
-            "demo",
-            "-Sagent_types.claude.settings_overrides.fastMode=true",
-        ],
-        [
-            "mngr",
-            "create",
-            "demo",
-            "--setting=agent_types.claude.settings_overrides.fastMode=true",
-        ],
+        ["mngr", "create", "demo", "-S", "agent_types.claude.settings_overrides.fastMode=false"],
+        ["mngr", "create", "demo", "-Sagent_types.claude.settings_overrides.fastMode=true"],
+        ["mngr", "create", "demo", "--setting=agent_types.claude.settings_overrides.fastMode=true"],
         # A non-"mngr" binary path in argv[0] is ignored (only argv[1:] matters).
         ["/path/to/custom-mngr", "message", "demo", "-m", "hi"],
     ],
@@ -61,14 +45,7 @@ def test_rejects_removed_subcommand() -> None:
     genuinely removed command -- mngr replaced it with ``rsync``)."""
     with pytest.raises(MngrArgvContractError, match="not accepted"):
         assert_mngr_argv_valid(
-            [
-                "mngr",
-                "push",
-                "demo:/x/",
-                "--source",
-                "/x/",
-                "--uncommitted-changes=merge",
-            ]
+            ["mngr", "push", "demo:/x/", "--source", "/x/", "--uncommitted-changes=merge"]
         )
 
 
