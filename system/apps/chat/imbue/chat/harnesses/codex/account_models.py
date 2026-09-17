@@ -30,6 +30,7 @@ from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
+from imbue.concurrency_group.local_process import RunningProcess
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -62,16 +63,26 @@ def _probe_environment(account_dir: Path) -> dict[str, str]:
     return environment
 
 
-def _wait_for_socket(socket_path: Path, deadline: float) -> None:
-    """Block until the daemon has bound ``socket_path``.
+def _wait_for_socket(socket_path: Path, process: RunningProcess, deadline: float) -> None:
+    """Block until the daemon has bound ``socket_path``, or raise when it dies without binding.
 
     Polled rather than awaited: codex prints nothing when it binds (verified against 0.154.0 --
     its only startup line is an unrelated sandbox warning), so there is no readiness signal to
     block on. mngr's own launcher waits the same way.
+
+    The child is watched alongside the socket because a codex that starts and exits -- signed out,
+    crashed, a build with no ``app-server`` -- is the common failure, and waiting the full ceiling
+    out on it would hold the switch dialog's request open for fifteen seconds and then report a
+    bind timeout, hiding the reason codex itself printed.
     """
     while time.monotonic() < deadline:
         if socket_path.exists():
             return
+        if process.is_finished():
+            stderr = process.read_stderr().strip() or "no output"
+            raise AccountModelProbeError(
+                f"codex app-server exited (code {process.returncode}) without binding {socket_path}: {stderr}"
+            )
         time.sleep(_SOCKET_POLL_INTERVAL_SECONDS)
     raise AccountModelProbeError(f"codex app-server did not bind {socket_path} within {_SOCKET_WAIT_SECONDS:.0f}s")
 
@@ -100,7 +111,7 @@ def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
                 name="codex account model-options probe",
             )
             try:
-                _wait_for_socket(socket_path, deadline)
+                _wait_for_socket(socket_path, process, deadline)
                 client = CodexAppServerClient(transport=connect_app_server_transport(socket_path))
                 try:
                     client.initialize(_PROBE_CLIENT_NAME, _PROBE_CLIENT_VERSION)
@@ -109,8 +120,9 @@ def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
                     client.close()
             finally:
                 process.terminate()
-    # A failure inside the group (codex missing, a daemon that died on launch) reaches the caller
-    # only when the group exits, re-raised as its ExceptionGroup rather than as itself.
+    # Whatever fails inside the group reaches the caller only when the group exits, re-raised as
+    # its ExceptionGroup rather than as itself -- including a missing codex, whose spawn failure
+    # ``run_process_in_background`` raises right there in the body.
     except (CodexAppServerError, ConcurrencyExceptionGroup, ConcurrencyGroupError, OSError) as e:
         raise AccountModelProbeError(f"could not read the models of the codex account at {account_dir}: {e}") from e
     finally:
