@@ -64,8 +64,8 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
 
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat is
  *  not converging, the switch failed, or it picked no model, all of which leave the chip on the live
- *  choice. A failed switch keeps its pick on the chat for the retry, but never applied it: the chat
- *  runs on the model it always did, which is what the chip must say while the failure notice stands.
+ *  choice. A failed switch still carries its pick, for the retry to rerun the model step from, but
+ *  never applied it.
  *
  *  Named from the target harness's catalog, and by its raw id for a harness whose option set is per
  *  agent (codex), which no catalog holds -- an id the user has not seen spelled that way, but the

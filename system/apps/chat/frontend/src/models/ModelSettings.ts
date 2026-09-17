@@ -167,10 +167,10 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
 /** Show the model a switch picked as the chat's own until the harness confirms it, without POSTing:
  *  the switch applies the pick itself, on the far side of a restart or a create.
  *
- *  Installed when the armed switch stops covering the pick (``PendingLane``), because from there to
- *  the harness writing its model state the pushed live choice is a sequence of values the user never
- *  asked for: the account the chat is leaving, then the model the new account last ran. Settles like
- *  any other overlay, once the live choice matches. */
+ *  Held from the moment the armed switch stops covering the pick: from there to the harness writing
+ *  its model state, the pushed live choice is a sequence of values the user never asked for -- the
+ *  account the chat is leaving, then the model the new account last ran. Settles like any other
+ *  overlay, once the live choice matches. */
 export function showSwitchChoice(chatId: string, identity: ModelIdentity, option: CatalogModelOption): void {
   // The chat already runs on the agent the switch landed it on: the pick is held for that agent, and
   // no further move of the chat's.
