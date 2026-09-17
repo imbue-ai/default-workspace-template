@@ -1,0 +1,5 @@
+`host-backup-now` no longer gets killed by the OOM watchdog before it does anything. Its first step reads the backup events log to see whether a tick is already in flight, and it read the whole file to look at the last 200 lines. Every event embeds the stdout of the restic command it reports, so the log reaches gigabytes on an old workspace: the command was killed within seconds, every time, with memory to spare. It now reads only the end of the file.
+
+This mattered beyond the command itself. `update-self` takes a backup first and treats a non-zero exit as "no confirmed restore point", so on any workspace with a grown log, every update ran and reported that it had no restore point -- while the hourly snapshots were in fact healthy the whole time.
+
+The log that grew is capped too. Each field of an event is now stored with at most 16 KB, keeping the head and the tail with a marker naming what was dropped, so a command's opening lines and its final summary both survive. Nothing rotates this file, and an uncapped `restic backup --json` progress stream was adding megabytes a day.

@@ -33,6 +33,11 @@ from host_backup.events import (
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5
 
+# How much of the end of the events log the in-flight scan may read. Comfortably
+# more than the events of one tick, and small enough that this command cannot be
+# the reason the workspace runs out of memory.
+_TAIL_READ_MAX_BYTES = 8 * 1024 * 1024
+
 # Exit codes. "Backups are not configured" is a distinct outcome from "the
 # backup attempt failed": callers that take a backup as a precondition (e.g. the
 # update-self skill) have to tell "there is no restore point" from "something
@@ -160,17 +165,44 @@ def _wait_for_next_completion(
     return None
 
 
-def _scan_for_inflight_tick_ids(events_path: Path, *, max_lines: int) -> set[str]:
+def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> list[str]:
+    """The last `max_lines` lines of `events_path`, reading at most `max_bytes` from its end.
+
+    Never reads the whole file. Backup events embed the full stdout of the restic
+    command they report, so a single line runs to hundreds of kilobytes and the log
+    reaches gigabytes on an old workspace -- reading it whole is what got this command
+    killed by the OOM watchdog before it did anything at all.
+
+    The byte ceiling binds first on such a workspace, yielding fewer than `max_lines`
+    events. That is the right trade for the one question asked of this: only a tick
+    whose BACKUP_STARTED has no completion after it matters, and the events a tick
+    emits before it completes are the small ones (the large ones all report a finished
+    restic command), so an in-flight tick is always inside the window.
+    """
+    try:
+        with events_path.open("rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - max_bytes))
+            blob = fh.read()
+    except OSError:
+        return []
+    lines = blob.decode(errors="replace").splitlines()
+    # A window that started mid-file almost certainly cut its first line in half.
+    if size > max_bytes and lines:
+        lines = lines[1:]
+    return lines[-max_lines:]
+
+
+def _scan_for_inflight_tick_ids(
+    events_path: Path, *, max_lines: int, max_bytes: int = _TAIL_READ_MAX_BYTES
+) -> set[str]:
     """Look at the last `max_lines` events; return the set of tick_ids that started but did not finish."""
     if not events_path.exists():
         return set()
-    try:
-        lines = events_path.read_text().splitlines()
-    except OSError:
-        return set()
+    lines = _read_tail_lines(events_path, max_lines=max_lines, max_bytes=max_bytes)
     started: set[str] = set()
     finished: set[str] = set()
-    for raw in lines[-max_lines:]:
+    for raw in lines:
         try:
             event = json.loads(raw)
         except ValueError:
