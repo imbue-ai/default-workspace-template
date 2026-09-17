@@ -979,7 +979,15 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
-        return UndeliveredSend(send=held, detail=f"the agent could not take it ({outcome.value})")
+        # The detail is read by whoever the send goes back to, so it says what happened in
+        # words rather than in the outcome's name, and carries the kind the outcome already is.
+        match outcome:
+            case SendOutcome.NOT_READY:
+                return UndeliveredSend(
+                    send=held, detail="The agent was still starting up and could not take it.", kind="not_ready"
+                )
+            case _:
+                return UndeliveredSend(send=held, detail="The agent could not take it.")
     return None
 
 
