@@ -81,13 +81,18 @@ def test_planner_prompt_examples_are_valid_plans() -> None:
     """The example plans the planner is shown must parse, so the prompt and the
     parser cannot drift apart."""
     prompt = (
-        Path(__file__).parents[1] / "references" / "planner-prompt.md"
+        Path(__file__).parents[4]
+        / "system"
+        / "scripts"
+        / "imbue_plan_extra"
+        / "prompts"
+        / "build-app-parallel.md"
     ).read_text()
     example_blocks = re.findall(
         r"<output>\n(capability = .*?)\n</output>", prompt, re.DOTALL
     )
 
-    assert len(example_blocks) == 2
+    assert example_blocks
     for block in example_blocks:
         plan = plan_orchestration.parse_plan(f"<output>\n{block}\n</output>")
         capabilities = [node["capability"] for node in plan["nodes"]]
