@@ -53,18 +53,25 @@ export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-a
  * that only ever lined up by coincidence, and drifted a pixel apart the moment
  * either type size changed.
  *
- * `-top-px` is the optical correction on top of that: centring on the line box
- * centres on the em box, but a line of text carries its visual mass above that
- * (between cap height and baseline, with the descender space empty), so a
- * geometrically centred bullet still reads low. Relative rather than a margin
- * so the row's layout does not move with it.
+ * `top-[0.1em]` is the optical correction on top of that. A line box is
+ * symmetric about the em box, but the ink in it is not: the ascenders reach
+ * most of the way to the top while the descenders use only part of the bottom,
+ * so the mass the eye centres on sits BELOW the geometric middle -- by about
+ * half a descender, which is what 0.1em is. In em rather than px so it keeps
+ * pace with the type size, and relative rather than a margin so the row's
+ * layout does not move with it.
+ *
+ * Measured, not guessed: for the title's 14px/500 at 19.6px leading, the
+ * line-box centre is 131.39 and the ink centre (ascender top to descender
+ * bottom) is 132.73. Aiming at the EM box instead -- and then nudging the wrong
+ * way on top of it -- is what left the bullet visibly high.
  *
  * The height must track {@link TITLE_BASE}'s `leading-[1.4]` at
  * `--font-size-body`; both are written out because Tailwind scans class strings
  * literally and would miss a shared constant.
  */
 export const TIMELINE_BULLET_CLASS =
-  "pv-tl-bullet relative -top-px z-(--z-content) flex h-[calc(var(--font-size-body)*1.4)] w-4 shrink-0 " +
+  "pv-tl-bullet relative top-[0.1em] z-(--z-content) flex h-[calc(var(--font-size-body)*1.4)] w-4 shrink-0 " +
   "items-center bg-chat";
 
 /** Everything right of the bullet: title, caption, and the expanded body. */
