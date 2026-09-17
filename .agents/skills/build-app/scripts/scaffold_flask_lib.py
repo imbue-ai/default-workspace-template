@@ -281,12 +281,9 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
-<<<<<<< HEAD
 import json
 import os
 import time
-=======
->>>>>>> origin/main
 from pathlib import Path
 
 from flask import Flask, Response
