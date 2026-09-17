@@ -37,11 +37,13 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
 import argparse
+import functools
 import importlib.util
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Iterable
 
 import tomlkit
@@ -80,7 +82,8 @@ def _kebab_to_snake(name: str) -> str:
     return name.replace("-", "_")
 
 
-def load_forward_port():
+@functools.cache
+def _load_forward_port() -> ModuleType:
     """The registration script, loaded by path: it is stdlib-only and not importable."""
     spec = importlib.util.spec_from_file_location("_forward_port", _FORWARD_PORT_PATH)
     assert spec is not None and spec.loader is not None
@@ -90,7 +93,7 @@ def load_forward_port():
 
 
 def _read_and_validate_icon(path: Path) -> str:
-    module = load_forward_port()
+    module = _load_forward_port()
     markup, error = module.read_icon_file(path)
     if error is not None:
         sys.exit(f"error: {error}")
@@ -112,7 +115,7 @@ def _validate_name(name: str) -> None:
             "(lowercase letters/digits with single hyphens, "
             "starting with a letter)"
         )
-    registration_problem = load_forward_port().validate_service_name(name)
+    registration_problem = _load_forward_port().validate_service_name(name)
     if registration_problem is not None:
         sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
