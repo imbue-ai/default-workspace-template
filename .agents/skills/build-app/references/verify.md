@@ -45,7 +45,8 @@ Rather than hardcoded `sleep` calls, use active connection retries to answer ins
 curl --retry 20 --retry-connrefused --retry-delay 0.1 -sf http://127.0.0.1:<port>/ -o /dev/null -w "%{http_code}\n"
 ```
 
-Expected: `200`.
+`<port>` is the port in the service's `forward_port.py --url` (see
+`system/supervisord.conf.d/<name>.conf` or `data/.state/apps.toml`). Expected: `200`.
 
 Common failures:
 - **Connection refused** -- the app crashed or never came up. Check

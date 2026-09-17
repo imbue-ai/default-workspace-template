@@ -19,6 +19,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.watcher import PiSessionWatcher
+from imbue.chat.harnesses.pi_coding.watcher import PiTranscriptLoader
 
 
 def _agent_info(state_dir: Path) -> AgentInfo:
@@ -407,3 +408,30 @@ def test_get_event_detail_serves_full_input_output_and_thinking(tmp_path: Path) 
     detail = watcher.get_event_detail(result["event_id"])
     assert detail is not None
     assert detail["output"] == "y" * 6000
+
+
+def test_a_loader_reads_the_session_files_without_watching_or_a_queue(tmp_path: Path) -> None:
+    """An archived pi agent's segment reads through the loader: the same events as the watcher,
+    each naming its agent, with no inbox read and no queue behind it."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    session_file = state_dir / "plugin" / "pi_coding" / "sessions" / "2026" / "live.jsonl"
+    _write_session(
+        session_file,
+        [
+            _message_record("r1", {"role": "user", "content": [{"type": "text", "text": "hey"}]}),
+            _message_record("r2", {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}),
+        ],
+    )
+    _point_marker(state_dir, session_file)
+    (state_dir / "pi_inbox").write_text(json.dumps("queued for a live process") + "\n")
+
+    loader = PiTranscriptLoader.build_loader(_agent_info(state_dir))
+    watcher = PiSessionWatcher.build(_agent_info(state_dir), lambda _agent_id, _events: None)
+
+    events = loader.get_all_events()
+    assert [event["event_id"] for event in events] == ["pi-r1", "pi-r2"]
+    assert [event["event_id"] for event in events] == [event["event_id"] for event in watcher.get_all_events()]
+    assert {event["agent_id"] for event in events} == {"agent-test"}
+    assert loader.get_total_event_count() == 2
+    assert not isinstance(loader, PiSessionWatcher)

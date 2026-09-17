@@ -374,6 +374,22 @@ def test_switch_reports_failure_when_the_daemon_is_unreachable(tmp_path: Path) -
     assert client.closed is True
 
 
+def test_switch_reports_failure_when_the_connection_cannot_be_opened(tmp_path: Path) -> None:
+    # Not a raise: the handoff's model pick calls this from a background runner that catches only
+    # its own step errors, so an unopenable daemon connection has to come back as ok=False.
+    def _open() -> Any:
+        raise CodexAppServerError("no unambiguous codex root thread to bind for a model switch")
+
+    resolver = CodexModelResolver.build(_agent_info(tmp_path), open_client=_open)
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False),
+        frozenset({ModelAxis.MODEL}),
+        _forbidden_send,
+    )
+    assert result.ok is False
+    assert result.detail is not None
+
+
 # =============================================================================
 # Root-thread binding for the short-lived switch connection
 # =============================================================================

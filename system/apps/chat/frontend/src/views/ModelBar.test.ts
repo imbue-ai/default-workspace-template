@@ -10,16 +10,16 @@
  * dockview's clipping overlay otherwise -- and mithril validates keyed fragments during the
  * DOM diff, not while building vnodes, so a vnode walk cannot see either.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({
-  getAgentById: () => agentState.agent,
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
+vi.mock("../models/Chats", () => ({
+  getChatById: () => agentState.agent,
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -35,6 +35,52 @@ vi.mock("../models/ModelSettings", () => ({
   changedAxes: () => ["model"],
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
+
+// The workspace's chat settings as the page has them (null before the load), and every write
+// the fast-limit row asked for.
+const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
+  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
+  return {
+    DEFAULT_CHAT_SETTINGS: defaults,
+    chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
+    settingsWrites: [] as unknown[],
+  };
+});
+vi.mock("../models/ChatSettings", () => ({
+  DEFAULT_CHAT_SETTINGS,
+  getChatSettings: () => chatSettingsState.settings,
+  ensureChatSettings: () => {
+    chatSettingsState.loads += 1;
+    return Promise.resolve(chatSettingsState.settings ?? DEFAULT_CHAT_SETTINGS);
+  },
+  updateChatSettings: (next: unknown) => {
+    settingsWrites.push(next);
+    return Promise.resolve(next);
+  },
+}));
+
+// The chat's fast mode as the page has it (null before the load), the loads asked for, and every
+// mode the chooser picked.
+const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
+  fastModeState: { state: null as { mode: string; is_switched: boolean } | null },
+  fastModeLoads: [] as string[],
+  fastModeChoices: [] as [string, string][],
+}));
+vi.mock("../models/FastMode", () => ({
+  getFastModeState: () => fastModeState.state,
+  ensureFastModeState: (chatId: string) => {
+    fastModeLoads.push(chatId);
+    return Promise.resolve(fastModeState.state);
+  },
+  fastModeLabel: (state: { mode: string; is_switched: boolean }) =>
+    state.mode === "off" ? "Off" : state.mode === "on" ? "On" : state.is_switched ? "Auto (off now)" : "Auto",
+}));
+vi.mock("./fast-mode-limit", () => ({
+  chooseFastMode: (chatId: string, mode: string) => {
+    fastModeChoices.push([chatId, mode]);
+  },
+}));
+vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
 
 const providerState: { accounts: unknown[]; defaultId: string | null } = { accounts: [], defaultId: null };
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
@@ -60,14 +106,28 @@ vi.mock("../shell", () => ({
   openSubagentTab: vi.fn(),
 }));
 
+// A press on another account hands the chat to the switch dialog (or an immediate switch); the
+// armed card's Model row reopens it. Both recorded by account id.
+const begun: string[] = [];
+const reopened: string[] = [];
+vi.mock("./SwitchDialog", () => ({
+  beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
+}));
+
 import m from "mithril";
 
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
+
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
-  m.render(ROOT(), m(ModelBar as never, { agentId: "a1" }));
+  m.render(ROOT(), m(ModelBar as never, { chatId: "a1" }));
 }
 
 /** Everything on screen, card and flyout included -- both portal out of the component. */
@@ -112,16 +172,29 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
+  fastModeState.state = { mode: "auto", is_switched: false };
+  fastModeLoads.length = 0;
+  fastModeChoices.length = 0;
   picks.length = 0;
   started.length = 0;
+  begun.length = 0;
+  reopened.length = 0;
   pins.length = 0;
+  settingsWrites.length = 0;
+  chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+  chatSettingsState.loads = 0;
   providerState.defaultId = null;
-  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
+  agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
+  setPendingAccount("a1", null);
 });
 
 describe("the combo card", () => {
@@ -171,6 +244,22 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
+  });
+
+  it("stops explaining a read-only harness once its catalog says the model can be switched", () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
+    render();
+    click(".model-selector-trigger");
+    const modelRow = document.querySelector<HTMLElement>('[data-card-row="model"]')!;
+    expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
+
+    catalogState.catalog = catalogOf();
+    render();
+    // The card stays open and mithril patches the row rather than replacing it, so the row
+    // keeps whatever its first render attached.
+    expect(document.querySelector('[data-card-row="model"]')).toBe(modelRow);
+    expect(hoverTooltipText(modelRow)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
@@ -325,9 +414,9 @@ describe("the combo card", () => {
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
   });
 
-  it("asks before launching a new chat on another provider, and launches only on Launch", () => {
-    // A chat binds to its account when it is CREATED and nothing rebinds it, so pressing
-    // another account's row can only mean a new chat on it -- asked, never done by surprise.
+  it("hands a press on another harness's account to the switch dialog, and takes an armed choice back on a second press", () => {
+    // The dialog (or, for a chat with no user turn, an immediate switch) decides what happens;
+    // the card itself arms nothing and closes so the dialog has the screen.
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", label: "Google (Antigravity CLI)" },
@@ -337,28 +426,118 @@ describe("the combo card", () => {
     click('[data-card-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
-    expect(rows[0].getAttribute("aria-disabled")).toBeNull();
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    expect(screenText()).toContain("Launch a new chat?");
-    expect(screenText()).toContain("Google (Antigravity CLI)");
+    expect(begun).toEqual(["acct-2"]);
+    expect(getPendingAccountId("a1")).toBeNull();
     expect(started).toEqual([]);
-
-    // Cancel keeps the flyout up and starts nothing.
-    click(".notice-dismiss");
-    expect(screenText()).not.toContain("Launch a new chat?");
-    expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
-
-    // Launch starts the chat on that account and takes the card down.
-    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render();
-    const launch = [...document.querySelectorAll("button")].find((b) => b.textContent === "Launch");
-    if (launch === undefined) throw new Error("no Launch button");
-    launch.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render();
-    expect(started).toEqual(["acct-2"]);
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+
+    // Armed (what the dialog's "Switch this chat" does), the row wears its badge and pressing it
+    // again takes the choice back without a second dialog.
+    setPendingAccount("a1", "acct-2");
+    render();
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    const flyout = document.querySelector('[data-model-popover="flyout"]');
+    const badged = [...(flyout?.querySelectorAll("button") ?? [])].find((b) =>
+      (b.textContent ?? "").includes("Google"),
+    );
+    expect(badged?.querySelector(".account-row-badge")?.textContent).toBe("next");
+    badged?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(begun).toEqual(["acct-2"]);
+
+    // So does pressing the account the chat already runs on: staying put is the choice then.
+    setPendingAccount("a1", "acct-2");
+    click('[data-card-row="providers"]');
+    const own = [...document.querySelectorAll('[data-model-popover="flyout"] button')].find((b) =>
+      (b.textContent ?? "").includes("Anthropic"),
+    );
+    if (own === undefined) throw new Error("no row for the chat's own account");
+    own.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(started).toEqual([]);
+  });
+
+  it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {
+    providerState.accounts = [
+      ACCOUNT,
+      { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" },
+    ];
+    render();
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Anthropic 2"));
+    expect(rows).toHaveLength(1);
+    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(begun).toEqual(["acct-2"]);
+    expect(started).toEqual([]);
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+  });
+
+  it("reads as the target while a switch is armed, and its Model row reopens the dialog", () => {
+    const google = {
+      ...ACCOUNT,
+      id: "acct-2",
+      provider: "Google",
+      harness: "antigravity",
+      harness_label: "Antigravity CLI",
+      label: "Google (Antigravity CLI)",
+    };
+    providerState.accounts = [ACCOUNT, google];
+    // The current agent's model offers both rows, so their absence below is the armed switch
+    // hiding them rather than this model having none to show.
+    const choosy = {
+      ...OPUS,
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
+      supports_fast: true,
+    };
+    catalogState.catalog = catalogOf({ options: [choosy] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: choosy,
+      pending: null,
+    };
+    setPendingSwitch("a1", "acct-2", {
+      identity: { model_id: "gemini", effort: "high", fast: false },
+      label: "Gemini · High",
+    });
+    render();
+    // The chip states the pick with a "next" mark rather than the current agent's model.
+    expect(ROOT().textContent).toContain("Gemini · High");
+    expect(ROOT().textContent).toContain("next");
+    expect(ROOT().textContent).not.toContain("Opus");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("Google");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
+    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Gemini · High");
+    // The current agent's effort and fast rows are not the target's: they are not offered.
+    expect(document.querySelector('[data-card-row="effort"]')).toBeNull();
+    expect(document.querySelector('[data-model-popover="card"]')?.textContent).not.toContain("Fast Mode");
+    click('[data-card-row="model"]');
+    expect(reopened).toEqual(["acct-2"]);
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+  });
+
+  it("offers no Model row while a rebind is armed: the agent keeps its model", () => {
+    const other = { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" };
+    providerState.accounts = [ACCOUNT, other];
+    setPendingAccount("a1", "acct-2");
+    render();
+    expect(ROOT().textContent).toContain("next");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
+    expect(document.querySelector('[data-card-row="model"]')).toBeNull();
+    expect(reopened).toEqual([]);
   });
 
   it("stars the default account and pins another on a press of its star", () => {
@@ -415,6 +594,56 @@ describe("the combo card", () => {
     expect(trigger.textContent).toContain("Opus");
     expect(trigger.textContent).toContain("High");
     expect(trigger.querySelector("svg")).not.toBeNull();
+  });
+
+  it("states the chat's fast mode on the fast row and opens the chooser from it", () => {
+    // The row says which of the three modes the chat is in rather than showing a switch, since
+    // auto is neither on nor off; pressing it closes the card and opens the chooser modal, where
+    // the modes are picked and auto's turn limit lives.
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    chatSettingsState.settings = {
+      fast_mode_default: "auto",
+      fast_mode_turn_limit: 3,
+      is_fast_mode_notice_shown: true,
+    };
+    fastModeState.state = { mode: "auto", is_switched: true };
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    if (row === null) throw new Error("no fast row");
+    expect(row.textContent).toContain("Fast Mode");
+    expect(row.textContent).toContain("Auto (off now)");
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
+
+    click('[data-card-row="fast"]');
+    const modal = document.querySelector<HTMLElement>('[data-e2e="fast-mode-modal"]');
+    if (modal === null) throw new Error("no fast-mode modal");
+    expect(document.querySelector('[data-card-row="fast"]')).toBeNull();
+    expect(modal.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(modal.textContent).toContain("Fast for the first 3 turns, then standard speed.");
+    const limit = modal.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    expect(limit.value).toBe("3");
+
+    click('[data-fast-mode="on"]');
+    expect(fastModeChoices).toEqual([["a1", "on"]]);
+    click(".fast-mode-done");
+    expect(document.querySelector('[data-e2e="fast-mode-modal"]')).toBeNull();
+  });
+
+  it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    fastModeState.state = null;
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    if (row === null) throw new Error("no fast row");
+    expect(row.textContent).toContain("...");
+    expect(fastModeLoads).toContain("a1");
   });
 
   it("gives a read-only harness no model list to open", () => {

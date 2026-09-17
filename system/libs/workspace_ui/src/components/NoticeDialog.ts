@@ -20,6 +20,8 @@ export interface NoticeAction {
   tooltip?: string;
   /** Destructive actions are styled apart so they are not the easy button to reach. */
   isDestructive?: boolean;
+  /** A secondary action: offered, but not the one the dialog is for. */
+  isSecondary?: boolean;
   /** Greys the button and ignores its clicks. The greying is aria-disabled, not the native
    *  ``disabled``, so ``tooltip`` stays reachable while the button cannot be used. */
   isDisabled?: boolean;
@@ -79,8 +81,8 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
                 {
                   // Quiet destructive on purpose: danger text without a fill, so it is styled
                   // apart from the primary action rather than being the easy button to reach.
-                  variant: action.isDestructive ? "ghost-destructive" : "primary",
-                  ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
+                  variant: action.isDestructive ? "ghost-destructive" : action.isSecondary ? "secondary" : "primary",
+                  ...hoverTooltipAttrs(action.tooltip ?? null),
                   // aria-disabled, not disabled: a disabled button suppresses the hover/focus
                   // events the tooltip above needs, and the explanation matters most exactly
                   // while the button is greyed. Clicks are gated here instead.
@@ -94,9 +96,12 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
             ),
           ],
         },
-        body
-          .filter((line): line is string => line !== null && line !== "")
-          .map((line) => m("p", { class: NOTICE_BODY_CLASS }, line)),
+        [
+          ...body
+            .filter((line): line is string => line !== null && line !== "")
+            .map((line) => m("p", { class: NOTICE_BODY_CLASS }, line)),
+          vnode.children,
+        ],
       );
     },
   };

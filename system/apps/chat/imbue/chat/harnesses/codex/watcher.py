@@ -1,11 +1,13 @@
-"""Tail a codex agent's live rollout and emit UI events.
+"""Read a codex agent's rollout into UI events, and tail the live one.
 
 Built on the shared :class:`~imbue.chat.harnesses.transcript_store` scaffolding
 with a single lane: codex is one logical session to the UI, and the accumulated timeline
 survives rollout rotation (a fresh file per session, and again on resume) because codex
 re-serialises history into the new rollout with the same stable ids -- the store dedups the
 copies and refreshes each event's source byte range to the newest serialisation, which is
-exactly what the on-demand payload reads want.
+exactly what the on-demand payload reads want. :class:`CodexTranscriptLoader` is the read
+half, which an archived chat segment is read through with no thread and no watches;
+:class:`CodexSessionWatcher` adds the live half.
 
 We tail codex's LIVE rollout directly (the same real-time file codex writes), not the
 stream_transcript.sh mirror -- the mirror lags codex by up to its 1s poll, long enough for
@@ -15,11 +17,12 @@ rotates, so we follow the ``codex_transcript_path`` marker (written by codex's
 agents whose hook never fires.
 
 Codex-specific pieces kept here: the effective per-turn model read from ``turn_context``
-lines and reflected into the model-bar state file, live suppression of ``user_message``
-events (the subscribed ledger owns the live user-turn handoff -- the A3b chip-out-then-turn
-ordering -- so the file reader must not broadcast a competing copy; the events stay in the
-store for the read paths), and synthetic "Interrupted." results for tool calls a user
-interrupt left open (codex never persists one, so the card would spin forever).
+lines and reflected into the model-bar state file (the watcher's alone: an archived agent's
+bar is nobody's to update), live suppression of ``user_message`` events (the subscribed
+ledger owns the live user-turn handoff -- the A3b chip-out-then-turn ordering -- so the file
+reader must not broadcast a competing copy; the events stay in the store for the read
+paths), and synthetic "Interrupted." results for tool calls a user interrupt left open
+(codex never persists one, so the card would spin forever).
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
@@ -121,61 +125,47 @@ def codex_sessions_dir(agent_state_dir: Path) -> Path:
     return agent_state_dir / _SESSIONS_RELATIVE
 
 
-class CodexSessionWatcher(StoreBackedWatcher):
-    """Watches a codex agent's raw rollout file and emits parsed UI events."""
+class CodexTranscriptLoader(StoreBackedTranscriptLoader):
+    """Reads a codex agent's rollout (following rotation) into the store."""
 
-    # Instance attributes declared at class level so a `build()` classmethod (no
+    # Instance attributes declared at class level so a `build_loader()` classmethod (no
     # __init__) can assign them while the type checker still resolves every access.
     _marker_path: Path
     _sessions_dir: Path
     _current_path: Path | None
     _byte_offset: int
-    _line_index: int
     _tool_name_by_call_id: dict[str, str]
     _turn_state: dict[str, Any]
-    _model_state_path: Path
     # The byte span of the most recent reasoning line with readable summaries, waiting to
     # attach to the NEXT assistant event (a reasoning item precedes its output in the
     # rollout). Cleared once attached, and on rotation.
     _pending_thinking_source: tuple[Path, int, int] | None
 
     @classmethod
-    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
-        """Build from the agent record. Codex needs only the state dir: its rollout lives
-        under the per-agent CODEX_HOME there, so ``claude_config_dir`` is never read."""
-        agent_state_dir = agent_info.agent_state_dir
-        self = cls.__new__(cls)
-        self._init_store_watcher(agent_info.id, on_events)
+    def build_loader(cls, agent_info: AgentInfo) -> "CodexTranscriptLoader":
+        loader = cls.__new__(cls)
+        loader._init_loader(agent_info.id)
+        loader._init_codex_state(agent_info.agent_state_dir)
+        return loader
+
+    def _init_codex_state(self, agent_state_dir: Path) -> None:
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
         self._sessions_dir = codex_sessions_dir(agent_state_dir)
         # The rollout currently tailed (rotation = the marker points elsewhere) and the
         # bytes of it consumed through the last complete line.
-        self._current_path: Path | None = None
+        self._current_path = None
         self._byte_offset = 0
-        # GLOBAL monotonic line counter for synthetic event ids (an event_msg user_message
-        # has no codex id). Never reset -- keeps ids unique ACROSS rollout files so a
-        # resume's line 5 cannot collide with the prior file's line 5.
-        self._line_index = 0
         # call_id -> tool_name, so a function_call_output can recover its tool name from
         # the earlier function_call. Persists across files (a resume re-serialises them).
-        self._tool_name_by_call_id: dict[str, str] = {}
+        self._tool_name_by_call_id = {}
         # The EFFECTIVE per-turn model/effort, updated from each rollout ``turn_context``
-        # line: the model the turn actually RAN on. Reflected into the model-bar state file
-        # so a framework fallback shows in the bar rather than the selected model lying.
-        self._turn_state: dict[str, Any] = {}
-        self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
+        # line: the model the turn actually RAN on. The watcher reflects it into the
+        # model-bar state file so a framework fallback shows in the bar rather than the
+        # selected model lying.
+        self._turn_state = {}
         self._pending_thinking_source = None
-        return self
 
     # -- base hooks -----------------------------------------------------------------------
-
-    def _watch_paths(self) -> tuple[Path, ...]:
-        # CODEX_HOME (the parent of ``sessions/``), recursively, so an append to whichever
-        # rollout is live wakes the loop immediately, with the poll as the safety net.
-        return (self._sessions_dir.parent,)
-
-    def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [event for event in events if not _is_live_suppressed(self._agent_id, event)]
 
     def _refresh_locked(self) -> None:
         """Bring the store up to date with the live rollout, following rotation."""
@@ -184,9 +174,9 @@ class CodexSessionWatcher(StoreBackedWatcher):
             return
         if target != self._current_path:
             # First resolution or rotation (resume -> new rollout). Tail the new file from
-            # its start. The line counter, tool-name map, and store all persist, so a
-            # resume's re-serialised history (same codex ids) dedups against what we
-            # already hold -- with each event's source range refreshed to the live file.
+            # its start. The tool-name map and store persist, so a resume's re-serialised
+            # history (same codex ids) dedups against what we already hold -- with each
+            # event's source range refreshed to the live file.
             self._current_path = target
             self._byte_offset = 0
             self._pending_thinking_source = None
@@ -215,14 +205,10 @@ class CodexSessionWatcher(StoreBackedWatcher):
         if not complete:
             return
         for byte_offset, byte_len, line_bytes in iter_line_spans(complete, self._byte_offset):
-            # Every physical line consumes an index (even blanks/skips) so a given line
-            # always maps to the same synthetic id across the run.
-            idx = self._line_index
-            self._line_index += 1
             stripped = line_bytes.decode("utf-8", errors="replace").strip()
             if not stripped:
                 continue
-            for event in self._adapt_line(stripped, idx):
+            for event in self._adapt_line(stripped):
                 # A reasoning line is not a transcript event: remember its span so the next
                 # assistant event carries has_thinking and a thinking source for the
                 # detail endpoint. Only readable summaries count.
@@ -231,7 +217,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
                     continue
                 if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
                     event["has_thinking"] = True
-                self._store.ingest(_LANE, event, (target, byte_offset, byte_len))
+                self._ingest_locked(_LANE, event, (target, byte_offset, byte_len))
                 if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
                     self._store.set_thinking_source(event["event_id"], self._pending_thinking_source)
                     self._pending_thinking_source = None
@@ -244,7 +230,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
                     and event.get("kind") == SpecialEventKind.TURN_ABORTED.value
                 ):
                     for synthetic in self._interrupt_results(event.get("timestamp", "")):
-                        self._store.ingest(_LANE, synthetic)
+                        self._ingest_locked(_LANE, synthetic)
         self._byte_offset += len(complete)
 
         # Reflect the effective per-turn model into the model-bar state file, so a
@@ -253,6 +239,9 @@ class CodexSessionWatcher(StoreBackedWatcher):
         # write is rare and cheap enough to do under the lock -- no callback runs here.
         self._reflect_effective_model(self._turn_state.get("model"), self._turn_state.get("effort"))
 
+    def _reflect_effective_model(self, model: Any, effort: Any) -> None:
+        """Hand the effective per-turn model to the model bar. A loader has no bar to update."""
+
     # -- codex plumbing -------------------------------------------------------------------
 
     def _resolve_active_rollout(self) -> Path | None:
@@ -260,25 +249,6 @@ class CodexSessionWatcher(StoreBackedWatcher):
         if marker is not None:
             return marker
         return newest_rollout_under(self._sessions_dir)
-
-    def _reflect_effective_model(self, model: Any, effort: Any) -> None:
-        """Write the effective per-turn model into ``model_state.json`` when it DIVERGES
-        from what the file already holds.
-
-        The file is the harness-neutral model-bar read path; the ledger writes the SELECTED
-        settings to it on ``thread/settings/updated``. This writer reflects the EFFECTIVE
-        model the rollout records per turn -- so a per-turn framework fallback (over-quota /
-        tier downgrade) shows in the bar instead of the selected model lying. It writes only
-        on divergence, preserving the file's ``fast`` bit (``turn_context`` carries no
-        service tier, so fast is owned by the ledger's selected-settings write).
-        """
-        if not isinstance(model, str) or not model:
-            return
-        effective_effort = effort if isinstance(effort, str) and effort else None
-        current = read_json_dict(self._model_state_path)
-        if current.get("model") == model and current.get("effort") == effective_effort:
-            return
-        write_codex_model_state(self._model_state_path, model, effective_effort, current.get("fast") is True)
 
     def _interrupt_results(self, timestamp: str) -> list[dict[str, Any]]:
         """Synthetic terminal tool_results for every tool call still open (no result) in
@@ -314,18 +284,18 @@ class CodexSessionWatcher(StoreBackedWatcher):
                 )
         return results
 
-    def _adapt_line(self, line: str, line_index: int) -> list[dict[str, Any]]:
+    def _adapt_line(self, line: str) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
             # The rollout is codex-owned state, so a line we cannot parse is real
             # corruption rather than a shape to tolerate quietly: warn so it is visible,
             # and skip the line so the rest of the transcript still renders.
-            logger.warning("codex watcher: skipping malformed rollout line {}: {}", line_index, exc)
+            logger.warning("codex watcher: skipping malformed rollout line: {}", exc)
             return []
         if not isinstance(record, dict):
             return []
-        return parse_lines(record, line_index, self._tool_name_by_call_id, self._turn_state)
+        return parse_lines(record, self._tool_name_by_call_id, self._turn_state)
 
     # -- on-demand payload detail ---------------------------------------------------------
 
@@ -343,9 +313,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
             return None
         if not isinstance(record, dict):
             return None
-        # The line index only matters for id-less fallback events, whose byte ranges the
-        # store already resolved -- pass a stand-in that cannot collide.
-        detail = parse_line_detail(record, -1).get(event["event_id"])
+        detail = parse_line_detail(record).get(event["event_id"])
         thinking = None
         if thinking_line is not None:
             try:
@@ -384,8 +352,54 @@ class CodexSessionWatcher(StoreBackedWatcher):
                         # trailing partial line (mid-write) is the routine near-miss.
                         logger.warning("codex watcher: undecodable line in a payload fallback scan: {}", e)
                         continue
-                    if isinstance(record, dict) and event_id in parse_line_detail(record, -1):
+                    if isinstance(record, dict) and event_id in parse_line_detail(record):
                         return line
         except OSError:
             return None
         return None
+
+
+class CodexSessionWatcher(CodexTranscriptLoader, StoreBackedWatcher):
+    """Watches a codex agent's raw rollout file and emits parsed UI events."""
+
+    _model_state_path: Path
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
+        """Build from the agent record. Codex needs only the state dir: its rollout lives
+        under the per-agent CODEX_HOME there, so ``claude_config_dir`` is never read."""
+        agent_state_dir = agent_info.agent_state_dir
+        self = cls.__new__(cls)
+        self._init_store_watcher(agent_info.id, on_events)
+        self._init_codex_state(agent_state_dir)
+        self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
+        return self
+
+    # -- base hooks -----------------------------------------------------------------------
+
+    def _watch_paths(self) -> tuple[Path, ...]:
+        # CODEX_HOME (the parent of ``sessions/``), recursively, so an append to whichever
+        # rollout is live wakes the loop immediately, with the poll as the safety net.
+        return (self._sessions_dir.parent,)
+
+    def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [event for event in events if not _is_live_suppressed(self._agent_id, event)]
+
+    def _reflect_effective_model(self, model: Any, effort: Any) -> None:
+        """Write the effective per-turn model into ``model_state.json`` when it DIVERGES
+        from what the file already holds.
+
+        The file is the harness-neutral model-bar read path; the ledger writes the SELECTED
+        settings to it on ``thread/settings/updated``. This writer reflects the EFFECTIVE
+        model the rollout records per turn -- so a per-turn framework fallback (over-quota /
+        tier downgrade) shows in the bar instead of the selected model lying. It writes only
+        on divergence, preserving the file's ``fast`` bit (``turn_context`` carries no
+        service tier, so fast is owned by the ledger's selected-settings write).
+        """
+        if not isinstance(model, str) or not model:
+            return
+        effective_effort = effort if isinstance(effort, str) and effort else None
+        current = read_json_dict(self._model_state_path)
+        if current.get("model") == model and current.get("effort") == effective_effort:
+            return
+        write_codex_model_state(self._model_state_path, model, effective_effort, current.get("fast") is True)

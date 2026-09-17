@@ -262,7 +262,7 @@ function railAction(options: {
       xs: true,
       extra: `${reveal} ${options.extra ?? ""}`,
       "aria-label": options.label,
-      ...(options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip, options.tooltipPlacement)),
+      ...hoverTooltipAttrs(options.tooltip ?? null, options.tooltipPlacement),
       onclick: (event: MouseEvent) => {
         event.stopPropagation();
         options.onclick(event);
@@ -405,6 +405,21 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     menuError = null;
   }
 
+  /** Pick something that puts a tab on screen: the rail collapses out of the way of what it just
+   *  revealed, and entering it again brings it back. Picks that change the rail itself (pin,
+   *  rename, a mode flip) do not. */
+  function reveal(action: () => void): void {
+    pick(action);
+    expanded = false;
+  }
+
+  /** A collapsed rail offers nothing to aim at: no hover fill, and no row actions. Hovering it
+   *  normally expands it, so the only way to be over a collapsed row is a pick that just collapsed
+   *  the rail under the pointer, which is not the user aiming at the row they landed on. */
+  function hoverFillClass(): string {
+    return expanded ? "hover:bg-fill-hover" : "";
+  }
+
   function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
     endRename();
     const title = normalizeTabTitle(typed);
@@ -443,6 +458,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   interface ShortcutMenuEntry {
     label: string;
     run: () => void;
+    // Whether running it puts a tab on screen, and so collapses the rail.
+    isReveal?: boolean;
     isDisabled?: boolean;
   }
 
@@ -452,11 +469,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const isEverything = isEverythingView(attrs.activeViewId);
     const entries: ShortcutMenuEntry[] = [];
     if (resolved.mode === "focus") {
-      entries.push({ label: resolved.action.label, run: () => attrs.onRunShortcutAsNew(resolved.shortcut) });
+      entries.push({
+        label: resolved.action.label,
+        run: () => attrs.onRunShortcutAsNew(resolved.shortcut),
+        isReveal: true,
+      });
     } else {
       entries.push({
         label: `Focus last ${resolved.app.display_name}`,
         run: () => attrs.onFocusLastOfShortcut(resolved.shortcut),
+        isReveal: true,
         isDisabled: !attrs.rows.some((row) => row.appName === resolved.app.name),
       });
     }
@@ -500,7 +522,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             iconMarkup: null,
             label: entry.label,
             isDisabled: entry.isDisabled,
-            onclick: () => pick(entry.run),
+            onclick: () => (entry.isReveal === true ? reveal : pick)(entry.run),
           }),
         ),
         canUnpin
@@ -584,7 +606,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         type: "button",
         class:
           "project-rail-header group -mx-[5px] -mt-[5px] flex h-[34px] w-[calc(100%+10px)] shrink-0 cursor-pointer " +
-          "items-center gap-1 px-[5px] text-left text-primary hover:bg-fill-hover",
+          `items-center gap-1 px-[5px] text-left text-primary ${hoverFillClass()}`,
         "aria-haspopup": "menu",
         "aria-expanded": openMenu?.kind === "switcher" ? "true" : "false",
         ...hoverTooltipAttrs("Switch projects", "right"),
@@ -645,7 +667,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         key: `shortcut:${key}`,
         class:
-          "project-rail-shortcut-slot group relative flex w-full shrink-0 items-center rounded-md hover:bg-fill-hover",
+          "project-rail-shortcut-slot group relative flex w-full shrink-0 items-center rounded-md " + hoverFillClass(),
         ...hoverTooltipAttrs(tooltip, "right"),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -667,11 +689,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 : isStopped
                   ? "project-rail-shortcut-stopped text-faint opacity-60"
                   : "text-primary"),
-            onclick: isAwaiting ? undefined : () => pick(() => attrs.onRunShortcut(resolved.shortcut)),
+            onclick: isAwaiting ? undefined : () => reveal(() => attrs.onRunShortcut(resolved.shortcut)),
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(resolved.app, ROW_ICON_SIZE))), railLabel(label, "")],
         ),
-        canUnpin
+        canUnpin && expanded
           ? railAction({
               iconMarkup: railIcon("pin", ACTION_ICON_SIZE),
               label: `Unpin ${resolved.app.display_name} from this project`,
@@ -679,13 +701,15 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               onclick: () => attrs.onRemoveShortcut(resolved.shortcut),
             })
           : null,
-        railAction({
-          iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
-          label: `Shortcut options for ${resolved.app.display_name}`,
-          isRevealed: isMenuOpen,
-          extra: "project-rail-shortcut-menu absolute " + (canUnpin ? "right-6" : "right-1"),
-          onclick: (event) => openMenuAt({ kind: "shortcut", anchor: anchorForEvent(event), key }),
-        }),
+        expanded
+          ? railAction({
+              iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+              label: `Shortcut options for ${resolved.app.display_name}`,
+              isRevealed: isMenuOpen,
+              extra: "project-rail-shortcut-menu absolute " + (canUnpin ? "right-6" : "right-1"),
+              onclick: (event) => openMenuAt({ kind: "shortcut", anchor: anchorForEvent(event), key }),
+            })
+          : null,
       ],
     );
   }
@@ -752,6 +776,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   function renameRow(row: SidebarTabRow, attrs: SidebarAttrs): m.Vnode {
+    // Same tag and key as the row it stands in for, so mithril patches that element rather than
+    // replacing it. The attrs the row carries and this one does not -- its tooltip, its address --
+    // go with the patch.
     return m("div", { key: row.address, class: `${ROW_CLASS} pr-1` }, [
       m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(getApp(row.appName), ROW_ICON_SIZE))),
       m("input", {
@@ -796,12 +823,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             : row.isOpen
               ? "text-primary"
               : "text-faint"),
-        ...(row.stoppedDetail === undefined ? {} : hoverTooltipAttrs(`${row.label} — ${row.stoppedDetail}`, "right")),
-        onclick: () =>
-          pick(() => {
-            attrs.onOpenRow(row);
-            if (row.isOpen) expanded = false;
-          }),
+        ...hoverTooltipAttrs(row.stoppedDetail === undefined ? null : `${row.label} — ${row.stoppedDetail}`, "right"),
+        onclick: () => reveal(() => attrs.onOpenRow(row)),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           openMenuAt({ kind: "row", anchor: anchorForPointer(event), address: row.address });
@@ -921,7 +944,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         class: `${options.rowClass ?? MENU_ROW_CLASS} ${tone}`,
         role: "menuitem",
         "aria-disabled": options.isDisabled === true ? "true" : undefined,
-        ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
+        ...hoverTooltipAttrs(options.tooltip ?? null),
         onclick: options.isDisabled === true ? undefined : options.onclick,
       },
       [
@@ -1095,7 +1118,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: m(AllAppsPicker, {
         projectName: project?.name ?? null,
         pinnedKeys: (project?.shortcuts ?? []).map(shortcutKey),
-        onRunAction: (app, action) => pick(() => attrs.onRunAppAction(app, action)),
+        onRunAction: (app, action) => reveal(() => attrs.onRunAppAction(app, action)),
         onPin: (app, action) => {
           // Pinning is not picking: the popover stays open so several rows can be pinned.
           attrs.onPinShortcut(app, action);

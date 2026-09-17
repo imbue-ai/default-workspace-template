@@ -11,24 +11,53 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
+from app_instances.data_types import InstanceStatus
 from app_instances.testing import RecordingNudger
+from app_instances.testing import wait_until
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
-from imbue.chat.accounts import claim_first_chat
+from imbue.chat.accounts import Account
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
+from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.agent_manager import is_rebind_target
+from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.auto_open import AutoOpenLedger
+from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_fast_mode import ChatFastModeState
+from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_rebinds import RebindCancelledError
+from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import ChatRecordError
+from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_seed import SeedRole
+from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import read_seed_events
+from imbue.chat.chat_seed import seed_event_id
+from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -36,19 +65,40 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
+from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import AgentCreationError
+from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatConvergingError
+from imbue.chat.models import HandoffError
+from imbue.chat.models import HandoffFailedStep
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import TransitionKind
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
+from imbue.chat.primitives import ChatId
+from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import write_recording_mngr_binary
+from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
@@ -134,9 +184,9 @@ def _drain(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
     return out
 
 
-def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _last_chats_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
     for message in reversed(messages):
-        if message.get("type") == "agents_updated":
+        if message.get("type") == "chats_updated":
             return message
     return None
 
@@ -159,12 +209,23 @@ def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
     assert agents == []
 
 
-def test_get_proto_agents_initially_empty(agent_manager: AgentManager) -> None:
-    protos = agent_manager.get_proto_agents()
+def test_get_provisional_chats_initially_empty(agent_manager: AgentManager) -> None:
+    protos = agent_manager.get_provisional_chats()
     assert protos == []
 
 
-def test_get_agents_serialized(agent_manager: AgentManager) -> None:
+@pytest.mark.parametrize("chat_ref", ["", "   "])
+def test_a_blank_chat_ref_names_no_chat(agent_manager: AgentManager, chat_ref: str) -> None:
+    """A route or instance key can hand the manager a blank id; that names nothing rather than
+    tripping over the chat id primitive's own validation."""
+    seed_agent_state(agent_manager, "agent-1", name="Chat-1")
+
+    assert agent_manager.get_chat_snapshot(chat_ref) is None
+    assert agent_manager.get_provisional_chat(chat_ref) is None
+    assert agent_manager.discard_provisional_chat(chat_ref) is False
+
+
+def test_get_chat_snapshots(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._agents["a1"] = AgentStateItem(
             id="a1",
@@ -174,12 +235,15 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
             work_dir="/tmp/work",
         )
 
-    serialized = agent_manager.get_agents_serialized()
+    serialized = [snapshot.model_dump(mode="json") for snapshot in agent_manager.get_chat_snapshots()]
     assert len(serialized) == 1
-    assert serialized[0]["id"] == "a1"
+    assert serialized[0]["chat_id"] == "a1"
     assert serialized[0]["name"] == "agent-one"
     assert serialized[0]["labels"] == {"user_created": "true"}
-    assert serialized[0]["activity_state"] is None
+    assert serialized[0]["agent_ids"] == ["a1"]
+    assert serialized[0]["handoff"] is None
+    assert serialized[0]["active_agent"]["agent_id"] == "a1"
+    assert serialized[0]["active_agent"]["activity_state"] is None
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:
@@ -207,30 +271,30 @@ def test_resolve_agent_work_dir_returns_none_for_unknown(agent_manager: AgentMan
     assert result is None
 
 
-def test_create_chat_agent_broadcasts_proto_created(
+def test_create_chat_broadcasts_provisional_chat_created(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """The proto_agent_created broadcast fires before the creation thread runs."""
+    """The provisional_chat_created broadcast fires before the creation thread runs."""
     q = broadcaster.register()
 
-    created = agent_manager.create_chat_agent("test-chat")
+    created = agent_manager.create_chat("test-chat")
     agent_manager.stop()
 
-    assert isinstance(created.agent_id, str)
-    assert len(created.agent_id) > 0
+    assert isinstance(created.chat_id, str)
+    assert len(created.chat_id) > 0
     assert created.name == "test-chat"
     assert created.display_name == "test-chat"
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
-    assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["agent_id"] == created.agent_id
+    assert proto_msg["type"] == "provisional_chat_created"
+    assert proto_msg["chat_id"] == created.chat_id
     assert proto_msg["name"] == "test-chat"
     assert proto_msg["phase"] == "creating"
 
 
-def test_create_codex_agent_broadcasts_proto_created_with_its_account(
+def test_create_codex_chat_broadcasts_provisional_chat_created_with_its_account(
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
     git_work_dir: Path,
@@ -250,15 +314,15 @@ def test_create_codex_agent_broadcasts_proto_created_with_its_account(
 
     codex_account_id, _ = mint_account_dir()
     commit_account(codex_account_id, "openai", "OpenAI")
-    created = agent_manager.create_chat_agent("test-codex", account_id=codex_account_id)
+    created = agent_manager.create_chat("test-codex", account_id=codex_account_id)
     agent_manager.stop()
 
-    assert isinstance(created.agent_id, str)
+    assert isinstance(created.chat_id, str)
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
-    assert proto_msg["type"] == "proto_agent_created"
+    assert proto_msg["type"] == "provisional_chat_created"
     assert proto_msg["phase"] == "creating"
     assert proto_msg["account_id"] == codex_account_id
 
@@ -271,99 +335,542 @@ def test_reserve_chat_mints_a_chat_awaiting_an_account(
 
     reserved = agent_manager.reserve_chat()
 
-    proto = agent_manager.get_proto_agent(reserved.agent_id)
+    proto = agent_manager.get_provisional_chat(reserved.chat_id)
     assert proto is not None
     assert proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     assert proto.name == reserved.display_name == "Chat 1"
     raw = q.get_nowait()
     assert raw is not None
-    assert json.loads(raw) == {"type": "proto_agent_created", **proto.model_dump(mode="json")}
+    assert json.loads(raw) == {"type": "provisional_chat_created", **proto.model_dump(mode="json")}
 
 
-def test_create_chat_agent_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
+def test_create_chat_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
     reserved = agent_manager.reserve_chat()
     _tracked_chat(agent_manager, "agent-2", "Chat-2", display_name="Chat 2")
 
-    created = agent_manager.create_chat_agent("", agent_id=reserved.agent_id)
+    created = agent_manager.create_chat("", chat_id=reserved.chat_id)
     agent_manager.stop()
 
-    assert created.agent_id == reserved.agent_id
+    assert created.chat_id == reserved.chat_id
     assert created.display_name == reserved.display_name
 
 
-def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
-        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
-            agent_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
     with pytest.raises(AgentCreationError):
-        agent_manager.create_chat_agent("", agent_id="never-reserved")
+        agent_manager.create_chat("", chat_id="never-reserved")
     with pytest.raises(AgentCreationError):
-        agent_manager.create_chat_agent("", agent_id="proto-1")
+        agent_manager.create_chat("", chat_id="proto-1")
     agent_manager.stop()
 
 
-def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
     """A chat minted earlier keeps the name and project it was minted with: a launch that names either
     is refused rather than answered with a different name than it asked for."""
     reserved = agent_manager.reserve_chat()
-    with pytest.raises(AgentCreationError, match="keeps the name, project, and first message"):
-        agent_manager.create_chat_agent("Renamed", agent_id=reserved.agent_id)
-    with pytest.raises(AgentCreationError, match="keeps the name, project, and first message"):
-        agent_manager.create_chat_agent("", project_id="project-1", agent_id=reserved.agent_id)
-    reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
+    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+        agent_manager.create_chat("Renamed", chat_id=reserved.chat_id)
+    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+        agent_manager.create_chat("", project_id="project-1", chat_id=reserved.chat_id)
+    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
     assert reserved_proto is not None
     assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     agent_manager.stop()
 
 
-def test_create_chat_agent_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
     """A reserved chat keeps the first message it was minted with; a launch cannot reseed it."""
     reserved = agent_manager.reserve_chat(message="/welcome-tour")
     with pytest.raises(AgentCreationError, match="first message"):
-        agent_manager.create_chat_agent("", agent_id=reserved.agent_id, message="something else")
-    reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
+        agent_manager.create_chat("", chat_id=reserved.chat_id, message="something else")
+    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
     assert reserved_proto is not None
     assert reserved_proto.message == "/welcome-tour"
     assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     agent_manager.stop()
 
 
-def test_a_seeded_chat_leaves_the_first_chat_claim_for_a_plain_one(
+def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """A chat seeded with its own first message does not take the workspace's one ``/welcome``:
-    it launches without the ``first`` template, carrying its message, and the claim stays."""
+    """A chat created with its own first message carries it; ``/welcome`` is only for a chat
+    that starts with nothing to say (``launch_role_templates``)."""
     q = broadcaster.register()
 
-    seeded = agent_manager.create_chat_agent("seeded-chat", message="Teach me about Minds")
+    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
     agent_manager.stop()
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
-    assert proto_msg["agent_id"] == seeded.agent_id
-    assert proto_msg["message"] == "Teach me about Minds"
-    # The claim is still there for the next plain chat.
-    assert claim_first_chat() is True
+    assert proto_msg["chat_id"] == seeded.chat_id
+    assert proto_msg["message"] == "Teach me about Mind"
+
+
+@pytest.mark.parametrize(
+    ("message", "is_fast", "expected"),
+    [
+        ("", True, ("welcome", "fast")),
+        ("", False, ("welcome",)),
+        ("Teach me about Mind", True, ("fast",)),
+        ("Teach me about Mind", False, ()),
+    ],
+)
+def test_launch_role_templates_follow_the_message_and_the_chats_fast_mode(
+    message: str, is_fast: bool, expected: tuple[str, ...]
+) -> None:
+    """Every chat that starts silent is greeted; a chat starts fast when its fast mode calls for it."""
+    assert launch_role_templates(message, is_fast) == expected
+
+
+def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default decides the launch and is written as the chat's own mode, so a later change to
+    the default leaves this chat where it was."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(fast_mode_default=FastModeMode.OFF))
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats", chat_settings=settings
+    )
+    try:
+        created = manager.create_chat("", message="hello")
+        assert wait_until(lambda: manager.get_provisional_chat(created.chat_id) is None, timeout_seconds=10)
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--template fast" not in argv_line
+    assert read_fast_mode_state(tmp_path / "chats" / created.chat_id) == ChatFastModeState(mode=FastModeMode.OFF)
+    assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
+
+
+def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        chat_id = ChatId("agent-fastchat")
+        spec = SuccessorCreateSpec(
+            name="Chat 1",
+            chat_id=chat_id,
+            agent_id="agent-next",
+            harness=HarnessType.CLAUDE,
+            project_id="",
+            account_id="acct-1",
+            extra_labels=(),
+        )
+        # No mode of its own: the workspace default (auto) launches fast.
+        assert "fast" in manager._build_successor_create_command(spec)
+        manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.AUTO, is_switched=True))
+        assert "fast" not in manager._build_successor_create_command(spec)
+        manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+        assert "fast" in manager._build_successor_create_command(spec)
+    finally:
+        manager.stop()
+
+
+def _seed_turns() -> tuple[SeedTurn, ...]:
+    return (
+        SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
+        SeedTurn(role=SeedRole.ASSISTANT, text="Software that works for you."),
+        SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),
+    )
+
+
+def _seed_files_root(tmp_path: Path) -> Path:
+    """Where a seeded test's manager keeps its chats' seed files."""
+    return tmp_path / "chats"
+
+
+def _seed_manager(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    store: InMemoryChatRecordStore | None = None,
+    mngr_binary: str | None = None,
+    auto_open: AutoOpenReactor | None = None,
+) -> tuple[AgentManager, InMemoryChatRecordStore]:
+    """A manager for the seeded-chat tests: over ``store`` (a fresh one when None), its seed files
+    under ``tmp_path``, and the manager's own ``mngr`` unless a recording one is given."""
+    store = store if store is not None else InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary if mngr_binary is not None else "mngr",
+        auto_open=auto_open,
+        chat_record_store=store,
+        chat_files_root=_seed_files_root(tmp_path),
+    )
+    return manager, store
+
+
+def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seeded_turns(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The Mind app's conversation becomes the chat's first segment: the record names the seed
+    as its only member, the seed file holds the turns, and the chat is listed awaiting the user."""
+    manager, store = _seed_manager(broadcaster, tmp_path)
+    q = broadcaster.register()
+    try:
+        created = manager.seed_chat("Getting started", _seed_turns())
+
+        chat_id = ChatId(created.chat_id)
+        assert created.display_name == "Getting started"
+        provisional = manager.get_provisional_chat(created.chat_id)
+        assert provisional is not None
+        assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        assert provisional.is_seeded is True
+        record = store.read(chat_id)
+        assert record is not None
+        assert record.is_seed_only and record.seed_title == "Getting started"
+        assert record.agents[0].final_event_count == 3
+        events = read_seed_events(_seed_files_root(tmp_path) / chat_id)
+        assert [event["type"] for event in events] == ["user_message", "assistant_message", "assistant_message"]
+        assert events[0]["event_id"] == seed_event_id(chat_id, 0)
+        # The seed reads back as the chat's one (ended) segment.
+        segments = manager.get_chat_segments(chat_id)
+        assert segments is not None
+        (segment,) = segments
+        assert segment.agent.harness is HarnessType.SEED and segment.is_active is False
+        raw = q.get_nowait()
+        assert raw is not None
+        broadcast = json.loads(raw)
+        assert broadcast["type"] == "provisional_chat_created"
+        assert broadcast["chat_id"] == created.chat_id
+    finally:
+        manager.stop()
+
+
+def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user's first message launches the chat's first real agent: a fresh id under the
+    chat's, joining the record as its second member, with the membership labels a handoff's
+    successor carries, the message it was sent, and no ``/welcome``."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+        # The create runs on a thread; stopping the manager before it lands would kill the fake mngr.
+        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+    finally:
+        manager.stop()
+
+    assert launched.chat_id == seeded.chat_id
+    assert launched.display_name == "Getting started"
+    assert manager.get_provisional_chat(seeded.chat_id) is None
+    record = store.read(ChatId(seeded.chat_id))
+    assert record is not None
+    seed, agent = record.agents
+    assert agent.seq == 2 and agent.agent_id != seeded.chat_id
+    assert agent.harness is HarnessType.CLAUDE and agent.ended_at is None
+    assert manager.get_agent_by_id(agent.agent_id) is not None
+    (argv_line,) = argv_log.read_text().splitlines()
+    argv = argv_line.split()
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat", "fast"]
+    assert f"chat_id={seeded.chat_id}" in argv and "chat_seq=2" in argv
+    assert "Let's" in argv_line and "/welcome" not in argv_line
+
+
+def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Try again" on a seeded chat whose first launch failed: the retry keeps the
+    first send it was launched with and, like the first launch, gives the agent a fresh id and a
+    place on the record after the seed, so the chat resolves to it once the create lands."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    (signed_in,) = read_index().accounts
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        # The first launch failed: what _run_creation leaves behind when mngr create exits non-zero.
+        with manager._lock:
+            awaiting = manager._provisional_chats[chat_id]
+            manager._provisional_chats[chat_id] = awaiting.model_copy_update(
+                to_update(awaiting.field_ref().account_id, signed_in.id),
+                to_update(awaiting.field_ref().message, "Let's build something"),
+                to_update(awaiting.field_ref().phase, ProvisionalChatPhase.FAILED),
+                to_update(awaiting.field_ref().error, "mngr create exited with code 3"),
+            )
+
+        with pytest.raises(AgentCreationError, match="keeps the first message"):
+            manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id, message="Something else")
+        relaunched = manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id)
+        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+
+        assert relaunched.chat_id == seeded.chat_id
+        record = store.read(chat_id)
+        assert record is not None
+        seed, agent = record.agents
+        assert agent.seq == 2 and agent.agent_id != seeded.chat_id and agent.ended_at is None
+        active = manager.get_active_agent_info(chat_id)
+        assert active is not None and active.id == agent.agent_id
+        (argv_line,) = argv_log.read_text().splitlines()
+        assert f"chat_id={seeded.chat_id}" in argv_line.split() and "chat_seq=2" in argv_line.split()
+        assert "Let's" in argv_line and "Something else" not in argv_line
+    finally:
+        manager.stop()
+
+
+def _write_gated_mngr_binary(tmp_path: Path, create_exit_code: int = 0) -> tuple[str, Path, Path]:
+    """A stand-in ``mngr`` whose create blocks until the returned go-file exists, so the state a
+    create leaves while it runs is observable, then exits ``create_exit_code``; every other
+    command succeeds at once. Every argv is appended to the returned log."""
+    go_path = tmp_path / "mngr-go"
+    log_path = tmp_path / "mngr-argv.log"
+    script = tmp_path / "fake-mngr"
+    script.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n'
+        f'if [ "$1" = "create" ]; then while [ ! -e "{go_path}" ]; do sleep 0.05; done; exit {create_exit_code}; fi\n'
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+    return str(script), go_path, log_path
+
+
+def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_chat_of_its_own(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mngr lists an agent as soon as it is provisioned, seconds before its create returns, and an
+    agent no record names is a chat of its own: the record names the seeded chat's agent from before
+    the create, as a handoff names its successor, so that listing puts the chat under the seed's id
+    rather than a second chat beside it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, go_path, _argv_log = _write_gated_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+
+        # The create is still running: the record already names the agent as the chat's, and
+        # the seed is the whole transcript until mngr lists it.
+        record = store.read(chat_id)
+        assert record is not None
+        _seed, agent = record.agents
+        assert agent.seq == 2 and agent.ended_at is None
+        assert manager.chat_id_of_agent(agent.agent_id) == chat_id
+        assert manager.get_provisional_chat(seeded.chat_id) is not None
+        assert manager.get_chat_snapshots() == []
+        seed_segments = manager.get_chat_segments(chat_id)
+        assert seed_segments is not None
+        (seed_segment,) = seed_segments
+        assert seed_segment.agent.harness is HarnessType.SEED
+
+        # mngr lists the agent mid-create: one chat, under the seed's id, reading both segments.
+        listed = _agent_details(
+            "Getting-started",
+            agent_id=MngrAgentId(agent.agent_id),
+            labels={"user_created": "true", "chat_id": seeded.chat_id, "chat_seq": "2"},
+        )
+        manager._handle_observe_event(make_agent_state_event(listed))
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [chat_id]
+        segments = manager.get_chat_segments(chat_id)
+        assert segments is not None
+        assert [segment.agent.harness for segment in segments] == [HarnessType.SEED, HarnessType.CLAUDE]
+
+        go_path.touch()
+        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+        landed = store.read(chat_id)
+        assert landed is not None
+        assert [entry.agent_id for entry in landed.agents] == [seeded.chat_id, agent.agent_id]
+    finally:
+        go_path.touch()
+        manager.stop()
+
+
+def test_a_seeded_chats_failed_create_takes_its_agent_back_off_the_record(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create that fails leaves the chat seed-only again, failed and still seeded, so the page's
+    "Try again" and its discard find the chat as it was before the launch."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    script = tmp_path / "fake-mngr"
+    script.write_text('#!/bin/sh\necho "No provider account is signed in" >&2\nexit 3\n')
+    script.chmod(0o755)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=str(script))
+
+    def is_failed() -> bool:
+        provisional = manager.get_provisional_chat(seeded.chat_id)
+        return provisional is not None and provisional.phase is ProvisionalChatPhase.FAILED
+
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+        assert wait_until(is_failed, timeout_seconds=10)
+
+        failed = manager.get_provisional_chat(seeded.chat_id)
+        assert failed is not None
+        assert failed.is_seeded and failed.message == "Let's build something"
+        record = store.read(chat_id)
+        assert record is not None and record.is_seed_only
+        assert manager.discard_provisional_chat(seeded.chat_id) is True
+        assert store.read(chat_id) is None
+    finally:
+        manager.stop()
+
+
+def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mngr lists an agent before its create returns, so a create that fails after provisioning
+    leaves one behind that the withdrawn record no longer names: it would be listed as a chat of
+    its own, and the retry mints a fresh id, so the failure drops and destroys it, as a handoff's
+    retry does with its half-made successor."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, go_path, argv_log = _write_gated_mngr_binary(tmp_path, create_exit_code=3)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+
+    def destroys() -> list[str]:
+        # The log exists once the fake mngr has run at all, which the create's thread may not have got to yet.
+        if not argv_log.exists():
+            return []
+        return [line for line in argv_log.read_text().splitlines() if line.startswith("destroy ")]
+
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        chat_id = ChatId(seeded.chat_id)
+        manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+        record = store.read(chat_id)
+        assert record is not None
+        _seed, agent = record.agents
+        listed = _agent_details(
+            "Getting-started",
+            agent_id=MngrAgentId(agent.agent_id),
+            labels={"user_created": "true", "chat_id": seeded.chat_id, "chat_seq": "2"},
+        )
+        manager._handle_observe_event(make_agent_state_event(listed))
+        assert manager.get_agent_by_id(agent.agent_id) is not None
+
+        go_path.touch()
+        assert wait_until(lambda: len(destroys()) == 1, timeout_seconds=10)
+
+        assert destroys() == [f"destroy {agent.agent_id} --force"]
+        failed = manager.get_provisional_chat(seeded.chat_id)
+        assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
+        withdrawn = store.read(chat_id)
+        assert withdrawn is not None and withdrawn.is_seed_only
+        # Neither the seeded chat (provisional, no agent) nor the orphan is a listed chat.
+        assert manager.get_agent_by_id(agent.agent_id) is None
+        assert manager.get_chat_snapshots() == []
+    finally:
+        go_path.touch()
+        manager.stop()
+
+
+def test_seed_chat_checks_its_title_like_a_launch_checks_a_requested_name(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A title the first send's ``mngr create`` could not use is refused here, with nothing seeded."""
+    manager, store = _seed_manager(broadcaster, tmp_path)
+    try:
+        with pytest.raises(AgentCreationError, match="no usable characters"):
+            manager.seed_chat("!!!", _seed_turns())
+        manager.seed_chat("Getting started", _seed_turns())
+        with pytest.raises(AgentNameConflictError, match="already exists"):
+            manager.seed_chat("getting-started", _seed_turns())
+        assert [proto.name for proto in manager.get_provisional_chats()] == ["Getting started"]
+        assert len(store.read_all()) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_seeded_chat_must_be_launched_with_a_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The launch resolves its work dir before it reads the message, so name one (CI sets none).
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = manager.seed_chat("", _seed_turns())
+        with pytest.raises(AgentCreationError, match="first message"):
+            manager.create_chat("", chat_id=seeded.chat_id)
+        provisional = manager.get_provisional_chat(seeded.chat_id)
+        assert provisional is not None
+        assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    finally:
+        manager.stop()
+
+
+def test_discarding_a_seeded_chat_drops_its_record_with_it(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    manager, store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = manager.seed_chat("", _seed_turns())
+        assert manager.discard_provisional_chat(seeded.chat_id) is True
+        assert manager.get_provisional_chat(seeded.chat_id) is None
+        assert store.read(ChatId(seeded.chat_id)) is None
+        assert manager.get_chat_segments(ChatId(seeded.chat_id)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The seed's record is on disk, so a restart of this app lists the chat again, awaiting the user."""
+    first, store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = first.seed_chat("Getting started", _seed_turns())
+    finally:
+        first.stop()
+
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=RecordingShell(client_ids=[]))
+    second, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=reactor)
+    try:
+        restored = second.get_provisional_chat(seeded.chat_id)
+        assert restored is not None
+        assert restored.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        assert restored.name == "Getting started" and restored.is_seeded is True
+        # Its tab is still owed: nobody was connected to see it before the restart.
+        assert reactor.pending_chat_ids() == {ChatId(seeded.chat_id)}
+    finally:
+        second.stop()
+
+    # A tab the ledger says was delivered is not popped again by a restart.
+    delivered_ledger = AutoOpenLedger(path=None)
+    delivered_ledger.mark_delivered(ChatId(seeded.chat_id))
+    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=RecordingShell(client_ids=[]))
+    third, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=delivered_reactor)
+    try:
+        assert third.get_provisional_chat(seeded.chat_id) is not None
+        assert delivered_reactor.pending_chat_ids() == set()
+    finally:
+        third.stop()
 
 
 def _seed_failed_chat(
-    agent_manager: AgentManager, agent_id: str, name: str, account_id: str = "acct-1"
+    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1"
 ) -> ProvisionalChat:
     proto = ProvisionalChat(
-        agent_id=agent_id,
+        chat_id=chat_id,
         name=name,
         account_id=account_id,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
     with agent_manager._lock:
-        agent_manager._proto_agents[agent_id] = proto
+        agent_manager._provisional_chats[chat_id] = proto
     return proto
 
 
-def test_create_chat_agent_relaunches_a_failed_chat_under_its_id_and_name(
+def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """The page's "Try again": the failed record is launched again on its account, keeping the id
@@ -372,43 +879,44 @@ def test_create_chat_agent_relaunches_a_failed_chat_under_its_id_and_name(
     ``mngr`` of this fixture fails at once, which would settle it again)."""
     # The account the conftest signed in: what the failed record binds to and the retry names.
     (signed_in,) = read_index().accounts
-    failed = _seed_failed_chat(agent_manager, "failed-1", "Chat 1", account_id=signed_in.id)
+    failed = _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
     q = broadcaster.register()
 
-    created = agent_manager.create_chat_agent("", agent_id="failed-1", account_id=failed.account_id)
+    created = agent_manager.create_chat("", chat_id="failed-1", account_id=failed.account_id)
     agent_manager.stop()
 
-    assert created.agent_id == "failed-1"
+    assert created.chat_id == "failed-1"
     assert created.display_name == "Chat 1"
     raw = q.get_nowait()
     assert raw is not None
     assert json.loads(raw) == {
-        "type": "proto_agent_created",
-        "agent_id": "failed-1",
+        "type": "provisional_chat_created",
+        "chat_id": "failed-1",
         "name": "Chat 1",
         "project_id": "",
         "account_id": signed_in.id,
         "message": "",
         "phase": "creating",
         "error": None,
+        "is_seeded": False,
     }
-    assert [proto.agent_id for proto in agent_manager.get_proto_agents()] == ["failed-1"]
+    assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
 
 
 def test_discard_provisional_chat_drops_a_failed_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    _seed_failed_chat(agent_manager, "failed-1", "Chat 1")
+    _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     q = broadcaster.register()
 
     assert agent_manager.discard_provisional_chat("failed-1") is True
 
-    assert agent_manager.get_proto_agent("failed-1") is None
+    assert agent_manager.get_provisional_chat("failed-1") is None
     raw = q.get_nowait()
     assert raw is not None
     assert json.loads(raw) == {
-        "type": "proto_agent_completed",
-        "agent_id": "failed-1",
+        "type": "provisional_chat_completed",
+        "chat_id": "failed-1",
         "success": False,
         "error": None,
     }
@@ -419,21 +927,21 @@ def test_discard_provisional_chat_drops_a_reserved_chat_but_not_a_create_in_flig
 ) -> None:
     reserved = agent_manager.reserve_chat()
     with agent_manager._lock:
-        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
-            agent_id="proto-1", name="Chat 9", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 9", phase=ProvisionalChatPhase.CREATING
         )
     q = broadcaster.register()
 
-    assert agent_manager.discard_provisional_chat(reserved.agent_id) is True
+    assert agent_manager.discard_provisional_chat(reserved.chat_id) is True
     assert agent_manager.discard_provisional_chat("proto-1") is False
     assert agent_manager.discard_provisional_chat("never-minted") is False
 
-    assert [proto.agent_id for proto in agent_manager.get_proto_agents()] == ["proto-1"]
+    assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["proto-1"]
     raw = q.get_nowait()
     assert raw is not None
     assert json.loads(raw) == {
-        "type": "proto_agent_completed",
-        "agent_id": reserved.agent_id,
+        "type": "provisional_chat_completed",
+        "chat_id": reserved.chat_id,
         "success": False,
         "error": None,
     }
@@ -461,7 +969,7 @@ def test_agent_state_event_adds_agent(agent_manager: AgentManager, broadcaster: 
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "agents_updated"
+    assert msg["type"] == "chats_updated"
 
 
 def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
@@ -484,8 +992,8 @@ def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcas
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "agents_updated"
-    assert str_id not in [a["id"] for a in msg["agents"]]
+    assert msg["type"] == "chats_updated"
+    assert str_id not in [chat["chat_id"] for chat in msg["chats"]]
 
 
 def _full_snapshot_with_agent(name: str) -> tuple[MngrAgentId, HostId, AgentDetails]:
@@ -619,7 +1127,7 @@ def test_create_chat_raises_when_the_primary_work_dir_is_unknown(agent_manager: 
         # MNGR_AGENT_WORK_DIR is absent, and the fallback treats it as falsy.
         agent_manager._own_work_dir = ""
     with pytest.raises(AgentCreationError, match="Cannot determine work directory"):
-        agent_manager.create_chat_agent("test")
+        agent_manager.create_chat("test")
 
 
 def test_initial_discover_populates_agents(
@@ -661,26 +1169,26 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "agents_updated"
-    assert len(msg["agents"]) == 2
+    assert msg["type"] == "chats_updated"
+    assert len(msg["chats"]) == 2
 
 
-def _seed_creating_chat(agent_manager: AgentManager, agent_id: str, name: str) -> None:
+def _seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str) -> None:
     with agent_manager._lock:
-        agent_manager._proto_agents[agent_id] = ProvisionalChat(
-            agent_id=agent_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
         )
 
 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     q = broadcaster.register()
 
-    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+    agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
 
-    assert agent_manager.get_proto_agent("test-id") is None
+    assert agent_manager.get_provisional_chat("test-id") is None
     agent = agent_manager.get_agent_by_id("test-id")
     assert agent is not None
     assert agent.name == "test-agent"
@@ -689,21 +1197,115 @@ def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
         raw = q.get_nowait()
         assert raw is not None
         messages.append(json.loads(raw))
-    completed = [message for message in messages if message["type"] == "proto_agent_completed"]
-    assert completed == [{"type": "proto_agent_completed", "agent_id": "test-id", "success": True, "error": None}]
+    completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
+    assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
+
+
+def test_a_created_chat_stays_listed_through_observe_events_that_predate_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The observe stream reports a new agent seconds after its create returns; every event before
+    that rebuilds the tracked agents without it, which must not unlist the chat the create landed."""
+    created_id = str(MngrAgentId())
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+
+    agent_manager._handle_observe_event(make_agent_state_event(_agent_details("older-chat")))
+    agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
+
+    assert created_id in {snapshot.chat_id for snapshot in agent_manager.get_chat_snapshots()}
+
+
+def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A create that never reaches the stream (the agent died before observe saw it) must not be held
+    for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
+    created_id = str(MngrAgentId())
+    (tmp_path / "agents" / created_id).mkdir(parents=True)
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+    with agent_manager._lock:
+        assert created_id in agent_manager._activity_tracked_agents
+        assert created_id in agent_manager._model_watcher_by_agent
+
+    for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
+        agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
+
+    assert agent_manager.get_agent_by_id(created_id) is None
+    with agent_manager._lock:
+        assert created_id not in agent_manager._activity_tracked_agents
+        assert created_id not in agent_manager._model_watcher_by_agent
+
+
+def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    created_id = MngrAgentId()
+    _seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
+    agent_manager._run_creation(
+        ChatId(str(created_id)), str(created_id), "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE
+    )
+    created = _agent_details("chat-1", agent_id=created_id)
+
+    agent_manager._handle_observe_event(make_agent_state_event(created))
+    agent_manager._handle_observe_event(make_agent_removed_event(created.id, created.name, created.host.id))
+
+    assert agent_manager.get_agent_by_id(str(created_id)) is None
+
+
+def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agent is up, so the create succeeded; a first message that could not be handed over is the
+    settling step's problem and must not cost the waiting page its answer."""
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        raise OSError("the pane went away")
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    q = broadcaster.register()
+
+    with pytest.raises(OSError):
+        agent_manager._run_creation(
+            ChatId("test-id"),
+            "test-id",
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {},
+            HarnessType.CLAUDE,
+            deferred_message="hello",
+        )
+
+    assert agent_manager.get_agent_by_id("test-id") is not None
+    messages = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        messages.append(json.loads(raw))
+    completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
+    assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
 
 
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """A failed create is not forgotten: the page shows why, and can try again on the same account."""
-    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
 
-    agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
+    agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
 
     assert agent_manager.get_agent_by_id("test-id") is None
-    proto = agent_manager.get_proto_agent("test-id")
+    proto = agent_manager.get_provisional_chat("test-id")
     assert proto is not None
     assert proto.phase is ProvisionalChatPhase.FAILED
     assert proto.account_id == "acct-1"
@@ -807,7 +1409,7 @@ def test_full_snapshot_dropping_agents_removes_them(
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "agents_updated"
+    assert msg["type"] == "chats_updated"
 
 
 def test_full_snapshot_omitting_agent_drops_it(
@@ -839,6 +1441,19 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
+def _chat_create_argv(**overrides: Any) -> list[str]:
+    """The argv for one demo chat on claude; ``overrides`` replace the builder's arguments."""
+    arguments: dict[str, Any] = {
+        "mngr_binary": "mngr",
+        "name": "demo",
+        "chat_id": ChatId("agent-123"),
+        "agent_id": "agent-123",
+        "primary_labels": {},
+        "harness": HarnessType.CLAUDE,
+    }
+    return _build_chat_create_command(**{**arguments, **overrides})
+
+
 def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None:
     """The harness/role split is the contract: `--type` picks the harness, the lone
     `--template` picks the role.
@@ -847,24 +1462,23 @@ def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None
     directly), and the `chat` role template -- which never sets `type` -- cannot
     clobber it.
     """
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv()
     assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat"]
 
 
+def test_chat_create_argv_names_the_chat_in_the_agents_environment() -> None:
+    """Every agent the app creates carries its chat's id as ``MINDS_CHAT_ID``, which is how a
+    skill or script inside the workspace addresses the chat rather than the agent."""
+    argv = _chat_create_argv()
+    env_values = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--env"]
+    assert "MINDS_CHAT_ID=agent-123" in env_values
+
+
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
     """The codex harness reuses the chat role verbatim; only the `--type` differs."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
+    argv = _chat_create_argv(
         primary_labels={"project": "proj"},
         harness=HarnessType.CODEX,
     )
@@ -877,31 +1491,16 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
 def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
     """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
     like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
-    seeded = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-        initial_message="/use-template https://github.com/example/a-template",
-    )
+    seeded = _chat_create_argv(initial_message="/use-template https://github.com/example/a-template")
     assert_mngr_argv_valid(seeded)
     assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
 
-    plain = _build_chat_create_command(
-        mngr_binary="mngr", name="demo", agent_id="agent-123", primary_labels={}, harness=HarnessType.CLAUDE
-    )
+    plain = _chat_create_argv()
     assert "--message" not in plain
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={"workspace": "ws", "project": "proj"},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(primary_labels={"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
@@ -922,6 +1521,10 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
     settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
     agent_types = settings["agent_types"]
     for harness in HarnessType:
+        if harness is HarnessType.SEED:
+            # The seed segment's pseudo-harness: no agent ever runs on it, so it has no agent
+            # type and nothing to launch through the wrapper.
+            continue
         command = agent_types[harness.value].get("command", "")
         assert "oom_priority/bin/agent_oom_launch.py" in command, f"{harness} launches unbanded"
         # The wrapper consumes argv[1] as the binary to exec, so it must actually be there.
@@ -930,33 +1533,23 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
-    mode rides only the `first` create template (see .mngr/settings.toml), never
-    the argv, so every non-first chat starts at standard speed."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    mode rides only the `fast` create template (see .mngr/settings.toml), never
+    the argv, so a chat launched without it starts at standard speed."""
+    argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
-    """The `first` launcher stacks its template via extra_role_templates; the
+    """The launch templates (`welcome`, `fast`) stack via extra_role_templates; the
     resulting argv must resolve against the live CLI."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={},
+    argv = _chat_create_argv(
         harness=HarnessType.CODEX,
-        extra_role_templates=("first",),
+        extra_role_templates=("welcome", "fast"),
     )
     assert_mngr_argv_valid(argv)
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == ["chat", "first"]
+    assert templates == ["chat", "welcome", "fast"]
 
 
 # --- the chat's originating project (the mngr ``project`` label) ---
@@ -987,18 +1580,30 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
     derives for itself, so its "true name is the canonical form of the display
     name" rule holds either way.
     """
-    argv = _build_chat_create_command(
-        "mngr",
-        "Chat 2",
-        "agent-1",
-        {},
-        HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(name="Chat 2", chat_id=ChatId("agent-1"), agent_id="agent-1")
 
     assert argv[2] == "Chat-2"
     labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
     assert "display_name=Chat 2" in labels
     assert_mngr_argv_valid(argv)
+
+
+def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
+    """A handoff's create adds the chat membership labels after the account args, which the vendored mngr has
+    to accept.
+
+    That the successor's create carries no message -- the prompt follows through the send path once the
+    model pick has landed -- is checked where the create is actually built, against the fake mngr's own
+    argv log (``chat_handoffs_test.py``); asserting it here would only restate that this helper passes
+    no message.
+    """
+    argv = _chat_create_argv(
+        account_args=("--label", "account=acct-1"),
+        extra_labels=("chat_id=agent-123", "chat_seq=2"),
+    )
+    assert_mngr_argv_valid(argv)
+    labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
+    assert labels[-3:] == ["account=acct-1", "chat_id=agent-123", "chat_seq=2"]
 
 
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
@@ -1028,7 +1633,7 @@ def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name:
         )
 
 
-def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
+def test_rename_chat_refuses_a_chat_that_is_still_being_created(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
     """A create in flight already carries a name; renaming to another would race it.
@@ -1040,17 +1645,17 @@ def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
     manager = AgentManager.build(broadcaster)
     try:
         with manager._lock:
-            manager._proto_agents["proto-1"] = ProvisionalChat(
-                agent_id="proto-1", name="Chat 2", phase=ProvisionalChatPhase.CREATING
+            manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+                chat_id=ChatId("proto-1"), name="Chat 2", phase=ProvisionalChatPhase.CREATING
             )
-        manager.rename_chat_agent("proto-1", "Chat 2")
+        manager.rename_chat("proto-1", "Chat 2")
         with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("proto-1", "Something else")
+            manager.rename_chat("proto-1", "Something else")
     finally:
         manager.stop()
 
 
-def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
+def test_rename_chat_leaves_mngr_alone_for_an_untracked_id(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1061,12 +1666,12 @@ def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
     """
     manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
     try:
-        manager.rename_chat_agent("agent-nowhere", "Scratch")
+        manager.rename_chat("agent-nowhere", "Scratch")
     finally:
         manager.stop()
 
 
-def test_rename_chat_agent_raises_when_mngr_refuses(
+def test_rename_chat_raises_when_mngr_refuses(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1079,7 +1684,7 @@ def test_rename_chat_agent_raises_when_mngr_refuses(
     try:
         _tracked_chat(manager, "agent-7", "Chat-2")
         with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("agent-7", "Planning notes")
+            manager.rename_chat("agent-7", "Planning notes")
         still_named = manager.get_agent_by_id("agent-7")
         assert still_named is not None
         assert still_named.name == "Chat-2"
@@ -1087,7 +1692,7 @@ def test_rename_chat_agent_raises_when_mngr_refuses(
         manager.stop()
 
 
-def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
+def test_rename_chat_rejects_a_name_already_held_by_another_chat(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1102,12 +1707,12 @@ def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
         _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
         _tracked_chat(manager, "agent-8", "Chat-3", display_name="Chat 3")
         with pytest.raises(AgentNameConflictError):
-            manager.rename_chat_agent("agent-7", "chat 3")
+            manager.rename_chat("agent-7", "chat 3")
     finally:
         manager.stop()
 
 
-def test_rename_chat_agent_refuses_the_primary_agent(
+def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1119,12 +1724,12 @@ def test_rename_chat_agent_refuses_the_primary_agent(
                 id="agent-1", name="system-services", state="RUNNING", labels={"is_primary": "true"}, work_dir=None
             )
         with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("agent-1", "My machine")
+            manager.rename_chat("agent-1", "My machine")
     finally:
         manager.stop()
 
 
-def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
+def test_rename_chat_rejects_a_name_with_no_usable_characters(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1132,7 +1737,7 @@ def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
     try:
         _tracked_chat(manager, "agent-7", "Chat-2")
         with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("agent-7", "!!!")
+            manager.rename_chat("agent-7", "!!!")
     finally:
         manager.stop()
 
@@ -1196,7 +1801,7 @@ def test_rename_failure_detail_names_a_signal_we_did_not_send() -> None:
     )
 
 
-def test_create_chat_agent_mints_the_first_free_numbered_name(
+def test_create_chat_mints_the_first_free_numbered_name(
     agent_manager: AgentManager,
 ) -> None:
     """An empty requested name allocates "Chat N" server-side, filling gaps.
@@ -1206,54 +1811,53 @@ def test_create_chat_agent_mints_the_first_free_numbered_name(
     """
     _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
     _tracked_chat(agent_manager, "agent-3", "Chat-3", display_name="Chat 3")
-    created = agent_manager.create_chat_agent("")
+    created = agent_manager.create_chat("")
     agent_manager.stop()
 
     assert created.display_name == "Chat 2"
     assert created.name == "Chat-2"
 
 
-def test_create_chat_agent_counts_in_flight_creates_as_taken(
+def test_create_chat_counts_in_flight_creates_as_taken(
     agent_manager: AgentManager,
 ) -> None:
     """Two concurrent creates cannot both mint "Chat 1": an in-flight create's
     proto entry blocks the slot. The in-flight create is pinned as a proto
     entry directly, so the test cannot race its background completion."""
     with agent_manager._lock:
-        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
-            agent_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
-    created = agent_manager.create_chat_agent("")
+    created = agent_manager.create_chat("")
     agent_manager.stop()
 
     assert created.display_name == "Chat 2"
 
 
-def test_create_chat_agent_numbers_each_harness_under_its_own_word(
+def test_create_chat_numbers_every_harness_under_the_one_chat_word(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+    """A codex chat is "Chat 2", not "Codex 1": one word for every harness and lane.
 
-    The harness comes from the bound account, so the codex one is named by signing in
-    rather than by asking for it -- which is the point: a caller cannot name a harness
-    that disagrees with the credential the chat will actually run on.
+    A chat can move to another harness after it is named, so a name that said which
+    harness it started on would be wrong the moment it moved; the provider row of the
+    model bar is where the harness shows.
     """
     # The plain chat is created first, while there is nothing signed in, so it lands on
     # the workspace login as claude. Signing in afterwards is what makes the second one
-    # codex -- and note it would also make an unbound THIRD chat codex, since the most
-    # recently used account is the default.
-    chat = agent_manager.create_chat_agent("")
+    # codex -- the harness comes from the bound account, never from the name.
+    chat = agent_manager.create_chat("")
     codex_account_id, _ = mint_account_dir()
     commit_account(codex_account_id, "openai", "OpenAI")
-    codex = agent_manager.create_chat_agent("", account_id=codex_account_id)
+    codex = agent_manager.create_chat("", account_id=codex_account_id)
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"
-    assert codex.display_name == "Codex 1"
+    assert codex.display_name == "Chat 2"
 
 
-def test_create_chat_agent_rejects_an_explicit_name_that_collides(
+def test_create_chat_rejects_an_explicit_name_that_collides(
     agent_manager: AgentManager,
 ) -> None:
     """An explicitly requested name that canonicalizes onto an existing agent's
@@ -1261,11 +1865,11 @@ def test_create_chat_agent_rejects_an_explicit_name_that_collides(
     background mngr create to fail on."""
     _tracked_chat(agent_manager, "agent-1", "Chat-2", display_name="Chat 2")
     with pytest.raises(AgentNameConflictError):
-        agent_manager.create_chat_agent("chat 2")
+        agent_manager.create_chat("chat 2")
     agent_manager.stop()
 
 
-def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
+def test_create_chat_registers_the_pre_observe_state_under_the_name_pair(
     broadcaster: WebSocketBroadcaster,
     git_work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1282,18 +1886,18 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_files_root=tmp_path / "chats")
     try:
-        created = manager.create_chat_agent("My planning chat")
+        created = manager.create_chat("My planning chat")
         assert created.name == "My-planning-chat"
 
         wait_for(
-            lambda: manager.get_agent_by_id(created.agent_id) is not None,
+            lambda: manager.get_agent_by_id(created.chat_id) is not None,
             timeout=30.0,
             error_message="the creation thread never registered the agent",
         )
 
-        agent = manager.get_agent_by_id(created.agent_id)
+        agent = manager.get_agent_by_id(created.chat_id)
         assert agent is not None
         assert agent.name == "My-planning-chat"
         assert agent.labels["display_name"] == "My planning chat"
@@ -1303,12 +1907,8 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
 
 
 def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
+    argv = _chat_create_argv(
         primary_labels={"workspace": "ws", "project": "taxes"},
-        harness=HarnessType.CLAUDE,
         project_id="website-redesign",
     )
     assert "project=website-redesign" in argv
@@ -1317,13 +1917,7 @@ def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
 
 
 def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        agent_id="agent-123",
-        primary_labels={"workspace": "ws"},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(primary_labels={"workspace": "ws"})
     assert not any(token.startswith("project=") for token in argv)
     assert_mngr_argv_valid(argv)
 
@@ -1340,7 +1934,7 @@ def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadc
                 manager._agents[agent_id] = AgentStateItem(
                     id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
                 )
-        project_by_id = {agent["id"]: agent["project"] for agent in manager.get_agents_serialized()}
+        project_by_id = {snapshot.chat_id: snapshot.project for snapshot in manager.get_chat_snapshots()}
         assert project_by_id == {"filed": "taxes", "unfiled": None}
     finally:
         manager.stop()
@@ -1358,16 +1952,16 @@ def test_serialized_agents_expose_the_display_name_label(broadcaster: WebSocketB
                 manager._agents[agent_id] = AgentStateItem(
                     id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
                 )
-        by_id = {agent["id"]: agent for agent in manager.get_agents_serialized()}
-        assert by_id["named"]["display_name"] == "Chat 1"
-        assert by_id["unnamed"]["display_name"] is None
-        assert by_id["named"]["name"] == "Chat-1"
-        assert by_id["unnamed"]["name"] == "brave-otter"
+        by_id = {snapshot.chat_id: snapshot for snapshot in manager.get_chat_snapshots()}
+        assert by_id[ChatId("named")].title == "Chat 1"
+        assert by_id[ChatId("unnamed")].title == "brave-otter"
+        assert by_id[ChatId("named")].name == "Chat-1"
+        assert by_id[ChatId("unnamed")].name == "brave-otter"
     finally:
         manager.stop()
 
 
-def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
+def test_get_chat_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
     """Only chats are OOM-managed: workers and the primary keep their launch bands."""
     manager = AgentManager.build(broadcaster)
     try:
@@ -1380,9 +1974,51 @@ def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketB
                 manager._agents[agent_id] = AgentStateItem(
                     id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
                 )
-        assert manager.get_chat_agent_ids() == ["chat"]
+        assert manager.get_chat_ids() == ["chat"]
     finally:
         manager.stop()
+
+
+def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
+    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, state, labels in (
+                ("chat-running", "RUNNING", {"user_created": "true"}),
+                ("chat-waiting", "WAITING", {"user_created": "true"}),
+                ("chat-dead", "DEAD", {"user_created": "true"}),
+                ("chat-stopped", "STOPPED", {"user_created": "true"}),
+                ("worker-running", "RUNNING", {"agent_created": "true"}),
+                ("primary-running", "RUNNING", {"is_primary": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
+                )
+        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+    finally:
+        manager.stop()
+
+
+def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    custom_compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: [],
+        runner=lambda *args, **kwargs: FinishedProcess(
+            command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
+        ),
+    )
+    manager = AgentManager.build(broadcaster, autocompactor=custom_compactor)
+    assert manager._autocompactor is custom_compactor
+    assert manager._autocompactor._thread is None
+
+    manager._autocompactor.start()
+    assert manager._autocompactor._thread is not None
+    assert manager._autocompactor._thread.is_alive()
+
+    manager.stop()
+    assert manager._autocompactor._thread is None
 
 
 def test_observe_argv_accepted_by_live_cli() -> None:
@@ -1456,6 +2092,10 @@ def test_start_observe_spawns_long_lived_subprocess(
     # otherwise running pytest from inside a mngr-managed worktree would inherit
     # a config with ``is_allowed_in_pytest = false`` and the child would abort.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    # And at an empty project config dir: the account this module's autouse fixture commits
+    # writes a settings.local.toml into the shared one, which carries no
+    # ``is_allowed_in_pytest`` and so would make the child abort the same way.
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "mngr-project-config"))
     # And at an empty host dir: with the developer's real ~/.mngr, the spawned
     # observe enumerates their live agents and queries tmux about them, which
     # trips the tmux resource guard on any machine with running agents. The
@@ -1627,9 +2267,9 @@ def test_session_events_user_message_drives_thinking(
         )
         with agent_manager._lock:
             assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["activity_state"] == ActivityState.THINKING.value
     finally:
@@ -1678,9 +2318,9 @@ def test_update_session_events_flips_to_tool_running(
         with agent_manager._lock:
             assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.TOOL_RUNNING
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["activity_state"] == ActivityState.TOOL_RUNNING.value
 
@@ -1740,9 +2380,9 @@ def test_reset_activity_state_clears_tool_running(
             assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
             assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["activity_state"] == ActivityState.IDLE.value
     finally:
@@ -1869,12 +2509,12 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
             assert agent_manager._agents["agent-1"].queued_messages == (
                 QueuedMessageState(queued_id="q1", content="hello", timestamp="2026-08-07T00:00:01.000Z"),
             )
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["queued_messages"] == snapshot
-        assert agent_manager.get_agents_serialized()[0]["queued_messages"] == snapshot
+        assert [q.model_dump() for q in agent_manager.get_chat_snapshots()[0].active_agent.queued_messages] == snapshot
     finally:
         agent_manager.stop()
 
@@ -1889,7 +2529,7 @@ def test_shoulder_tap_available_reflects_queue_and_send_in_flight(agent_manager:
     agent_manager._ensure_activity_tracking("agent-1")
 
     def available() -> bool:
-        return bool(agent_manager.get_agents_serialized()[0]["shoulder_tap_available"])
+        return agent_manager.get_chat_snapshots()[0].active_agent.shoulder_tap_available
 
     # Empty queue -> unavailable (nothing to tap).
     assert available() is False
@@ -2030,10 +2670,10 @@ def test_queued_snapshot_arriving_while_idle_is_swept_before_broadcast(
             assert agent_manager._agents["agent-1"].queued_messages == ()
         assert idle_calls == [True]
         # The arrival still broadcasts, and no broadcast ever carried the phantom.
-        updates = [m for m in _drain(listener) if m.get("type") == "agents_updated"]
+        updates = [m for m in _drain(listener) if m.get("type") == "chats_updated"]
         assert updates
         for update in updates:
-            assert update["agents"][0]["queued_messages"] == []
+            assert update["chats"][0]["active_agent"]["queued_messages"] == []
     finally:
         agent_manager.stop()
 
@@ -2058,11 +2698,11 @@ def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
         agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}])
 
         messages = _drain(listener)
-        updates = [message for message in messages if message.get("type") == "agents_updated"]
+        updates = [message for message in messages if message.get("type") == "chats_updated"]
         assert updates, "the snapshot arrival still broadcasts (the swept state)"
         for update in updates:
-            assert update["agents"][0]["queued_messages"] == []
-        assert updates[-1]["agents"][0]["activity_state"] == ActivityState.IDLE.value
+            assert update["chats"][0]["active_agent"]["queued_messages"] == []
+        assert updates[-1]["chats"][0]["active_agent"]["activity_state"] == ActivityState.IDLE.value
         with agent_manager._lock:
             assert agent_manager._agents["agent-1"].queued_messages == ()
     finally:
@@ -2099,9 +2739,9 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
                 QueuedMessageState(queued_id="q1", content="parked", timestamp="t"),
             )
         assert idle_calls == []
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["queued_messages"] == snapshot
     finally:
@@ -2125,10 +2765,10 @@ def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
         snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t", "is_sending": False}]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        assert latest["agents"][0]["queued_messages"] == snapshot
-        assert latest["agents"][0]["activity_state"] == ActivityState.IDLE.value
+        assert latest["chats"][0]["active_agent"]["queued_messages"] == snapshot
+        assert latest["chats"][0]["active_agent"]["activity_state"] == ActivityState.IDLE.value
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:
@@ -2155,10 +2795,10 @@ def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
         snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t", "is_sending": False}]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        assert latest["agents"][0]["queued_messages"] == snapshot
-        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert latest["chats"][0]["active_agent"]["queued_messages"] == snapshot
+        assert latest["chats"][0]["active_agent"]["activity_state"] == ActivityState.THINKING.value
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:
@@ -2202,11 +2842,11 @@ def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
     listener = broadcaster.register()
     try:
         agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
-        assert agents[0]["id"] == str_id
+        assert agents[0]["agent_id"] == str_id
         assert agents[0]["queued_messages"] == [
             {"queued_id": "q1", "content": "hi", "timestamp": "t", "is_sending": False}
         ]
@@ -2246,14 +2886,14 @@ def test_agent_removed_event_drops_pending_permissions_and_presence(
     agent_manager._handle_observe_event(make_agent_state_event(agent))
     with agent_manager._lock:
         agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
-    agent_manager.record_presence(str_id, "client-1", PresenceState.VISIBLE)
-    assert agent_manager.has_pending_permission(str_id)
-    assert agent_manager._oom_prioritizer._presence.is_open(str_id)
+    agent_manager.record_presence(ChatId(str_id), "client-1", PresenceState.VISIBLE)
+    assert agent_manager.has_pending_permission(ChatId(str_id))
+    assert agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
     agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
-    assert not agent_manager.has_pending_permission(str_id)
-    assert not agent_manager._oom_prioritizer._presence.is_open(str_id)
+    assert not agent_manager.has_pending_permission(ChatId(str_id))
+    assert not agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
 
 def test_provider_snapshot_preserves_activity_state_for_tracked_agent(
@@ -2293,12 +2933,12 @@ def test_provider_snapshot_preserves_activity_state_for_tracked_agent(
         snapshot_event = make_full_agent_state_event([agent])
         agent_manager._handle_observe_event(snapshot_event)
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         # The broadcast must carry the cached activity_state, not None.
-        assert agents[0]["id"] == str_id
+        assert agents[0]["agent_id"] == str_id
         assert agents[0]["activity_state"] == ActivityState.THINKING.value
 
         with agent_manager._lock:
@@ -2336,11 +2976,11 @@ def test_agent_state_event_stopped_flips_lifecycle_and_activity_to_idle(
         stopped = _agent_details("dying-agent", agent_id=test_agent_id, state=AgentLifecycleState.STOPPED)
         agent_manager._handle_observe_event(make_agent_state_event(stopped))
 
-        latest = _last_agents_updated(_drain(listener))
+        latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        agents = latest["agents"]
+        agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
-        assert agents[0]["id"] == str_id
+        assert agents[0]["agent_id"] == str_id
         assert agents[0]["state"] == AgentLifecycleState.STOPPED.value
         assert agents[0]["activity_state"] == ActivityState.IDLE.value
 
@@ -2355,7 +2995,7 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A full snapshot rebuilds the tracked set: new agents appear, absent ones are dropped,
-    and a single agents_updated broadcast reflects the rebuilt set."""
+    and a single chats_updated broadcast reflects the rebuilt set."""
     first = _agent_details("first-agent")
     agent_manager._handle_observe_event(make_full_agent_state_event([first]))
     assert {a.id for a in agent_manager.get_agents()} == {str(first.id)}
@@ -2371,8 +3011,8 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "agents_updated"
-    assert {a["id"] for a in msg["agents"]} == {str(second.id)}
+    assert msg["type"] == "chats_updated"
+    assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
 # =============================================================================
@@ -2454,14 +3094,14 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
-    Wired to the manager's own ``get_chat_agent_ids`` / ``_read_process_started_at``
+    Wired to the manager's own ``get_chat_ids`` / ``_read_process_started_at``
     (the collaborators under test) but to a fake pid resolver and a capturing
     ``set_adj``, so the manager's real seeding and lifecycle paths are exercised
     without touching ``/proc``.
     """
     writes: list[tuple[int, int]] = []
     manager._oom_prioritizer = ChatOomPrioritizer(
-        list_chat_agent_ids=manager.get_chat_agent_ids,
+        list_chat_ids=manager.get_chat_ids,
         resolve_pid=lambda cid: pids.get(cid),
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=manager._read_agent_process_started_at,
@@ -2483,8 +3123,8 @@ def test_seeding_recovers_chat_message_recency_from_the_message_stamps(
     newer = _agent_details("newer-chat", labels={"user_created": "true"})
     now = time.time()
     previous_run = MessageStampStore(path=stamps_path)
-    previous_run.record(str(older.id), at=now - 60 * 60)
-    previous_run.record(str(newer.id), at=now - 30 * 60)
+    previous_run.record(ChatId(older.id), at=now - 60 * 60)
+    previous_run.record(ChatId(newer.id), at=now - 30 * 60)
 
     manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
     try:
@@ -2508,7 +3148,7 @@ def test_message_stamps_follow_the_chats_they_stamp(broadcaster: WebSocketBroadc
     manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
     try:
         manager._handle_observe_event(make_full_agent_state_event([chat]))
-        manager.record_message_sent(str(chat.id))
+        manager.record_message_sent(ChatId(str(chat.id)))
         assert set(MessageStampStore(path=stamps_path).read()) == {str(chat.id)}
         manager.remove_agent(str(chat.id))
         assert MessageStampStore(path=stamps_path).read() == {}
@@ -2673,7 +3313,7 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
             "agent-1",
             [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}],
         )
-        assert agent_manager.has_pending_permission("agent-1")
+        assert agent_manager.has_pending_permission(ChatId("agent-1"))
         nudges_after_filing = nudger.nudge_count
         assert nudges_after_filing >= 1
 
@@ -2688,7 +3328,7 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
                 }
             ],
         )
-        assert not agent_manager.has_pending_permission("agent-1")
+        assert not agent_manager.has_pending_permission(ChatId("agent-1"))
         assert nudger.nudge_count > nudges_after_filing
     finally:
         agent_manager.stop()
@@ -2700,7 +3340,7 @@ def test_a_result_without_a_filed_request_leaves_nothing_pending(agent_manager: 
     agent_manager._ensure_activity_tracking("agent-1")
     try:
         agent_manager.update_session_events("agent-1", [{"type": "tool_result", "tool_call_id": "x"}])
-        assert not agent_manager.has_pending_permission("agent-1")
+        assert not agent_manager.has_pending_permission(ChatId("agent-1"))
     finally:
         agent_manager.stop()
 
@@ -2718,3 +3358,1045 @@ def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager
     assert nudger.nudge_count == 1
     agent_manager.remove_agent(next(iter(agent_manager.get_agents())).id)
     assert nudger.nudge_count == 2
+
+
+# --- The auto-open reactor, fed from the observe stream ---
+
+
+def test_observe_events_feed_the_auto_open_reactor(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The first listing seeds (a labeled chat the ledger does not name is owed its tab), every
+    labeled agent that appears afterwards is opened, and a removed one is forgotten."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    shell = RecordingShell(client_ids=["c1"])
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell)
+    manager = AgentManager.build(broadcaster, auto_open=reactor)
+    at_start = _agent_details("update-self-1", labels={"auto_open": "true"})
+    plain = _agent_details("chat-1", labels={"user_created": "true"})
+
+    manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
+    reactor.flush()
+
+    assert shell.opens == [(str(at_start.id), "c1")]
+    assert not reactor.ledger.is_delivered(ChatId(plain.id))
+
+    appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
+    manager._handle_observe_event(make_agent_state_event(appeared))
+    reactor.flush()
+    assert shell.opens[-1] == (str(appeared.id), "c1")
+    assert reactor.ledger.is_delivered(ChatId(appeared.id))
+
+    manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
+    assert not reactor.ledger.is_delivered(ChatId(appeared.id))
+
+
+# --- Chats that have run on several agents (a hand-built record) ---
+
+
+class _UnremovableChatRecordStore(InMemoryChatRecordStore):
+    """A store whose records cannot be deleted: what a read-only chat folder looks like to the file store."""
+
+    def delete(self, chat_id: ChatId) -> None:
+        raise ChatRecordError(f"chat record folder for {chat_id} could not be removed")
+
+
+def _recorded_chat(
+    broadcaster: WebSocketBroadcaster,
+    mngr_binary: str | None = None,
+    store: InMemoryChatRecordStore | None = None,
+) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
+    """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
+    store = store if store is not None else InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
+    )
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(
+        manager,
+        first,
+        name=f"archived-1-Chat-1-{first}",
+        state="STOPPED",
+        labels={
+            "account": "acct-1",
+            "archived_at": "2026-09-01T13:01:00+00:00",
+            "display_name": "Chat 1 (archived 1)",
+        },
+    )
+    seed_agent_state(
+        manager,
+        second,
+        name="Chat-1",
+        labels={"account": "acct-2", "display_name": "Chat 1", "chat_id": first, "chat_seq": "2"},
+        harness=HarnessType.CODEX,
+    )
+    store.write(make_two_member_chat_record(first, second))
+    manager.refresh_chat_records()
+    return manager, store, first, second
+
+
+def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_order(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        snapshots = manager.get_chat_snapshots()
+        assert [snapshot.chat_id for snapshot in snapshots] == [first]
+        (snapshot,) = snapshots
+        assert snapshot.agent_ids == (first, second)
+        assert snapshot.active_agent.agent_id == second
+        assert snapshot.active_agent.harness is HarnessType.CODEX
+        assert (snapshot.name, snapshot.title) == ("Chat-1", "Chat 1")
+        assert snapshot.handoff is None
+        # The chat is addressed by its own id only; an archived member's id names no chat.
+        assert manager.get_chat_snapshot(first) == snapshot
+        assert manager.get_chat_snapshot(second) is None
+        active = manager.get_active_agent_info(ChatId(first))
+        assert active is not None and active.id == second
+        assert manager.get_active_agent_info(ChatId(second)) is None
+        assert manager.get_chat_ids() == [ChatId(first)]
+    finally:
+        manager.stop()
+
+
+def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_longer_lists(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, store, first, second = _recorded_chat(broadcaster)
+    try:
+        segments = manager.get_chat_segments(ChatId(first))
+        assert segments is not None
+        assert [(s.agent.id, s.seq, s.is_active, s.recorded_event_count) for s in segments] == [
+            (first, 1, False, 7),
+            (second, 2, True, None),
+        ]
+        assert manager.get_chat_segments(ChatId(second)) is None
+
+        # An archived member mngr has forgotten leaves a gap; a forgotten active agent leaves no chat.
+        manager.remove_agent(first)
+        remaining = manager.get_chat_segments(ChatId(first))
+        assert remaining is not None and [s.agent.id for s in remaining] == [second]
+        manager.remove_agent(second)
+        assert manager.get_chat_segments(ChatId(first)) is None
+        assert manager.get_chat_snapshots() == []
+        # Nothing here destroyed the chat, so its record stands.
+        assert store.read(ChatId(first)) is not None
+    finally:
+        manager.stop()
+
+
+def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    try:
+        manager.stop_chat(ChatId(first))
+        manager.rename_chat(first, "New Name")
+        with manager._lock:
+            manager._pending_permission_ids_by_agent[second] = {"req-1"}
+        assert manager.has_pending_permission(ChatId(first))
+        assert not manager.has_pending_permission(ChatId(second))
+        # A sign-in restarts the chat's active agent and never its archived member, though
+        # both carry an ``account`` label.
+        assert manager.restart_agents_on_account("acct-1") == 0
+        assert manager.restart_agents_on_account("acct-2") == 1
+
+        manager.destroy_chat(ChatId(first))
+
+        argv_lines = argv_log.read_text().splitlines()
+        # The rename is reflected in the tracked name at once, so the restart names the new one.
+        assert argv_lines == [
+            "stop Chat-1",
+            f"rename {second} New-Name --label display_name=New Name",
+            "start New-Name --restart --no-resume",
+            f"destroy {first} {second} --force",
+        ]
+        assert store.read(ChatId(first)) is None
+        assert manager.get_agent_by_id(first) is None and manager.get_agent_by_id(second) is None
+        assert manager.get_chat_snapshots() == []
+    finally:
+        manager.stop()
+
+
+def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    try:
+        manager.remove_agent(second)
+        with pytest.raises(AgentStopError):
+            manager.stop_chat(ChatId(first))
+        with pytest.raises(AgentDestroyError):
+            manager.destroy_chat(ChatId(first))
+        assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agents are gone but the record would resurrect the chat at the next build, so the verb
+    reports the failure through the error its callers handle, not a foreign one."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
+    try:
+        with pytest.raises(AgentDestroyError, match="folder could not be removed"):
+            manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {second} --force"]
+    finally:
+        manager.stop()
+
+
+def test_destroying_or_discarding_a_chat_with_no_record_removes_its_folder(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat's fast mode lives in its folder, so a chat that never had a record still has one to remove."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    try:
+        seed_agent_state(manager, "agent-plain", name="Chat-1")
+        manager.set_fast_mode_state(ChatId("agent-plain"), ChatFastModeState(mode=FastModeMode.ON))
+        manager.destroy_chat(ChatId("agent-plain"))
+        assert not (chats_root / "agent-plain").exists()
+
+        _seed_failed_chat(manager, ChatId("failed-1"), "Chat 2")
+        manager.set_fast_mode_state(ChatId("failed-1"), ChatFastModeState(mode=FastModeMode.ON))
+        assert manager.discard_provisional_chat("failed-1") is True
+        assert not (chats_root / "failed-1").exists()
+    finally:
+        manager.stop()
+
+
+def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_standing(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    try:
+        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.remove_agent(first)
+        # The chat's per-chat state (its presence, here) belongs to the chat, not the member.
+        assert manager._oom_prioritizer._presence.is_open(ChatId(first))
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
+        # The member's own resident transcript goes; the chat's active segment stays.
+        assert evicted == [first]
+
+        # The active agent stopping drops the whole chat's resident transcripts, archived
+        # segments included, and the observe stream's report of the death is what says so.
+        evicted.clear()
+        details = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
+        manager._handle_observe_event(make_agent_state_event(details))
+        stopped = details.model_copy_update(to_update(details.field_ref().state, AgentLifecycleState.STOPPED))
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert set(evicted) == {first, second}
+    finally:
+        manager.stop()
+
+
+def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
+    """A retiring agent that is still running when it is archived stops a moment later; that
+    death is the member's, not the chat's, so the active agent's watcher (which a user may be
+    viewing) stays resident."""
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    try:
+        for agent_id, name in ((second, "Chat-1"), (first, f"archived-1-Chat-1-{first}")):
+            details = _agent_details(name, agent_id=MngrAgentId(agent_id), state=AgentLifecycleState.RUNNING)
+            manager._handle_observe_event(make_agent_state_event(details))
+        assert evicted == []
+
+        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        stopped = first_details.model_copy_update(
+            to_update(first_details.field_ref().state, AgentLifecycleState.STOPPED)
+        )
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert evicted == [first]
+    finally:
+        manager.stop()
+
+
+def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
+        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        manager._handle_observe_event(make_agent_state_event(first_details))
+        manager._handle_observe_event(
+            make_agent_removed_event(first_details.id, first_details.name, first_details.host.id)
+        )
+        assert manager._oom_prioritizer._presence.is_open(ChatId(first))
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
+    finally:
+        manager.stop()
+
+
+def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name=f"archived-1-Chat-1-{first}", state="STOPPED")
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        # The record names the first agent, so it is not a chat of its own either.
+        assert manager.get_chat_snapshots() == []
+        assert manager.get_chat_snapshot(first) is None
+        assert manager.get_chat_ids() == []
+    finally:
+        manager.stop()
+
+
+# The handoff: moving a chat to another harness (``chat_handoffs.py`` runs it; these cover the manager's side).
+
+
+class _TranscriptWithUserTurn(ListTranscriptReader):
+    """Three events, the second a user turn the user typed, so a handoff off this agent is not a fresh start."""
+
+    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        events = super().get_all_events(session_id)
+        return [
+            events[0],
+            {**events[1], "type": "user_message", "timestamp": "2026-09-13T11:00:00+00:00"},
+            events[2],
+        ]
+
+
+def _handoff_capabilities(
+    sent: list[tuple[str, str, str]], is_summary_written: bool = True, has_user_turn: bool = True
+) -> HandoffCapabilities:
+    """Capabilities whose send records itself and, for the summary request, writes the file at once. The
+    retiring agent's transcript carries a user turn unless ``has_user_turn`` is off, which makes every
+    handoff a fresh start."""
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        sent.append((agent_info.id, text, message_id))
+        if is_summary_written:
+            write_summary_for_request(text)
+        return SendOutcome.OK
+
+    event_ids = ["e-1", "e-2", "e-3"]
+    return HandoffCapabilities(
+        ensure_watcher=lambda agent_info: (
+            _TranscriptWithUserTurn(event_ids) if has_user_turn else ListTranscriptReader(event_ids)
+        ),
+        drain_to_composer=lambda agent_info: "queued text",
+        deliver=deliver,
+    )
+
+
+def _openai_account() -> str:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    return account_id
+
+
+def _handoff_manager(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, sent: list[tuple[str, str, str]], has_user_turn: bool = True
+) -> tuple[AgentManager, InMemoryChatRecordStore, Path]:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities(sent, has_user_turn=has_user_turn))
+    return manager, store, argv_log
+
+
+def _wait_until_settled(store: InMemoryChatRecordStore, chat_id: ChatId) -> ChatRecord:
+    wait_for(lambda: (record := store.read(chat_id)) is not None and record.handoff is None, timeout=15.0)
+    record = store.read(chat_id)
+    assert record is not None
+    return record
+
+
+def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    account = _openai_account()
+    try:
+        phase, block = manager.begin_handoff(ChatId(first), account, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        assert (phase, block) == (HandoffPhase.SUMMARIZING, "queued text")
+
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+        successor = record.agents[1].agent_id
+        assert record.agents[0].archived_name == f"archived-1-Chat-1-{first}"
+        assert record.agents[0].final_event_count == 3
+        assert record.agents[1].account_id == account and record.agents[1].lane == "openai"
+
+        # The chat lists once, from its new agent, under its old title and name.
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.agent_ids) == (first, (first, successor))
+        assert snapshot.active_agent.agent_id == successor and snapshot.active_agent.harness is HarnessType.CODEX
+        assert (snapshot.title, snapshot.name, snapshot.handoff) == ("Chat 1", "Chat-1", None)
+        archived = manager.get_agent_by_id(first)
+        assert archived is not None and archived.state == "STOPPED"
+        assert archived.labels["chat_seq"] == "1" and archived.labels["chat_id"] == first
+
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs == ["stop", "rename", "create"]
+        assert sent[0][0] == first and sent[0][1].startswith("/handoff-summary ")
+        # The prompt reached the successor through the send path, with the message at its end.
+        assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
+        assert sent[1][1].endswith("Carry on in Codex\n")
+        assert "--message" not in argv_log.read_text()
+    finally:
+        manager.stop()
+
+
+def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Nothing to summarize: no request goes out, no prompt is written, and the confirming message (or nothing,
+    for a switch made from the provider menu) reaches the successor as an ordinary send."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        phase, _block = manager.begin_handoff(ChatId(first), _openai_account(), "", "m-1", HeldSendOrigin.CLIENT)
+        assert phase is HandoffPhase.SUMMARIZING
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.CODEX]
+        assert [entry.is_fresh_start for entry in record.agents] == [False, True]
+        assert sent == []
+        assert not (tmp_path / "chats" / first / "summaries").exists()
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        # The snapshot never listed a confirming message, since none was typed.
+        assert manager.get_handoff_state(ChatId(first)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_step_and_a_retry_adopts_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The recording mngr's successor has no daemon and no sidecar, so its option set is empty and the pick is
+    unknown: the switch fails after the create, the page names the pick, a retry on the same account runs no
+    second create, and a retry on another account destroys the successor and creates afresh."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    chat_id = ChatId(first)
+    pick = ModelPick(model_id="gpt-6-astra", effort="high")
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT, pick)
+
+        def is_failed() -> bool:
+            record = store.read(chat_id)
+            return record is not None and record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        assert record.handoff.failed_step is HandoffFailedStep.MODEL
+        assert record.handoff.error == "Unknown model 'gpt-6-astra'"
+        assert record.handoff.model_pick == pick
+        successor = record.handoff.next_agent_id
+        # The successor exists and is tracked, hidden inside its chat rather than listed as one of its own.
+        assert manager.get_agent_by_id(successor) is not None
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is InstanceStatus.ERROR and snapshot.handoff is not None
+        assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        # Only the summary request went out: the prompt waits for the pick.
+        assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
+
+        # A retry on the same account adopts the successor: no create, the pick fails again the same way.
+        assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
+        wait_for(is_failed, timeout=15.0)
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+
+        # A retry on another account of the same harness keeps the pick, destroys the successor, and
+        # creates afresh under the same pre-minted id.
+        assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
+        wait_for(is_failed, timeout=15.0)
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs == ["stop", "rename", "create", "destroy", "create"]
+        assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
+        assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
+        retried = store.read(chat_id)
+        assert retried is not None and retried.handoff is not None and retried.handoff.model_pick == pick
+        # Discarding it forgot it the way a destroy does, trackers and resident transcript included,
+        # rather than only dropping it from the tracked list.
+        assert evicted == [successor]
+    finally:
+        manager.stop()
+
+
+def test_a_switch_that_failed_after_its_successor_was_adopted_retries_only_where_the_chat_moved(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A delivery refused past the adoption leaves the successor as the chat's own agent, with only the
+    deliveries left to do. A retry naming another account is refused: destroying that agent to create
+    another under the same id would take the chat's agent away and leave the create step skipped (its
+    guard reads the record's last entry), so the chat would list nothing at all."""
+    sent: list[tuple[str, str, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        # The prompt goes out after the successor is on the record; failing it is how a real
+        # refusal past the point of no return lands (a record write, ensure_watcher, a held send).
+        if message_id.startswith("handoff-prompt-"):
+            raise OSError("the successor's pane went away")
+        sent.append((agent_info.id, text, message_id))
+        write_summary_for_request(text)
+        return SendOutcome.OK
+
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=store,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+    )
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: _TranscriptWithUserTurn(["e-1", "e-2", "e-3"]),
+            drain_to_composer=lambda agent_info: "queued text",
+            deliver=deliver,
+        )
+    )
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    chat_id = ChatId(first)
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        def is_failed() -> bool:
+            record = store.read(chat_id)
+            return record is not None and record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        successor = record.handoff.next_agent_id
+        assert record.agents[-1].agent_id == successor
+
+        with pytest.raises(HandoffError):
+            manager.retry_handoff(chat_id, _openai_account())
+
+        # Refused before anything was written or destroyed: the chat still runs on its successor.
+        assert "destroy" not in argv_log.read_text()
+        refused = store.read(chat_id)
+        assert refused is not None and refused.handoff is not None
+        assert refused.handoff.phase is HandoffPhase.FAILED
+        assert refused.handoff.next_agent_id == successor
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.active_agent.agent_id == successor
+    finally:
+        manager.stop()
+
+
+def test_a_pick_is_refused_for_a_switch_that_keeps_the_agent(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rebind keeps the agent's model settings, so a pick beside it is a refusal, not a silent drop."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    try:
+        with pytest.raises(HandoffError, match="keeps its model settings"):
+            manager.begin_switch(
+                ChatId(agent_id),
+                second_account,
+                "hi",
+                "m-1",
+                HeldSendOrigin.CLIENT,
+                model_pick=ModelPick(model_id="opus"),
+            )
+        assert manager.get_handoff_state(ChatId(agent_id)) is None
+    finally:
+        manager.stop()
+
+
+def _converging_chat(
+    manager: AgentManager,
+    store: InMemoryChatRecordStore,
+    *,
+    phase: HandoffPhase,
+    is_retiring_archived: bool,
+    target_account_id: str = "acct-openai",
+) -> tuple[str, str]:
+    """A one-agent chat whose record carries a handoff in ``phase``; returns the agent id and the successor's."""
+    first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    entry = make_chat_agent_entry(1, first, is_archived=is_retiring_archived)
+    seed_agent_state(
+        manager,
+        first,
+        name=entry.archived_name if is_retiring_archived and entry.archived_name is not None else "Chat-1",
+        state="STOPPED" if is_retiring_archived else "RUNNING",
+        labels={"display_name": "Chat 1", "account": "acct-anthropic"},
+    )
+    handoff = make_chat_handoff_record(
+        retiring_seq=1, next_agent_id=successor, phase=phase, target_account_id=target_account_id
+    )
+    if phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
+        handoff = handoff.model_copy_update(
+            to_update(handoff.field_ref().held_sends, ()),
+            to_update(handoff.field_ref().prompt, "the stored prompt"),
+            to_update(handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
+            to_update(
+                handoff.field_ref().error, "mngr create exited with code 3" if phase is HandoffPhase.FAILED else None
+            ),
+        )
+    store.write(ChatRecord(chat_id=ChatId(first), agents=(entry,), handoff=handoff))
+    manager.refresh_chat_records()
+    return first, successor
+
+
+def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+    chat_id = ChatId(first)
+    try:
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.SCRIPT) is HandoffPhase.SUMMARIZING
+        # A retried send is not held twice; a chat that is not converging is not held at all.
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.SCRIPT) is HandoffPhase.SUMMARIZING
+        assert manager.hold_send(ChatId(f"agent-{uuid4().hex}"), "m-3", "x", HeldSendOrigin.SCRIPT) is None
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        assert [held.message_id for held in record.handoff.held_sends] == ["trigger-1", "m-2"]
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is InstanceStatus.WORKING
+        assert snapshot.handoff is not None and snapshot.handoff.phase is HandoffPhase.SUMMARIZING
+        assert manager.get_handoff_state(chat_id) == snapshot.handoff
+
+        with pytest.raises(ChatConvergingError):
+            manager.stop_chat(chat_id)
+        with pytest.raises(ChatConvergingError):
+            manager.rename_chat(first, "Other")
+        with pytest.raises(ChatConvergingError):
+            manager.begin_handoff(chat_id, _openai_account(), "again", "m-4", HeldSendOrigin.CLIENT)
+
+        # Cancel: the trigger comes back, the other held send goes to the agent the chat stays on, and a
+        # first-handoff record disappears so the chat is its one agent again.
+        assert manager.cancel_handoff(chat_id) == "Carry on in Codex"
+        assert store.read(chat_id) is None
+        wait_for(lambda: (first, "and this", "m-2") in sent, timeout=5.0)
+        assert manager.get_chat_snapshot(first) is not None and manager.get_handoff_state(chat_id) is None
+        with pytest.raises(HandoffError):
+            manager.cancel_handoff(chat_id)
+        assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=True)
+    chat_id = ChatId(first)
+    try:
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is InstanceStatus.ERROR
+        assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
+        # The stand-in already carries its archival name; the snapshot still says what the chat is called.
+        assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
+        with pytest.raises(ChatConvergingError, match="switch to Codex can no longer be called off"):
+            manager.cancel_handoff(chat_id)
+        # The trigger already rides the stored prompt: a retried send with its id is not held again.
+        assert (
+            manager.hold_send(chat_id, "trigger-1", "Carry on in Codex", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
+        )
+        failed = store.read(chat_id)
+        assert failed is not None and failed.handoff is not None and failed.handoff.held_sends == ()
+
+        assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
+        record = _wait_until_settled(store, chat_id)
+        assert [entry.agent_id for entry in record.agents] == [first, successor]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs == ["create"]
+        assert f"--id {successor}" in argv_log.read_text()
+        assert manager.get_chat_snapshot(first) is not None
+        with pytest.raises(HandoffError):
+            manager.retry_handoff(chat_id, _openai_account())
+    finally:
+        manager.stop()
+
+
+def test_destroying_one_agent_runs_the_shared_destroy_and_reports_a_refusal(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, false_binary: str
+) -> None:
+    """The handoff's destroy of a half-made successor is the chat destroy's own ``mngr destroy --force``, by id."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    refusing = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    try:
+        manager.destroy_agent_process(agent_id)
+        assert argv_log.read_text().splitlines() == [f"destroy {agent_id} --force"]
+        with pytest.raises(AgentDestroyError, match=f"Failed to destroy agent '{agent_id}'"):
+            refusing.destroy_agent_process(agent_id)
+    finally:
+        manager.stop()
+        refusing.stop()
+
+
+def test_an_unfinished_handoff_resumes_when_the_manager_starts(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(
+        manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True, target_account_id=_openai_account()
+    )
+    try:
+        manager._resume_handoffs()
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.agent_id for entry in record.agents] == [first, successor]
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["create"]
+    finally:
+        manager.stop()
+
+
+def test_a_successor_being_made_is_its_chats_and_not_a_chat_of_its_own(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The observe stream tracks the successor as soon as mngr lists it, before the record appends it;
+    the chat keeps listing once, from the retiring stand-in, the successor resolves to that chat, and
+    destroying the chat takes the successor with it."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
+    seed_agent_state(
+        manager,
+        successor,
+        name="Chat-1",
+        harness=HarnessType.CODEX,
+        labels={"display_name": "Chat 1", "chat_id": first, "chat_seq": "2"},
+    )
+    try:
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.active_agent.agent_id, snapshot.status) == (
+            first,
+            first,
+            InstanceStatus.WORKING,
+        )
+        assert manager.get_chat_snapshot(successor) is None
+        assert manager.get_active_agent_info(ChatId(successor)) is None
+        assert manager.chat_id_of_agent(successor) == ChatId(first)
+
+        manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {successor} --force"]
+        assert manager.get_agent_by_id(successor) is None and store.read(ChatId(first)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    anthropic_id, _ = mint_account_dir()
+    commit_account(anthropic_id, "anthropic", "Anthropic")
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": anthropic_id})
+    try:
+        with pytest.raises(HandoffError, match="already runs on account"):
+            manager.begin_handoff(ChatId(first), anthropic_id, "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError):
+            manager.begin_handoff(ChatId(first), "acct-missing", "hi", "m-1", HeldSendOrigin.CLIENT)
+        # A row naming a lane this build no longer has is refused by name, not as "no such account".
+        retired_lane_id, _ = mint_account_dir()
+        commit_account(retired_lane_id, "lane-this-build-lacks", "Elsewhere")
+        with pytest.raises(HandoffError, match="lane this build does not have"):
+            manager.begin_switch(ChatId(first), retired_lane_id, "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError, match="no active agent"):
+            manager.begin_handoff(
+                ChatId(f"agent-{uuid4().hex}"), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT
+            )
+        assert sent == []
+    finally:
+        manager.stop()
+
+
+# The rebind: changing a chat's account in place (``chat_rebinds.py`` runs it; these cover the manager's side).
+
+
+def _anthropic_account(display: str = "Anthropic") -> str:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", display)
+    return account_id
+
+
+def _rebind_manager(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sent: list[tuple[str, str, str]],
+) -> tuple[AgentManager, InMemoryChatRecordStore, Path, str, str, str]:
+    """A manager over the test's own host dir, tracking a claude chat bound to one Anthropic account with a second
+    signed in; returns it with the record store, the mngr argv log, the agent id, and the two account ids."""
+    host_dir = tmp_path / "host"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first_account, second_account = _anthropic_account(), _anthropic_account()
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
+    state_dir = host_dir / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    (state_dir / "env").write_text(f"MNGR_AGENT_ID={agent_id}\nCLAUDE_CONFIG_DIR={account_dir(first_account)}\n")
+    (state_dir / "claude_session_id_history").write_text("session-one\n")
+    project_dir = account_dir(first_account) / "projects" / "-home-user-workspace"
+    project_dir.mkdir(parents=True)
+    (project_dir / "session-one.jsonl").write_text('{"type":"user"}\n')
+    return manager, store, argv_log, agent_id, first_account, second_account
+
+
+def test_a_switch_to_an_account_on_the_chats_own_lane_rebinds_the_agent_in_place(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    try:
+        kind, phase, block = manager.begin_switch(
+            chat_id, second_account, "Carry on here", "m-1", HeldSendOrigin.CLIENT
+        )
+        assert (kind, phase, block) == (TransitionKind.REBIND, HandoffPhase.RESTARTING, "queued text")
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+
+        # stop, relabel, start: the agent stayed the chat's, on the new account.
+        argv = argv_log.read_text().splitlines()
+        assert argv == [
+            "stop Chat-1",
+            f"label {agent_id} --label account={second_account}",
+            "start Chat-1 --no-resume",
+        ]
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.handoff is None
+        assert snapshot.active_agent.account_id == second_account and snapshot.agent_ids == (agent_id,)
+        assert snapshot.active_agent.state == "WAITING"
+        # The env line and the session files followed the agent to the new account's folder.
+        env_text = (tmp_path / "host" / "agents" / agent_id / "env").read_text()
+        assert env_text == f"MNGR_AGENT_ID={agent_id}\nCLAUDE_CONFIG_DIR={account_dir(second_account)}\n"
+        assert (account_dir(second_account) / "projects" / "-home-user-workspace" / "session-one.jsonl").exists()
+        # The confirming message went through the ordinary send path once the agent was back; the
+        # one-agent record is gone again, and the target became the most recently used account.
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+        assert store.read(chat_id) is None
+        assert read_index().mru == second_account
+    finally:
+        manager.stop()
+
+
+def test_the_switch_target_rule_keeps_the_agent_only_for_its_own_harness_and_lane() -> None:
+    claude = AgentStateItem(id="agent-1", name="c", state="RUNNING", labels={"account": "acct-a"}, work_dir=None)
+    anthropic_2 = Account(id="acct-a2", lane="anthropic", seq=2, display="Anthropic")
+    openrouter = Account(id="acct-r", lane="openrouter", seq=1, display="OpenRouter")
+    opencode_go = Account(id="acct-g", lane="opencode-go", seq=1, display="Opencode Go")
+    first_anthropic, _ = mint_account_dir()
+    commit_account(first_anthropic, "anthropic", "Anthropic")
+    first_openrouter, _ = mint_account_dir()
+    commit_account(first_openrouter, "openrouter", "OpenRouter")
+    bound_claude = claude.model_copy_update(to_update(claude.field_ref().labels, {"account": first_anthropic}))
+    pi = AgentStateItem(
+        id="agent-2",
+        name="p",
+        state="RUNNING",
+        labels={"account": first_openrouter},
+        work_dir=None,
+        harness=HarnessType.PI_CODING,
+    )
+
+    def target(account: Account, harness: HarnessType) -> _SwitchTarget:
+        return _SwitchTarget(account=account, harness=harness, label=account.display)
+
+    assert is_rebind_target(bound_claude, target(anthropic_2, HarnessType.CLAUDE)) is True
+    assert is_rebind_target(bound_claude, target(openrouter, HarnessType.PI_CODING)) is False
+    # Two lanes on one harness: a move between them replaces the agent.
+    assert is_rebind_target(pi, target(opencode_go, HarnessType.PI_CODING)) is False
+    assert (
+        is_rebind_target(
+            pi,
+            target(
+                openrouter.model_copy_update(to_update(openrouter.field_ref().id, "acct-r2")), HarnessType.PI_CODING
+            ),
+        )
+        is True
+    )
+    # An agent whose account label names a deleted account has no lane to match.
+    assert is_rebind_target(claude, target(anthropic_2, HarnessType.CLAUDE)) is False
+    unscoped = AgentStateItem(
+        id="agent-3", name="o", state="RUNNING", labels={}, work_dir=None, harness=HarnessType.OPENCODE
+    )
+    assert is_rebind_target(unscoped, target(anthropic_2, HarnessType.OPENCODE)) is False
+
+
+def test_a_retry_on_an_unwired_manager_leaves_the_failed_phase_as_it_is(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The refusal comes before anything is written: the page keeps its failed notice and its retry."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, mngr_binary=mngr_binary)
+    first_account, second_account = _anthropic_account(), _anthropic_account()
+    agent_id = f"agent-{uuid4().hex}"
+    chat_id = ChatId(agent_id)
+    seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
+    failed = make_chat_rebind_record(agent_id=agent_id, phase=HandoffPhase.FAILED, target_account_id=second_account)
+    store.write(
+        ChatRecord(
+            chat_id=chat_id,
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+            rebind=failed,
+        )
+    )
+    manager.refresh_chat_records()
+    try:
+        with pytest.raises(HandoffError, match="not wired"):
+            manager.retry_handoff(chat_id, second_account)
+        assert store.read(chat_id) == ChatRecord(
+            chat_id=chat_id,
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+            rebind=failed,
+        )
+    finally:
+        manager.stop()
+
+
+def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_lane(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    rebind = make_chat_rebind_record(
+        agent_id=agent_id,
+        phase=HandoffPhase.FAILED,
+        target_account_id=second_account,
+        error="mngr start exited with code 1",
+    )
+    try:
+        store.write(
+            ChatRecord(
+                chat_id=chat_id,
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+                rebind=rebind,
+            )
+        )
+        manager.refresh_chat_records()
+        state = manager.get_handoff_state(chat_id)
+        assert state is not None and state.kind is TransitionKind.REBIND and state.phase is HandoffPhase.FAILED
+        assert state.target_label == "Anthropic 2 (Claude Code)"
+        assert state.started_at == rebind.started_at
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.status.value == "error"
+
+        with pytest.raises(ChatConvergingError, match="cannot be called off"):
+            manager.cancel_handoff(chat_id)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
+        with pytest.raises(ChatConvergingError, match="switch to Anthropic 2 \\(Claude Code\\) failed; retry"):
+            manager.stop_chat(chat_id)
+        with pytest.raises(HandoffError, match="same harness and lane"):
+            manager.retry_handoff(chat_id, _openai_account())
+
+        assert manager.retry_handoff(chat_id, second_account) is HandoffPhase.RESTARTING
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        # The agent is seeded running, so the retry stops it before relabelling and starting; both
+        # held sends follow once it is back.
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"]
+        assert sent == [(agent_id, "Carry on on the other account", "trigger-1"), (agent_id, "and this", "m-2")]
+        assert store.read(chat_id) is None
+    finally:
+        manager.stop()
+
+
+def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_signed_out(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The relabel runs before the start, so the agent's label names the failed target; deleting that account must
+    not stop a retry on another account of the lane."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    third_account = _anthropic_account()
+    try:
+        seed_agent_state(
+            manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": second_account}
+        )
+        store.write(
+            ChatRecord(
+                chat_id=chat_id,
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+                rebind=make_chat_rebind_record(
+                    agent_id=agent_id,
+                    phase=HandoffPhase.FAILED,
+                    target_account_id=second_account,
+                    error="mngr start exited with code 1",
+                ),
+            )
+        )
+        manager.refresh_chat_records()
+        delete_account(second_account)
+
+        assert manager.retry_handoff(chat_id, third_account) is HandoffPhase.RESTARTING
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        assert f"label {agent_id} --label account={third_account}" in argv_log.read_text().splitlines()
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.active_agent.account_id == third_account
+        assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
+    finally:
+        manager.stop()
+
+
+def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runner catches only ``RebindCancelledError`` as the quiet stop, so a record that no longer carries the
+    rebind must reach it as that, from the held-send pop as much as from the record update."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, _second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    try:
+        deps = manager._rebind_runner()._deps
+        with pytest.raises(RebindCancelledError):
+            deps.take_next_held_send(ChatId(agent_id), "rebind-gone")
+        with pytest.raises(RebindCancelledError):
+            deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
+    finally:
+        manager.stop()

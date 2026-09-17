@@ -5,8 +5,12 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
+import importlib.util
+from pathlib import Path
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 
@@ -56,6 +60,25 @@ def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:
     assert decision.display_label == "deep-research"
 
 
+def test_the_handoff_prompt_is_a_chip_since_the_user_did_not_type_it() -> None:
+    """The successor's first message goes through the send path and lands in its transcript as a user message;
+    the page shows it collapsed rather than as the user's own words."""
+    prompt = 'You are continuing the chat "Chat 1" (chat id agent-abc). It ran on Claude Code until now.\n\nRead it.'
+    decision = classify_user_message(prompt)
+    assert decision is not None
+    assert (decision.display, decision.display_label) == (DisplayKind.CHIP, "Handoff prompt")
+    assert classify_user_message("You are continuing to be helpful, thanks") is None
+
+
+def test_the_handoff_summary_request_is_a_chip_that_names_itself() -> None:
+    decision = classify_user_message(f"{HANDOFF_SUMMARY_COMMAND} data/.apps/chat/chats/agent-abc/summaries/1.md")
+    assert decision is not None
+    assert (decision.display, decision.display_label) == (DisplayKind.CHIP, "Asked for a handoff summary")
+    # Only the command itself: a message that merely mentions it is a human turn.
+    assert classify_user_message(f"what does {HANDOFF_SUMMARY_COMMAND} do?") is None
+    assert classify_user_message(f"{HANDOFF_SUMMARY_COMMAND}-ish") is None
+
+
 def test_seeded_welcome_is_hidden() -> None:
     decision = classify_user_message("/welcome")
     assert decision is not None
@@ -77,15 +100,6 @@ def test_resume_continuation_is_hidden_via_is_meta_not_a_bespoke_matcher() -> No
     assert decision is not None
     assert decision.display is DisplayKind.HIDDEN
     assert classify_user_message("Continue from where you left off.") is None
-
-
-def test_compaction_summary_is_a_labelled_chip_keyed_off_its_flag() -> None:
-    summary = "This session is being continued from a previous conversation that ran out of context. ..."
-    assert classify_user_message(summary) is None
-    decision = classify_user_message(summary, is_compact_summary=True)
-    assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Summary of earlier conversation"
 
 
 def test_explicit_detector_wins_over_is_meta() -> None:
@@ -246,3 +260,18 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.display == DisplayKind.PERMISSION_RESOLUTION
     assert display.resolution == "denied"
     assert display.request_id == "evt-9"
+
+
+def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
+    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
+    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
+    script = Path(__file__).resolve().parents[5] / "scripts" / "message_chat.py"
+    spec = importlib.util.spec_from_file_location("message_chat_for_tag_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.SYSTEM_MESSAGE_TAG == BROWSER_FLEET_TAG
+    decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP

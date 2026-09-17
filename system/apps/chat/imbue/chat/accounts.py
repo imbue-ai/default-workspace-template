@@ -32,12 +32,20 @@ import threading
 import uuid
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
 from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 
+from imbue.chat.create_defaults import CreateDefaults
+from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.create_defaults import write_create_defaults
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import LaneNotFoundError
+from imbue.chat.harnesses.lanes import account_label
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 
@@ -53,11 +61,6 @@ _INDEX_FILENAME: Final = "index.json"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
-
-# Marks that this workspace has had its first chat. Beside the accounts root rather than in
-# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the chat that
-# answers it is created on demand rather than at boot.
-_FIRST_CHAT_FILENAME: Final = "first_chat_started"
 
 _INDEX_THREAD_LOCK = threading.Lock()
 _LOCK_FILENAME: Final = "index.lock"
@@ -145,37 +148,6 @@ def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
 
 
-def claim_first_chat(home: Path | None = None) -> bool:
-    """True exactly once per workspace, for the first chat anyone starts.
-
-    The caller stacks the `first` create template on that chat -- which is what delivers
-    `/welcome`. It is claimed here rather than by bootstrap because a chat needs a provider
-    account, and a fresh workspace has none until someone signs in.
-
-    Claim-and-mark in one call so two creates racing cannot both be first.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        if marker.exists():
-            return False
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
-        return True
-
-
-def release_first_chat(home: Path | None = None) -> None:
-    """Give the claim back, for a create that claimed it and then failed.
-
-    There is exactly one `/welcome` per workspace and no way to ask for another, so a claim
-    spent on a create that died -- a rejected credential, an OOM, a container restart -- would
-    cost the user their first-run experience permanently. Only the claimant calls this, and
-    only on a failure path, so it cannot race a second create into being first as well.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        marker.unlink(missing_ok=True)
-
-
 def index_path(home: Path | None = None) -> Path:
     return accounts_root(home) / _INDEX_FILENAME
 
@@ -214,7 +186,7 @@ def read_index(home: Path | None = None) -> AccountIndex:
 
 
 def _write_index(index: AccountIndex, home: Path | None = None) -> None:
-    """Serialize the index through a temp file and rename it into place.
+    """Serialize the index through a temp file and rename it into place, then rewrite what derives from it.
 
     Callers must already hold `_index_lock`; the rename only buys atomicity of the file's
     contents, not of the read-modify-write around it.
@@ -227,6 +199,69 @@ def _write_index(index: AccountIndex, home: Path | None = None) -> None:
     current = index.model_copy_update(to_update(index.field_ref().version, INDEX_VERSION))
     tmp.write_text(json.dumps(current.model_dump(), indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)
+    # The workspace's create defaults are derived from the index and nothing else, so every
+    # write of the index -- from the server or a script -- is what keeps them current.
+    write_create_defaults(create_defaults_path(), create_defaults_for(current, home))
+
+
+def harness_for(account: Account) -> HarnessType | None:
+    """The harness an account's lane runs on, or None if this build no longer has that lane."""
+    try:
+        return get_lane(account.lane).harness
+    except LaneNotFoundError:
+        logger.warning("Account {} names unknown lane {}", account.id, account.lane)
+        return None
+
+
+def choose_default_account(index: AccountIndex) -> Account | None:
+    """The account a launch that names none runs on, or None when no usable account exists.
+
+    The pinned default, else the most recently used account, else the oldest -- which is the
+    same rule the picker shows (`Providers.ts`, `getSelectedAccount`). It matters that the two
+    agree: every launch without an explicit account lands here, and a disagreement means two
+    chats started seconds apart run on different providers with nothing saying so. A pin on a
+    lane this build lacks is skipped rather than refused: the user can still chat, and the
+    picker shows the same fallback.
+    """
+    usable = [a for a in index.accounts if harness_for(a) is not None]
+    if not usable:
+        return None
+    pinned = next((a for a in usable if a.id == index.default_account), None)
+    if pinned is not None:
+        return pinned
+    return next((a for a in usable if a.id == index.mru), usable[0])
+
+
+def create_defaults_for(index: AccountIndex, home: Path | None = None) -> CreateDefaults | None:
+    """What the workspace's `mngr create` defaults should name for `index`: the default account, or nothing.
+
+    An account whose folder is gone yields nothing rather than the next account: a binding to
+    a directory that is not there fails every call without saying signed-out, and the boot
+    sweep drops such a row anyway.
+    """
+    chosen = choose_default_account(index)
+    if chosen is None:
+        return None
+    harness = harness_for(chosen)
+    assert harness is not None, "choose_default_account only returns accounts on a lane this build has"
+    folder = account_dir(chosen.id, home)
+    if not folder.is_dir():
+        logger.warning(
+            "Account {} has no folder on disk; writing no create defaults for it",
+            chosen.id,
+        )
+        return None
+    return CreateDefaults(harness=harness, account_id=chosen.id, account_dir=folder)
+
+
+def regenerate_create_defaults(home: Path | None = None) -> None:
+    """Rewrite the workspace's create defaults from the index as it stands.
+
+    For boot: a workspace updated onto this build has accounts but no file yet, and a file
+    deleted by hand comes back the same way.
+    """
+    with _index_lock(home):
+        write_create_defaults(create_defaults_path(), create_defaults_for(read_index(home), home))
 
 
 def _next_seq(index: AccountIndex, lane: str) -> int:
@@ -406,6 +441,52 @@ def rename_account(account_id: str, name: str, home: Path | None = None) -> Acco
             raise AccountError(f"no such account: {account_id}")
         _write_index(index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))), home)
     return renamed
+
+
+class NumberedAccount(FrozenModel):
+    """An account as the picker shows it: numbered among the accounts that read the same, with its harness."""
+
+    account: Account
+    harness: HarnessType
+    # The provider noun, or the user's own name for the account when it has one.
+    display: str
+    # 1-based among the accounts sharing ``display`` and ``harness``, in index order.
+    number: int
+
+    @property
+    def label(self) -> str:
+        return account_label(self.display, self.harness, self.number)
+
+
+def number_accounts(rows: Sequence[Account]) -> list[NumberedAccount]:
+    """Number the accounts the way every surface shows them; an account on a lane this build lacks is left out.
+
+    The stored ``seq`` counts per lane, but a label names a provider and a harness, and those
+    do not line up: two lanes run on pi and can both mint an OpenRouter account, so lane
+    numbering gives two rows reading "OpenRouter (Pi)" with nothing between them, while a lane
+    that offers many providers numbers its only Groq account "Groq 2" because an OpenRouter one
+    came first. A renamed account is numbered under the name the user gave it, since that is
+    what the row reads.
+    """
+    shown: dict[tuple[str, str], int] = {}
+    numbered: list[NumberedAccount] = []
+    for account in rows:
+        harness = harness_for(account)
+        if harness is None:
+            continue
+        display = account.name if account.name != "" else account.display
+        key = (display, harness.value)
+        shown[key] = shown.get(key, 0) + 1
+        numbered.append(NumberedAccount(account=account, harness=harness, display=display, number=shown[key]))
+    return numbered
+
+
+def account_label_for(account_id: str, home: Path | None = None) -> str:
+    """The label the picker shows for one signed-in account. Raises ``AccountError`` when the index lacks it."""
+    for numbered in number_accounts(read_index(home).accounts):
+        if numbered.account.id == account_id:
+            return numbered.label
+    raise AccountError(f"no such account: {account_id}")
 
 
 def set_mru(account_id: str, home: Path | None = None) -> None:

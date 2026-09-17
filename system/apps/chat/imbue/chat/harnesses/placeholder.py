@@ -36,14 +36,16 @@ from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import SwitchResult
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 
 
-class PlaceholderSessionWatcher(AgentSessionWatcher):
+class PlaceholderSessionWatcher(AgentSessionWatcher, TranscriptLoader):
     """A watcher that watches nothing and reports an empty transcript.
 
     Every read returns the empty answer for its shape, so the chat tab renders as a
     blank conversation rather than erroring. ``on_events`` is retained but never
-    called -- there is no source to call it from.
+    called -- there is no source to call it from. As a loader (an archived segment of a
+    chat) it is the same empty transcript.
     """
 
     _on_events: OnEventsCallback
@@ -53,6 +55,10 @@ class PlaceholderSessionWatcher(AgentSessionWatcher):
         watcher = cls.__new__(cls)
         watcher._on_events = on_events
         return watcher
+
+    @classmethod
+    def build_loader(cls, agent_info: AgentInfo) -> "PlaceholderSessionWatcher":
+        return cls.build(agent_info, lambda _agent_id, _events: None)
 
     def start(self) -> None:
         pass

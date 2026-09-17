@@ -97,17 +97,22 @@ was opened; "Remove from project" unfiles it. Each client keeps its own
 arrangement of each view: the browser saves the user's gestures with a save
 id and the stamp it was based on (a save over a newer arrangement is refused
 with 409 and the window refetches), the shell writes the file for agent ops
-and its own pruning, and every write is announced as `layout_updated` so the
+and deletes, and every write is announced as `layout_updated` so the
 client's other windows mirror it. The active view lives on the client record.
-A saved tab whose address the machine no longer lists is pruned on the next
-observation; an instance whose record says `lifetime = "referenced"` is
-deleted through its app once nothing references it.
+A tab leaves its tab sets and layouts only when its instance is deleted through
+the shell; one whose app stops listing it stays, shown as unavailable, and
+reconnects when the app lists it again. An instance whose record says
+`lifetime = "referenced"` is deleted through its app once nothing references it.
 
 The rail shows the view's identity (the switcher; right-click for project
 settings), its shortcut rows (seeded from every app's `default_shortcut`;
 Everything's rail is every app's primary action), the "All apps" popover, a
 search pill, and the view's tab list. The New Tab page is
-the only empty state, and the page for starting things: a search field; "Open
+the only empty state, and the page for starting things. It is an ordinary tab:
+the "+" opens another no matter how many are already up, in one pane or across
+panes, and one stays open until it is closed or answered -- by opening something
+from inside it, or by a tab docking into the pane where it was the only tab. Its
+contents: a search field; "Open
 new" (every app's primary action as a tile, four to a row, the apps that
 declare a `launcher_rank` in their manifest first in rank order and the rest
 after them); "In this project" (the tab set, with an app filter and a last-active
