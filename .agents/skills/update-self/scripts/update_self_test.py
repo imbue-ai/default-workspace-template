@@ -5048,31 +5048,21 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     ) in capsys.readouterr().err
 
 
-def test_the_pinned_fallback_is_the_home_the_build_installs_under(
-    apply_repo: Path,
-) -> None:
-    """The apply's floor and the build's target are the same directory.
+def test_the_pinned_fallback_is_the_tool_layout_the_build_installs_under() -> None:
+    """The floor spelled out, so it cannot be redefined out from under the build.
 
-    ``install_mngr.py`` sets ``UV_TOOL_DIR``/``UV_TOOL_BIN_DIR`` from
-    ``tool_env`` at build time; a floor that drifted from it would install a
-    reachable-looking copy next to the real one rather than over it.
+    Everything else states the layout in terms of ``tool_env``'s own helpers --
+    ``install_mngr_test`` for the build's pin, ``tool_env_sync_test`` for the
+    two copies of the module -- which would all move together if those helpers
+    moved. ``_tool_env.sh`` hard-codes these same two strings for the shell
+    that puts the bin directory on PATH, and cannot follow.
     """
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    assert not runner.executables
-
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
-
-    mngr_install_env = next(
-        env
-        for argv, env in zip(runner.calls, runner.envs)
-        if argv[:4] == ["uv", "tool", "install", "-e"]
-        and argv[4] == update_layout.MNGR_DIR
-    )
     home = tool_env.tool_home()
-    assert mngr_install_env["UV_TOOL_DIR"] == str(
-        home / ".local" / "share" / "uv" / "tools"
+
+    assert update_environment._pinned_tool_location() == (
+        home / ".local" / "share" / "uv" / "tools",
+        home / ".local" / "bin",
     )
-    assert mngr_install_env["UV_TOOL_BIN_DIR"] == str(home / ".local" / "bin")
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
