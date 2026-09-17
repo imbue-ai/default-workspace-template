@@ -1,3 +1,2 @@
-- The terminal app depends on `imbue-mngr-ttyd` (at the mngr commit `pyproject.toml`
-  pins) and reads the OSC 52-capable ttyd web client from that package's resources
-  instead of a vendored mngr tree; `--ttyd-web-client` is now an optional override.
+- `imbue-mngr-ttyd`, like every other mngr package the workspace installs, comes from the public
+  mngr repo at the commit `pyproject.toml` pins.
