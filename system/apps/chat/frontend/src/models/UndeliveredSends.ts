@@ -18,7 +18,7 @@ import type { ChatSnapshot } from "./Chats";
 import { prependToComposer, raiseFailureNotice } from "../views/MessageInput";
 import { getChatSessionId } from "../document-meta";
 
-/** Puts a chat's undelivered sends back in its composer, at most one paste per send.
+/** Puts a chat's undelivered sends back in its composer, each of them once.
  *
  * A class rather than module state so each test drives its own and the absorbed ids cannot leak
  * between them. The app builds one, for its own page's chat only.
@@ -39,14 +39,20 @@ export class UndeliveredSendAbsorber {
     // one composer once per open pane -- deterministically, not as a race.
     const chat = chats.find((candidate) => candidate.chat_id === this.ownChatId);
     if (chat === undefined) return;
+    const fresh = chat.undelivered_sends.filter((held) => !this.pastedMessageIds.has(held.message_id));
+    if (fresh.length > 0) {
+      // One paste for all of them, in the order they were sent. A paste per send would invert
+      // them: each one goes in ABOVE what the composer already holds, so the last would end up
+      // on top. One notice too -- the composer keeps only the latest anyway, and sends refused
+      // together were refused by one agent for one reason.
+      for (const held of fresh) this.pastedMessageIds.add(held.message_id);
+      this.prepend(chat.chat_id, fresh.map((held) => held.text).join("\n\n"));
+      this.raise(chat.chat_id, fresh[0].detail, fresh[0].kind);
+    }
     for (const held of chat.undelivered_sends) {
       // The take is re-issued even for one already pasted: a take that never landed leaves the
       // send on the record, and this is the only thing that clears it.
       void this.take(chat.chat_id, held.message_id);
-      if (this.pastedMessageIds.has(held.message_id)) continue;
-      this.pastedMessageIds.add(held.message_id);
-      this.prepend(chat.chat_id, held.text);
-      this.raise(chat.chat_id, held.detail, held.kind);
     }
   }
 }
