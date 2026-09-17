@@ -4451,8 +4451,8 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
         if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]
     ]
     assert recovery_npm, "recovery should have rebuilt without the expendable tag"
-    # The refresh itself, not just any uv call: `uv tool dir` runs unwrapped
-    # on the forward pass too, so it cannot stand in for the recovery refresh.
+    # The refresh itself, not just any uv call: only the reinstalls and the
+    # sync are what recovery has to rebuild untagged.
     recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
     recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
     assert len(recovery_installs) == 3, "recovery should reinstall every tool untagged"
