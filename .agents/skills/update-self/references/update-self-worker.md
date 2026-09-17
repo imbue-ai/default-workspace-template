@@ -148,11 +148,13 @@ they only spend the user's time. The footprint is read from git, so the one
 user consumer it cannot see is a scheduled task: cron drop-ins live under the
 gitignored `data/.state/cron.d`, and your worktree holds none of them (the
 launcher syncs only this run's `data/.tasks/update-self/` into it), so read
-the lead's copy. On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` and
-grep its lines for any path the update deleted or renamed (`git diff
---name-status --diff-filter=DR "$BASE" "$TARGET_REF"`); a hit is a
-user-created consumer, and 4a runs in full. If you believe the analysis
-should run anyway in a situation this rule does not cover, that is a
+the lead's copy. On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` --
+the main worktree of this same repo when `LEAD_WORK_DIR` is unset, as in Step
+6, since a directory you cannot read answers exactly like a workspace with no
+scheduled task -- and grep its lines for any path the update deleted or
+renamed (`git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"`); a
+hit is a user-created consumer, and 4a runs in full. If you believe the
+analysis should run anyway in a situation this rule does not cover, that is a
 `question` gate (Step 6), never a silent widening. When `has_local_footprint`
 is true, run all of it.
 
