@@ -97,10 +97,11 @@ goes to stdout; with it, the parent directories are created.
   error). The first label of every standalone program is a reserved app name,
   so the sidecar prefix cannot claim an unrelated program. One entry per file a
   block is written in, so a footprint names the file a change would have to
-  edit: the template declares every program in its own
-  `system/supervisord.conf.d/<name>.conf`, so an app with a sidecar of its own
-  usually has two. Empty when nothing runs any of them, which is the normal
-  state before an app is first registered.
+  edit: the browser's own `program:browser` block is in
+  `system/supervisord.conf.d/browser.conf` and the `xvfb` it declares is in
+  `system/supervisord.conf.d/xvfb.conf`, so its footprint carries both. Empty
+  when nothing runs any of them, which is the normal state before an app is
+  first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a
