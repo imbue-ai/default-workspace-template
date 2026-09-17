@@ -1,7 +1,7 @@
 """Guard: ``mngr <subcommand>`` references in skill markdown name real commands.
 
 Skills carry ``mngr ...`` command examples in their prose that agents copy and
-run verbatim. When system/vendor/mngr renames or removes a subcommand, those examples
+run verbatim. When mngr renames or removes a subcommand, those examples
 go stale silently. This test scans skill markdown for code-formatted
 ``mngr <subcommand>`` tokens and asserts each subcommand exists in the live mngr
 CLI, so that drift fails at merge.
@@ -79,7 +79,7 @@ def test_skill_markdown_mngr_subcommands_exist() -> None:
     assert scanned > 0, "no skill markdown found -- check _SKILL_MD_ROOTS"
     assert not offenders, (
         "Skill markdown references mngr subcommands that the live CLI does not "
-        "have (and that are not known plugin commands). The vendored mngr CLI "
+        "have (and that are not known plugin commands). The pinned mngr CLI "
         "likely renamed/removed them -- update the skill prose (or, for a new "
         "plugin command, add it to _KNOWN_PLUGIN_SUBCOMMANDS):\n  "
         + "\n  ".join(offenders)

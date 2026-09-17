@@ -12,14 +12,15 @@
   time by `system/scripts/fetch_mngr_assets.sh` into gitignored
   `system/vendor/mngr-assets/`.
 
-- An mngr checkout dropped (untracked) at `system/vendor/mngr/` takes over the
-  pin: `system/scripts/use_local_mngr.py` runs first in the build and rewrites
-  the mngr sources to editable paths into the tree. This is how the mngr repo's
-  dev loop and CI harnesses run a checkout's mngr in a workspace. Nothing tracked
-  changes; deleting the tree restores the pin.
+- There is no way to build a workspace against any other mngr: the build reads
+  the pin and nothing else. A workspace built by the mngr repo's dev loop or CI
+  harnesses runs the pinned mngr too.
 
 - `system/test_mngr_pin.py` pins the shape: public repo, full commit, every locked
   mngr package at the pin, nothing tracked under `system/vendor/mngr`.
+  `system/test_supervisord_layout.py`'s evals-capture release gate, which could
+  only read the capture from a vendored tree, is gone; mngr's own
+  `evidence_collection_test.py` covers the pinned commit's capture.
 
 - `system/scripts/pull_upstreams.sh` and `push_upstreams.sh` are gone: they existed to
   split vendored-mngr edits from workspace edits, and there is no vendored mngr to

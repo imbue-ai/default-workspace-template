@@ -1,4 +1,4 @@
-"""The create gate as mngr runs it, end to end through the real vendored `mngr create`.
+"""The create gate as mngr runs it, end to end through the real installed `mngr create`.
 
 The unit tests beside this file (`require_create_account_test.py`) run the script directly
 and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
@@ -47,7 +47,7 @@ def _committed_pre_command_entry() -> str:
 def _mngr_create_in_a_gated_project(
     tmp_path: Path, extra_env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
-    """Run the real vendored `mngr create` in a temp project carrying the committed gate entry.
+    """Run the real installed `mngr create` in a temp project carrying the committed gate entry.
 
     The entry names the script by its project-relative path, so the script is copied to that
     path inside the project; mngr runs the entry from the project root, in this environment.

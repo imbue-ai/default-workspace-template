@@ -106,7 +106,7 @@ venv = ".venv"
 pythonVersion = "3.12"
 strict = ["**/*.py"]
 
-# Ruff config mirrors system/vendor/mngr/pyproject.toml so that lint/isort behavior
+# Ruff config mirrors mngr's pyproject.toml so that lint/isort behavior
 # matches what this code was previously checked under (it was a workspace
 # member of system/vendor/mngr before being promoted into system/apps/system_interface).
 [tool.ruff]

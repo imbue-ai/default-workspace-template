@@ -989,7 +989,7 @@ def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
 def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> None:
     """A chat is created under its true name with the typed name as a label.
 
-    Both are sent explicitly so the create works against any vendored mngr,
+    Both are sent explicitly so the create works against any pinned mngr,
     including one predating free-form names -- and the pair is what newer mngr
     derives for itself, so its "true name is the canonical form of the display
     name" rule holds either way.
@@ -1005,7 +1005,7 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
     """A rename carries the same name pair a create does: canonical name + typed label.
 
-    The canonical name is what an older vendored mngr accepts, and the typed
+    The canonical name is what an older pinned mngr accepts, and the typed
     name rides the same atomic write as the rename so no observer sees the
     renamed agent without its ``display_name``.
     """

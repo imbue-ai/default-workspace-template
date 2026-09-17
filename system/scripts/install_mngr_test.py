@@ -117,29 +117,6 @@ def test_the_base_package_and_every_plugin_go_in_one_command(tmp_path: Path) -> 
     ]
 
 
-def test_a_local_tree_installs_the_base_and_every_plugin_editable_from_it(tmp_path: Path) -> None:
-    """A checkout at system/vendor/mngr is the dev and CI override of the pin."""
-    tree = list_mngr_plugins.LocalTree(root=tmp_path / "system" / "vendor" / "mngr")
-
-    command = install_mngr.build_install_command(
-        tree,
-        list_mngr_plugins.plugin_arguments_for_tool(_MANIFEST, tree, "mngr"),
-    )
-
-    assert command == [
-        "uv",
-        "tool",
-        "install",
-        "-e",
-        str(tree.root / "libs" / "mngr"),
-        "--with-editable",
-        str(tree.root / "libs" / "mngr_claude"),
-        "--with-editable",
-        str(tree.root / "libs" / "mngr_wait"),
-        "--reinstall",
-    ]
-
-
 def test_an_empty_plugin_list_refuses_rather_than_installing_the_base_alone(
     tmp_path: Path,
 ) -> None:

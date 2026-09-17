@@ -4,7 +4,7 @@ The default update target is capped at the version of the **Mind app driving
 this workspace**, which `resolve-target` reads from the app itself (`GET
 /api/v1/app/version` through the latchkey gateway; `ceiling` in the output).
 The template carries the code the app talks to -- the system interface and the
-vendored `mngr` -- so a workspace running a template newer than its app would
+pinned `mngr` -- so a workspace running a template newer than its app would
 be speaking a protocol the app does not know. When the app reports a branch
 rather than a release tag (a dev build) there is nothing to compare against and
 `ceiling` caps nothing. When the app cannot be reached, or is too old to report

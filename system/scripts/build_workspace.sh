@@ -45,10 +45,6 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
-# An mngr checkout dropped at system/vendor/mngr (untracked) takes over from the
-# public-repo commit pyproject.toml pins: everything below reads the rewritten file.
-python3 "$REPO_ROOT/system/scripts/use_local_mngr.py" "$REPO_ROOT"
-
 # Build every frontend of the npm workspace (deps installed by install_dependencies.sh): the
 # shell's and the chat app's, each into the static/ directory its backend serves.
 ( cd "$REPO_ROOT/system" && npm run build )

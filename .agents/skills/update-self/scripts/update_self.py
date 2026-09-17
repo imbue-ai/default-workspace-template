@@ -17,7 +17,7 @@ than agent prose:
     ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
-    app talks to (the system interface, the vendored ``mngr``), so updating past
+    app talks to (the system interface, the pinned ``mngr``), so updating past
     the app's own release would leave the workspace speaking a protocol its app
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
@@ -311,7 +311,7 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     # system/scripts/check_changelog_entries.py for the bucket definition).
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
-    # under the bucketed layout. Exclude the vendored subtree, which carries
+    # under the bucketed layout. Exclude system/vendor, whose tk copy carries
     # its own separate changelog system. ``top`` anchors both pathspecs at the
     # repository root: a git pathspec is otherwise relative to the cwd, so run
     # from a subdirectory the glob matched nothing and the digest came back

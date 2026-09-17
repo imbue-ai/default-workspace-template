@@ -157,7 +157,7 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
 ) -> None:
     """The one test that reads the file the way the workspace's mngr does.
 
-    Loaded through the vendored mngr's own loader, over a copy of the committed `.mngr/settings.toml`,
+    Loaded through the installed mngr's own loader, over a copy of the committed `.mngr/settings.toml`,
     so a key mngr does not know, or a bare assignment that narrows a list the committed file sets
     (which mngr refuses), fails here rather than on the first create in a workspace.
     """

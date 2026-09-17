@@ -6,11 +6,10 @@
 # merge, so a release that ships a new plugin registers it in the workspace
 # being updated rather than only in freshly built images.
 #
-# Every plugin is installed from wherever pyproject.toml's [tool.uv.sources]
-# points imbue-mngr -- the public mngr repo at ONE pinned commit (uv refuses to
-# mix commits across packages from the same repo), or the local tree at
-# system/vendor/mngr. Each entry names the package and its subdirectory in the
-# mngr repo. mngr_modal is intentionally not registered
+# Every plugin is installed from the public mngr repo at the ONE commit
+# pyproject.toml's [tool.uv.sources] pins imbue-mngr to (uv refuses to mix
+# commits across packages from the same repo). Each entry names the package and
+# its subdirectory in the mngr repo. mngr_modal is intentionally not registered
 # (providers.modal.is_enabled=false).
 
 [[plugins]]
