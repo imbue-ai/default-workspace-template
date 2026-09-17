@@ -94,6 +94,7 @@ COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/syste
 COPY system/vendor/mngr/libs/mngr_autocompact/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_autocompact/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
 COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_ttyd/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_ttyd/pyproject.toml
 
 # Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
 # package.json) -- install needs only these.

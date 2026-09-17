@@ -114,6 +114,7 @@ imbue-mngr-antigravity = { path = "system/vendor/mngr/libs/mngr_antigravity", ed
 imbue-mngr-autocompact = { path = "system/vendor/mngr/libs/mngr_autocompact", editable = true }
 resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
 concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
+imbue-mngr-ttyd = { path = "system/vendor/mngr/libs/mngr_ttyd", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
