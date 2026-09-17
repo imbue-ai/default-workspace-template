@@ -41,10 +41,11 @@ you when two of you touch the same file.
    `merge` or anything else that changes git state. The orchestrator commits the
    folder when no worker is running. Reading (`git status`, `git diff`,
    `git log`) is fine.
-3. **Leave the shared registration files alone** -- the root `pyproject.toml`,
-   `uv.lock` and `system/supervisord.conf` -- unless your subtask is the one that
-   scaffolds the app or adds its libraries. If it is, run
-   `uv sync --all-packages` after changing them.
+3. **Leave the two shared files alone** -- the root `pyproject.toml` and
+   `uv.lock` -- unless your subtask is the one that scaffolds the app or adds its
+   libraries. If it is, run `uv sync --all-packages` after changing them. The
+   app's own manifest and supervisord program file belong to the app, not to the
+   workspace, so they are yours if your subtask covers them.
 4. **Do not touch the running workspace.** Apps run under supervisord from the
    workspace's main checkout, not from this folder. Do not run `supervisorctl`,
    `system/scripts/forward_port.py` or `system/scripts/layout.py`, and do not

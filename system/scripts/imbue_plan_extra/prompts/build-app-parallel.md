@@ -214,9 +214,10 @@ Sharing one folder has a rule: two nodes that run at the same time must never
 edit the same file, because nothing detects it and the later write silently wins.
 So say in each subtask which files the node owns, and have nodes that run side by
 side own different ones. Exactly one node scaffolds the app, because scaffolding
-edits the root `pyproject.toml`, `uv.lock` and `system/supervisord.conf` and picks
-a port; any library the app needs is added by that node, or by a later node that
-runs with no other node beside it.
+edits the root `pyproject.toml` and `uv.lock` and picks a port; any library the
+app needs is added by that node, or by a later node that runs with no other node
+beside it. The app's own files -- its package, its manifest and its supervisord
+program -- are its alone, so they collide with nothing.
 
 A node's access list controls two things:
 
