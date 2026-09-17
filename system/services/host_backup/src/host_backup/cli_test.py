@@ -13,6 +13,7 @@ from host_backup.cli import (
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
     _exit_code_for_completion,
+    _read_tail_lines,
     _scan_for_inflight_tick_ids,
     _wait_for_next_completion,
 )
@@ -142,3 +143,114 @@ def test_inflight_scan_ignores_foreign_event_sources(tmp_path: Path) -> None:
         + "\n"
     )
     assert _scan_for_inflight_tick_ids(events_path, max_lines=200) == set()
+
+
+def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> None:
+    """The reported OOM kill: every event embeds the full stdout of the restic command
+    it reports, so the log reaches gigabytes on an old workspace and reading it whole
+    got `host-backup-now` killed by the watchdog before it did anything at all."""
+    events_path = tmp_path / "events.jsonl"
+    padding = "x" * 200_000
+    with events_path.open("w") as fh:
+        for index in range(50):
+            fh.write(
+                json.dumps(
+                    {
+                        "source": "backup",
+                        "type": BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+                        "tick_id": f"old-{index}",
+                        "stdout": padding,
+                    }
+                )
+                + "\n"
+            )
+        fh.write(
+            json.dumps(
+                {
+                    "source": "backup",
+                    "type": BackupEventType.BACKUP_STARTED.value,
+                    "tick_id": "in-flight",
+                }
+            )
+            + "\n"
+        )
+    assert events_path.stat().st_size > 8 * 1024 * 1024
+
+    read_bytes = 0
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        handle = real_open(self, *args, **kwargs)
+        if self != events_path:
+            return handle
+        real_read = handle.read
+
+        def counting_read(*read_args):  # type: ignore[no-untyped-def]
+            nonlocal read_bytes
+            chunk = real_read(*read_args)
+            read_bytes += len(chunk)
+            return chunk
+
+        handle.read = counting_read  # type: ignore[method-assign]
+        return handle
+
+    Path.open = counting_open  # type: ignore[method-assign]
+    try:
+        pending = _scan_for_inflight_tick_ids(events_path, max_lines=200)
+    finally:
+        Path.open = real_open  # type: ignore[method-assign]
+
+    # The tick still in flight is found -- it is the newest event, so the bounded
+    # window always covers it -- without the file's size ever being read.
+    assert pending == {"in-flight"}
+    assert read_bytes <= 8 * 1024 * 1024
+    assert read_bytes < events_path.stat().st_size
+
+
+def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> None:
+    # A window that starts mid-file lands mid-line; that fragment is not an event and
+    # must not be handed to the caller as one.
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("first-line-is-long\nsecond\nthird\n")
+
+    assert _read_tail_lines(events_path, max_lines=10, max_bytes=14) == ["second", "third"]
+    assert _read_tail_lines(events_path, max_lines=10, max_bytes=10_000) == [
+        "first-line-is-long",
+        "second",
+        "third",
+    ]
+
+
+def test_a_huge_restic_stdout_is_capped_at_both_ends_when_it_is_written(
+    tmp_path: Path,
+) -> None:
+    """Nothing rotates the events log, so an uncapped progress stream grew it by
+    megabytes a day. What an operator reads -- the opening lines and the final
+    summary -- has to survive the cap, so both ends are kept."""
+    events_dir = tmp_path / "events"
+    stdout = "HEAD-MARKER\n" + ("progress tick\n" * 200_000) + "TAIL-SUMMARY"
+    write_event(
+        events_dir,
+        make_event(
+            BackupEventType.RESTIC_BACKUP_SUCCEEDED, tick_id="t1", stdout=stdout
+        ),
+    )
+
+    written = (events_dir / "events.jsonl").read_text()
+    stored = json.loads(written)["stdout"]
+    assert len(written) < len(stdout) / 100
+    assert stored.startswith("HEAD-MARKER")
+    assert stored.endswith("TAIL-SUMMARY")
+    assert "characters dropped" in stored
+
+
+def test_an_ordinary_event_is_stored_verbatim(tmp_path: Path) -> None:
+    events_dir = tmp_path / "events"
+    write_event(
+        events_dir,
+        make_event(
+            BackupEventType.RESTIC_BACKUP_FAILED, tick_id="t1", stdout="repo locked"
+        ),
+    )
+
+    assert json.loads((events_dir / "events.jsonl").read_text())["stdout"] == "repo locked"
