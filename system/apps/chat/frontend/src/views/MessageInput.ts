@@ -13,16 +13,28 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { getPendingPick, pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { openProviderChooser } from "../models/Providers";
-import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getChatById, isHandoffCancellable, whenChatRegistered } from "../models/Chats";
+import { getSelectedAccount, openProviderChooser } from "../models/Providers";
+import {
+  ensureHarnessCatalogs,
+  findComposerPopup,
+  getHarnessCatalog,
+  hasFastModeLimit,
+} from "../models/HarnessCatalog";
+import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
+import {
+  getChatById,
+  getProvisionalChat,
+  isHandoffCancellable,
+  launchChat,
+  whenChatRegistered,
+} from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
@@ -408,6 +420,16 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
           }
+          // ``/fast on`` and ``/fast off`` choose the chat's fast mode (on a harness that has
+          // one) rather than reaching the harness or its notice: the mode is the chat's setting.
+          const fastMode = parseFastModeCommand(messageText);
+          if (fastMode !== null && hasFastModeLimit(harness)) {
+            chooseFastMode(chatId, fastMode, getEventsForChat(chatId));
+            messageText = "";
+            localStorage.removeItem(messageTextKey(chatId));
+            m.redraw();
+            return null;
+          }
           const match = findComposerPopup(harness, messageText);
           if (match !== null) {
             if (match.popup.action === "open_auth") {
@@ -485,6 +507,34 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
+          // A seeded chat awaiting its first send has no agent yet, and this send is what
+          // launches one: on the signed-in account, else on the one the chooser produces. The
+          // message rides the launch as the agent's first, so nothing is sent after it lands.
+          if (getProvisionalChat(chatId)?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+            const accountId = await chooseAccountForFirstSend();
+            if (accountId === null) {
+              // The chooser closed with no sign-in: nothing was launched, and the message is
+              // the user's to keep.
+              dropOutgoing(chatId, outgoingId);
+              restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+              m.redraw();
+              return;
+            }
+            await launchChat(chatId, accountId, finalText);
+            try {
+              await whenChatRegistered(chatId);
+            } catch (err) {
+              // The create failed after the launch took the message: the chat keeps it as its
+              // first message and the page's "Try again" delivers it, so it does not go back to
+              // the composer (a copy there would be sent twice). The page shows the reason.
+              console.error(`The seeded chat ${chatId} could not be started: ${describeRequestError(err)}`);
+              dropOutgoing(chatId, outgoingId);
+              m.redraw();
+              return;
+            }
+            refocusAfterSend();
+            return;
+          }
           // A chat still being created has no agent to deliver to yet: the bubble stays
           // "Sending…" until the create lands, and the send goes out then. A create that
           // fails rejects here and the message goes back to the composer like any failed send.
@@ -518,6 +568,20 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         }
 
         refocusAfterSend();
+      }
+
+      /**
+       * The account a seeded chat's first send launches it on: the signed-in one when there is
+       * one, else whatever the provider chooser produces, or null when it is dismissed instead.
+       */
+      function chooseAccountForFirstSend(): Promise<string | null> {
+        const account = getSelectedAccount();
+        if (account !== null) {
+          return Promise.resolve(account.id);
+        }
+        return new Promise((resolve) => {
+          openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });
+        });
       }
 
       /**

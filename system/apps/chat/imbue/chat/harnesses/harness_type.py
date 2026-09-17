@@ -27,6 +27,10 @@ class HarnessType(StrEnum):
     # The mngr agent type is ``antigravity`` (``agy`` is only an alias); as with pi above,
     # this value MUST match the type, not the alias, or ``parse_harness`` falls through.
     ANTIGRAVITY = "antigravity"
+    # Not a harness any agent runs: the pseudo-harness of a chat's seed segment, the turns
+    # the Mind app handed over when it created the workspace (``chat_seed.py``). Registered so
+    # the segment reads through the registry like any archived one.
+    SEED = "seed"
 
 
 # What an agent whose mngr type is not a harness is treated as. Such agents still get a

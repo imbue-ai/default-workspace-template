@@ -36,6 +36,52 @@ vi.mock("../models/ModelSettings", () => ({
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
 
+// The workspace's chat settings as the page has them (null before the load), and every write
+// the fast-limit row asked for.
+const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
+  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
+  return {
+    DEFAULT_CHAT_SETTINGS: defaults,
+    chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
+    settingsWrites: [] as unknown[],
+  };
+});
+vi.mock("../models/ChatSettings", () => ({
+  DEFAULT_CHAT_SETTINGS,
+  getChatSettings: () => chatSettingsState.settings,
+  ensureChatSettings: () => {
+    chatSettingsState.loads += 1;
+    return Promise.resolve(chatSettingsState.settings ?? DEFAULT_CHAT_SETTINGS);
+  },
+  updateChatSettings: (next: unknown) => {
+    settingsWrites.push(next);
+    return Promise.resolve(next);
+  },
+}));
+
+// The chat's fast mode as the page has it (null before the load), the loads asked for, and every
+// mode the chooser picked.
+const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
+  fastModeState: { state: null as { mode: string; is_switched: boolean } | null },
+  fastModeLoads: [] as string[],
+  fastModeChoices: [] as [string, string][],
+}));
+vi.mock("../models/FastMode", () => ({
+  getFastModeState: () => fastModeState.state,
+  ensureFastModeState: (chatId: string) => {
+    fastModeLoads.push(chatId);
+    return Promise.resolve(fastModeState.state);
+  },
+  fastModeLabel: (state: { mode: string; is_switched: boolean }) =>
+    state.mode === "off" ? "Off" : state.mode === "on" ? "On" : state.is_switched ? "Auto (off now)" : "Auto",
+}));
+vi.mock("./fast-mode-limit", () => ({
+  chooseFastMode: (chatId: string, mode: string) => {
+    fastModeChoices.push([chatId, mode]);
+  },
+}));
+vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
+
 const providerState: { accounts: unknown[]; defaultId: string | null } = { accounts: [], defaultId: null };
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
@@ -132,11 +178,17 @@ afterEach(() => {
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
+  fastModeState.state = { mode: "auto", is_switched: false };
+  fastModeLoads.length = 0;
+  fastModeChoices.length = 0;
   picks.length = 0;
   started.length = 0;
   begun.length = 0;
   reopened.length = 0;
   pins.length = 0;
+  settingsWrites.length = 0;
+  chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+  chatSettingsState.loads = 0;
   providerState.defaultId = null;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
@@ -542,6 +594,56 @@ describe("the combo card", () => {
     expect(trigger.textContent).toContain("Opus");
     expect(trigger.textContent).toContain("High");
     expect(trigger.querySelector("svg")).not.toBeNull();
+  });
+
+  it("states the chat's fast mode on the fast row and opens the chooser from it", () => {
+    // The row says which of the three modes the chat is in rather than showing a switch, since
+    // auto is neither on nor off; pressing it closes the card and opens the chooser modal, where
+    // the modes are picked and auto's turn limit lives.
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    chatSettingsState.settings = {
+      fast_mode_default: "auto",
+      fast_mode_turn_limit: 3,
+      is_fast_mode_notice_shown: true,
+    };
+    fastModeState.state = { mode: "auto", is_switched: true };
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    if (row === null) throw new Error("no fast row");
+    expect(row.textContent).toContain("Fast Mode");
+    expect(row.textContent).toContain("Auto (off now)");
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
+
+    click('[data-card-row="fast"]');
+    const modal = document.querySelector<HTMLElement>('[data-e2e="fast-mode-modal"]');
+    if (modal === null) throw new Error("no fast-mode modal");
+    expect(document.querySelector('[data-card-row="fast"]')).toBeNull();
+    expect(modal.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(modal.textContent).toContain("Fast for the first 3 turns, then standard speed.");
+    const limit = modal.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    expect(limit.value).toBe("3");
+
+    click('[data-fast-mode="on"]');
+    expect(fastModeChoices).toEqual([["a1", "on"]]);
+    click(".fast-mode-done");
+    expect(document.querySelector('[data-e2e="fast-mode-modal"]')).toBeNull();
+  });
+
+  it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    fastModeState.state = null;
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    if (row === null) throw new Error("no fast row");
+    expect(row.textContent).toContain("...");
+    expect(fastModeLoads).toContain("a1");
   });
 
   it("gives a read-only harness no model list to open", () => {

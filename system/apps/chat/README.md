@@ -163,6 +163,38 @@ the agent list has been read from mngr once, like the instances API, so a send
 during the app's first seconds is retried rather than mistaken for an unknown
 chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A chat can also start from a conversation that happened before the workspace
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+`system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
+workspace is ready) takes a title and the turns of the onboarding conversation
+and opens a chat on them: the turns are written as the chat's first segment
+(`data/.apps/chat/chats/<chat-id>/seed.jsonl`, read through the `seed`
+pseudo-harness like any archived segment), the record names the seed as its
+first member, and the chat is listed as a provisional chat in the
+`awaiting_first_send` phase, its transcript on the page with a composer under
+it. The user's first message is what launches the chat's first real agent
+(the provider chooser opens then if nothing is signed in), which joins the
+record as the seed's successor with the `chat_id` and `chat_seq` labels a
+handoff's successor carries. The seed survives a restart of this app because
+the record does; discarding the chat before its first send drops both.
+
+Every chat that starts with no message is greeted: the `welcome` create
+template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
+says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
+is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
+folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+**off** (standard speed throughout), **auto** (fast for the first
+`fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
+(fast throughout). A new chat starts in the workspace's default mode
+(`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
+at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
+a chat whose mode calls for it launches through the `fast` create template, a
+handoff's successor included. The model picker's fast row states the chat's
+mode and opens a small chooser where the mode, auto's turn limit and the
+default for new chats are set; `/fast on` and `/fast off` typed in the
+composer choose the mode too. The first time auto switches a chat in a
+workspace, a one-time notice over the model bar explains it.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
