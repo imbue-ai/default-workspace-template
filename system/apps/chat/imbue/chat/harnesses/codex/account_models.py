@@ -20,6 +20,7 @@ so no probe outlives the request that asked.
 """
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Final
@@ -51,10 +52,24 @@ _PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
 # and a codex that reads one answers for THAT key rather than for the folder we are asking about,
 # which is the one thing this probe must never do. Same reasoning as the signed-in probe's.
 _AMBIENT_AUTH_KEYS: Final[frozenset[str]] = frozenset(("OPENAI_API_KEY",))
+# One probe of a given account at a time. The socket path is a hash of the account folder, so every
+# probe of one account wants the same one: overlapping probes (two switch dialogs opened on the same
+# account, each served by its own thread of the threaded WSGI server) would unlink each other's live
+# socket and launch two daemons on one listen address, leaving both pickers waiting on a path that no
+# longer exists. Keyed by the resolved folder, and never evicted -- an account is probed by the one
+# server process, and there are a handful of them.
+_PROBE_LOCKS_BY_ACCOUNT_DIR: Final[dict[Path, threading.Lock]] = {}
+_PROBE_LOCKS_GUARD: Final[threading.Lock] = threading.Lock()
 
 
 class AccountModelProbeError(RuntimeError):
     """The account's models could not be read: codex would not start, bind, or answer."""
+
+
+def _probe_lock(account_dir: Path) -> threading.Lock:
+    """The lock that admits one probe of ``account_dir`` at a time."""
+    with _PROBE_LOCKS_GUARD:
+        return _PROBE_LOCKS_BY_ACCOUNT_DIR.setdefault(account_dir.resolve(), threading.Lock())
 
 
 def _probe_environment(account_dir: Path) -> dict[str, str]:
@@ -92,7 +107,15 @@ def probe_codex_account_models(account_dir: Path) -> tuple[CodexModel, ...]:
 
     Raw entries, not mapped options: the caller persists exactly what the daemon said, so a later
     change to the mapping needs no second probe.
+
+    One probe of an account at a time; a concurrent caller waits its turn and then runs its own.
     """
+    with _probe_lock(account_dir):
+        return _probe_bound_codex(account_dir)
+
+
+def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
+    """Launch a codex bound to ``account_dir``, ask it for its models, and tear it down."""
     socket_path = get_codex_app_server_socket_path(account_dir)
     # A socket left behind by a probe that was killed would otherwise be taken for a live daemon,
     # and every later probe of this account would connect to nothing.
