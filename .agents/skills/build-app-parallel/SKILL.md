@@ -29,6 +29,10 @@ are restated below.
 checking the plan, listing which nodes can start, and writing each worker's task.
 Run it with bare `python3`.
 
+Run every command below from the repo root, and never pipe one through `tail` or
+`head` to shorten its output -- a pre-tool hook refuses that outright, and each
+refusal costs a turn. Redirect to a file and read the file instead.
+
 ## Conventions
 
 Pick the app's kebab-case name `$APP` up front (the rules are in `build-app`'s
@@ -193,6 +197,19 @@ Repeat until every node is done.
      changes. Otherwise destroy it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
      Destroying a worker leaves `$BUILD` intact.
+   - **The poll exits 76 (the worker went idle without reporting).** A worker
+     that has not started its turn yet looks idle, and the check gives up after
+     about fifteen seconds of it, so this is usually a worker that was still
+     getting going rather than a broken one. Look for a delivered report first
+     (`$RUN/nodes/N/reports/`), and if there is none, nudge it once:
+
+     ```bash
+     uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+         --task-file "$RUN/nodes/N/task.md" \
+         -m "Start your subtask now and report when it is done."
+     ```
+
+     Re-arm the poll. Treat a second 76 on the same node as `stuck` below.
    - **`stuck`:** stop the worker
      (`uv run .agents/skills/launch-task/scripts/create_worker.py stop --name "$APP-node-N"`),
      which keeps its work for inspection, stop launching new nodes, let running

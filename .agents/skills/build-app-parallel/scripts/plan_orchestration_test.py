@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 
@@ -258,6 +259,74 @@ def test_render_node_task_without_dependencies_says_so() -> None:
     )
 
     assert "None. This node starts from the original request alone." in text
+
+
+def test_read_node_report_prefers_the_live_report(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    report_path = plan_orchestration.node_report_path(run_dir, 0)
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("the live report")
+    (report_path.parent / "consumed").mkdir()
+    (report_path.parent / "consumed" / "20260101T000000Z-status-done.md").write_text(
+        "older"
+    )
+
+    assert plan_orchestration.read_node_report(run_dir, 0) == "the live report"
+
+
+def test_read_node_report_falls_back_to_the_archive(tmp_path: Path) -> None:
+    """The launcher's poll archives a report as soon as it prints it, so by the time
+    a dependent node's task is written the live path is usually empty."""
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    consumed = plan_orchestration.node_report_path(run_dir, 0).parent / "consumed"
+    consumed.mkdir(parents=True)
+    (consumed / "20260101T000000Z-status-done.md").write_text("the archived report")
+
+    assert plan_orchestration.read_node_report(run_dir, 0) == "the archived report"
+
+
+def test_read_node_report_takes_the_newest_archived_report(tmp_path: Path) -> None:
+    """A worker that revises its work after a review delivers a fresh report."""
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    consumed = plan_orchestration.node_report_path(run_dir, 0).parent / "consumed"
+    consumed.mkdir(parents=True)
+    first = consumed / "20260101T000000Z-status-done.md"
+    second = consumed / "20260102T000000Z-status-done.md"
+    first.write_text("the first report")
+    second.write_text("the revised report")
+    os.utime(first, (1_700_000_000, 1_700_000_000))
+    os.utime(second, (1_700_000_100, 1_700_000_100))
+
+    assert plan_orchestration.read_node_report(run_dir, 0) == "the revised report"
+
+
+def test_read_node_report_is_none_when_the_node_never_delivered(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+
+    assert plan_orchestration.read_node_report(run_dir, 0) is None
+
+
+def test_cli_write_task_reads_an_archived_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point of the fallback: node 2's task is written from node 0's and
+    node 1's reports after the poll has archived both."""
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
+    for idx, body in ((0, "Spec is settled."), (1, "Scaffolded.")):
+        consumed = plan_orchestration.node_report_path(run_dir, idx).parent / "consumed"
+        consumed.mkdir(parents=True)
+        (consumed / "20260101T000000Z-status-done.md").write_text(body)
+
+    assert (
+        plan_orchestration.main(
+            ["write-task", "--run-dir", str(run_dir), "--node", "2"]
+        )
+        == 0
+    )
+    task_text = plan_orchestration.node_task_path(run_dir, 2).read_text()
+    assert "Spec is settled." in task_text
+    assert "Scaffolded." in task_text
 
 
 def test_render_node_task_refuses_interactive_and_missing_reports() -> None:
