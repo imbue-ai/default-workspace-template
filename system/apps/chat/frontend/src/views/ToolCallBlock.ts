@@ -26,7 +26,7 @@ const BLOCK_CLASS = "tool-call-block group/tool overflow-hidden rounded-md borde
 
 const HEADER_CLASS =
   "tool-call-header flex cursor-pointer items-center gap-1.5 px-2.5 py-[3px] font-mono " +
-  "text-(length:--font-size-row) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
+  "text-(length:--font-size-helper) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
 
 // text-[10px]: icon glyph (the chevron), sized independently of the text scale.
 const CHEVRON_CLASS =

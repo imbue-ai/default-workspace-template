@@ -91,7 +91,7 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
       ? m(
           "div",
           // Faint, matching the greyed-out title of the closed step it belongs to.
-          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-row) leading-normal text-faint" },
+          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-helper) leading-normal text-faint" },
           step.summary,
         )
       : null;
