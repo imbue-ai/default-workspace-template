@@ -261,6 +261,12 @@ _AWAIT_IDLE_RC = 76
 # absorb the race where the worker is mid-delivery: the report file is checked
 # first on every loop, so a delivered report always wins.
 _IDLE_POLLS_BEFORE_GIVING_UP = 3
+# How long a freshly launched worker is given to start its first turn before
+# idle observations count. A worker that has not begun reads as idle, so without
+# this a lead that awaits immediately after launching gets exit 76 within
+# seconds, on a worker that is merely starting up -- observed in a parallel
+# build, where the lead then destroyed and relaunched two healthy workers.
+_IDLE_GRACE_SECONDS = 120.0
 
 
 def _normalize_dir(value: str) -> str:
@@ -1580,13 +1586,18 @@ def await_report(
     specific (and differently-recovered) one. ``_worker_is_idle`` -- the check
     the CLI wires in -- counts a worker that is waiting on a live sub-worker of
     its own as busy, so a nested dispatch is never mistaken for a stalled one.
+    Idle observations are ignored for the first ``_IDLE_GRACE_SECONDS`` of the
+    wait, since a worker that has not yet begun its first turn also reads as
+    idle.
 
     ``sleeper``/``clock`` are injected so tests can drive the poll loop without
     real time. The file is checked before the first sleep, so a report already
     present returns immediately.
     """
     stream: TextIO = sys.stdout if out is None else out
-    deadline = clock() + timeout_seconds
+    started_at = clock()
+    deadline = started_at + timeout_seconds
+    idle_counts_from = started_at + _IDLE_GRACE_SECONDS
     consecutive_idle_count = 0
     while True:
         if report_path.is_file():
@@ -1632,7 +1643,11 @@ def await_report(
                 file=sys.stderr,
             )
             return _AWAIT_SHED_RC
-        if worker_name is not None and idle_check is not None:
+        if (
+            worker_name is not None
+            and idle_check is not None
+            and clock() >= idle_counts_from
+        ):
             consecutive_idle_count = (
                 consecutive_idle_count + 1 if idle_check(worker_name) else 0
             )

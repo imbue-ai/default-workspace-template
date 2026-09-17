@@ -234,10 +234,9 @@ Repeat until every node is done.
      changes. Otherwise destroy it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
      Destroying a worker leaves `$BUILD` intact.
-   - **Exit 76 (the worker went idle without reporting).** A worker
-     that has not started its turn yet looks idle, and the check gives up after
-     about fifteen seconds of it, so this is usually a worker that was still
-     getting going rather than a broken one. Look for a delivered report first
+   - **Exit 76 (the worker went idle without reporting).** It has been up for
+     at least two minutes and has ended its turn, so it either finished and the
+     delivery failed or it stopped early. Look for a delivered report first
      (`$RUN/nodes/N/reports/`), and if there is none, nudge it once:
 
      ```bash
@@ -247,6 +246,9 @@ Repeat until every node is done.
      ```
 
      Then wait on it again. Treat a second 76 on the same node as `stuck` below.
+     Never destroy and relaunch a worker to restart it: you get two agents under
+     one name, the second inherits none of the first's work, and the evidence an
+     eval collects for that node becomes unreadable.
    - **`stuck`:** stop the worker
      (`uv run .agents/skills/launch-task/scripts/create_worker.py stop --name "$APP-node-N"`),
      which keeps its work for inspection, stop launching new nodes, let running

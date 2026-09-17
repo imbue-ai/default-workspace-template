@@ -1484,6 +1484,24 @@ def test_await_returns_shed_code_when_worker_shed(
     assert "demo" in err and "--restart" in err
 
 
+class _HandWoundClock:
+    """A clock the test moves by hand, so a poll loop's start-up grace is
+    crossed exactly when the test means it to be. Unlike ``_FakeClock`` it does
+    not move on its own: the grace is measured from the wait's first read, so a
+    clock that advanced per read would make each test's timing depend on how
+    many reads the loop happens to do.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def test_await_returns_idle_code_when_worker_idle_without_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1496,6 +1514,7 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
     report.parent.mkdir(parents=True)
     out = io.StringIO()
     idle_polls: list[str] = []
+    clock = _HandWoundClock()
 
     def _always_idle(name: str) -> bool:
         idle_polls.append(name)
@@ -1505,8 +1524,12 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
         report_path=report,
         timeout_seconds=1800,
         poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=lambda: 0.0,
+        # Past the start-up grace after one sleep, so the idle observations the
+        # threshold counts are the ones this test is about.
+        sleeper=lambda _seconds: clock.advance(
+            create_worker_mod._IDLE_GRACE_SECONDS
+        ),
+        clock=clock,
         out=out,
         worker_name="demo",
         pending_shed_check=lambda _name: False,
@@ -1520,6 +1543,41 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
     assert "ended its turn" in err and "worktree" in err
 
 
+def test_await_ignores_idle_while_the_worker_is_starting_up(tmp_path: Path) -> None:
+    """A worker that has not begun its first turn reads as idle. Within the
+    start-up grace that must not end the wait: the lead awaits immediately after
+    launching, and ending there costs a healthy worker."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    out = io.StringIO()
+    clock = _HandWoundClock()
+    sleeps: list[float] = []
+
+    def _sleeper_that_creates_report(seconds: float) -> None:
+        sleeps.append(seconds)
+        # Well inside the grace, and long enough to trip the threshold twice over.
+        clock.advance(create_worker_mod._IDLE_GRACE_SECONDS / 20)
+        if len(sleeps) == 6:
+            report.write_text("---\ntype: status\nname: done\n---\n\nstarted late\n")
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_sleeper_that_creates_report,
+        clock=clock,
+        out=out,
+        worker_name="demo",
+        pending_shed_check=lambda _name: False,
+        idle_check=lambda _name: True,
+    )
+
+    assert rc == 0
+    assert "started late" in out.getvalue()
+
+
 def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
     """Idle observations must be consecutive: a worker seen active again resets
     the counter, and a report that then appears wins normally."""
@@ -1528,6 +1586,7 @@ def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
     )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
+    clock = _HandWoundClock()
 
     # Idle twice, then active (counter resets), then idle again while the
     # report lands via the sleeper -- await must return the report, not the
@@ -1537,6 +1596,7 @@ def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
 
     def _sleeper_that_creates_report(seconds: float) -> None:
         sleeps.append(seconds)
+        clock.advance(create_worker_mod._IDLE_GRACE_SECONDS)
         if len(sleeps) == 4:
             report.write_text("---\ntype: status\nname: done\n---\n\nmade it\n")
 
@@ -1545,7 +1605,7 @@ def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
         timeout_seconds=1800,
         poll_interval_seconds=5,
         sleeper=_sleeper_that_creates_report,
-        clock=lambda: 0.0,
+        clock=clock,
         out=out,
         worker_name="demo",
         pending_shed_check=lambda _name: False,
