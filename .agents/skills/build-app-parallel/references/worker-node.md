@@ -62,8 +62,12 @@ order of steps and everything outside your subtask. Its steps for the main agent
 surfacing the tab, and handing off to `crystallize-creation` -- are never yours.
 
 Where you meet something you would rather ask about (a name, a default, an
-ambiguity), decide, and say what you decided in your report. You never talk to
-the user.
+ambiguity), decide, and say what you decided in your report.
+
+You never talk to the user, and you never start anything that asks the user for
+something, such as a `latchkey` permission request. Every contact with the user
+is a separate node the orchestrator runs. If your subtask needs access or an
+answer the user has not given, report `stuck` and name what is needed.
 
 ## How to check your work
 

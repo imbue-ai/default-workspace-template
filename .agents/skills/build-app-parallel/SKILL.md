@@ -1,6 +1,6 @@
 ---
 name: build-app-parallel
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you run the two reviews with the user (the throwaway mock, then the working site) and take the confirmed app live. For changing or removing an existing app use update-app."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
 metadata:
   author: imbue
 ---
@@ -17,7 +17,7 @@ You orchestrate. You do not build the app yourself:
   for this build (the build folder). Each follows
   `references/worker-node.md` and reports back.
 - **You** clarify the request, run the planner, launch workers as their
-  dependencies finish, hold the two conversations with the user, merge the
+  dependencies finish, run the interactive nodes (every contact with the user), merge the
   result, and hand the app to hardening.
 
 `.agents/skills/build-app/SKILL.md` is the reference for how an app is built
@@ -199,12 +199,21 @@ Repeat until every node is done.
 
    Workers never commit, so this is the only history the build has.
 
-## Step 5: The two conversations
+## Step 5: The interactive nodes
 
-A plan has two interactive nodes: the mock, then the working site. For each,
-the node's subtask says what to show and ask, and its access list names the
-node that built what is shown. That node's report names the app, its package
-folder and anything the preview needs.
+Every contact with the user during the build is an interactive node, and you run
+each one yourself by doing what its subtask says. Workers never ask the user
+anything. There are two kinds:
+
+- **Reviewing what was built** -- the mock, then the working site. The node's
+  access list names the node that built what is shown, and that node's report
+  names the app, its package folder and anything the preview needs. Follow items
+  1 to 4 below.
+- **Anything else the user has to do**, such as connecting an account or granting
+  access through the `latchkey` skill. Do it in this chat by following that
+  skill, then record the outcome as the node's report (item 3 below).
+
+For a review:
 
 1. **Serve a preview from the build folder.** The app is not live yet, so show
    a throwaway instance wrapped in a labeled preview tab, with its own scratch
@@ -239,7 +248,8 @@ folder and anything the preview needs.
 
 3. **Record the answer as this node's report**, so the nodes after it read it:
    write `$RUN/nodes/N/reports/report.md` with what the user confirmed and every
-   change they asked for. Move N to `done`.
+   change they asked for (or, for an account connection, what access was granted).
+   Move N to `done`.
 
 4. **Tear down the preview:**
    `python3 .agents/shared/scripts/serve_isolated_instance.py down --name "$APP-preview"`.
