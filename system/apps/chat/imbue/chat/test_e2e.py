@@ -974,6 +974,106 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(provider_row).not_to_contain_text("after your next message")
 
 
+# A turn that failed on the chat's own credential: Claude Code's stamped login notice.
+_AUTH_FAILED_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Hello agent!"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "isApiErrorMessage": True,
+        "error": "authentication_failed",
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+            "stop_reason": "stop_sequence",
+            "usage": {},
+        },
+    },
+]
+
+
+def _pick_from_auth_error_note(chat: FrameLocator, server: RunningWorkspace, account_id: str) -> None:
+    """Follow "switch to another provider" under the failed turn and pick ``account_id`` in the chooser.
+
+    The chat's own account is listed as not working and cannot be picked.
+    """
+    expect(chat.locator(".message-list")).to_contain_text("Login expired", timeout=15000)
+    chat.get_by_role("button", name="switch to another provider").click()
+    own = chat.locator(f'[data-e2e="pick-account-{server.account_ids[0]}"]')
+    expect(own).to_be_disabled()
+    expect(own.locator("xpath=..")).to_contain_text("Not working")
+    chat.locator(f'[data-e2e="pick-account-{account_id}"]').click()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_hands_off_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another harness's account from the auth-error note moves this chat there through the handoff,
+    rather than opening a new chat."""
+    with _switched_workspace(
+        tmp_path, messenger=SummaryWritingMngrMessenger(), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Codex?")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to OpenAI (Codex)"
+        )
+        _switch_and_send(chat, "Carry on in Codex")
+
+        expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
+            "Handed off from Claude Code to Codex", timeout=30000
+        )
+        snapshot = _settled_chat_snapshot(server)
+        assert snapshot.active_agent.account_id == server.account_ids[1]
+        assert len(snapshot.agent_ids) == 2
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another account on the chat's own harness and lane from the auth-error note arms a rebind of
+    this chat, with no dialog."""
+    with _switched_workspace(
+        tmp_path, additional_accounts=(("anthropic", "Anthropic"),), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code)"
+        )
+        expect(chat.locator(".modal-card")).to_have_count(0)
+        chat.locator(".message-input-textbox").fill("Carry on on the other account")
+        chat.locator(".message-input-send-button--switch").click()
+
+        manager = server.chat_state.agent_manager
+
+        def is_rebound() -> bool:
+            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+            return (
+                snapshot is not None
+                and snapshot.handoff is None
+                and snapshot.active_agent.account_id == server.account_ids[1]
+            )
+
+        wait_for(is_rebound, timeout=30.0)
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_comes_back(
     tmp_path: Path, page: Page

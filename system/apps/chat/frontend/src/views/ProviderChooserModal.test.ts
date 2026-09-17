@@ -262,7 +262,7 @@ describe("picking a signed-in account", () => {
 
   it("hands a working account to the caller and closes the chooser", () => {
     const onSignedIn = vi.fn();
-    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    openProviderChooser({ onSignedIn, unpickable: { accountId: OPENAI.id, note: "Not working", isFailing: true } });
     const { root } = mount();
 
     pickTarget(root, ANTHROPIC.id)!.click();
@@ -274,7 +274,7 @@ describe("picking a signed-in account", () => {
 
   it("lists the failing account without letting it be picked, keeping its actions", () => {
     const onSignedIn = vi.fn();
-    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    openProviderChooser({ onSignedIn, unpickable: { accountId: OPENAI.id, note: "Not working", isFailing: true } });
     const { root, draw } = mount();
 
     const broken = pickTarget(root, OPENAI.id)!;

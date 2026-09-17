@@ -10,12 +10,43 @@ import {
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import {
+  closeProviderChooser,
+  getUnpickableAccount,
+  isPickingAccount,
+  isProviderChooserOpen,
+  pickAccount,
+} from "../models/Providers";
+import { startChatOnAccount } from "../shell";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
 // needs openSubagentTab, and the card path never calls MarkdownContent.
 vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The auth-error note moves the chat through the switch dialog's entry point and reads the chat
+// and its accounts from their models; the chooser's open/pick state is the real module's.
+const switching = vi.hoisted(() => {
+  // Opening the chooser redraws, and mithril schedules a redraw on an animation frame.
+  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+  return {
+    chat: undefined as unknown,
+    accounts: [] as { id: string; harness: string; lane: string; label: string }[],
+    beginSwitchTo: vi.fn(),
+  };
+});
+vi.mock("./SwitchDialog", () => ({ beginSwitchTo: switching.beginSwitchTo }));
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: () => switching.chat,
+}));
+vi.mock("../models/Providers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Providers")>()),
+  accountForAgent: (id?: string) => switching.accounts.find((account) => account.id === id) ?? null,
+}));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
 // stub those three so tests control the state machine without mithril's XHR.
@@ -601,5 +632,59 @@ describe("expanded tool row payload states", () => {
     mockDetailState.mockReturnValue({ state: "unavailable" });
     const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
     expect(text).toContain("No longer available");
+  });
+});
+
+describe("the auth-error note's switch link", () => {
+  const OPENAI = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
+  const ANTHROPIC = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
+
+  function authErrorEvent(): AssistantMessageEvent {
+    return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
+  }
+
+  function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
+    if (node == null || typeof node !== "object") return null;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = findButton(child, label);
+        if (found !== null) return found;
+      }
+      return null;
+    }
+    const v = node as { tag?: unknown; text?: unknown; children?: unknown; attrs?: { onclick: () => void } };
+    if (v.tag === "button" && allText(v).trim() === label) return v as { attrs: { onclick: () => void } };
+    return findButton(v.children, label);
+  }
+
+  beforeEach(() => {
+    closeProviderChooser();
+    switching.beginSwitchTo.mockClear();
+    vi.mocked(startChatOnAccount).mockClear();
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI.id } });
+    switching.accounts = [OPENAI, ANTHROPIC];
+  });
+
+  it("switches the failed chat to the account picked, rather than starting a new chat", () => {
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "switch to another provider")!.attrs.onclick();
+
+    expect(isProviderChooserOpen()).toBe(true);
+    expect(isPickingAccount()).toBe(true);
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI.id, note: "Not working", isFailing: true });
+
+    pickAccount(ANTHROPIC.id);
+
+    expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
+    expect(startChatOnAccount).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
+  });
+
+  it("is not offered until the chat itself is known", () => {
+    switching.chat = undefined;
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+    expect(findButton(children, "switch to another provider")).toBeNull();
+    expect(findButton(children, "Sign in again")).not.toBeNull();
   });
 });
