@@ -26,13 +26,13 @@ Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`) are yours, and
 are restated below.
 
 **You speak to the user only when an interactive node says to.** The plan names
-every conversation the build has; a message you send outside one is you departing
-from the plan. While worker nodes run you stay in your turn: read reports as their
-polls wake you, launch whatever became ready, and say nothing. If the user writes
-to you meanwhile, answer only what they asked -- in one line -- and carry on; do
-not volunteer progress. Three runs were lost to this: each turn that ended with
-nothing openable drew another "any update?", which ate the conversation the
-build's own review needed.
+every conversation the build has, and those are the only messages you send: no
+acknowledgement when the request arrives, no note that planning has started, no
+progress while nodes run. While workers run you stay in your turn: read reports
+as their polls wake you, and launch whatever became ready. If the user writes to
+you meanwhile, answer only what they asked, in one line, and carry on. Three runs
+were lost to this: each turn that ended with a progress note drew another "any
+update?", which ate the conversation the build's own review needed.
 
 `scripts/plan_orchestration.py` does the bookkeeping with a single right answer:
 checking the plan, listing which nodes can start, and writing each worker's task.
@@ -108,8 +108,8 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-Tell the user in one line that you are building, then run the planner
-as a background task (`run_in_background: true`); it takes a few minutes:
+Run the planner as a background task (`run_in_background: true`); it takes a few
+minutes. Send the user nothing while it runs:
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" build-app-parallel
