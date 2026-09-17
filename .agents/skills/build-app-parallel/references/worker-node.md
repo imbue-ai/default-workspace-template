@@ -66,8 +66,7 @@ ambiguity), decide, and say what you decided in your report.
 
 You never talk to the user, and you never start anything that asks the user for
 something, such as a `latchkey` permission request. Every contact with the user
-is a separate node the orchestrator runs. If your subtask needs access or an
-answer the user has not given, report `stuck` and name what is needed.
+is a separate node the orchestrator runs.
 
 ## How to check your work
 
