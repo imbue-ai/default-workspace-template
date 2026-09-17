@@ -1711,19 +1711,31 @@ class AgentManager:
         return transition.trigger_text
 
     def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
-        """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""
+        """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order.
+
+        The record's drop waits for this in every case: the cancel left it standing precisely so a
+        send that does not land has somewhere to be parked, so the drop has to run even when there
+        is no agent to deliver to.
+        """
         capabilities = self._handoff_capabilities
         agent_info = self.get_agent_info_by_id(agent_id)
-        if capabilities is None or agent_info is None:
-            _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
-            return
-        for held in held_sends:
-            undelivered = deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
-            if undelivered is not None:
-                self._park_undelivered_send(chat_id, undelivered)
-        with self._lock:
-            self._drop_record_if_spent_locked(chat_id)
-        self._broadcast_chats_updated()
+        try:
+            if capabilities is None or agent_info is None:
+                _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
+                for held in held_sends:
+                    self._park_undelivered_send(
+                        chat_id,
+                        UndeliveredSend(send=held, detail="The agent could not be reached.", kind="agent_unreachable"),
+                    )
+                return
+            for held in held_sends:
+                undelivered = deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+                if undelivered is not None:
+                    self._park_undelivered_send(chat_id, undelivered)
+        finally:
+            with self._lock:
+                self._drop_record_if_spent_locked(chat_id)
+            self._broadcast_chats_updated()
 
     def retry_handoff(self, chat_id: ChatId, account_id: str) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id`` (spec 5.10, and spec 6 for a rebind).
