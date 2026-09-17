@@ -110,11 +110,6 @@ attach), and re-points the tab through the shell's
 key and no title (the shell tab's title is the record's) and so only nudges.
 Either event nudges the shell, since the instance list may have changed.
 
-The ttyd binary and its OSC 52-capable web client come from mngr's `mngr_ttyd`
-plugin; the client is a resource of the `imbue-mngr-ttyd` package this app
-depends on (at the mngr commit `pyproject.toml` pins) -- this folder is the
-template-side wiring around them.
-
 `notify_terminal_session.py` at this folder's root is a symlink into `bin/`, for
 a tmux server whose hook commands name that path (a server keeps the hook
 commands it read at start; see the `CLEANUP` note in `terminal_tmux.conf`).

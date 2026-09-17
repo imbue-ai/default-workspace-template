@@ -41,9 +41,7 @@ STATE_DIR: Final[Path] = Path("data/.state/terminal")
 STORE_PATH: Final[Path] = app_store_path(APP_NAME)
 TTYD_EXECUTABLE: Final[str] = "ttyd"
 # The tagging wrapper every terminal session runs its shell through (the terminal-session band).
-OOM_TAG_SCRIPT: Final[Path] = Path(
-    "system/services/oom_priority/bin/oom_tag_service.py"
-)
+OOM_TAG_SCRIPT: Final[Path] = Path("system/services/oom_priority/bin/oom_tag_service.py")
 
 # The mngr session-name prefix; agent sessions carry it, terminals do not.
 ENV_AGENT_SESSION_PREFIX: Final[str] = "MNGR_PREFIX"
