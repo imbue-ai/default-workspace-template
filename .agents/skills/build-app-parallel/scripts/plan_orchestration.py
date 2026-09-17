@@ -276,6 +276,8 @@ def render_node_task(
         f"Follow `{WORKER_RULES_REFERENCE}` for how to work in the shared build "
         "folder and how to report back. It is part of this task.\n\n"
         f"## Your subtask\n\n{node['subtask']}\n\n"
+        "Do this subtask and nothing else. Other nodes are building the rest of "
+        "the app, some of them in this folder right now.\n\n"
         f"## Handoffs from the nodes you depend on\n\n{handoffs}"
     )
 

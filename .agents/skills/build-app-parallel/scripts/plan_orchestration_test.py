@@ -241,7 +241,10 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     assert (
         "This task file: `data/.tasks/build-app-parallel/todo/nodes/2/task.md`" in text
     )
-    assert "## Your subtask\n\nBuild the mock." in text
+    assert (
+        "## Your subtask\n\nBuild the mock.\n\nDo this subtask and nothing else."
+        in text
+    )
     assert "### Node 0\n\n**Its subtask:** Settle the spec." in text
     assert "Spec: items have a title." in text
     assert "Scaffolded todo on 8082." in text

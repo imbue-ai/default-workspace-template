@@ -284,3 +284,8 @@ After the working-site conversation is confirmed and every node is done:
 - **Two workers edited the same file** (a report says so, or the preview shows
   one piece overwriting another): stop launching, tell the user, and have the
   worker that owns the file redo its part once the other is done.
+- **A worker did more than its subtask** (its report lists files or work the
+  subtask did not name, or `git -C "$BUILD" status` at a commit point shows
+  changes no report accounts for): do not build on the extra work. Before the
+  next launch, have that worker revert what falls outside its subtask, and check
+  that no other node's files were changed.
