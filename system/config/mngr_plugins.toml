@@ -42,3 +42,9 @@ tools = ["mngr", "chat"]
 package = "imbue-mngr-wait"
 subdirectory = "libs/mngr_wait"
 tools = ["mngr"]
+
+[[plugins]]
+package = "imbue-mngr-autocompact"
+subdirectory = "libs/mngr_autocompact"
+tools = ["mngr"]
+

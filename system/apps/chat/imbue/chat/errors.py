@@ -14,6 +14,10 @@ class ChatTitleConflictError(ChatInstancesError, InstanceConflictError):
     """A rename asked for a title another chat already has (a 409)."""
 
 
+class ChatMovingError(ChatInstancesError, InstanceConflictError):
+    """Stop, start, or rename asked of a chat that is moving to another agent; try again once it has (a 409)."""
+
+
 class ChatDestroyFailedError(ChatInstancesError):
     """``mngr destroy`` failed for a chat that exists (a 500 with mngr's own words)."""
 

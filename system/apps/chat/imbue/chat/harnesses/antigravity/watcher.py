@@ -35,6 +35,7 @@ from imbue.chat.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.chat.harnesses.antigravity.agy_transcript import decode_step
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import session_token
 from imbue.chat.harnesses.antigravity.session_parser import parse_step
@@ -45,6 +46,7 @@ from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
 
@@ -81,8 +83,13 @@ _DELIVERY_POLL_SECONDS: Final[float] = 0.25
 _EMIT_EMBARGO_CEILING_SECONDS: Final[float] = 120.0
 
 
-class AntigravitySessionWatcher(AgentSessionWatcher):
-    """Watches an agy agent's conversation ``.db``(s) and emits parsed UI events."""
+class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
+    """Watches an agy agent's conversation ``.db``(s) and emits parsed UI events.
+
+    Also the loader an archived agy segment is read through: built unstarted and primed
+    once (``build_loader``), it holds the conversation store's rows resident with no poll
+    thread, no observer, and no flush worker.
+    """
 
     _agent_id: str
     _state_dir: Path
@@ -148,6 +155,22 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._observer: Any = None
         self._connections: dict[Path, sqlite3.Connection] = {}
         return self
+
+    @classmethod
+    def build_loader(cls, agent_info: AgentInfo) -> "AntigravitySessionWatcher":
+        """An unstarted watcher primed once: an archived agent's store no longer changes, so one
+        collect is the whole transcript, and nothing needs to watch or deliver anything."""
+        loader = cls.build(agent_info, lambda _agent_id, _events: None)
+        with loader._lock:
+            loader._collect_new_events()
+        return loader
+
+    def close(self) -> None:
+        """Release what a loader holds: ``stop`` (which, unstarted, has only the connections and the
+        turn state to release) plus the tracker, which ``stop`` keeps for a watcher's restart but
+        an archived agent will never need again."""
+        self.stop()
+        drop_tracker(self._agent_id)
 
     # --- paths ---------------------------------------------------------------------------
 
@@ -302,6 +325,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 event_id = event["event_id"]
                 if event_id in self._emitted_ids:
                     continue
+                # Every event on the wire names its agent (the chat it belongs to may span several).
+                event["agent_id"] = self._agent_id
                 self._emitted_ids.add(event_id)
                 self._index_by_id[event_id] = len(self._events)
                 self._events.append(event)

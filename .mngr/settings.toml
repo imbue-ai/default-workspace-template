@@ -147,12 +147,11 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
-# Every other chat gets this default too: the chat app's create passes no launch
-# settings. Only the workspace's first chat launches fast, through the
-# `agent_types.claude.settings_overrides.fastMode=true` setting that
-# `[create_templates.first]` (below) stacks on its create; a running chat then
-# toggles it with `/fast`, which the chat app's harnesses/claude/model.py writes
-# into that agent's own settings file.
+# A chat launches fast through the `agent_types.claude.settings_overrides.fastMode=true`
+# setting that `[create_templates.fast]` (below) stacks on its create when the
+# chat's fast mode (off, auto or on; the chat app's data/.apps/chat/chats/<id>/fast_mode.json)
+# calls for it; a running chat's speed follows the mode through the chat app's
+# harnesses/claude/model.py, which writes into that agent's own settings file.
 #
 # That setting targets `claude` rather than `chat` because a create-time setting
 # (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
@@ -161,7 +160,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
-# This is the canonical explanation; the `first` template and the CLI-contract
+# This is the canonical explanation; the `fast` template and the CLI-contract
 # test point here rather than repeating it.
 #
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
@@ -219,8 +218,6 @@ append_system_prompt__extend = ["""# Claude-specific instructions
 Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`tk create --step "..."`) are the replacement for `TodoWrite`. Do not use any other built-in memory or task-planning tools; `tk` is the only task tracker in this workspace.
 
 `.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
-
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to the Bash tool timeout.
 
 Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`)."""]
 
@@ -315,25 +312,15 @@ check_installation = false
 #   so they never appear in the transcript.
 config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 # Codex-only instructions, appended to every codex agent's system prompt.
+# The `/welcome` entry is what claude gets from its slash-command expansion: codex does not
+# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
-
 Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
-If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
-
-### Welcome to Mind
-
-I'm an AI operating system built to extend *you* — so you can do your best work.
-
-I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
-
-**Let's get started**
-
-Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
@@ -368,19 +355,11 @@ share_home_npm_dir = true
 auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
+# The `/welcome` entry is what claude gets from its slash-command expansion: pi does not
+# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
 
-If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
-
-### Welcome to Mind
-
-I'm an AI operating system built to extend *you* — so you can do your best work.
-
-I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
-
-**Let's get started**
-
-Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
@@ -603,13 +582,13 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
-# creates a separate chat agent on first boot and passes `--message /welcome`
-# to it instead.
+# `/welcome` is NOT set here: the services agent's window 0 sleeps forever
+# (see `[agent_types.main] command`) and never reaches claude. Chats are
+# separate agents the chat app creates on demand; the ones that start with
+# nothing to say get `/welcome` through `[create_templates.welcome]` below.
 #
-# bootstrap is the only extra_window now. It runs first-boot setup (git config,
-# initial chat agent) and then launches
+# bootstrap is the only extra_window now. It runs first-boot setup (git config)
+# and then launches
 # supervisord, which runs every background service (system_interface, web,
 # share-gateway, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
@@ -1667,11 +1646,20 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 
-# First chat: the one agent per workspace that greets the user (/welcome) and
-# opens in fast mode so the first conversation feels responsive. Stacked on top
-# of `chat` (`-t first -t chat --type <harness>`) by the bootstrap and by the
-# flag-gated "New first ..." launchers. The `first=true` label is what scopes
-# the fast-mode grace-period prompt to this agent.
+# Welcome: the greeting a chat that starts with nothing to say gets. The chat app
+# stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
+# a first message -- the New Tab page's plain "New Chat", a rail shortcut -- so
+# `/welcome` runs each time, and the skill (.agents/skills/welcome) varies what it
+# says by how many times it has run in this workspace. A chat that starts with a
+# message (a seeded prompt, the onboarding chat's first send) gets its message
+# instead.
+[create_templates.welcome]
+message = "/welcome"
+
+# Fast: launches the fast-capable harnesses in fast mode so a new conversation
+# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
+# auto with its fast turns still to run (a new chat's mode is the workspace's
+# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
 #
 # The two fast settings are deliberately asymmetric: claude's
 # `settings_overrides` is a SettingsPatchField (deep-merge marker on the
@@ -1681,9 +1669,7 @@ output_style = "Engineering Subordinate"
 # the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
 # inconsistency in either direction. Settings for whichever harness is not
 # resolved are inert, so this template is safe to stack with any --type.
-[create_templates.first]
-message = "/welcome"
-label__extend = ["first=true"]
+[create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',

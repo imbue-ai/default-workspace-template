@@ -28,3 +28,9 @@
 
 - CI's pytest steps no longer set `PYTEST_MAX_DURATION_SECONDS`: nothing in this repo reads
   it now that the apps no longer register mngr-internal's conftest hooks.
+
+- `mngr` is symlinked into `/usr/local/bin` like `tk`, so non-login shells (`ssh <workspace> mngr ...`,
+  `mngr exec`) find it without a `PATH` prefix.
+
+- The root dev group depends on `imbue-common[testing]` (the extra that declares what
+  `imbue_common.ratchet_testing` needs) instead of naming `import-linter` itself.

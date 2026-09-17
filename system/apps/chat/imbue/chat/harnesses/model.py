@@ -188,6 +188,35 @@ class SwitchResult(FrozenModel):
     detail: str | None = None
 
 
+class InvalidModelPickError(ValueError):
+    """A model, effort, and fast selection that the agent's option set does not allow; the message names why."""
+
+
+def validate_model_pick(
+    options: tuple[ModelOption, ...], model_id: str, effort: str | None, fast: bool
+) -> ModelOption:
+    """The option a pick names, once checked against the agent's option set; raises ``InvalidModelPickError``.
+
+    One rule for every pick, wherever it is made: the model bar's route and a switch's pick for
+    the agent it creates. The model is an exact id lookup (a picker only ever sends an option
+    id); the effort is required and in the model's declared set when the model has an effort
+    axis, and absent when it does not; fast needs the model's support.
+    """
+    option = next((candidate for candidate in options if candidate.id == model_id), None)
+    if option is None:
+        raise InvalidModelPickError(f"Unknown model '{model_id}'")
+    declared_efforts = {choice.level for choice in option.efforts}
+    if declared_efforts and effort is None:
+        raise InvalidModelPickError("This model requires an effort level")
+    if declared_efforts and effort is not None and effort not in declared_efforts:
+        raise InvalidModelPickError(f"'{effort}' is not a valid effort for '{model_id}'")
+    if not declared_efforts and effort is not None:
+        raise InvalidModelPickError(f"'{model_id}' has no effort axis")
+    if fast and not option.supports_fast:
+        raise InvalidModelPickError(f"'{model_id}' does not support fast mode")
+    return option
+
+
 # The one live model-state file every harness writes ({model, effort, fast}), read by
 # the shared reader below. The harness's directory for it is per-harness DATA (its
 # ``model_state_relative_path`` on the registry); the file NAME is uniform.
@@ -331,6 +360,16 @@ class HarnessModelResolver(ABC):
         The returned ids are matched back against the catalog for their labels and efforts;
         ids absent from the catalog are simply not shown. The default -- for a small,
         static, non-gated catalog (claude, codex) -- returns None: offer everything.
+        """
+        return None
+
+    def list_persisted_options(self) -> tuple["ModelOption", ...] | None:
+        """The options this agent was last offered, read from disk without reaching its daemon, or None
+        for a static catalog.
+
+        What an account-level picker shows for an agent that does not exist yet: the switch
+        dialog offering a handoff's successor its models reads them off an existing agent of
+        the same account. The default, for a static harness, is None (the catalog is the offer).
         """
         return None
 

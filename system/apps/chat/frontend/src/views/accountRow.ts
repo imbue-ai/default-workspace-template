@@ -44,6 +44,8 @@ export interface AccountRowOptions {
   rowClass: string;
   /** Anything else the row button needs: a tooltip, `aria-disabled`, and so on. */
   rowAttrs?: m.Attributes;
+  /** A short word pinned after the harness ("next" on the account the chat switches to on its next send). */
+  badge?: string;
   onSelect: () => void;
   state: AccountRowState;
   /** Run after a rename or a removal lands, for a caller that has to close or refresh. */
@@ -165,6 +167,17 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
       [
         m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
         m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
+        opts.badge !== undefined
+          ? m(
+              "span",
+              {
+                class:
+                  "account-row-badge ml-1 shrink-0 rounded-full bg-accent-light px-1.5 " +
+                  "text-(length:--font-size-helper) font-medium text-accent",
+              },
+              opts.badge,
+            )
+          : null,
       ],
     ),
     // Siblings of the row button rather than children -- buttons cannot nest -- each pinned
