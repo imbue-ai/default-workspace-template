@@ -122,7 +122,9 @@ def test_session_changed_keys_the_tab_by_the_terminal_whose_session_id_it_is(
     # The session was renamed inside tmux; the tab still shows terminal-1, the record's key.
     fake_tmux.set_sessions([make_tmux_session("my-build", "$4")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$4")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$4"
+        )
     )
     _record_tab(terminal_paths, "term-a", "/dev/pts/3")
 
@@ -150,7 +152,9 @@ def test_session_changed_adopts_a_session_recreated_on_attach(
     # the switch is how the app learns its id.
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$9")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", is_stopped=True
+        )
     )
     _record_tab(terminal_paths, "term-a", "/dev/pts/3")
 
@@ -166,9 +170,13 @@ def test_session_changed_adopts_a_session_recreated_on_attach(
 
     assert recording_shell.requests[0].body == {"app": "terminal", "key": "terminal-1"}
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$9")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", session_id="$9"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$9")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$9")
 
 
 def test_session_renamed_changes_no_tab_and_only_nudges(

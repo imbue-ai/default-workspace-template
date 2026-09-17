@@ -1714,6 +1714,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "imbue-mngr-ttyd"
+version = "0.1.14"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=e27a5b3066892e08507195c431397f48bde96cb3#e27a5b3066892e08507195c431397f48bde96cb3" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[[package]]
 name = "import-linter"
 version = "2.13"
 source = { registry = "https://pypi.org/simple" }
@@ -3388,6 +3396,7 @@ dependencies = [
     { name = "flask" },
     { name = "httpx" },
     { name = "imbue-common" },
+    { name = "imbue-mngr-ttyd" },
     { name = "loguru" },
     { name = "pydantic" },
 ]
@@ -3400,6 +3409,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=e27a5b3066892e08507195c431397f48bde96cb3" },
+    { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=e27a5b3066892e08507195c431397f48bde96cb3" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
