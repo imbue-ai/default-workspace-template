@@ -26,7 +26,7 @@ const BLOCK_CLASS = "tool-call-block group/tool overflow-hidden rounded-md borde
 
 const HEADER_CLASS =
   "tool-call-header flex cursor-pointer items-center gap-1.5 px-2.5 py-[3px] font-mono " +
-  "text-(length:--font-size-body) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
+  "text-(length:--font-size-row) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
 
 // text-[10px]: icon glyph (the chevron), sized independently of the text scale.
 const CHEVRON_CLASS =
@@ -35,7 +35,7 @@ const CHEVRON_CLASS =
 
 const DETAILS_CLASS = "tool-call-details hidden border-t group-[.tool-call-block--expanded]/tool:block";
 
-const PANE_CLASS = "px-3 py-2";
+const PANE_CLASS = "px-3.5 py-2";
 
 /** A pane's deferred-payload state: events are payload-free on the wire, so a
  *  pane may still be fetching or reference a payload the backend no longer holds. */

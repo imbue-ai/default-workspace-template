@@ -72,6 +72,13 @@
   --c-success: #22a06b;
   --c-success-bg: #e0f2ea;
   --c-success-border: #b2decb;
+  /* Progress-timeline bullets. A finished step's check reads green without
+     shouting -- the accent pulled most of the way toward the faint grey, so it
+     carries the same weight as the greyed-out title beside it. A step not
+     started yet sits a shade lighter still, below faint, so the not-yet reads
+     as absence rather than as text. */
+  --c-step-done: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-faint));
+  --c-step-pending: #c2bfb6;
   /* Foreground on accent/coloured surfaces (e.g. white button text). */
   --c-text-on-accent: #ffffff;
   /* Inverse surface — dark ("black") bg with on-accent text. */
@@ -105,6 +112,12 @@
   --z-overlay: 10000;
   --z-tooltip: 10001;
   --width-message-column: 740px;
+  /* The agent's side of the column keeps this much clear on the right. The user's
+     bubbles already stop short (they cap at 80% and hug the right edge); without
+     it the agent's prose and task rows were the only thing running the column's
+     full width, which read as a wall rather than as the other side of a
+     conversation. */
+  --width-agent-gutter: 60px;
 }
 
 /* The colour-utility layer: clean semantic names over the --c-* values,
@@ -134,6 +147,9 @@
   /* fills: bg-fill-hover / bg-fill-active (control state tints) */
   --color-fill-hover: var(--c-fill-hover);
   --color-fill-active: var(--c-fill-active);
+  /* progress-timeline bullets: text-step-done / text-step-pending */
+  --color-step-done: var(--c-step-done);
+  --color-step-pending: var(--c-step-pending);
   /* accent / interactive */
   --color-accent: var(--c-accent);
   --color-accent-hover: var(--c-accent-hover);
@@ -253,8 +269,9 @@ body {
 /* Spinner primitive.
  * One CSS ring spinner (+ one @keyframes spin).
  * Size via --spinner-size (or .spinner--sm; add a size
- * step when a use exists); the two-tone track/arc default to --c-border /
- * --c-accent, overridable via --spinner-track / --spinner-arc.
+ * step when a use exists) and ring weight via --spinner-width; the two-tone
+ * track/arc default to --c-border / --c-accent, overridable via
+ * --spinner-track / --spinner-arc.
  * .spinner--current makes it monochrome (currentColor ring with a transparent
  * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
  * its own svg drawing -- see loginSpinnerIcon in components/icons.ts -- but shares
@@ -268,7 +285,7 @@ body {
   display: block;
   width: var(--spinner-size, 16px);
   height: var(--spinner-size, 16px);
-  border: 2px solid var(--spinner-track, var(--c-border));
+  border: var(--spinner-width, 2px) solid var(--spinner-track, var(--c-border));
   border-top-color: var(--spinner-arc, var(--c-accent));
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
