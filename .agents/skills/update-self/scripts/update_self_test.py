@@ -5041,23 +5041,6 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     ) in capsys.readouterr().err
 
 
-def test_the_pinned_fallback_is_the_tool_layout_the_build_installs_under() -> None:
-    """The floor spelled out, so it cannot be redefined out from under the build.
-
-    Everything else states the layout in terms of ``tool_env``'s own helpers --
-    ``install_mngr_test`` for the build's pin, ``tool_env_sync_test`` for the
-    two copies of the module -- which would all move together if those helpers
-    moved. ``_tool_env.sh`` hard-codes these same two strings for the shell
-    that puts the bin directory on PATH, and cannot follow.
-    """
-    home = tool_env.tool_home()
-
-    assert update_environment._pinned_tool_location() == (
-        home / ".local" / "share" / "uv" / "tools",
-        home / ".local" / "bin",
-    )
-
-
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # No readable receipt means the tool is not installed (or predates
     # receipts); the refresh must still run as the plain install it would

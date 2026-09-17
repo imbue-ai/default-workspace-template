@@ -72,18 +72,25 @@ def test_the_pin_installs_into_the_directory_it_puts_on_path() -> None:
 def test_the_shell_pin_and_the_module_agree_on_where_tools_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pin is shell and the sweep is Python, so they have to name the same directory;
-    otherwise the build installs into one place and cleans around another. Neither side is
-    overridden here, because what they hold separately -- and can therefore drift -- is the
-    default each falls back to when nothing sets TOOL_ENV_HOME, which is the production
-    case."""
+    """The pin is shell and the sweep is Python, so they have to name the same directories;
+    otherwise the build installs into one place and cleans around another. Both are checked:
+    the tool directory is where an environment lands, and the bin directory is the one the
+    pin puts on PATH -- and the one the update apply aims a last-resort install at. Neither
+    side is overridden here, because what they hold separately -- and can therefore drift --
+    is the default each falls back to when nothing sets TOOL_ENV_HOME, which is the
+    production case."""
     monkeypatch.delenv("TOOL_ENV_HOME", raising=False)
-    pinned = _run_shell(
-        'tool_env_pin\nprintf "%s\\n" "$UV_TOOL_DIR"',
-        home=Path("/home/user"),
-    ).strip()
+    pinned_tools, pinned_bin = (
+        _run_shell(
+            'tool_env_pin\nprintf "%s\\n%s\\n" "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"',
+            home=Path("/home/user"),
+        )
+        .strip()
+        .splitlines()
+    )
 
-    assert pinned == str(tool_env.tools_dir(tool_env.tool_home()))
+    assert pinned_tools == str(tool_env.tools_dir(tool_env.tool_home()))
+    assert pinned_bin == str(tool_env.bin_dir(tool_env.tool_home()))
 
 
 @pytest.mark.parametrize(
