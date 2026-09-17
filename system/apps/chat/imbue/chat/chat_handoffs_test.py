@@ -361,7 +361,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
 
 
 def test_the_archival_rename_argv_is_accepted_by_the_live_cli() -> None:
-    """The archive is one rename carrying every label, checked against the vendored mngr like the manager's argvs."""
+    """The archive is one rename carrying every label, checked against mngr like the manager's argvs."""
     argv = archive_rename_command(
         "mngr",
         "agent-123",

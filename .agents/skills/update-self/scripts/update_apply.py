@@ -1113,7 +1113,7 @@ def apply_update(
             )
 
         # Every apply restarts the services agent, whatever the diff: the
-        # running chat app imports the vendored mngr in-process, the shell and
+        # running chat app imports mngr in-process, the shell and
         # the chat both import the workspace libraries and re-read
         # ``.mngr/settings.toml`` per request, and every other supervisord program runs whatever
         # code was on disk when it started -- so a restart is the only way
