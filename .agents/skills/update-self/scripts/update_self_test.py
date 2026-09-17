@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+import tool_env
 import update_apply
 import update_apply_contract
 import update_banding
@@ -4689,13 +4690,16 @@ def test_only_apply_and_recover_band_themselves(
 # tool those extras ARE its plugins.
 
 
-def _with_receipt(
-    runner: _RecordingRunner, tool_dir: Path, tool: str, body: str
-) -> None:
-    """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
-    runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
+def _with_receipt(tool: str, body: str) -> Path:
+    """Give ``tool`` a receipt in the directory the refresh will install into.
+
+    With nothing resolvable on PATH that is the build's pinned tool home, which
+    ``_isolate_tool_home`` points at this test's ``tmp_path``. Returns it.
+    """
+    tool_dir = tool_env.tools_dir(tool_env.tool_home())
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
     (tool_dir / tool / update_layout.RECEIPT).write_text(body)
+    return tool_dir
 
 
 def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
@@ -4716,8 +4720,6 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     # in a new way while reporting success.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         """
         [tool]
@@ -4756,8 +4758,6 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     # receipt already has.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         f"""
         [tool]
@@ -4823,8 +4823,6 @@ def test_the_refresh_repins_the_base_to_the_in_tree_source(
     # vendored code for a published release.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
     )
@@ -5020,14 +5018,17 @@ def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
     )
 
 
-def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
+def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """With neither the tool's own executable nor mngr an installed uv tool on
-    PATH there is no installation to aim at, so the install is left to uv's own
-    tool directory and the refresh says so, naming both."""
+    PATH there is nothing to resolve, and uv's own default is the one answer
+    that is always wrong: it follows ``$HOME``, which at runtime is
+    ``/home/user`` and on no PATH. The build pins a home precisely because it
+    cannot trust the one it runs under; the apply aims at the same one."""
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     assert not runner.executables
+    pinned = tool_env.tool_home()
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
@@ -5037,12 +5038,41 @@ def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
         if argv[:4] == ["uv", "tool", "install", "-e"]
         and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
     )
-    assert "UV_TOOL_DIR" not in shell_install_env
-    assert "UV_TOOL_BIN_DIR" not in shell_install_env
+    assert shell_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
+    assert shell_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
     assert (
         f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
         f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
+        f"; installing '{update_layout.TOOL_NAME}' into the build's pinned tool "
+        f"directory ({tool_env.bin_dir(pinned)})"
     ) in capsys.readouterr().err
+
+
+def test_the_pinned_fallback_is_the_home_the_build_installs_under(
+    apply_repo: Path,
+) -> None:
+    """The apply's floor and the build's target are the same directory.
+
+    ``install_mngr.py`` sets ``UV_TOOL_DIR``/``UV_TOOL_BIN_DIR`` from
+    ``tool_env`` at build time; a floor that drifted from it would install a
+    reachable-looking copy next to the real one rather than over it.
+    """
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    assert not runner.executables
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    mngr_install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"]
+        and argv[4] == update_layout.MNGR_DIR
+    )
+    home = tool_env.tool_home()
+    assert mngr_install_env["UV_TOOL_DIR"] == str(
+        home / ".local" / "share" / "uv" / "tools"
+    )
+    assert mngr_install_env["UV_TOOL_BIN_DIR"] == str(home / ".local" / "bin")
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
@@ -5057,22 +5087,6 @@ def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     assert len(runner.argvs_starting("uv", "tool", "install")) == 3
 
 
-def test_the_refresh_survives_a_uv_that_cannot_be_run_at_all(
-    apply_repo: Path, capsys
-) -> None:
-    # The same verdict as a non-zero `uv tool dir`, reached the other way: uv
-    # missing from the PATH the apply inherited raises rather than exiting.
-    # Reading the extras is best effort, so it must cost the extras and a
-    # warning -- not roll a landed merge back through the last-resort catch.
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    runner.respond(("uv", "tool", "dir"), FileNotFoundError(2, "No such file", "uv"))
-
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
-
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 3
-    assert "could not be run" in capsys.readouterr().err
-
-
 def test_the_refresh_reports_a_receipt_it_cannot_read(
     apply_repo: Path, tmp_path: Path, capsys
 ) -> None:
@@ -5082,8 +5096,6 @@ def test_the_refresh_reports_a_receipt_it_cannot_read(
     # plugin-less CLI this refresh exists to prevent, and report success.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         "[tool]\nrequirements = [",
     )
