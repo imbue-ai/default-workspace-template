@@ -138,8 +138,14 @@ FAILURE_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
 # failure. An errored result is scanned whatever tool produced it, since the error is the harness
 # speaking rather than the content the agent asked for.
 # A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
-# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`.
-EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput", "bash"})
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, and codex in code mode runs every
+# tool from inside an `exec` program, whose output is whatever that program printed -- and hands back
+# the rest of a program still running at its yield through `wait`, which is where a slow command's
+# failure arrives. `shell`, `shell_command` and `exec_command` are codex's shell with code mode off,
+# and `write_stdin` hands back the rest of an `exec_command` still running, as `wait` does for a program.
+EXECUTING_TOOLS: frozenset[str] = frozenset(
+    {"Bash", "BashOutput", "bash", "shell", "shell_command", "exec_command", "write_stdin", "exec", "wait"}
+)
 
 
 # Signatures that are evidence for the judge but are NOT counted against the scripted score. An agent
@@ -258,7 +264,11 @@ def _render_step(index: int, step: dict[str, Any], reasons: list[str]) -> str:
         arguments = call.get("arguments")
         detail = ""
         if isinstance(arguments, dict):
-            for key in ("skill", "command", "file_path", "prompt"):
+            # `cmd` and `_raw` are codex's: it runs the shell from inside a code-mode JavaScript
+            # program, which arrives whole under `_raw`. The program is shown as it stands rather
+            # than unwrapped -- what this line is for is saying what the step invoked next to the
+            # output it produced, and the wrapper does not obscure that.
+            for key in ("skill", "command", "cmd", "_raw", "file_path", "prompt"):
                 if arguments.get(key):
                     detail = _clip(str(arguments[key]), ARGUMENT_CLIP)
                     break

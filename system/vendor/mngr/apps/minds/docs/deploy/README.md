@@ -63,6 +63,12 @@ write-ups, kept for their lessons rather than as procedure.
 **[next_deploy.md](./next_deploy.md) — the running checklist** for the next
 deployment. Read it before cutting; reset it after shipping.
 
+**Gen-2 slice-fleet rollout (in flight, still top-level):**
+[gen2-cutover.md](./gen2-cutover.md),
+[gen2-management-plane.md](./gen2-management-plane.md),
+[gen2-telemetry.md](./gen2-telemetry.md),
+[host-pool-setup.md](./host-pool-setup.md).
+
 Note: this folder's *history in the public mirror* predates the exclusion --
 files that lived at `apps/minds/docs/*.md` before 2026-08-18 were mirrored,
 so treat their pre-move revisions as public.

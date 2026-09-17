@@ -8,10 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-20T00:00:00Z"
-
-[options.exclude-newer-package]
-modal = "2026-08-13T00:00:00Z"
+exclude-newer = "2026-09-01T00:00:00Z"
 
 [manifest]
 members = [
@@ -23,6 +20,7 @@ members = [
     "imbue-minds-admin",
     "imbue-mngr",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     "imbue-mngr-aws",
     "imbue-mngr-azure",
     "imbue-mngr-behaviors",
@@ -57,6 +55,7 @@ members = [
     "imbue-mngr-vps",
     "imbue-mngr-vultr",
     "imbue-mngr-wait",
+    "imbue-mngr-witness",
     "imbue-observability",
     "minds",
     "modal-app-kit",
@@ -340,6 +339,7 @@ dependencies = [
     { name = "imbue-mngr" },
     { name = "loguru" },
     { name = "pydantic" },
+    { name = "python-debian" },
     { name = "tenacity" },
 ]
 
@@ -352,6 +352,7 @@ requires-dist = [
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "python-debian", specifier = ">=1.1.1" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 
@@ -2427,6 +2428,7 @@ dev = [
     { name = "semver" },
     { name = "shellcheck-py" },
     { name = "tomlkit" },
+    { name = "types-psycopg2" },
 ]
 
 [package.metadata]
@@ -2454,6 +2456,7 @@ dev = [
     { name = "semver", specifier = ">=3.0" },
     { name = "shellcheck-py", specifier = ">=0.10.0" },
     { name = "tomlkit", specifier = ">=0.12.0" },
+    { name = "types-psycopg2", specifier = ">=2.9.21" },
 ]
 
 [[package]]
@@ -2478,6 +2481,11 @@ dependencies = [
 dev = [
     { name = "inline-snapshot" },
 ]
+testing = [
+    { name = "import-linter" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2487,27 +2495,33 @@ requires-dist = [
     { name = "cowsay-python", specifier = ">=1.0.2" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "import-linter", marker = "extra == 'testing'", specifier = ">=2.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
+    { name = "inline-snapshot", marker = "extra == 'testing'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
     { name = "sentry-sdk", specifier = ">=2.63.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "testing"]
 
 [[package]]
 name = "imbue-minds-admin"
 version = "0.1.0"
 source = { editable = "apps/minds_admin" }
 dependencies = [
+    { name = "apt-mirror" },
     { name = "boto3" },
     { name = "click" },
     { name = "concurrency-group" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-imbue-cloud" },
+    { name = "imbue-mngr-latchkey" },
     { name = "imbue-mngr-lima" },
     { name = "imbue-mngr-ovh" },
     { name = "imbue-mngr-vps" },
@@ -2524,13 +2538,16 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "apt-mirror", editable = "apps/apt_mirror" },
     { name = "boto3" },
     { name = "click", specifier = ">=8.0" },
     { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "imbue-mngr-imbue-cloud", editable = "libs/mngr_imbue_cloud" },
+    { name = "imbue-mngr-latchkey", editable = "libs/mngr_latchkey" },
     { name = "imbue-mngr-lima", editable = "libs/mngr_lima" },
     { name = "imbue-mngr-ovh", editable = "libs/mngr_ovh" },
     { name = "imbue-mngr-vps", editable = "libs/mngr_vps" },
@@ -2593,7 +2610,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=2.2.0" },
     { name = "overlay", editable = "libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "paramiko", specifier = ">=3.0" },
+    { name = "paramiko", specifier = "==3.5.1" },
     { name = "pluggy", specifier = ">=1.5.0" },
     { name = "psutil", specifier = ">=7.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -2616,6 +2633,17 @@ requires-dist = [
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
 source = { editable = "libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+
+[[package]]
+name = "imbue-mngr-autocompact"
+version = "0.1.0"
+source = { editable = "libs/mngr_autocompact" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -3016,10 +3044,14 @@ version = "0.1.0"
 source = { editable = "libs/mngr_mapreduce" }
 dependencies = [
     { name = "imbue-mngr" },
+    { name = "jinja2" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+requires-dist = [
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "jinja2", specifier = ">=3.1" },
+]
 
 [[package]]
 name = "imbue-mngr-modal"
@@ -3323,6 +3355,37 @@ dependencies = [
 requires-dist = [
     { name = "click-option-group", specifier = ">=0.5.6" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+]
+
+[[package]]
+name = "imbue-mngr-witness"
+version = "0.1.0"
+source = { editable = "libs/mngr_witness" }
+dependencies = [
+    { name = "click" },
+    { name = "concurrency-group" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "imbue-mngr-behaviors" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-mapreduce" },
+    { name = "jinja2" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click" },
+    { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "imbue-mngr-behaviors", editable = "libs/mngr_behaviors" },
+    { name = "imbue-mngr-claude", editable = "libs/mngr_claude" },
+    { name = "imbue-mngr-mapreduce", editable = "libs/mngr_mapreduce" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "loguru" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -3887,10 +3950,16 @@ dependencies = [
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
     { name = "imbue-mngr-aws" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
     { name = "imbue-mngr-forward" },
     { name = "imbue-mngr-imbue-cloud" },
     { name = "imbue-mngr-latchkey" },
+    { name = "imbue-mngr-modal" },
+    { name = "imbue-mngr-opencode" },
+    { name = "imbue-mngr-pi-coding" },
     { name = "imbue-mngr-vps" },
     { name = "itsdangerous" },
     { name = "loguru" },
@@ -3930,10 +3999,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "libs/mngr_antigravity" },
     { name = "imbue-mngr-aws", editable = "libs/mngr_aws" },
+    { name = "imbue-mngr-claude", editable = "libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "libs/mngr_codex" },
     { name = "imbue-mngr-forward", editable = "libs/mngr_forward" },
     { name = "imbue-mngr-imbue-cloud", editable = "libs/mngr_imbue_cloud" },
     { name = "imbue-mngr-latchkey", editable = "libs/mngr_latchkey" },
+    { name = "imbue-mngr-modal", editable = "libs/mngr_modal" },
+    { name = "imbue-mngr-opencode", editable = "libs/mngr_opencode" },
+    { name = "imbue-mngr-pi-coding", editable = "libs/mngr_pi_coding" },
     { name = "imbue-mngr-vps", editable = "libs/mngr_vps" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "loguru" },
@@ -5408,6 +5483,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-debian"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/36/f90e7d006dd9311a6185f1c34b403dd6d76ff583e7962c56e9374c462a48/python_debian-1.1.1.tar.gz", hash = "sha256:fe4fc3dc798dbf1f0ef5865e2b1b4f7cc0352b6a511b25ab7594906c64a73629", size = 127956, upload-time = "2026-06-07T11:06:58.282Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6e/47/e184f0004e63dbc49c4bad5e811218f66bece1b519f80b06a619b42e6ec3/python_debian-1.1.1-py3-none-any.whl", hash = "sha256:f98ae013e8e5310e49041cc3860a7105df73af73d4ff1d8afb474770d328a6ad", size = 138101, upload-time = "2026-06-07T11:06:56.632Z" },
+]
+
+[[package]]
 name = "python-discovery"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6765,6 +6849,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/05/e4/4ab4df17433a3c576ee3f0c11b74038b5ac19b618cae4eda0a461510e8f6/types_paramiko-4.0.0.20260508.tar.gz", hash = "sha256:3a00f0847fc4097ec99cfa53dca566169a50baefc93e2cace624642edec32bc1", size = 29167, upload-time = "2026-05-08T04:51:11.562Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/7d/f3661f4b69ca8b104e871151b419ee8495945895a9a6bc8bbff40c142b25/types_paramiko-4.0.0.20260508-py3-none-any.whl", hash = "sha256:a4389857b497b8eef8159cbf21dbd76c471c8d388acb2bca376c5ff023daa306", size = 38784, upload-time = "2026-05-08T04:51:10.357Z" },
+]
+
+[[package]]
+name = "types-psycopg2"
+version = "2.9.21.20260712"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/f2/4326b61737922d4e5b2ce18f6e9f9034fda861414bff07fc473fdc879692/types_psycopg2-2.9.21.20260712.tar.gz", hash = "sha256:18157ddfe3f2d66db5c2908c2e27fe79a6867b11bdba515434b108ac2aa377d8", size = 27581, upload-time = "2026-07-12T05:13:30.106Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/c8/5a8e02cb0ff4e0cc2ed12a7bc30a7d6ad498d40d98c6f508774ad9cdac49/types_psycopg2-2.9.21.20260712-py3-none-any.whl", hash = "sha256:a78a615a5e828d99dc6fe46ddf16d0732ab7564de1065d1b3ad9dac3067b64cc", size = 24967, upload-time = "2026-07-12T05:13:29.188Z" },
 ]
 
 [[package]]

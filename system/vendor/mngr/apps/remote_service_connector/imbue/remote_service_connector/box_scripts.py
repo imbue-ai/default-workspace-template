@@ -1,57 +1,45 @@
-"""Box-side scripts for workspace stop/start, rendered connector-side.
+"""Generation-1 (lima) box-side scripts for workspace stop/start, rendered connector-side.
 
 The transition supervisor SSHes a bare-metal box (as its lima service user)
 and runs these. They are deliberately dumb: idempotent transfer pipelines
 that stream the slice's qcow2 disks between the box and the tier's S3
 bucket (``zstd | age | s5cmd``), reporting progress through a flat
 KEY=VALUE status file the supervisor polls. All state-machine decisions
-stay in the connector.
+stay in the connector. The transfer conventions themselves (the transfer
+dir, the status file, the object names, the restore markers, the env file)
+are shared with the gen-2 scripts and come from
+``imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer``.
 
-Duplicated constants (the lima naming scheme, the port range) mirror
-``imbue.mngr_imbue_cloud.slices`` -- the shipped connector package must not
-import the monorepo. Keep them in sync.
+Duplicated constants (the lima naming scheme) mirror
+``imbue.mngr_imbue_cloud.slices.bare_metal``, which does not ship into this
+container. Keep them in sync.
 """
 
 import shlex
+from collections.abc import Mapping
 from typing import Final
 
-from pydantic import BaseModel
-from pydantic import Field
-
-# Default box host-port range slices' forwards are chosen from. Mirrors
-# ``mngr_imbue_cloud.slices.bare_metal.DEFAULT_SLICE_PORT_RANGE_*``.
-SLICE_PORT_RANGE_START: Final[int] = 22000
-SLICE_PORT_RANGE_END: Final[int] = 32000
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import DEFAULT_SLICE_PORT_RANGE_END
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import DEFAULT_SLICE_PORT_RANGE_START
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DATADISK_OBJECT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DISK_OBJECT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DOWNLOAD_LOCK_RELPATH
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DOWNLOAD_LOCK_WAIT_SECONDS
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import META_OBJECT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_NO_PORTS_MARKER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_RESERVED_MARKER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import script_prelude
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import transfer_dir
 
 # Marker file (inside the instance dir) that tells the box's
 # ``mngr-slices-autostart.service`` NOT to boot this stopped VM at box boot:
 # it is mid-upload (or mid-restore) and must only be started by a supervisor.
 STOP_MARKER_FILENAME: Final[str] = "mngr-stop-requested"
 
-# Everything transfer-related for one instance lives under this directory in
-# the lima user's home: the detached script, its env (creds + age material),
-# the status file, the log, and the pid file.
-TRANSFER_DIR_ROOT: Final[str] = ".mngr-transfers"
-
-# Box-wide lock serializing artifact downloads (one at a time per box, so a
-# restore never competes with another restore for disk/network).
-DOWNLOAD_LOCK_RELPATH: Final[str] = ".mngr-download.lock"
-# How long a restore waits for the download lock before failing. Downloads
-# run at ~1 GB/s against ~30 GB disks, so a legitimate queue clears in well
-# under a minute; anything longer means the lock is stuck, and failing fast
-# with a real error beats parking the workspace behind the transfer timeout.
-DOWNLOAD_LOCK_WAIT_SECONDS: Final[int] = 300
-
-# Object names within a generation prefix.
-DISK_OBJECT: Final[str] = "disk.zst.age"
-DATADISK_OBJECT: Final[str] = "datadisk.zst.age"
-META_OBJECT: Final[str] = "meta.tar.zst.age"
-
-# Marker printed by the restore-reserve script on success, followed by the two
-# chosen host ports. Failure markers mirror the bake reserve script's.
-RESTORE_RESERVED_MARKER: Final[str] = "MNGR_RESTORE_RESERVED"
+# Printed by the gen-1 restore-reserve when the box's lima disk count already
+# reaches its slot count (the gen-2 reserve refuses with the two-budget
+# markers instead).
 RESTORE_BOX_FULL_MARKER: Final[str] = "MNGR_RESTORE_BOX_FULL"
-RESTORE_NO_PORTS_MARKER: Final[str] = "MNGR_RESTORE_NO_PORTS"
 # Printed (to stderr) by the restore rollback when the instance survived
 # ``limactl delete``: its dirs were kept rather than pulled out from under a
 # possibly-running VM.
@@ -60,73 +48,6 @@ CLEANUP_DELETE_FAILED_MARKER: Final[str] = "MNGR_CLEANUP_DELETE_FAILED"
 # Slice lima resources are named mngr-slice-<env>-<host-hex>; the data disk
 # adds this suffix. Mirrors ``mngr_imbue_cloud.slices.bare_metal``.
 SLICE_DISK_SUFFIX: Final[str] = "-data"
-
-
-class TransferEnv(BaseModel):
-    """The env-file contents a transfer script sources (creds + object coordinates)."""
-
-    s3_endpoint: str = Field(description="S3 endpoint URL")
-    s3_region: str = Field(description="S3 region name")
-    access_key_id: str = Field(description="S3 access key id")
-    secret_access_key: str = Field(description="S3 secret access key")
-    bucket: str = Field(description="Artifact bucket")
-    key_prefix: str = Field(description="Object key prefix for this generation (e.g. <hex>/gen-2)")
-    instance_name: str = Field(description="Lima instance name")
-    age_recipient: str = Field(default="", description="age recipient for upload (empty on download)")
-    age_identity: str = Field(default="", description="age identity for download (empty on upload)")
-
-
-def transfer_dir(instance_name: str) -> str:
-    return f"$HOME/{TRANSFER_DIR_ROOT}/{instance_name}"
-
-
-def render_transfer_env(env: TransferEnv) -> str:
-    """The env file a transfer script sources. Written 0600, deleted when the transfer ends."""
-    lines = [
-        f"export AWS_ACCESS_KEY_ID={shlex.quote(env.access_key_id)}",
-        f"export AWS_SECRET_ACCESS_KEY={shlex.quote(env.secret_access_key)}",
-        f"export AWS_REGION={shlex.quote(env.s3_region)}",
-        f"export WS_S3_ENDPOINT={shlex.quote(env.s3_endpoint)}",
-        f"export WS_BUCKET={shlex.quote(env.bucket)}",
-        f"export WS_KEY_PREFIX={shlex.quote(env.key_prefix)}",
-        f"export WS_INSTANCE={shlex.quote(env.instance_name)}",
-        f"export WS_AGE_RECIPIENT={shlex.quote(env.age_recipient)}",
-    ]
-    if env.age_identity:
-        lines.append(f"export WS_AGE_IDENTITY={shlex.quote(env.age_identity)}")
-    return "\n".join(lines) + "\n"
-
-
-# Shared bash prelude: PATH (limactl/s5cmd live in /usr/local/bin, age too),
-# the transfer dir, and the atomic KEY=VALUE status writer. ``status_kv``
-# appends a key to the pending status; ``status_flush`` publishes atomically.
-_SCRIPT_PRELUDE: Final[str] = """\
-set -Eeuo pipefail
-export PATH=/usr/local/bin:$HOME/.local/bin:$PATH
-TD="$HOME/{transfer_dir_root}/{instance}"
-mkdir -p "$TD"
-. "$TD/env"
-STATUS="$TD/status"
-declare -A STATUS_KV
-status_kv() {{ STATUS_KV["$1"]="$2"; }}
-status_flush() {{
-    : > "$STATUS.tmp"
-    for key in "${{!STATUS_KV[@]}}"; do printf '%s=%s\\n' "$key" "${{STATUS_KV[$key]}}" >> "$STATUS.tmp"; done
-    mv "$STATUS.tmp" "$STATUS"
-}}
-fail() {{
-    status_kv STAGE failed
-    status_kv FINISHED 1
-    status_kv ERROR "$1"
-    status_flush
-    exit 1
-}}
-trap 'fail "command failed: $BASH_COMMAND"' ERR
-"""
-
-
-def _prelude(instance_name: str) -> str:
-    return _SCRIPT_PRELUDE.format(transfer_dir_root=TRANSFER_DIR_ROOT, instance=instance_name)
 
 
 def render_upload_script(instance_name: str, disk_name: str) -> str:
@@ -138,7 +59,7 @@ def render_upload_script(instance_name: str, disk_name: str) -> str:
     record them in the artifact manifest without a second pass.
     """
     return (
-        _prelude(instance_name)
+        script_prelude(instance_name)
         + f"""\
 upload_one() {{
     local src="$1" object="$2" name="$3"
@@ -183,7 +104,7 @@ status_flush
 def render_download_script(
     instance_name: str,
     disk_name: str,
-    expected_sha_by_name: dict[str, str],
+    expected_sha_by_name: Mapping[str, str],
     vm_ssh_port: int,
     container_ssh_port: int,
 ) -> str:
@@ -197,7 +118,7 @@ def render_download_script(
     expected_disk = shlex.quote(expected_sha_by_name["DISK"])
     expected_datadisk = shlex.quote(expected_sha_by_name["DATADISK"])
     return (
-        _prelude(instance_name)
+        script_prelude(instance_name)
         + f"""\
 # One artifact download at a time per box. The lock covers only the
 # downloads: it is closed before the boot below because limactl's hostagent
@@ -282,7 +203,7 @@ def render_restore_reserve_script(
     Prints ``MNGR_RESTORE_RESERVED <vm_port> <container_port>``.
     """
     return (
-        _prelude(instance_name)
+        script_prelude(instance_name)
         + f"""\
 exec 9> "$HOME/.mngr-slice-alloc.lock"
 flock 9
@@ -304,7 +225,7 @@ done
 
 pick_port() {{
     local p
-    for ((p={SLICE_PORT_RANGE_START}; p<{SLICE_PORT_RANGE_END}; p++)); do
+    for ((p={DEFAULT_SLICE_PORT_RANGE_START}; p<{DEFAULT_SLICE_PORT_RANGE_END}; p++)); do
         if ! grep -qx "$p" "$used_ports_file"; then
             echo "$p"
             return 0
@@ -360,35 +281,6 @@ def build_stop_vm_commands(instance_name: str) -> tuple[str, ...]:
         f"limactl stop {quoted} 2>&1 || true",
         f"touch $HOME/.lima/{quoted}/{STOP_MARKER_FILENAME}",
     )
-
-
-def build_launch_detached_command(instance_name: str, script_filename: str) -> str:
-    """Launch a transfer script detached from the SSH session, recording its pid.
-
-    Any prior status file is removed first so pollers only ever observe the
-    launched transfer's own status (a stale file from an earlier failed or
-    unrelated transfer must not masquerade as this one's result).
-    """
-    td = transfer_dir(instance_name)
-    # The brace group backgrounds only the script itself: the stale-status
-    # removal happens synchronously, before the launch command returns, so a
-    # poller can never race it.
-    return (
-        f'cd "{td}" && rm -f status && '
-        f'{{ setsid nohup bash {shlex.quote(script_filename)} >> run.log 2>&1 & echo $! > "{td}/pid"; }}'
-    )
-
-
-def build_is_transfer_alive_command(instance_name: str) -> str:
-    """Exit 0 when the recorded transfer pid is still running."""
-    td = transfer_dir(instance_name)
-    return f'[ -f "{td}/pid" ] && kill -0 "$(cat "{td}/pid")" 2>/dev/null'
-
-
-def build_read_status_command(instance_name: str) -> str:
-    """Print the transfer status file (empty output when it does not exist yet)."""
-    td = transfer_dir(instance_name)
-    return f'cat "{td}/status" 2>/dev/null || true'
 
 
 def build_cancel_and_restart_commands(instance_name: str) -> tuple[str, ...]:
@@ -452,18 +344,8 @@ def build_cleanup_reserved_restore_commands(instance_name: str, disk_name: str) 
     )
 
 
-def parse_status_text(text: str) -> dict[str, str]:
-    """Parse the flat KEY=VALUE status file a transfer script writes."""
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        key, separator, value = line.partition("=")
-        if separator:
-            values[key.strip()] = value.strip()
-    return values
-
-
 def parse_reserved_ports_line(stdout: str) -> tuple[int, int] | None:
-    """Parse ``MNGR_RESTORE_RESERVED <vm> <container>`` from the reserve run's stdout."""
+    """Parse ``MNGR_RESTORE_RESERVED <vm> <container>`` from the gen-1 reserve run's stdout."""
     for line in stdout.splitlines():
         stripped = line.strip()
         if stripped.startswith(RESTORE_RESERVED_MARKER):

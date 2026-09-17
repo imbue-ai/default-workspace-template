@@ -12,6 +12,7 @@ dependencies = [
     "imbue-mngr",
     "loguru>=0.7",
     "pydantic>=2.0",
+    "python-debian>=1.1.1",
     "tenacity>=8.0",
 ]
 license = {text = "MIT"}

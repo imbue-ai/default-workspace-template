@@ -38,6 +38,7 @@ from pydantic import Field
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 
 # Constant agent name baked onto every pool host (OVH or slice). The minds-side
 # adoption code (``ImbueCloudHost.create_agent_state``) keeps the bake's agent
@@ -165,6 +166,27 @@ class EphemeralBakeNamespace(FrozenModel):
             "MNGR_HOST_DIR": str(self.host_dir),
             "MNGR_PREFIX": EPHEMERAL_BAKE_MNGR_PREFIX,
         }
+
+
+# The mngr switch that turns unknown settings fields into warnings instead of
+# errors (``resolve_strict_from_env`` in mngr's config loader).
+TOLERATE_UNKNOWN_CONFIG_ENV_VAR: Final[str] = "MNGR_ALLOW_UNKNOWN_CONFIG"
+
+
+@pure
+def tolerate_unknown_template_config(env: Mapping[str, str]) -> dict[str, str]:
+    """``env`` for an inner ``mngr create`` that must accept a template older than the operator's mngr.
+
+    The cutover's image-seed bake checks the template out at the migrating
+    workspace's own release tag, whose ``.mngr/settings.toml`` names the fields
+    the mngr vendored at that release knew; a field mngr has since renamed
+    (``auto_dismiss_dialogs`` before minds-v0.5.0) fails today's strict parse
+    and no image could be seeded for any workspace of that age. The seed's row
+    never leases and is destroyed once the tar exists, so dropping the unknown
+    fields with a warning costs nothing there; a real pool-row bake keeps the
+    strict parse, where an unknown field means a typo.
+    """
+    return {**env, TOLERATE_UNKNOWN_CONFIG_ENV_VAR: "1"}
 
 
 def bake_namespace_parent_dir() -> Path:

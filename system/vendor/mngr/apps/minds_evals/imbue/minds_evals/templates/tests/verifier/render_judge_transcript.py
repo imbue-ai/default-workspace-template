@@ -101,8 +101,14 @@ def _as_the_client_reads_it(message: str) -> str:
 # the agent did not write and the client never saw, and rendering them as the agent's progress-view
 # copy grades it on someone else's words.
 # A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
-# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`.
-EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput", "bash"})
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`, and codex in code mode runs every
+# tool from inside an `exec` program, whose output is whatever that program printed -- and hands back
+# the rest of a program still running at its yield through `wait`, which is where a slow command's
+# output arrives. `shell`, `shell_command` and `exec_command` are codex's shell with code mode off,
+# and `write_stdin` hands back the rest of an `exec_command` still running, as `wait` does for a program.
+EXECUTING_TOOLS: frozenset[str] = frozenset(
+    {"Bash", "BashOutput", "bash", "shell", "shell_command", "exec_command", "write_stdin", "exec", "wait"}
+)
 
 
 def _observation_text(step: dict[str, Any]) -> str:
@@ -125,14 +131,105 @@ def _observation_text(step: dict[str, Any]) -> str:
     )
 
 
+# codex runs its shell from inside "code mode": one tool call carries a whole JavaScript program
+# that reaches the real tools as `tools.<fn>({...})`, so the command is a string literal inside that
+# program rather than an argument of the call. One program may batch several calls, and the shell
+# function is spelled two ways -- `tools.exec_command({cmd})` or `tools.shell_command({command})`,
+# depending on the codex version and whether its unified exec is on -- so both are read. The
+# surrounding program is arbitrary JavaScript rather than JSON, which is why the literal is read out
+# with a regex instead of being parsed -- the same approach the chat app's own codex tool labels
+# take. This parse is mirrored by the _CODE_MODE_* patterns and _shell_commands_in_call in
+# minds_evals/trajectory.py, which recovers the same command text host-side to find worker launches.
+# The two cannot be shared: this file runs inside the slim verifier container, which has stdlib and
+# rewardkit and no imbue package. Keep the two in step.
+CODE_MODE_CALL_PATTERN = re.compile(r"tools\.([A-Za-z_]\w*)\s*\(")
+# Each shell function's own command key, followed by any of the three JavaScript string literal
+# forms. A call is read under its function's key only: the other key can appear inside the command
+# text itself (`python3 -c "print({'command': 'ls'})"`), and would match there. Each form consumes a
+# backslash escape as a unit, so a command containing an escaped quote -- `tk create --step \"Title\"`,
+# which is exactly the shape the timeline scan below needs -- is captured whole rather than clipped
+# there. A template literal keeps its `${...}` placeholders as written: a program that builds the
+# command in a loop still yields the text around them. The lookbehind keeps a longer key that merely
+# ends in `cmd` from matching.
+CODE_MODE_COMMAND_PATTERN_BY_FUNCTION: dict[str, re.Pattern[str]] = {
+    function: re.compile(
+        r"(?<![\w$])[\"']?" + key + r"[\"']?\s*:\s*"
+        r"(?:\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\])*)`)"
+    )
+    for function, key in (("shell_command", "command"), ("exec_command", "cmd"))
+}
+# The JavaScript string escapes worth undoing in a captured command. An unknown escape keeps the
+# character after the backslash, which is harmless here and cannot raise the way a decode can.
+JS_UNESCAPES: dict[str, str] = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "\\": "\\",
+    "/": "/",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+}
+
+
+def _unescaped(value: str) -> str:
+    """A captured JavaScript string literal with its escapes undone."""
+    if "\\" not in value:
+        return value
+    characters: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value):
+            characters.append(JS_UNESCAPES.get(value[index + 1], value[index + 1]))
+            index += 2
+        else:
+            characters.append(value[index])
+            index += 1
+    return "".join(characters)
+
+
+def code_mode_commands(program: str) -> list[str]:
+    """Every shell command a code-mode program runs, in the order the program runs them.
+
+    Each call's arguments are read from the slice between its own `tools.` and the next one, so a
+    program that batches a shell call behind another tool's call reads the command belonging to the
+    shell call rather than the first command literal anywhere in the text.
+    """
+    calls = list(CODE_MODE_CALL_PATTERN.finditer(program))
+    commands: list[str] = []
+    for index, call in enumerate(calls):
+        pattern = CODE_MODE_COMMAND_PATTERN_BY_FUNCTION.get(call.group(1))
+        if pattern is None:
+            continue
+        end = calls[index + 1].start() if index + 1 < len(calls) else len(program)
+        match = pattern.search(program[call.end() : end])
+        if match is not None:
+            commands.append(_unescaped(next(group for group in match.groups() if group is not None)))
+    return commands
+
+
+def commands_in(arguments: dict[str, Any]) -> list[str]:
+    """The shell commands one executing tool call runs, whichever shape its harness uses.
+
+    claude and pi-coding pass the command as an argument of the call; codex passes a code-mode
+    program under `_raw` and runs the shell from inside it.
+    """
+    for key in ("command", "cmd"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return [value]
+    program = arguments.get("_raw")
+    return code_mode_commands(program) if isinstance(program, str) else []
+
+
 def _shell_commands(step: dict[str, Any]) -> list[str]:
     """The commands this step's executing tools ran, for the input fallback below."""
-    commands = []
+    commands: list[str] = []
     for call in step.get("tool_calls") or []:
         if isinstance(call, dict) and call.get("function_name") in EXECUTING_TOOLS:
             arguments = call.get("arguments")
             if isinstance(arguments, dict):
-                commands.append(str(arguments.get("command") or ""))
+                commands.extend(commands_in(arguments))
     return commands
 
 

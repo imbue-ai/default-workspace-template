@@ -19,8 +19,8 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
@@ -57,9 +57,17 @@ vi.mock("../models/Providers", () => ({
 }));
 
 vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTab: vi.fn() }));
+const begun: string[] = [];
+vi.mock("./SwitchDialog", () => ({
+  beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  openSwitchDialog: vi.fn(),
+}));
 
 import m from "mithril";
 
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { getPendingAccountId } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const OPUS = {
@@ -114,7 +122,7 @@ beforeEach(() => {
   chooserOpens.length = 0;
   deleted.length = 0;
   renamed.length = 0;
-  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
+  agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = {
     switch_mode: "eager_then_reconcile",
     picker_mode: "list",
@@ -127,7 +135,7 @@ beforeEach(() => {
   // MOUNTED, not rendered: this is what gives handlers in the main tree their auto-redraw,
   // and what the portal has to reproduce for the handlers inside it.
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(ModelBar as never, { agentId: "a1" }),
+    view: () => m(ModelBar as never, { chatId: "a1" }),
   });
 });
 
@@ -299,20 +307,23 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
   });
 
-  it("ignores a press on a locked provider, without closing anything", async () => {
+  it("hands a press on another harness's account to the switch dialog and closes the whole stack", async () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
     ];
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
-    const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
-    if (locked === undefined) throw new Error("no locked row");
-    locked.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    locked.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const other = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
+    if (other === undefined) throw new Error("no row for the other account");
+    other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    other.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(begun).toEqual(["acct-2"]);
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {

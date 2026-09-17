@@ -327,6 +327,30 @@ def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None
     )
 
 
+def _wait_for_saved_launcher_count(state_dir: Path, view_id: str, count: int) -> None:
+    """Wait until the browser's autosave has written ``count`` New Tabs into the view's layout.
+
+    A document op is applied to the saved file, so an op issued before the (debounced) save lands
+    would edit an arrangement the browser has not finished describing -- and the refetch that
+    follows would put that older arrangement back on screen.
+    """
+
+    def _saved() -> bool:
+        for path in _client_layout_files(state_dir, view_id):
+            panels = (json.loads(path.read_text()).get("dockview") or {}).get("panels") or {}
+            launchers = [key for key, entry in panels.items() if (entry.get("params") or {}).get("kind") == "launcher"]
+            if len(launchers) == count:
+                return True
+        return False
+
+    wait_for(
+        _saved,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"autosave never wrote {count} New Tab(s) into the layout of {view_id}",
+    )
+
+
 def _wait_for_view(page: Page, view_id: str) -> None:
     """The dock names the view it has mounted; the active view itself lives in the shell's client record."""
     page.wait_for_selector(
@@ -353,7 +377,7 @@ def _open_from_launcher(page: Page, address: str) -> None:
     """
     # The dock must be up first: before it mounts there is neither a launcher nor a "+". A view
     # that mounts its launcher does so a beat after the switch lands, so the launcher gets a
-    # moment to appear before the "+" (which a launcher hides) is reached for.
+    # moment to appear before the "+" is reached for.
     expect(page.locator(".dv-default-tab-content").first).to_be_visible(timeout=15000)
     launcher = page.locator(".new-tab-launcher:visible")
     if launcher.count() == 0:
@@ -361,7 +385,7 @@ def _open_from_launcher(page: Page, address: str) -> None:
             expect(launcher.first).to_be_visible(timeout=3000)
         except AssertionError:
             page.locator(".dockview-add-tab-button:visible").first.click()
-    expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+    expect(launcher.first).to_be_visible(timeout=10000)
     row = _launcher_row(page, address)
     if row.count() == 0:
         _search_launcher(page, _app_name_of_address(address))
@@ -602,6 +626,147 @@ def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: 
     )
     # And the launcher that was in the pane made way for it.
     expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_many_new_tabs_stay_open_beside_each_other_and_survive_a_reload(tmp_path: Path, page: Page) -> None:
+    """A New Tab is an ordinary tab: the "+" opens another, and clicking away leaves them all up.
+
+    Opens a real instance first, so the New Tabs under test share their pane with a real tab rather
+    than standing for a pane of their own (which a dock does still fill).
+    """
+    with _running_e2e_server(tmp_path, _PORT + 26) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+        # The "+" is offered even once the pane already holds a New Tab, and each press adds one.
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (1, 2, 3):
+            expect(add_button).to_have_count(1)
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # Focus landing on a real tab leaves every New Tab where it is.
+        _tab(page, _FIXTURE_TITLE).click()
+        expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=10000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3)
+        expect(page.locator(".dv-default-tab-content", has_text="New tab")).to_have_count(3)
+
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3, timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_an_agent_open_takes_the_place_of_a_lone_new_tab_but_not_of_several(tmp_path: Path, page: Page) -> None:
+    """A New Tab alone in a pane stands for the pane, so an agent's open takes its place; two do not.
+
+    The first open answers a pane holding nothing but one New Tab, so it replaces it. The user then
+    presses "+" twice, and the next open docks beside both.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 27, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_ADDRESS})
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0, timeout=10000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=10000)
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(2, timeout=10000)
+        _wait_for_saved_launcher_count(server.state_dir, STARTER_PROJECT_ID, 2)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-2")})
+        expect(_tab(page, "Stub 2")).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(2)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_tab_alone_in_a_pane_is_taken_while_the_other_pane_keeps_its_tab(tmp_path: Path, page: Page) -> None:
+    """The rule is per pane: opening into a pane showing one New Tab takes its place, and the tab in
+    the other pane is left where it is.
+
+    Builds the two panes by splitting a second instance out to the right, adding a New Tab beside
+    it, and closing it -- so the right pane shows one New Tab while the left holds a real tab.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 29, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+
+        _broadcast_layout_op(
+            server.base_url,
+            "split",
+            {
+                "address": _stub_address("stub-2"),
+                "relative_to": _FIXTURE_ADDRESS,
+                "direction": "right",
+                "new_group": True,
+            },
+        )
+        add_buttons = page.locator(".dockview-add-tab-button")
+        expect(add_buttons).to_have_count(2, timeout=15000)
+        boxes = [add_buttons.nth(i).bounding_box() for i in range(2)]
+        assert boxes[0] is not None and boxes[1] is not None
+        add_buttons.nth(0 if boxes[0]["x"] > boxes[1]["x"] else 1).click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=10000)
+
+        stub_two_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 2"))
+        stub_two_tab.hover()
+        stub_two_tab.locator('[aria-label="Close tab"]').click()
+        expect(_tab(page, "Stub 2")).to_have_count(0, timeout=10000)
+        right_group = page.locator(".dv-groupview", has=page.locator(".dv-default-tab-content", has_text="New tab"))
+        expect(right_group).to_have_class(re.compile(r"\bdv-active-group\b"))
+
+        _open_all_apps(page)
+        page.locator(f'.project-rail-app[data-app="{_STUB_APP_NAME}"]').click()
+
+        expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0, timeout=10000)
+        expect(_tab(page, _FIXTURE_TITLE)).to_have_count(1)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_opening_from_a_new_tab_takes_that_tab_s_place_in_the_strip(tmp_path: Path, page: Page) -> None:
+    """Opening from the middle of three New Tabs leaves the result in the middle.
+
+    Opening answers the New Tab it was asked from, so what it opens belongs where that tab stood
+    rather than on the end of the strip.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 28) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (2, 3):
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # The middle one of the three, by tab position rather than by DOM order.
+        middle_tab = page.locator(".dv-tab").nth(1)
+        middle_tab.click()
+        page.locator(f'.new-tab-launcher:visible .new-tab-launcher-tile[data-launch="{_STUB_APP_NAME}:new"]').click()
+        expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
+
+        titles = page.locator(".dv-tab .dv-default-tab-content")
+        expect(titles).to_have_count(3, timeout=10000)
+        strip = [titles.nth(i).inner_text() for i in range(3)]
+        assert [strip[0], strip[2]] == ["New tab", "New tab"] and _STUB_TAB_TITLE_RE.match(strip[1]), (
+            f"the opened tab did not take the middle New Tab's slot: {strip}"
+        )
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -993,6 +1158,72 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
         expect(page.locator(".dv-default-tab-content", has_text="Stub 1")).to_have_count(0)
 
 
+def _tell_the_shell_the_stub_list_changed(server: E2EServer) -> None:
+    request = urllib.request.Request(f"{server.base_url}/api/apps/{_STUB_APP_NAME}/changed", data=b"", method="POST")
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_it_is_listed_again(
+    tmp_path: Path, page: Page
+) -> None:
+    """An app dropping an instance from its list for a while is not a delete.
+
+    The tab stays in the dock, the project's tab set, and the saved layout (also across a reload),
+    shows the instance as unavailable without loading its page, and loads the page again once
+    the app lists the instance again. While unavailable, its Close tab button closes it.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 30) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        frame_input = page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")
+        expect(frame_input).to_be_visible(timeout=15000)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+
+        fixture_record = server.stub_source.records[0]
+        server.stub_source.records.clear()
+        _tell_the_shell_the_stub_list_changed(server)
+
+        placeholder = page.locator(".si-unavailable-instance")
+        expect(placeholder).to_be_visible(timeout=15000)
+        expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(0)
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
+        expect(page.locator('.dv-tab-process-dot[data-status="unavailable"]')).to_have_count(1)
+
+        stub_page_requests: list[str] = []
+        page.on(
+            "request",
+            lambda request: stub_page_requests.append(request.url)
+            if request.url.startswith(server.stub_url)
+            else None,
+        )
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        expect(placeholder).to_be_visible(timeout=15000)
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(1)
+        page.wait_for_timeout(3000)
+        assert stub_page_requests == []
+        assert _FIXTURE_ADDRESS in _project_tabs(server.base_url)
+        assert any(
+            _FIXTURE_ADDRESS in path.read_text() for path in _client_layout_files(server.state_dir, STARTER_PROJECT_ID)
+        )
+
+        server.stub_source.records.append(fixture_record)
+        _tell_the_shell_the_stub_list_changed(server)
+        expect(frame_input).to_be_visible(timeout=15000)
+        expect(placeholder).to_have_count(0)
+        assert stub_page_requests != []
+
+        server.stub_source.records.clear()
+        _tell_the_shell_the_stub_list_changed(server)
+        expect(placeholder).to_be_visible(timeout=15000)
+        placeholder.locator(".si-unavailable-instance-close").click()
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0, timeout=10000)
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
     """The rail row menu's "Remove from project" unfiles an address rather than deleting the instance."""
@@ -1089,9 +1320,9 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
 def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp_path: Path, page: Page) -> None:
     """A rail shortcut in focus mode with nothing to focus creates an instance; expanding the rail never reflows it.
 
-    The rail expands over the dock by growing width alone, so a row shared by both states
-    sits at the same y whether collapsed or expanded; and picking a row inside the
-    still-hovered rail leaves it open, since only the pointer leaving closes it.
+    The rail expands over the dock by growing width alone, so a row shared by both states sits at
+    the same y whether collapsed or expanded; and picking a row that puts a tab on screen collapses
+    the rail off it, even with the pointer still inside.
     """
     with _running_e2e_server(tmp_path, _PORT + 16, stub_instances=(), project_names=()) as server:
         page.goto(server.base_url)
@@ -1120,11 +1351,14 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
 
         stub_shortcut.click()
         expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
-        expect(page.locator(".project-rail-search")).to_be_visible(timeout=1000)
+        # The rail got out of the way of the tab it just opened, without waiting for the pointer.
+        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
         assert [str(record.key) for record in server.stub_source.records] == ["stub-1"]
 
+        # And the pointer leaving and returning brings it back.
         page.mouse.move(600, 400)
-        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+        rail.hover()
+        expect(page.locator(".project-rail-search")).to_be_visible(timeout=5000)
 
 
 # ---------- the launcher ----------
@@ -1215,7 +1449,7 @@ def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Pa
         page.locator('.new-tab-start-tile[data-start="learn"]').click()
         is_seeded = poll_until(
             lambda: any(
-                call.startswith("create:new:{'message': 'Teach me about Minds") for call in server.stub_source.calls
+                call.startswith("create:new:{'message': 'Teach me about Mind") for call in server.stub_source.calls
             ),
             timeout=15.0,
             poll_interval=0.1,

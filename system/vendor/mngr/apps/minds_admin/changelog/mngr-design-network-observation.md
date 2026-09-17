@@ -1,0 +1,3 @@
+Thread the slice-fleet generation (specs/slice-fleet-gen2, phase 1) through the operator tooling: `minds-admin server register` gains `--box-generation` and `--uplink-mbps`, the slice bake passes the box's generation and declared uplink rate to the provider via `-S` overrides, and slice `pool_hosts` rows are stamped with their box's generation at insert.
+
+Every box-side slice client the operator tooling builds now dispatches on the box's (or row's) generation: the bake's occupancy pre-check and orphan reap, bake rollback, the tier audit, the CI cache warm, and `pool destroy` (whose destroy target now carries the row's stamped generation), so all of them work against gen-2 boxes.

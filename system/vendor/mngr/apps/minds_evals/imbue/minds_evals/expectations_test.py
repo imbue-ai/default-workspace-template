@@ -1,8 +1,12 @@
+from typing import Any
+
 import pytest
 
+from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import DeliverableKind
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import FlowSurface
+from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import UiFlow
 from imbue.minds_evals.errors import EvalConfigError
@@ -66,7 +70,7 @@ def test_parse_expectations_requires_outcome_prose() -> None:
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "why": "z"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "why": "z"}],
             },
             "unknown key",
         ),
@@ -84,9 +88,9 @@ def test_parse_expectations_rejects_an_unknown_deliverable_kind() -> None:
 
 
 def test_parse_expectations_rejects_a_flow_with_neither_steps_nor_script() -> None:
-    with pytest.raises(EvalConfigError, match="either 'steps' \\+ 'expect' or 'script'"):
+    with pytest.raises(EvalConfigError, match=r"either 'actions' \+ 'expect' or 'script'"):
         parse_expectations(
-            {"outcome": "x", "deliverable": {"kind": "minds-app"}, "ui_flows": [{"name": "f", "steps": "open it"}]},
+            {"outcome": "x", "deliverable": {"kind": "minds-app"}, "ui_flows": [{"name": "f", "actions": "open it"}]},
             "todo-app",
         )
 
@@ -97,7 +101,7 @@ def test_parse_expectations_rejects_a_flow_carrying_both_a_script_and_steps() ->
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "script": "flow.py"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "script": "flow.py"}],
             },
             "todo-app",
         )
@@ -123,7 +127,7 @@ def test_parse_expectations_still_accepts_a_natural_language_flow() -> None:
         {
             "outcome": "x",
             "deliverable": {"kind": "minds-app"},
-            "ui_flows": [{"name": "persistence", "steps": "Open the app. Add a task.", "expect": "still there"}],
+            "ui_flows": [{"name": "persistence", "actions": "Open the app. Add a task.", "expect": "still there"}],
         },
         "todo-app",
     )
@@ -213,8 +217,8 @@ def test_expand_expectations_turns_natural_language_flows_into_checks() -> None:
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
                 "ui_flows": [
-                    {"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."},
-                    {"name": "persistence", "steps": "Reload.", "expect": "It survived."},
+                    {"name": "add-complete-delete", "actions": "Add 'buy milk'.", "expect": "'buy milk' is visible."},
+                    {"name": "persistence", "actions": "Reload.", "expect": "It survived."},
                 ],
             },
             "todo",
@@ -235,7 +239,7 @@ def test_expand_expectations_refuses_to_expand_a_scripted_flow() -> None:
     expectations = Expectations(
         outcome="x",
         deliverable=parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo").deliverable,
-        ui_flows=(UiFlow(name="scripted", steps="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
+        ui_flows=(UiFlow(name="scripted", actions="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
         test_commands=(),
         is_fresh_env_enabled=False,
     )
@@ -253,8 +257,8 @@ def test_parse_expectations_rejects_two_flows_whose_names_collide() -> None:
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
                 "ui_flows": [
-                    {"name": "add-task", "steps": "s", "expect": "e"},
-                    {"name": "add_task", "steps": "s", "expect": "e"},
+                    {"name": "add-task", "actions": "s", "expect": "e"},
+                    {"name": "add_task", "actions": "s", "expect": "e"},
                 ],
             },
             "todo",
@@ -266,7 +270,7 @@ def test_parse_expectations_defaults_a_flow_to_the_forwarded_origin() -> None:
         {
             "outcome": "x",
             "deliverable": {"kind": "minds-app"},
-            "ui_flows": [{"name": "persistence", "steps": "s", "expect": "e"}],
+            "ui_flows": [{"name": "persistence", "actions": "s", "expect": "e"}],
         },
         "todo",
     )
@@ -283,7 +287,7 @@ def test_parse_expectations_rejects_the_minds_ui_surface_as_unimplemented() -> N
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "minds-ui"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "surface": "minds-ui"}],
             },
             "todo",
         )
@@ -296,7 +300,256 @@ def test_parse_expectations_rejects_an_unknown_surface() -> None:
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "carrier-pigeon"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "surface": "carrier-pigeon"}],
             },
             "todo",
         )
+
+
+def test_parse_expectations_reads_a_process_block() -> None:
+    expectations = parse_expectations(
+        {
+            "outcome": "A throwaway mock, nothing hardened.",
+            "process": {
+                "required_skills": ["build-app", "frontend-design"],
+                "forbidden_skills": ["crystallize-creation"],
+                "max_worker_launches": 0,
+            },
+        },
+        "mock-only",
+    )
+
+    assert expectations.process is not None
+    assert expectations.process.required_skills == ("build-app", "frontend-design")
+    assert expectations.process.forbidden_skills == ("crystallize-creation",)
+    assert expectations.process.max_worker_launches == 0
+
+
+def test_parse_expectations_leaves_a_case_without_a_process_block_unconstrained() -> None:
+    expectations = parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo-app")
+
+    assert expectations.process is None
+    assert expand_expectations(expectations).process_checks == ()
+
+
+def test_parse_expectations_rejects_an_unknown_process_key() -> None:
+    with pytest.raises(EvalConfigError, match="unknown key"):
+        parse_expectations({"outcome": "x", "process": {"required_skill": ["build-app"]}}, "mock-only")
+
+
+def test_parse_expectations_rejects_a_skill_that_is_required_and_forbidden_at_once() -> None:
+    # The two lists would expand into checks that can never both pass, so the case could not be
+    # satisfied however the agent worked.
+    with pytest.raises(EvalConfigError, match="both requires and forbids: build-app"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "process": {"required_skills": ["build-app"], "forbidden_skills": ["build-app"]},
+            },
+            "mock-only",
+        )
+
+
+def test_parse_expectations_rejects_a_qualified_requirement_its_bare_name_forbids() -> None:
+    # The collector matches a bare forbidden name against a plugin-qualified invocation, so this
+    # pair could never both pass -- and the oracle, which invokes every required skill, would fail
+    # the forbidden check for no reason a reader of the run could see.
+    with pytest.raises(EvalConfigError, match=r"both requires and forbids: frontend-design:frontend-design"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "process": {
+                    "required_skills": ["frontend-design:frontend-design"],
+                    "forbidden_skills": ["frontend-design"],
+                },
+            },
+            "mock-only",
+        )
+
+
+def test_parse_expectations_rejects_an_empty_process_block() -> None:
+    # Leaving the block off says the same thing; accepting it would report a case as grading the
+    # agent's process while measuring nothing about it.
+    with pytest.raises(EvalConfigError, match="declares nothing to check"):
+        parse_expectations({"outcome": "x", "process": {}}, "mock-only")
+
+
+@pytest.mark.parametrize("bad_name", ["", "  ", "-leading-dash", "has space", "slash/name"])
+def test_parse_expectations_rejects_a_name_that_is_not_a_skill_name(bad_name: str) -> None:
+    with pytest.raises(EvalConfigError, match="must be a skill name"):
+        parse_expectations({"outcome": "x", "process": {"required_skills": [bad_name]}}, "mock-only")
+
+
+def test_parse_expectations_accepts_a_plugin_skill_name() -> None:
+    expectations = parse_expectations(
+        {"outcome": "x", "process": {"forbidden_skills": ["imbue-code-guardian:autofix"]}}, "mock-only"
+    )
+
+    assert expectations.process is not None
+    assert expectations.process.forbidden_skills == ("imbue-code-guardian:autofix",)
+
+
+def test_parse_expectations_rejects_a_negative_worker_launch_cap() -> None:
+    with pytest.raises(EvalConfigError, match="non-negative integer"):
+        parse_expectations({"outcome": "x", "process": {"max_worker_launches": -1}}, "mock-only")
+
+
+def test_parse_expectations_rejects_two_skill_names_whose_check_ids_would_collide() -> None:
+    # The slug is the manifest entry's id, so the second check would overwrite the first.
+    with pytest.raises(EvalConfigError, match="names that collide"):
+        parse_expectations({"outcome": "x", "process": {"required_skills": ["build-app", "build_app"]}}, "mock-only")
+
+
+def test_expand_expectations_turns_a_process_block_into_one_flat_check_list() -> None:
+    expanded = expand_expectations(
+        parse_expectations(
+            {
+                "outcome": "x",
+                "process": {
+                    "required_skills": ["build-app"],
+                    "forbidden_skills": ["crystallize-creation"],
+                    "max_worker_launches": 0,
+                },
+            },
+            "mock-only",
+        )
+    )
+
+    assert [(check.check_id, check.kind, check.skill) for check in expanded.process_checks] == [
+        ("skill_required_build_app", ProcessCheckKind.REQUIRED_SKILL, "build-app"),
+        ("skill_forbidden_crystallize_creation", ProcessCheckKind.FORBIDDEN_SKILL, "crystallize-creation"),
+        ("worker_launches", ProcessCheckKind.MAX_WORKER_LAUNCHES, ""),
+    ]
+    assert expanded.process_checks[-1].max_worker_launches == 0
+
+
+def test_expand_expectations_leaves_out_a_launch_cap_the_case_did_not_set() -> None:
+    expanded = expand_expectations(
+        parse_expectations({"outcome": "x", "process": {"required_skills": ["build-app"]}}, "mock-only")
+    )
+
+    assert [check.kind for check in expanded.process_checks] == [ProcessCheckKind.REQUIRED_SKILL]
+
+
+def _timing_case(timing: dict[str, Any]) -> dict[str, Any]:
+    """A case that declares a deliverable and a process block, so a timing prerequisite has classes
+    it may legitimately name."""
+    return {
+        "outcome": "A mockup, fast.",
+        "deliverable": {"kind": "minds-app"},
+        "process": {"required_skills": ["build-app"]},
+        "timing": timing,
+    }
+
+
+def test_parse_expectations_reads_a_timing_block() -> None:
+    expectations = parse_expectations(
+        _timing_case({"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]}), "todo-mock"
+    )
+
+    assert expectations.timing is not None
+    assert expectations.timing.fast_seconds == 150.0
+    assert expectations.timing.slow_seconds == 600.0
+    assert expectations.timing.requires_no_failures == (CheckClass.APP,)
+
+
+def test_parse_expectations_leaves_a_case_without_a_timing_block_unmeasured() -> None:
+    expectations = parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo-app")
+
+    assert expectations.timing is None
+    assert expand_expectations(expectations).timing_checks == ()
+
+
+def test_parse_expectations_accepts_a_timing_block_with_no_prerequisite() -> None:
+    # A case may measure the time on its own terms; that is a different claim from a slow case, and
+    # an empty list says it explicitly.
+    expectations = parse_expectations(
+        _timing_case({"fast_seconds": 10, "slow_seconds": 20, "requires_no_failures": []}), "todo-mock"
+    )
+
+    assert expectations.timing is not None
+    assert expectations.timing.requires_no_failures == ()
+
+
+def test_parse_expectations_rejects_a_timing_block_with_an_unknown_key() -> None:
+    with pytest.raises(EvalConfigError, match="unknown key"):
+        parse_expectations(_timing_case({"fast_seconds": 1, "slow_seconds": 2, "target_seconds": 3}), "todo-mock")
+
+
+@pytest.mark.parametrize("missing_key", ["fast_seconds", "slow_seconds"])
+def test_parse_expectations_rejects_a_timing_block_missing_an_anchor(missing_key: str) -> None:
+    # Neither anchor has a defensible default: what counts as fast is the whole per-case judgement.
+    anchors: dict[str, Any] = {"fast_seconds": 150, "slow_seconds": 600}
+    del anchors[missing_key]
+
+    with pytest.raises(EvalConfigError, match="needs a '{}'".format(missing_key)):
+        parse_expectations(_timing_case(anchors), "todo-mock")
+
+
+@pytest.mark.parametrize("bad_anchor", ["fast", None, True, [150]])
+def test_parse_expectations_rejects_an_anchor_that_is_not_a_number(bad_anchor: Any) -> None:
+    with pytest.raises(EvalConfigError, match="fast_seconds must be a number"):
+        parse_expectations(_timing_case({"fast_seconds": bad_anchor, "slow_seconds": 600}), "todo-mock")
+
+
+@pytest.mark.parametrize("bad_anchor", [0, -1, -0.5])
+def test_parse_expectations_rejects_an_anchor_that_is_not_positive(bad_anchor: float) -> None:
+    # The curve is taken over logarithms, so a zero or negative anchor has no curve to sit on.
+    with pytest.raises(EvalConfigError, match="fast_seconds must be a positive number"):
+        parse_expectations(_timing_case({"fast_seconds": bad_anchor, "slow_seconds": 600}), "todo-mock")
+
+
+def test_parse_expectations_rejects_anchors_that_are_not_in_order() -> None:
+    with pytest.raises(EvalConfigError, match=r"fast_seconds \(600.0\) must be below slow_seconds \(600.0\)"):
+        parse_expectations(_timing_case({"fast_seconds": 600, "slow_seconds": 600}), "todo-mock")
+
+
+def test_parse_expectations_rejects_a_prerequisite_the_case_does_not_declare() -> None:
+    # A class with no entries can never carry a failure, so the block would read as gated while
+    # gating on nothing.
+    with pytest.raises(EvalConfigError, match="which this case does not declare"):
+        parse_expectations(
+            _timing_case({"fast_seconds": 1, "slow_seconds": 2, "requires_no_failures": ["ui_flows"]}), "todo-mock"
+        )
+
+
+def test_parse_expectations_rejects_a_prerequisite_that_is_not_an_expectation_class() -> None:
+    with pytest.raises(EvalConfigError, match="is not an expectation class"):
+        parse_expectations(
+            _timing_case({"fast_seconds": 1, "slow_seconds": 2, "requires_no_failures": ["apps"]}), "todo-mock"
+        )
+
+
+def test_parse_expectations_rejects_timing_as_its_own_prerequisite() -> None:
+    with pytest.raises(EvalConfigError, match="cannot be its own prerequisite"):
+        parse_expectations(
+            _timing_case({"fast_seconds": 1, "slow_seconds": 2, "requires_no_failures": ["timing"]}), "todo-mock"
+        )
+
+
+def test_parse_expectations_rejects_test_commands_as_a_timing_prerequisite() -> None:
+    # Test commands are recorded and never gated; letting one gate the clock would gate them after
+    # all, on a case whose prompts may never have mentioned tests.
+    with pytest.raises(EvalConfigError, match="recorded and never gated"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "test_commands": ["pytest"],
+                "timing": {"fast_seconds": 1, "slow_seconds": 2, "requires_no_failures": ["test_command"]},
+            },
+            "todo-mock",
+        )
+
+
+def test_expand_expectations_turns_a_timing_block_into_one_check() -> None:
+    expanded = expand_expectations(
+        parse_expectations(
+            _timing_case({"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]}), "todo-mock"
+        )
+    )
+
+    assert [
+        (check.check_id, check.fast_seconds, check.slow_seconds, check.requires_no_failures)
+        for check in expanded.timing_checks
+    ] == [("time_to_goal", 150.0, 600.0, (CheckClass.APP,))]

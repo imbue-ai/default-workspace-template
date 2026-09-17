@@ -1,0 +1,1 @@
+The `FakeHost` test double now accepts and forwards `is_atomic` on `write_file` and `write_text_file`, matching the interface: writes are atomic by default on every host and take `is_atomic=False` to write in place. No behavior change in this project's own code.

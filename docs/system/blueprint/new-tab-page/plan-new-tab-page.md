@@ -76,10 +76,10 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    | Set up a routine | Something that runs on its own schedule, like a briefing every morning. | chat seeded with a routine prompt |
    | Delegate a task | Hand something over and walk away. It comes back when the work is done. | chat seeded with a delegation prompt |
    | Make sense of a pile of stuff | Point at files, an export or an inbox and get something you can actually read. | chat seeded with a make-sense-of-data prompt |
-   | Learn about Minds | Have Minds teach you about all of its different capabilities and features. | chat seeded with a tour prompt (behind "See more") |
-   | Edit Minds itself | Change the interface, theme, chats, etc--Minds can modify itself! | chat seeded with a change-Minds prompt (behind "See more") |
+   | Learn about Mind | Have Mind teach you about all of its different capabilities and features. | chat seeded with a tour prompt (behind "See more") |
+   | Edit Mind itself | Change the interface, theme, chats, etc--Mind can modify itself! | chat seeded with a change-Mind prompt (behind "See more") |
 
-   Each tile's glyph is drawn duotone in one of the Minds brand-palette hues (the
+   Each tile's glyph is drawn duotone in one of the Mind brand-palette hues (the
    hue darkened for the stroke, a wash of it for the fill); the tile itself stays
    a white card.
 
@@ -113,7 +113,7 @@ actions:
   is `/use-template <repository url>`, so the mind adopts the template into this
   machine and walks the user through its requirements.
 - **Create a new machine from this**: starts a new chat whose first message asks
-  the mind to create a fresh Minds machine from the template's repository (the
+  the mind to create a fresh Mind machine from the template's repository (the
   `minds-api` skill does that) and to walk the user through anything it needs.
 
 Both close the dialog; the new chat replaces the launcher in the pane, as any tile

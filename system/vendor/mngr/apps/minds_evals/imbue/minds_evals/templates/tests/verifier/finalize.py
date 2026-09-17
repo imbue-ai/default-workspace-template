@@ -71,7 +71,22 @@ HARNESS_SHARE = 0.2
 DEFAULT_HARNESS = "claude"
 
 # Which expanded check list makes a class scored, mirroring outcome/checks.py's registration rule.
-SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
+SCORED_CLASS_BY_EXPECTATION_KEY = {
+    "files_checks": "files",
+    "app_checks": "app",
+    "http_checks": "http",
+    "process_checks": "process",
+}
+
+# process_checks belongs on that map because its one unmeasurable state is the instrument failing:
+# the class is read off the agent's captured transcript, so a class whose every entry errored means
+# the transcript never came out of the workspace, and scoring that would charge the agent for skills
+# it may well have invoked.
+
+# timing_checks is deliberately NOT in that map either, for a different reason: its one
+# unmeasurable state is an agent that never got its client to say the goal was met. That is
+# unboundedly slow -- a measurement of the agent, scoring zero on the curve -- not an instrument
+# that failed, so voiding the trial over it would discard a legitimate result.
 
 # ui_flow_checks is deliberately NOT in that map. An unmeasurable inventory or registry means the
 # collection phase itself failed, which is worth erroring a trial over. A flow set where every

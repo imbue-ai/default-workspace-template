@@ -1,0 +1,1 @@
+No behavior change. The comment explaining why a local-provider run reuses the source host no longer describes the local host's name as the fixed `localhost`: mngr's local provider now answers to the name its host record carries, and the comment states the mechanism in those terms.

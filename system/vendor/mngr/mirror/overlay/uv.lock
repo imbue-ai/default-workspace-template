@@ -8,10 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-20T00:00:00Z"
-
-[options.exclude-newer-package]
-modal = "2026-08-13T00:00:00Z"
+exclude-newer = "2026-09-01T00:00:00Z"
 
 [manifest]
 members = [
@@ -20,6 +17,7 @@ members = [
     "imbue-common",
     "imbue-mngr",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     "imbue-mngr-aws",
     "imbue-mngr-azure",
     "imbue-mngr-claude",
@@ -1758,6 +1756,11 @@ dependencies = [
 dev = [
     { name = "inline-snapshot" },
 ]
+testing = [
+    { name = "import-linter" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1767,14 +1770,17 @@ requires-dist = [
     { name = "cowsay-python", specifier = ">=1.0.2" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "import-linter", marker = "extra == 'testing'", specifier = ">=2.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
+    { name = "inline-snapshot", marker = "extra == 'testing'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
     { name = "sentry-sdk", specifier = ">=2.63.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "testing"]
 
 [[package]]
 name = "imbue-mngr"
@@ -1824,7 +1830,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=2.2.0" },
     { name = "overlay", editable = "libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "paramiko", specifier = ">=3.0" },
+    { name = "paramiko", specifier = "==3.5.1" },
     { name = "pluggy", specifier = ">=1.5.0" },
     { name = "psutil", specifier = ">=7.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -1847,6 +1853,17 @@ requires-dist = [
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
 source = { editable = "libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+
+[[package]]
+name = "imbue-mngr-autocompact"
+version = "0.1.0"
+source = { editable = "libs/mngr_autocompact" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -2893,10 +2910,16 @@ dependencies = [
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
     { name = "imbue-mngr-aws" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
     { name = "imbue-mngr-forward" },
     { name = "imbue-mngr-imbue-cloud" },
     { name = "imbue-mngr-latchkey" },
+    { name = "imbue-mngr-modal" },
+    { name = "imbue-mngr-opencode" },
+    { name = "imbue-mngr-pi-coding" },
     { name = "imbue-mngr-vps" },
     { name = "itsdangerous" },
     { name = "loguru" },
@@ -2931,10 +2954,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "libs/mngr_antigravity" },
     { name = "imbue-mngr-aws", editable = "libs/mngr_aws" },
+    { name = "imbue-mngr-claude", editable = "libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "libs/mngr_codex" },
     { name = "imbue-mngr-forward", editable = "libs/mngr_forward" },
     { name = "imbue-mngr-imbue-cloud", editable = "libs/mngr_imbue_cloud" },
     { name = "imbue-mngr-latchkey", editable = "libs/mngr_latchkey" },
+    { name = "imbue-mngr-modal", editable = "libs/mngr_modal" },
+    { name = "imbue-mngr-opencode", editable = "libs/mngr_opencode" },
+    { name = "imbue-mngr-pi-coding", editable = "libs/mngr_pi_coding" },
     { name = "imbue-mngr-vps", editable = "libs/mngr_vps" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "loguru" },

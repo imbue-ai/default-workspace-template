@@ -189,7 +189,7 @@ function SessionsSection(state: PageState): m.Vnode {
       m(
         "p",
         { class: "type-helper text-tertiary text-center" },
-        '"All devices" includes the Minds desktop app anywhere you are signed in.',
+        '"All devices" includes the Mind desktop app anywhere you are signed in.',
       ),
     ],
   );
@@ -257,7 +257,7 @@ export function ManagePage(): m.Component {
               href: "https://imbue.com",
               class: "type-helper text-accent hover:underline",
             },
-            "Get the Minds app",
+            "Get the Mind app",
           ),
         ]),
       );

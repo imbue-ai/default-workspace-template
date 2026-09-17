@@ -31,3 +31,21 @@ def test_fetch_raises_clean_mirror_error_on_unexpected_4xx_without_retrying() ->
     assert isinstance(exc_info.value, AptMirrorError)
     assert not isinstance(exc_info.value, AptMirrorTransientUpstreamError)
     assert "403" in str(exc_info.value)
+
+
+def test_is_served_reports_success_and_client_errors_without_a_body() -> None:
+    assert _fetcher_answering(200, b"body").is_served("https://mirror.example.test/artifacts/a") is True
+    assert _fetcher_answering(400).is_served("https://mirror.example.test/artifacts/a") is False
+    assert _fetcher_answering(404).is_served("https://mirror.example.test/artifacts/a") is False
+
+
+def test_is_served_uses_head_requests() -> None:
+    seen_methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_methods.append(request.method)
+        return httpx.Response(200)
+
+    fetcher = HttpUpstreamFetcher(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert fetcher.is_served("https://mirror.example.test/artifacts/a") is True
+    assert seen_methods == ["HEAD"]

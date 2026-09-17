@@ -119,18 +119,24 @@ from imbue.minds_admin.envs.recover import write_recover_target_atomic
 from imbue.minds_admin.envs.secret_lifecycle import gc_old_per_tier_secrets
 from imbue.minds_admin.envs.secret_lifecycle import make_deploy_id
 from imbue.minds_admin.envs.secret_lifecycle import timestamped_secret_name
+from imbue.minds_admin.slices.box_registry import BoxRegistryImportReport
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
 
 
 def resolve_web_template_pin(web_workspaces: WebWorkspacesConfig, *, tier: str) -> tuple[str, str]:
-    """Resolve the (template_repo, template_ref) pin for a tier's web creates.
+    """Resolve the (template_repo, deploy-time template_ref) pin for a tier's web creates.
 
     The repo resolves as: the ``MINDS_WEB_TEMPLATE_REPO`` env var > the
     deploy.toml ``template_repo`` pin > the canonical
     default-workspace-template repo key.
 
-    The ref is never committed (a committed ref silently goes stale when the
-    pool is re-baked at a newer version): shared tiers resolve
+    The ref here is the connector's FALLBACK: on a tier with an update feed
+    the live pin is the release channel's ``<channel>-web.json``
+    (``[web_channels.*]`` in ``apps/minds/release-channels.toml``), read by the
+    connector on every web create, and this value serves only while that file
+    cannot be read. Tiers without a feed (dev envs, staging) run on it
+    outright. It is never committed (a committed ref silently goes stale when
+    the pool is re-baked at a newer version): shared tiers resolve
     ``MINDS_WEB_TEMPLATE_REF`` env var > the app's pinned release tag
     ``FALLBACK_BRANCH`` (the same tag their pool is re-baked from), while
     dev-tier deploys must set ``MINDS_WEB_TEMPLATE_REF`` explicitly --
@@ -156,6 +162,28 @@ def resolve_web_template_pin(web_workspaces: WebWorkspacesConfig, *, tier: str) 
     else:
         template_ref = FALLBACK_BRANCH
     return template_repo, template_ref
+
+
+# Env var carrying the tier's update-feed base URL into the connector, which
+# reads the release channels' ``<channel>-web.json`` from it to pin web creates.
+# Mirrors ``web_template_channel.UPDATE_FEED_BASE_URL_ENV_VAR`` in the
+# connector (not imported: the two packages share no import path).
+UPDATE_FEED_BASE_URL_KEY: Final[str] = "MINDS_UPDATE_FEED_BASE_URL"
+
+
+def update_feed_base_url_for_tier(tier: str, lifecycle: DeployLifecycleConfig) -> str:
+    """The tier's ``update_feed_base_url`` from its committed client.toml, or "" when it publishes no feed.
+
+    Only the shared tiers have a committed client.toml (dev envs get theirs
+    written by the deploy, and none of them publishes channel manifests), so a
+    tier that writes local state has no feed by construction.
+    """
+    if lifecycle.writes_local_state:
+        return ""
+    feed_base_url = load_client_config(repo_tier_client_config_path(tier)).update_feed_base_url
+    # AnyUrl renders a bare host with a trailing slash; the connector joins
+    # the channel file name onto this, so hand it the bare base.
+    return str(feed_base_url).rstrip("/") if feed_base_url is not None else ""
 
 
 # Env var the deployed connector reads at startup to identify which
@@ -336,6 +364,11 @@ ListModalSecretsFn = Callable[[str, ConcurrencyGroup], tuple[str, ...]]
 # schema_migrations runner against the per-env host_pool DB. Tests
 # pass a no-op fake; the real implementation shells out to psql.
 ApplyPoolHostsMigrationsFn = Callable[[SecretStr, ConcurrencyGroup], tuple[Path, ...]]
+# (registry_dsn, host_pool_dsn, cg) -> import report. Copies the tier box
+# registry's ready bare_metal_servers rows into a dynamic env's host_pool DB
+# (id-preserving upsert) so its connector can lease slices on the tier's
+# fleet.
+ImportRegistryBoxesFn = Callable[[SecretStr, SecretStr, ConcurrencyGroup], BoxRegistryImportReport]
 # (host_pool_dsn, domains, emails, cg) -> None. Seed-if-absent default paid
 # domains/emails into the host_pool DB after migrations. Tests pass a no-op fake.
 SeedPaidListDefaultsFn = Callable[[SecretStr, tuple[str, ...], tuple[str, ...], ConcurrencyGroup], None]
@@ -485,6 +518,12 @@ class Providers(FrozenModel):
         description=(
             "(host_pool_dsn, domains, emails, cg) -> seed-if-absent the tier's default "
             "paid domains/emails into the host_pool DB after migrations."
+        ),
+    )
+    import_registry_boxes: ImportRegistryBoxesFn = Field(
+        description=(
+            "(registry_dsn, host_pool_dsn, cg) -> import report. Copies the tier box registry's "
+            "ready bare_metal_servers rows into a dynamic env's host_pool DB after migrations."
         ),
     )
     write_plan_defaults: WritePlanDefaultsFn = Field(
@@ -995,6 +1034,19 @@ def _deploy_env_locked(
         with info_span("Writing plan definitions ({})", sorted(plan_rows_by_name)):
             providers.write_plan_defaults(host_pool_dsn, plan_rows_by_name, parent_concurrency_group)
 
+    # A dynamic env leases slices on the tier's shared fleet, whose canonical
+    # rows live in the tier's standing box registry (the Vault ``neon``
+    # DATABASE_URL leaf); copy them in so this env's connector can reach every
+    # box from its first lease.
+    if lifecycle.creates_resources:
+        _import_tier_registry_boxes(
+            host_pool_dsn=host_pool_dsn,
+            tier=tier,
+            tier_vault_prefix=tier_vault_prefix,
+            providers=providers,
+            parent_concurrency_group=parent_concurrency_group,
+        )
+
     # Resolve the Modal deploy strategy now that we know whether a
     # migration ran. Done here (rather than at the CLI boundary) so the
     # decision sees the full deploy context the policy depends on; the
@@ -1106,6 +1158,12 @@ def _deploy_env_locked(
             if web_workspaces.gpu_count is not None:
                 connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_GPU_COUNT", str(int(web_workspaces.gpu_count)))
             connector_secret_overrides.setdefault("SHARE_CHROME_ORIGIN", _bare_origin(expected_connector_url))
+            # The live web pin comes from the tier's release feed; the ref
+            # above is the fallback for when the feed cannot be read. Only
+            # tiers publishing channel manifests have one.
+            update_feed_base_url = update_feed_base_url_for_tier(tier, lifecycle)
+            if update_feed_base_url:
+                connector_secret_overrides.setdefault(UPDATE_FEED_BASE_URL_KEY, update_feed_base_url)
         # When the operator sets MINDS_INJECT_BROKEN_HEALTHCHECK at deploy time,
         # propagate it into the deployed connector's Modal Secret so the
         # in-container healthcheck returns 500 and the auto-rollback path
@@ -1341,6 +1399,33 @@ def _resolve_modal_env(*, name: DevEnvName, lifecycle: DeployLifecycleConfig, de
             assert_never(unreachable)
 
 
+def _import_tier_registry_boxes(
+    *,
+    host_pool_dsn: SecretStr,
+    tier: str,
+    tier_vault_prefix: str,
+    providers: Providers,
+    parent_concurrency_group: ConcurrencyGroup,
+) -> None:
+    """Copy the tier's registered boxes into a dynamic env's host_pool DB (a no-op for a tier with no registry yet)."""
+    registry_dsn = _read_tier_neon_database_url(tier_vault_prefix, providers, parent_concurrency_group)
+    if not registry_dsn:
+        logger.info(
+            "Tier {!r} has no box registry yet ({}/neon has no DATABASE_URL); no boxes imported into host_pool",
+            tier,
+            tier_vault_prefix,
+        )
+        return
+    with info_span("Importing the tier's registered boxes into host_pool"):
+        report = providers.import_registry_boxes(SecretStr(registry_dsn), host_pool_dsn, parent_concurrency_group)
+    logger.info(
+        "Imported {} box(es) from the {!r} tier registry ({} skipped)",
+        len(report.imported),
+        tier,
+        len(report.skipped),
+    )
+
+
 def _resolve_host_pool_dsn_for_migrations(
     *,
     lifecycle: DeployLifecycleConfig,
@@ -1366,14 +1451,7 @@ def _resolve_host_pool_dsn_for_migrations(
         assert neon_record is not None, "creates_resources=true should have populated neon_record"
         return neon_record.host_pool_dsn
 
-    neon_vault_values = providers.read_per_env_secret_values(
-        "neon",
-        tier_vault_prefix,
-        {},
-        False,
-        parent_concurrency_group,
-    )
-    database_url = neon_vault_values.get("DATABASE_URL", "")
+    database_url = _read_tier_neon_database_url(tier_vault_prefix, providers, parent_concurrency_group)
     if not database_url:
         raise MindError(
             f"Cannot apply pool-hosts migrations: shared-tier Vault entry "
@@ -1408,7 +1486,7 @@ def _expected_litellm_proxy_url(
             assert_never(unreachable)
 
 
-def _workspace_storage_key_prefix(name: DevEnvName, lifecycle: DeployLifecycleConfig) -> str:
+def workspace_storage_key_prefix(name: DevEnvName, lifecycle: DeployLifecycleConfig) -> str:
     """The env's keyspace inside its tier's workspace-storage bucket.
 
     Per-env-Modal-env tiers (dev / ci) share their tier's bucket, so each env
@@ -1493,7 +1571,7 @@ def _compute_secret_overrides(
     # stop/start artifacts (and their cleanup) disjoint within the shared
     # tier bucket.
     if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV:
-        overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": _workspace_storage_key_prefix(name, lifecycle)}
+        overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": workspace_storage_key_prefix(name, lifecycle)}
     # Git-owned storage knobs win over stale Vault values, so deploy.toml is
     # the source of truth for the tier's retention window.
     if storage is not None and storage.stop_retention_seconds is not None:
@@ -1656,14 +1734,8 @@ def destroy_env(
             providers.delete_neon_project(name, credentials.neon_org_id, credentials.neon_api_token)
     else:
         with info_span("Wiping Neon DB schema for env {!r}", str(name)):
-            neon_values = providers.read_per_env_secret_values(
-                "neon",
-                tier_vault_prefix,
-                {},
-                False,
-                parent_concurrency_group,
-            )
-            _wipe_neon_for_tier(neon_values, providers=providers, tier=tier, parent_cg=parent_concurrency_group)
+            database_url = _read_tier_neon_database_url(tier_vault_prefix, providers, parent_concurrency_group)
+            _wipe_neon_for_tier(database_url, providers=providers, tier=tier, parent_cg=parent_concurrency_group)
 
     # Step 4: Modal (dev deletes the per-env Modal env outright which
     # cascade-deletes its apps / secrets / volumes; shared tiers stop
@@ -1709,7 +1781,7 @@ def destroy_env(
         parent_concurrency_group,
     )
     if is_workspace_storage_configured(storage_values):
-        storage_prefix = _workspace_storage_key_prefix(name, lifecycle)
+        storage_prefix = workspace_storage_key_prefix(name, lifecycle)
         with info_span("Deleting workspace-storage artifacts for env {!r}", str(name)):
             providers.delete_workspace_storage_prefix(storage_values, storage_prefix)
     else:
@@ -1757,21 +1829,36 @@ def _wipe_supertokens_for_tier(
 
 
 def _wipe_neon_for_tier(
-    neon_vault_values: dict[str, str],
+    database_url: str,
     *,
     providers: Providers,
     tier: str,
     parent_cg: ConcurrencyGroup,
 ) -> None:
-    """Pull DATABASE_URL out of the Neon Vault entry + invoke the schema wipe."""
-    dsn_str = neon_vault_values.get("DATABASE_URL", "")
-    if not dsn_str:
+    """Invoke the schema wipe on the tier's Neon DB; an empty DSN (no Vault DATABASE_URL) is a refusal."""
+    if not database_url:
         raise MindError(
             f"Cannot wipe Neon DB schema for tier {tier!r}: Vault entry is missing "
             f"DATABASE_URL. Populate the entry at secrets/minds/{tier}/neon "
             "(see .minds/template/neon.sh)."
         )
-    providers.wipe_neon_db_schema(SecretStr(dsn_str), parent_cg)
+    providers.wipe_neon_db_schema(SecretStr(database_url), parent_cg)
+
+
+def _read_tier_neon_database_url(
+    tier_vault_prefix: str,
+    providers: Providers,
+    parent_concurrency_group: ConcurrencyGroup,
+) -> str:
+    """Pull ``DATABASE_URL`` out of the tier-shared ``neon`` Vault entry ("" when absent).
+
+    For a shared tier this is its single pool database; for dev / ci it is
+    the tier's standing box registry (see ``slices/box_registry.py``). The
+    entry is read as non-required, so a missing entry or key yields "" and
+    each caller decides whether that is a refusal or a no-op.
+    """
+    values = providers.read_per_env_secret_values("neon", tier_vault_prefix, {}, False, parent_concurrency_group)
+    return values.get("DATABASE_URL", "")
 
 
 def _read_litellm_master_key(

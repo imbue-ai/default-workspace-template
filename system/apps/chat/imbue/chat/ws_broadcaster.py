@@ -6,7 +6,9 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 
 # Per-client buffer depth. Holds at most this many state-change broadcasts before
@@ -23,9 +25,14 @@ _CLIENT_QUEUE_MAX_SIZE = 1000
 _MAX_CONSECUTIVE_QUEUE_FULL = 50
 
 
-def proto_agent_created_message(proto: ProvisionalChat) -> dict[str, Any]:
-    """The ``proto_agent_created`` message: the provisional chat's fields beside the type."""
-    return {"type": "proto_agent_created", **proto.model_dump(mode="json")}
+def provisional_chat_created_message(provisional: ProvisionalChat) -> dict[str, Any]:
+    """The ``provisional_chat_created`` message: the provisional chat's fields beside the type."""
+    return {"type": "provisional_chat_created", **provisional.model_dump(mode="json")}
+
+
+def chats_updated_message(snapshots: list[ChatSnapshot]) -> dict[str, Any]:
+    """The ``chats_updated`` message: every chat's snapshot."""
+    return {"type": "chats_updated", "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots]}
 
 
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
@@ -39,7 +46,7 @@ def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
 
 
 class WebSocketBroadcaster(MutableModel):
-    """Fans the chat app's live agent state out to every connected chat page.
+    """Fans the chat app's live chat state out to every connected chat page.
 
     Thread-safe: background threads call broadcast methods which put messages
     into per-client queues. Each WebSocket handler runs in its own thread and
@@ -115,20 +122,20 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_agents_updated(self, agents: list[dict[str, Any]]) -> None:
-        """Broadcast an agents_updated event."""
-        self.broadcast({"type": "agents_updated", "agents": agents})
+    def broadcast_chats_updated(self, snapshots: list[ChatSnapshot]) -> None:
+        """Broadcast a chats_updated event: every chat's snapshot."""
+        self.broadcast(chats_updated_message(snapshots))
 
-    def broadcast_proto_agent_created(self, proto: ProvisionalChat) -> None:
-        """Broadcast a proto_agent_created event: a provisional chat, minted or moved to a new phase."""
-        self.broadcast(proto_agent_created_message(proto))
+    def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
+        """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""
+        self.broadcast(provisional_chat_created_message(provisional))
 
-    def broadcast_proto_agent_completed(self, agent_id: str, success: bool, error: str | None) -> None:
-        """Broadcast a proto_agent_completed event."""
+    def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
+        """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""
         self.broadcast(
             {
-                "type": "proto_agent_completed",
-                "agent_id": agent_id,
+                "type": "provisional_chat_completed",
+                "chat_id": chat_id,
                 "success": success,
                 "error": error,
             }

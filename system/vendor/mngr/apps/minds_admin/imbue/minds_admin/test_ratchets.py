@@ -53,8 +53,11 @@ _EMBEDDED_CONTAINER_SCRIPTS: tuple[str, ...] = ("slices/home_layout.py",)
 def test_prevent_bare_print() -> None:
     # Justified matches in ``main.py``: the bootstrap-failure path prints an
     # actionable one-liner to stderr before any logging is configured (the
-    # same pattern as ``imbue.minds.main``).
-    rc.check_bare_print(_DIR, snapshot(2), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
+    # same pattern as ``imbue.minds.main``). The two extra matches are string
+    # content, not code: ``slices/box_telemetry.py``'s rendered collector
+    # script, a standalone box-side program whose stdout IS its interface
+    # (journald ships every printed line to OpenObserve).
+    rc.check_bare_print(_DIR, snapshot(4), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
 
 
 # --- Exception handling ---
@@ -65,7 +68,12 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(0))
+    # The one match is string content, not code: the rendered box telemetry
+    # collector's per-section guard (``slices/box_telemetry.py``), the
+    # standalone script's top-level error handler -- it reports the failure as
+    # a shipped collector_error event and moves on, which is exactly the case
+    # the style guide carves out for broad catches.
+    rc.check_broad_exception_catch(_DIR, snapshot(1))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -133,7 +141,7 @@ def test_prevent_yaml_usage() -> None:
     # instance's lima.yaml for its on-box age), and their tests -- third-party
     # file formats we cannot pick TOML for, caught by the ratchet's ``r"yaml"``
     # substring regex, not YAML configuration of our own.
-    rc.check_yaml_usage(_DIR, snapshot(62))
+    rc.check_yaml_usage(_DIR, snapshot(56))
 
 
 def test_prevent_functools_partial() -> None:
@@ -247,7 +255,10 @@ def test_prevent_direct_subprocess() -> None:
     # and the whole point is for stdout/stderr/exit-code to flow
     # through to the operator's shell as if recover were the original
     # command. ConcurrencyGroup doesn't apply.
-    rc.check_direct_subprocess(_DIR, snapshot(1))
+    # The second match is string content, not code: the rendered box
+    # telemetry collector (``slices/box_telemetry.py``) runs stdlib-only on
+    # the boxes, where ConcurrencyGroup does not exist.
+    rc.check_direct_subprocess(_DIR, snapshot(2))
 
 
 def test_prevent_bare_tmux_targets() -> None:

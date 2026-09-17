@@ -237,6 +237,64 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     assert client.post("/api/apps/stub/instances/-not-a-key/rename", json={"title": "x"}).status_code == 400
 
 
+def test_a_relayed_delete_drops_the_instance_from_every_tab_set_and_layout(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    stub_1 = Address("app:stub?instance=stub-1")
+    stub_2 = Address("app:stub?instance=stub-2")
+    stub_source.records.extend([instance_record("stub-1"), instance_record("stub-2")])
+    inventory = build_inventory(
+        write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True)),
+        broadcaster,
+        fetcher=HttpInstanceFetcher(),
+    )
+    inventory.refetch_now("stub")
+    app = shell_application(tmp_path, inventory, broadcaster)
+    shell = _shell(app)
+    shell.projects.create_project("Alpha", "#111111", 0, ())
+    shell.projects.add_tab("alpha", stub_1)
+    shell.projects.add_tab("alpha", stub_2)
+    shell.layouts.save_browser_layout("alpha", "c1", layout_showing(stub_1, stub_2), None, TEST_NOW)
+    client_queue = broadcaster.register()
+
+    assert app.test_client().post("/api/apps/stub/instances/stub-1/delete").status_code == 204
+
+    assert shell.projects.get_project("alpha").tabs == (stub_2,)
+    remaining = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
+    assert addresses_by_panel_id(remaining.dockview) == {"p1": stub_2}
+    types = [message["type"] for message in drain_messages(client_queue)]
+    assert "projects_updated" in types and "layout_updated" in types
+
+
+def test_a_refused_delete_keeps_the_instance_in_its_tab_sets(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    stub_1 = Address("app:stub?instance=stub-1")
+    stub_source.records.append(instance_record("stub-1"))
+    inventory = build_inventory(
+        write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True)),
+        broadcaster,
+        fetcher=HttpInstanceFetcher(),
+    )
+    inventory.refetch_now("stub")
+    app = shell_application(tmp_path, inventory, broadcaster)
+    shell = _shell(app)
+    shell.projects.create_project("Alpha", "#111111", 0, ())
+    shell.projects.add_tab("alpha", stub_1)
+
+    stub_source.is_ready = False
+
+    assert app.test_client().post("/api/apps/stub/instances/stub-1/delete").status_code >= 400
+
+    assert shell.projects.get_project("alpha").tabs == (stub_1,)
+
+
 # ---------- section 6: stop and start ----------
 
 
@@ -777,6 +835,53 @@ def test_self_names_the_requesters_own_docked_instance(client: FlaskClient, app:
     moved = as_terminal_1("move", {"address": str(_FILES), "direction": "within"})
     assert moved.status_code == 200
     assert leaf_addresses(moved.get_json()["layout"]) == [[str(_TERMINAL_1), str(_FILES)]]
+
+
+def test_an_open_with_no_docked_anchor_tabs_into_the_active_group(
+    client: FlaskClient, app: Flask, fetcher: FakeInstanceFetcher
+) -> None:
+    """An ``open`` with nothing to be beside -- the auto-open reactor, or any agent surfacing its own
+    chat, which is never docked yet -- lands where the user is looking. Docking it *beside* the active
+    group instead split a fresh column open every time that group was the rightmost, which it usually
+    is, and each such open left its own group active for the next one to split beside."""
+    client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
+    _shell(app).inventory.refetch_now("terminal")
+    _register_client(app, "c1", "alpha")
+
+    def leaf_addresses(layout: dict[str, Any]) -> list[list[str]]:
+        tree = layout["tree"]
+        leaves = tree["children"] if tree["type"] == "branch" else [tree]
+        return [[panel["address"] for panel in leaf["panels"]] for leaf in leaves]
+
+    def as_terminal_1(op: str, args: dict[str, Any]) -> Any:
+        return client.post("/api/layout/broadcast", json={"op": op, "args": args, "requester": str(_TERMINAL_1)})
+
+    # Two groups, the right-hand one active: an anchored open still splits beside its docked requester.
+    assert as_terminal_1("open", {"address": str(_TERMINAL_1)}).status_code == 200
+    anchored = as_terminal_1("open", {"address": str(_FILES)})
+    assert leaf_addresses(anchored.get_json()["layout"]) == [[str(_TERMINAL_1)], [str(_FILES)]]
+
+    # The reactor's own op: no requester at all, so no anchor to be beside.
+    unanchored = client.post(
+        "/api/layout/broadcast", json={"op": "open", "args": {"address": str(_TERMINAL_2)}, "requester": ""}
+    )
+    assert unanchored.status_code == 200
+    assert leaf_addresses(unanchored.get_json()["layout"]) == [[str(_TERMINAL_1)], [str(_FILES), str(_TERMINAL_2)]]
+
+
+def test_an_unanchored_open_still_splits_when_it_asks_for_a_new_group(client: FlaskClient, app: Flask) -> None:
+    """``new_group`` is the caller saying it wants a column of its own, and ``_dock`` reads a ``within``
+    direction ahead of that flag -- so the unanchored default must not swallow the flag."""
+    client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
+    _register_client(app, "c1", "alpha")
+
+    assert _broadcast(client, "open", {"address": str(_TERMINAL_1)}).status_code == 200
+    split = _broadcast(client, "open", {"address": str(_FILES), "new_group": True})
+
+    assert split.status_code == 200
+    tree = split.get_json()["layout"]["tree"]
+    assert tree["type"] == "branch" and len(tree["children"]) == 2
 
 
 def test_an_op_lands_with_no_browser_connected_and_never_on_a_guessed_client(client: FlaskClient, app: Flask) -> None:

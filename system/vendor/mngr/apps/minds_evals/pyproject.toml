@@ -24,6 +24,13 @@ dependencies = [
     # litellm's map by litellm_pricing_test -- the four flat buckets only, not
     # the fast-mode or 1-hour-cache dimensions that map also carries.
     "imbue-mngr-usage",
+    # The flow lab drives the box-side UI-flow step script against a local
+    # Chromium, which playwright installs and locates. The box runs the copy the
+    # monorepo venv resolves (apps/minds depends on it), and a flow's page state
+    # is playwright's aria snapshot of a playwright-installed Chromium, so the lab
+    # only reproduces the box if the two are the same release. Pinned to the root
+    # lock's version; playwright_pin_test.py keeps them equal.
+    "playwright==1.59.0",
 ]
 
 [project.scripts]
@@ -104,6 +111,12 @@ timeout_func_only = true
 junit_family = "xunit1"
 testpaths = ["."]
 addopts = [
+  # Release tests are not part of any run of this project's suite: `just
+  # test-minds-evals` is the only runner it has, and it is what CI invokes, so
+  # without this the mark would mean nothing and a release test would spend live
+  # credentials on every PR. pytest takes the LAST -m it is given and addopts come
+  # first, so `just test-minds-evals "<path> -m release"` still runs one.
+  "-m", "not release",
   "--cov=imbue.minds_evals",
   "--cov-report=term-missing",
   "--cov-report=xml",

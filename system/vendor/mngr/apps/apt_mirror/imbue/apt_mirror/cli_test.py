@@ -16,6 +16,8 @@ from imbue.apt_mirror.testing import FOO_PACKAGES_TEXT
 from imbue.apt_mirror.testing import compress_packages_index
 from imbue.apt_mirror.testing import wire_canned_suite
 
+_DOCKER_LIVE = "https://download.docker.com/linux/debian"
+
 TIMESTAMP = "20260725T000000Z"
 _SNAPSHOT_DEBIAN = f"https://snapshot.debian.org/archive/debian/{TIMESTAMP}"
 _SNAPSHOT_SECURITY = f"https://snapshot.debian.org/archive/debian-security/{TIMESTAMP}"
@@ -30,6 +32,7 @@ def _service_with_canned_archives(packages_text: str) -> tuple[AptMirrorService,
     for base, suites in ((_SNAPSHOT_DEBIAN, ("trixie", "trixie-updates")), (_SNAPSHOT_SECURITY, ("trixie-security",))):
         for suite in suites:
             wire_canned_suite(fetcher, base, suite, {"amd64": packages_xz, "arm64": empty_xz})
+    wire_canned_suite(fetcher, _DOCKER_LIVE, "trixie", {"amd64": empty_xz, "arm64": empty_xz}, component="stable")
     return AptMirrorService(storage=storage, fetcher=fetcher), storage
 
 
@@ -56,9 +59,13 @@ def test_committed_current_timestamp_parses() -> None:
 
 
 def test_committed_package_lists_parse_and_are_nonempty() -> None:
-    names = read_package_lists(sorted(PACKAGE_LISTS_DIR.glob("*.txt")))
-    assert len(names) > 20
-    assert "git" in names
+    specs = read_package_lists(sorted(PACKAGE_LISTS_DIR.glob("*.txt")))
+    assert len(specs) > 20
+    spec_by_name = {spec.name: spec for spec in specs}
+    assert spec_by_name["git"].version is None
+    # The docker list pins the engine to the exact version the guest images install.
+    assert spec_by_name["docker-ce"].version is not None
+    assert spec_by_name["docker-ce"].version.endswith("~debian.13~trixie")
 
 
 def test_cut_writes_timestamp_file_and_reports_counts(tmp_path: Path) -> None:

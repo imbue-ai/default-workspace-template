@@ -30,6 +30,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.base_agent import BaseAgent
+from imbue.mngr.agents.base_agent import build_stderr_tee_redirect
 from imbue.mngr.agents.base_agent import quote_agent_args
 from imbue.mngr.agents.common_transcript import maybe_provision_common_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
@@ -79,6 +80,7 @@ from imbue.mngr.interfaces.agent import AgentInterface
 from imbue.mngr.interfaces.agent import CliBackedAgentMixin
 from imbue.mngr.interfaces.agent import HasAutoInstallMixin
 from imbue.mngr.interfaces.agent import HasCommonTranscriptMixin
+from imbue.mngr.interfaces.agent import HasCompactionMixin
 from imbue.mngr.interfaces.agent import HasSessionAdoptionMixin
 from imbue.mngr.interfaces.agent import HasSessionPreservationMixin
 from imbue.mngr.interfaces.agent import HasUnattendedModeMixin
@@ -136,6 +138,10 @@ from imbue.mngr_claude.claude_config import is_source_directory_trusted
 from imbue.mngr_claude.claude_config import read_claude_config
 from imbue.mngr_claude.claude_config import remove_claude_trust_for_path
 from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
+from imbue.mngr_claude.compaction import CLAUDE_DEFAULT_CACHE_TTL_MINUTES
+from imbue.mngr_claude.compaction import get_agent_context_tokens
+from imbue.mngr_claude.compaction import get_agent_idle_since
+from imbue.mngr_claude.compaction import record_agent_compacted
 from imbue.mngr_claude.dialogs import DialogBlocked
 from imbue.mngr_claude.dialogs import INPUT_PROMPT_GLYPH
 from imbue.mngr_claude.dialogs import Unrecognized
@@ -619,6 +625,11 @@ an mngr agent rather than in the user's persistent ~/.claude/ directory.
 # project's settings.local.json. See ``get_managed_settings_path``.
 _MANAGED_SETTINGS_SHELL_PATH: Final[str] = f"$MNGR_AGENT_STATE_DIR/{'/'.join(MANAGED_SETTINGS_RELATIVE_PATH)}"
 MANAGED_SETTINGS_LAUNCH_ARG: Final[str] = f'--settings "{_MANAGED_SETTINGS_SHELL_PATH}"'
+
+# Where a claude harness's stderr is captured, in the agent's state dir -- shared by
+# the interactive launch below and the headless agent. The bug-report collector picks
+# up any ``*.log`` there, so the name only has to end in ``.log``.
+STDERR_LOG_NAME: Final[str] = "stderr.log"
 
 # Where claude itself looks for output styles, relative to the work_dir. mngr validates
 # `output_style` against this exact path -- the one claude will read -- so a name that
@@ -2353,6 +2364,7 @@ class ClaudeAgent(
     InteractiveTuiAgent[ClaudeAgentConfig],
     SupportsLiveOutputMixin,
     HasSessionAdoptionMixin,
+    HasCompactionMixin,
 ):
     """Interactive (TUI-driven) Claude agent.
 
@@ -2781,6 +2793,30 @@ class ClaudeAgent(
                 "This may indicate a trust dialog appeared or Claude Code failed to start.",
             )
 
+    # --- HasCompactionMixin capability implementation ---
+
+    def request_compaction(self, instructions: str | None = None) -> None:
+        """Perform context compaction by sending /compact to Claude Code.
+
+        If ``instructions`` is provided, it is appended to the ``/compact`` command
+        (e.g. ``/compact <instructions>``).
+        """
+        command = f"/compact {instructions.strip()}" if instructions and instructions.strip() else "/compact"
+        self.send_message(command)
+        record_agent_compacted(self)
+
+    def get_cache_ttl_minutes(self) -> int | None:
+        """Return Claude Code's prompt cache TTL (60 minutes)."""
+        return CLAUDE_DEFAULT_CACHE_TTL_MINUTES
+
+    def get_context_tokens(self) -> int | None:
+        """Extract prompt context token count from Claude's transcript."""
+        return get_agent_context_tokens(self)
+
+    def get_idle_since(self) -> datetime | None:
+        """Return the datetime when the Claude agent entered idle state, or None."""
+        return get_agent_idle_since(self)
+
     def _build_background_tasks_command(self, session_name: str, primary_window_name: str) -> str:
         """Build a shell command that starts the background tasks script.
 
@@ -2955,10 +2991,22 @@ class ClaudeAgent(
         # shell itself, so the branch's own command (claude, or a custom base
         # like a command agent's `sleep infinity`) stays the
         # foreground command, exactly like the pre-chain launch command.
+        # Copy the harness's stderr into the agent's state dir (while keeping it on the
+        # pane): claude runs under tmux rather than supervisord, so a startup error or
+        # crash reaches none of the workspace's service logs and a bug report has no other
+        # way to see it. Claude renders its TUI on stdout, which is untouched.
+        #
+        # The redirect wraps the whole fallback chain rather than each branch, so a branch
+        # that fails does not have its own stderr truncated by the branch that follows it
+        # -- that output is exactly why the fallback happened. An outer brace group (not a
+        # subshell) for the same reason the inner ones are braces: it does not fork, so the
+        # launched claude stays the pane's foreground command.
+        stderr_redirect = build_stderr_tee_redirect(f'"$MNGR_AGENT_STATE_DIR/{STDERR_LOG_NAME}"')
         return CommandString(
             f"{background_cmd} {env_exports}"
             f" && rm -rf $MNGR_AGENT_STATE_DIR/session_started $MNGR_AGENT_STATE_DIR/claude_main_pid"
-            f" && {{ {resume_cmd} ; }} || {{ {resume_uuid_cmd} ; }} || {{ {create_cmd} ; }}"
+            f" && {{ {{ {resume_cmd} ; }} || {{ {resume_uuid_cmd} ; }} || {{ {create_cmd} ; }} ; }}"
+            f" {stderr_redirect}"
         )
 
     def on_before_provisioning(

@@ -5,6 +5,7 @@ Every test passes an explicit `home` so nothing touches the real `~/.minds`.
 
 import json
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,6 @@ from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import REAUTH_BACKUP_DIRNAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import accounts_root
-from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import clear_reauth_backup
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
@@ -24,11 +24,14 @@ from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import reconcile
+from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.accounts import rename_account
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import save_reauth_backup
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
+from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.testing import read_create_defaults_type
 from imbue.imbue_common.model_update import to_update
 
 
@@ -304,28 +307,6 @@ def test_the_lock_file_is_not_mistaken_for_an_account(tmp_path: Path) -> None:
     assert (accounts_root(tmp_path) / "index.lock").exists()
 
 
-def test_the_first_chat_is_claimed_exactly_once(tmp_path: Path) -> None:
-    """It is what stacks the `first` template, and therefore what delivers `/welcome`.
-
-    Claimed on demand rather than at boot, because a chat needs a provider account and a fresh
-    workspace has none until someone signs in.
-    """
-    assert claim_first_chat(tmp_path) is True
-    assert claim_first_chat(tmp_path) is False
-    assert claim_first_chat(tmp_path) is False
-
-
-def test_the_first_chat_marker_survives_deleting_every_account(tmp_path: Path) -> None:
-    """Signing out of everything does not make the next chat a first chat again -- the user
-    has already been welcomed, and being welcomed twice reads as the workspace forgetting."""
-    account_id, _ = mint_account_dir(tmp_path)
-    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    assert claim_first_chat(tmp_path) is True
-    delete_account(account_id, tmp_path)
-
-    assert claim_first_chat(tmp_path) is False
-
-
 def test_a_rename_changes_the_name_and_nothing_else(tmp_path: Path) -> None:
     """A rename is display only. If it touched the folder, the lane or the seq, it could
     strand a chat -- so this asserts on the whole row, not just the field that moved."""
@@ -528,3 +509,86 @@ def test_an_index_from_the_previous_version_reads_and_is_rewritten_at_the_curren
     rewritten = json.loads(index_path(tmp_path).read_text())
     assert rewritten["version"] == INDEX_VERSION
     assert rewritten["default_account"] == account.id
+
+
+# --- The workspace's create defaults, derived from the index ---
+
+
+def _written_type() -> str | None:
+    return read_create_defaults_type(create_defaults_path())
+
+
+def _written_create_section() -> dict[str, object]:
+    return tomllib.loads(create_defaults_path().read_text())["commands"]["create"]
+
+
+def test_committing_an_account_writes_the_create_defaults_for_it(tmp_path: Path) -> None:
+    """Every index write rewrites the file, so signing in is enough for the next unqualified create."""
+    assert _written_type() is None
+
+    account = _add(tmp_path, "anthropic", "Anthropic")
+
+    section = _written_create_section()
+    assert section["type"] == "claude"
+    assert section["label__extend"] == [f"account={account.id}"]
+    assert section["env__extend"] == [f"CLAUDE_CONFIG_DIR={account_dir(account.id, tmp_path)}"]
+
+
+def test_the_create_defaults_follow_the_pin_then_the_mru_then_the_oldest(tmp_path: Path) -> None:
+    """The same rule the picker shows and `resolve_binding` applies; a disagreement means an
+    app-launched chat and a New Tab chat start seconds apart on different providers."""
+    oldest = _add(tmp_path, "anthropic", "Anthropic")
+    recent = _add(tmp_path, "openai", "OpenAI")
+    assert _written_type() == "codex"
+
+    set_mru(oldest.id, tmp_path)
+    assert _written_type() == "claude"
+
+    set_default_account(recent.id, True, tmp_path)
+    assert _written_type() == "codex"
+    set_mru(oldest.id, tmp_path)
+    assert _written_type() == "codex"
+
+    set_default_account(recent.id, False, tmp_path)
+    assert _written_type() == "claude"
+
+
+def test_a_pinned_account_on_a_lane_this_build_lacks_is_skipped_for_the_defaults(tmp_path: Path) -> None:
+    stale = _add(tmp_path, "a-lane-from-the-future", "Mystery")
+    usable = _add(tmp_path, "google", "Google")
+    set_default_account(stale.id, True, tmp_path)
+
+    assert _written_type() == "antigravity"
+    assert _written_create_section()["label__extend"] == [f"account={usable.id}"]
+
+
+def test_deleting_the_last_usable_account_removes_the_create_defaults(tmp_path: Path) -> None:
+    """A stale file would bind the next create to a folder that is gone, which fails without saying signed-out."""
+    account = _add(tmp_path, "anthropic", "Anthropic")
+    assert create_defaults_path().exists()
+
+    delete_account(account.id, tmp_path)
+
+    assert not create_defaults_path().exists()
+
+
+def test_the_boot_sweep_regenerates_the_create_defaults_from_what_survives(tmp_path: Path) -> None:
+    kept = _add(tmp_path, "openai", "OpenAI")
+    gone = _add(tmp_path, "anthropic", "Anthropic")
+    assert _written_type() == "claude"
+    shutil.rmtree(account_dir(gone.id, tmp_path))
+
+    reconcile(tmp_path)
+
+    assert _written_type() == "codex"
+    assert _written_create_section()["label__extend"] == [f"account={kept.id}"]
+
+
+def test_regenerating_writes_the_file_for_an_index_that_predates_it(tmp_path: Path) -> None:
+    """A workspace updated onto this build has accounts but no file; boot's regeneration is what reaches it."""
+    account = _add(tmp_path, "anthropic", "Anthropic")
+    create_defaults_path().unlink()
+
+    regenerate_create_defaults(tmp_path)
+
+    assert _written_create_section()["label__extend"] == [f"account={account.id}"]

@@ -21,6 +21,7 @@ from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
 from imbue.chat.harnesses.codex.live_user_turns import note_live_user_turn
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
+from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.model import read_model_identity
@@ -502,3 +503,35 @@ def test_get_event_detail_serves_the_full_tool_payloads(tmp_path: Path) -> None:
     result_detail = watcher.get_event_detail(result["event_id"])
     assert result_detail is not None
     assert result_detail["output"] == "y" * 6000
+
+
+def test_a_loader_reads_the_rollout_without_watching_or_touching_the_model_bar(tmp_path: Path) -> None:
+    """An archived codex agent's segment reads through the loader: the same events as the watcher,
+    each naming its agent, and no write to the model-bar state file even when the rollout names
+    the model the turns ran on (an archived agent has no bar to update)."""
+    _write_rollout(
+        tmp_path,
+        [
+            {"timestamp": "2026-08-03T00:00:00Z", "type": "turn_context", "payload": {"model": "gpt-5.2-codex"}},
+            _user_line("first", "2026-08-03T00:00:01Z"),
+            _user_line("second", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    agent_info = AgentInfo(
+        id="agent-archived",
+        name="archived",
+        state="STOPPED",
+        agent_state_dir=tmp_path,
+        claude_config_dir=tmp_path / "unused",
+        harness=HarnessType.CODEX,
+    )
+    loader = CodexTranscriptLoader.build_loader(agent_info)
+
+    events = loader.get_all_events()
+    assert [event["content"] for event in events] == ["first", "second"]
+    assert {event["agent_id"] for event in events} == {"agent-archived"}
+    assert not model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH).exists()
+    # The watcher over the same rollout reads the same events, and it is the one that writes the bar.
+    watcher, _broadcast = _build_watcher(tmp_path)
+    assert [event["event_id"] for event in watcher.get_all_events()] == [event["event_id"] for event in events]
+    assert model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH).exists()

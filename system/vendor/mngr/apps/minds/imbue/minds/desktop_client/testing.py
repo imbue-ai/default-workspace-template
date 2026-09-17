@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import re
+import stat
 import subprocess
 import threading
 import uuid
@@ -33,6 +34,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.event_utils import ReadOnlyEvent
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
@@ -68,6 +70,8 @@ from imbue.minds.desktop_client.restic_cli import _get_restic_binary
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_BEGIN_SENTINEL
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_END_SENTINEL
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_EXIT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_ABSENT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_PRESENT_SENTINEL
 from imbue.minds.desktop_client.skill_chat import NO_ACCOUNT_STORE_SENTINEL
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import set_state
@@ -391,6 +395,29 @@ def capture_error_logs() -> Iterator[list[str]]:
         yield records
     finally:
         loguru_logger.remove(sink_id)
+
+
+def write_dead_destroy_marker(
+    paths: InstallationPaths, agent_id: AgentId, host_id: HostId, exit_code: int | None = None
+) -> None:
+    """Create a destroying/<agent_id>/ dir whose wrapper pid is already dead.
+
+    Spawns and reaps a trivial child so its pid is reliably not alive, then
+    writes a legacy-shaped destroy marker (pid, host_id, log -- no ``provider``
+    file, which ``start_destroy`` also writes when discovery knows the owning
+    provider), so status reads take the legacy absence-equals-gone path.
+    ``exit_code`` is written the way the detached wrapper records it; None
+    leaves it absent, as for a marker from before it was recorded.
+    """
+    dir_path = paths.data_dir / "destroying" / str(agent_id)
+    dir_path.mkdir(parents=True)
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    (dir_path / "pid").write_text(f"{proc.pid}\n")
+    (dir_path / "host_id").write_text(f"{host_id}\n")
+    (dir_path / "output.log").write_text("done\n")
+    if exit_code is not None:
+        (dir_path / "exit_code").write_text(f"{exit_code}\n")
 
 
 def drain_ui_channel_frames(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
@@ -905,14 +932,22 @@ def account_binding_probe_stdout(*, account_dir: str | None = SIGNED_IN_ACCOUNT_
     )
 
 
-def ready_machine_probe_stdout(skill_probe_stdout: str, *, account_dir: str | None = SIGNED_IN_ACCOUNT_DIR) -> str:
+def ready_machine_probe_stdout(
+    skill_probe_stdout: str,
+    *,
+    account_dir: str | None = SIGNED_IN_ACCOUNT_DIR,
+    is_local_settings_present: bool = False,
+) -> str:
     """The one answer a machine ready to host a skill chat gives, whichever pre-spawn probe asks.
 
-    ``RecordingMngrCaller`` answers every call alike, so this carries the skill sentinel and
-    the account probe's fenced binding together. ``account_dir`` keeps
-    ``account_binding_probe_stdout``'s three-way contract.
+    ``RecordingMngrCaller`` answers every call alike, so this carries the skill sentinel,
+    the local-settings sentinel, and the account probe's fenced binding together.
+    ``is_local_settings_present`` renders a workspace that writes its own create defaults
+    (the app then asks its resolver nothing); ``account_dir`` keeps
+    ``account_binding_probe_stdout``'s three-way contract for one that does not.
     """
-    return skill_probe_stdout + account_binding_probe_stdout(account_dir=account_dir)
+    local_settings = LOCAL_SETTINGS_PRESENT_SENTINEL if is_local_settings_present else LOCAL_SETTINGS_ABSENT_SENTINEL
+    return f"{skill_probe_stdout}{local_settings}\n" + account_binding_probe_stdout(account_dir=account_dir)
 
 
 def update_run_probe_stdout(*, run: str = "", agents: str | None = "") -> str:
@@ -1001,6 +1036,39 @@ def record_sleep_of(sleep_tracker: SleepTracker, clock: CatchUpClock, seconds: f
     sleep_tracker.record_heartbeat()
     clock.lag_seconds = 0.0
     sleep_tracker.record_heartbeat()
+
+
+FAKE_WORKSPACE_HOME: Final[str] = "/home/agent"
+
+
+def write_fake_mngr_pair_script(directory: Path, argv_record_path: Path) -> Path:
+    """A stand-in ``mngr`` for folder-sync tests: records its argv, then waits.
+
+    It answers the two commands a folder sync runs. ``mngr exec`` (which makes
+    the workspace side exist and reports the agent's home directory) prints the
+    success envelope carrying :data:`FAKE_WORKSPACE_HOME` and exits. ``mngr pair`` writes the arguments it was handed to
+    ``argv_record_path``, emits the ``pair_syncing`` event a real pairing emits
+    once unison is watching both replicas, and then blocks on ``signal.pause``
+    until it is signalled -- which is how a real ``mngr pair`` spends the sync.
+    Because ``FolderSyncManager.start`` waits for that event, the argv file is
+    always on disk by the time ``start`` returns.
+    """
+    script = directory / "fake-mngr"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import signal\n"
+        "import sys\n"
+        "if sys.argv[1] == 'exec':\n"
+        f"    print(json.dumps({{'results': [{{'stdout': {FAKE_WORKSPACE_HOME!r}, 'stderr': '', 'success': True}}]}}))\n"
+        "    sys.exit(0)\n"
+        f"open({str(argv_record_path)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        "sys.stdout.write(json.dumps({'event': 'pair_syncing'}) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "signal.pause()\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return script
 
 
 def _streamed_request(

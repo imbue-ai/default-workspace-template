@@ -1,0 +1,9 @@
+Every download a gen-2 box prep, guest-image bake, or operator onetun install makes now comes from imbue's artifact mirror instead of an upstream host (imbue-ai/mngr-internal#851):
+
+- New `slices/mirror_artifacts.py` manifest: the pinned Debian trixie cloud images (amd64 + arm64), gVisor `runsc`/shim + `.sha512` files, age, s5cmd, the uv release tarball, onetun for each operator platform, and the otel collector `.deb`s, each with its upstream URL, mirror location, and recorded digest. New `minds-admin artifacts {list, upload, verify}`: `upload` fetches each missing artifact, verifies it against the recorded digest and (where published) the upstream checksum file, and stores it on the mirror with the `APT_MIRROR_R2_*` credentials.
+
+- The gen-2 prep stages the guest image from the mirror and verifies its sha512 before customizing; installs age, s5cmd, and a pinned, version-converged uv (release tarball, no `astral.sh` install stream) from the mirror with digest checks; and its guest customization installs Docker from the mirror's frozen `docker` archive at the committed apt-mirror cut (`apps/apt_mirror/current-timestamp`, threaded through `server prep`/`setup`), writing Docker's signing key from the repo (`slices/docker_apt_signing_key.py`) and fetching gVisor from the mirror. A rendered gen-2 prep contains no upstream hostname (unit-tested); the customization hash now also covers the cut timestamp, so a bump re-stages the image on the next prep.
+
+- `server prep`/`setup` gain `--slice-base-image-sha512`, required alongside a gen-2 `--slice-base-image-url` override; `minds-admin wireguard install-onetun` downloads from the mirror only (no GitHub fallback). Gen-1 preps keep their lima and bookworm-docker downloads.
+
+- New release test (`slices/test_docker_mirror_release.py`): a trixie container downloads the pinned docker-ce-cli from the live mirror with the committed key. minds_admin now depends on the `apt-mirror` workspace package.

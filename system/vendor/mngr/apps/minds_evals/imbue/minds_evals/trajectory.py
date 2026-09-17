@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.data_types import SKILL_NAME_EXPRESSION
+from imbue.minds_evals.data_types import SkillInvocation
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
@@ -39,6 +41,43 @@ _WORKER_LAUNCH_PATTERN: Final[re.Pattern[str]] = re.compile(
 _LAUNCH_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name(?:=|\s+)(?P<name>\S+)")
 _LAUNCH_TASK_FILE_PATTERN: Final[re.Pattern[str]] = re.compile(r"--task-file(?:=|\s+)(?P<task_file>\S+)")
 _MNGR_CREATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bmngr\s+create\s+(?P<name>[^\s-]\S*)")
+# codex runs its shell from inside "code mode": one tool call carries a whole JavaScript program that
+# reaches the real tools as `tools.<fn>({...})`, so the command is a string literal inside that
+# program rather than an argument of the call. One program may batch several calls, and the shell
+# function is spelled two ways -- `tools.exec_command({cmd})` or `tools.shell_command({command})`,
+# depending on the codex version and whether its unified exec is on -- so both are read. The
+# surrounding program is arbitrary JavaScript rather than JSON, which is why the literal is read out
+# with a regex instead of being parsed -- the same approach the chat app's own codex tool labels take.
+# This parse is mirrored by the CODE_MODE_* patterns and commands_in in
+# templates/tests/verifier/render_judge_transcript.py, which recovers the same command text inside the
+# verifier container. The two cannot be shared: that file runs on stdlib and rewardkit alone, with no
+# imbue package. Keep the two in step.
+_CODE_MODE_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"tools\.([A-Za-z_]\w*)\s*\(")
+# Each shell function's own command key, followed by any of the three JavaScript string literal forms.
+# A call is read under its function's key only: the other key can appear inside the command text
+# itself (`python3 -c "print({'command': 'ls'})"`), and would match there. Each form consumes a
+# backslash escape as a unit, so a command containing an escaped quote is captured whole rather than
+# clipped there. A template literal keeps its `${...}` placeholders as written. The lookbehind keeps a
+# longer key that merely ends in `cmd` from matching.
+_CODE_MODE_COMMAND_PATTERN_BY_FUNCTION: Final[dict[str, re.Pattern[str]]] = {
+    function: re.compile(
+        r"(?<![\w$])[\"']?" + key + r"[\"']?\s*:\s*"
+        r"(?:\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\])*)`)"
+    )
+    for function, key in (("shell_command", "command"), ("exec_command", "cmd"))
+}
+# The JavaScript string escapes worth undoing in a captured command. An unknown escape keeps the
+# character after the backslash, which is harmless here and cannot raise the way a decode can.
+_JS_UNESCAPES: Final[dict[str, str]] = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "\\": "\\",
+    "/": "/",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+}
 # A `$NAME` or `${NAME}` anywhere in a value, and the `NAME=value` assignment earlier in the same
 # command that gives it its worth (the skill's snippet writes the name and the task-file path with
 # such a variable).
@@ -49,6 +88,18 @@ _SHELL_ASSIGNMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|[\s;&|])(?:export\s+)?(?P<variable>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s;&|]+)"
 )
 _SHELL_QUOTES: Final[str] = "'\""
+
+# claude's own skill tool, which names the skill in its arguments. Every other harness reads the
+# skill file itself, so the invocation shows up as a path to the skill's body in what the call runs
+# or opens: a shell command, the path a read tool is pointed at, or a codex code-mode program.
+_SKILL_TOOL_NAME: Final[str] = "Skill"
+_SKILL_FILE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"skills/(?P<name>{})/SKILL\.md".format(SKILL_NAME_EXPRESSION)
+)
+# Only these arguments are searched for that path, so a skill a call merely mentions -- in the
+# content it writes, in a note it records -- is not read as a reach for it. `prompt` is left out on
+# purpose too: a skill named in a delegation prompt is the worker's invocation, not the lead's.
+_SKILL_PATH_ARGUMENT_KEYS: Final[tuple[str, ...]] = ("command", "cmd", "_raw", "file_path", "path")
 
 
 # The `extra` tag every harness-written step carries, so a reader can tell the eval's own annotations
@@ -196,6 +247,13 @@ class EmbeddedWorker(FrozenModel):
 
     launch: WorkerLaunch = Field(description="The launch the worker answers to")
     document: dict[str, Any] = Field(description="The worker's ATIF document, as a JSON-shaped dict")
+    agent_id: str = Field(
+        description=(
+            "The mngr agent id the capture resolved, empty when it resolved none. Distinct from the "
+            "document's trajectory_id, which falls back to a launch-derived stand-in so an "
+            "unidentified worker's evidence is still embedded."
+        )
+    )
     state: WorkerState = Field(description="The worker's state at collection time")
     report_path: str = Field(description="Bundle-relative path of the captured reports directory, or empty")
 
@@ -362,12 +420,72 @@ def _launched_worker(command: str) -> tuple[str, str] | None:
 
 
 @pure
+def _unescaped_js_string(value: str) -> str:
+    """A captured JavaScript string literal with its escapes undone."""
+    if "\\" not in value:
+        return value
+    characters: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value):
+            characters.append(_JS_UNESCAPES.get(value[index + 1], value[index + 1]))
+            index += 2
+        else:
+            characters.append(value[index])
+            index += 1
+    return "".join(characters)
+
+
+@pure
+def _code_mode_commands(program: str) -> list[str]:
+    """Every shell command a code-mode program runs, in the order the program runs them.
+
+    Each call's arguments are read from the slice between its own ``tools.`` and the next one, so a
+    program that batches a shell call behind another tool's call reads the command belonging to the
+    shell call rather than the first command literal anywhere in the text.
+    """
+    calls = list(_CODE_MODE_CALL_PATTERN.finditer(program))
+    commands: list[str] = []
+    for index, call in enumerate(calls):
+        pattern = _CODE_MODE_COMMAND_PATTERN_BY_FUNCTION.get(call.group(1))
+        if pattern is None:
+            continue
+        end = calls[index + 1].start() if index + 1 < len(calls) else len(program)
+        match = pattern.search(program[call.end() : end])
+        if match is not None:
+            commands.append(_unescaped_js_string(next(group for group in match.groups() if group is not None)))
+    return commands
+
+
+@pure
+def _shell_commands_in_call(tool_call: Mapping[str, Any]) -> list[str]:
+    """The shell commands one tool call runs, whichever shape its harness uses.
+
+    claude and pi-coding pass the command as an argument of the call; codex passes a code-mode
+    program under ``_raw`` and runs the shell from inside it.
+    """
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return []
+    for key in ("command", "cmd"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return [value]
+    program = arguments.get("_raw")
+    return _code_mode_commands(program) if isinstance(program, str) else []
+
+
+@pure
 def scan_worker_launches(steps: Sequence[Mapping[str, Any]], depth: int, lead_name: str) -> list[WorkerLaunch]:
     """The workers an agent's steps launched, in launch order, one per name.
 
     Reads either a captured stream's ``step`` records or a document's ``steps``: both carry the
     agent's tool calls with their complete ``arguments``. A name launched twice yields one entry, for
     its first launch, since one agent answers to the name at collection time.
+
+    One call can launch several workers, because a codex code-mode program batches several shell
+    calls into one tool call. They all take that call's id, which is what the embedding step attaches
+    them by, and it holds a list of refs per result for exactly that reason.
     """
     launches: list[WorkerLaunch] = []
     seen_names: set[str] = set()
@@ -377,24 +495,102 @@ def scan_worker_launches(steps: Sequence[Mapping[str, Any]], depth: int, lead_na
         for tool_call in step.get("tool_calls") or []:
             if not isinstance(tool_call, Mapping):
                 continue
-            arguments = tool_call.get("arguments")
-            command = arguments.get("command") if isinstance(arguments, Mapping) else None
-            if not isinstance(command, str):
-                continue
-            launched = _launched_worker(command)
-            if launched is None or launched[0] in seen_names:
-                continue
-            seen_names.add(launched[0])
-            launches.append(
-                WorkerLaunch(
-                    name=launched[0],
-                    tool_call_id=str(tool_call.get("tool_call_id") or ""),
-                    task_file=launched[1],
-                    depth=depth,
-                    lead_name=lead_name,
+            for command in _shell_commands_in_call(tool_call):
+                launched = _launched_worker(command)
+                if launched is None or launched[0] in seen_names:
+                    continue
+                seen_names.add(launched[0])
+                launches.append(
+                    WorkerLaunch(
+                        name=launched[0],
+                        tool_call_id=str(tool_call.get("tool_call_id") or ""),
+                        task_file=launched[1],
+                        depth=depth,
+                        lead_name=lead_name,
+                    )
                 )
-            )
     return launches
+
+
+@pure
+def _skills_invoked_by_call(tool_call: Mapping[str, Any]) -> list[str]:
+    """The skills one tool call invokes, in the order the call names them, each once.
+
+    claude invokes a skill through its `Skill` tool, which names it outright. The other harnesses
+    have no such tool: the agent reads the skill's own file, so the invocation is a path to that
+    file in what the call runs or opens (`_SKILL_PATH_ARGUMENT_KEYS`).
+    """
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return []
+    if str(tool_call.get("function_name") or "") == _SKILL_TOOL_NAME:
+        named = str(arguments.get("skill") or "").strip()
+        if named:
+            return [named]
+    found = (
+        match.group("name")
+        for key in _SKILL_PATH_ARGUMENT_KEYS
+        if isinstance(value := arguments.get(key), str)
+        for match in _SKILL_FILE_PATTERN.finditer(value)
+    )
+    return list(dict.fromkeys(found))
+
+
+@pure
+def _errored_call_ids(records: Sequence[Mapping[str, Any]]) -> frozenset[str]:
+    """The tool calls whose result came back an error, in whichever shape the record carries it: a
+    captured stream writes observations as records of their own, a built document nests them under
+    the step that made the call. A result with no call id names no call, so it is left out."""
+    errored: set[str] = set()
+    for record in records:
+        observation = record.get("observation")
+        nested = observation.get("results") if isinstance(observation, Mapping) else None
+        for result in record.get("results") or nested or []:
+            if not isinstance(result, Mapping):
+                continue
+            extra = result.get("extra")
+            call_id = str(result.get("source_call_id") or "")
+            if call_id and isinstance(extra, Mapping) and extra.get("is_error"):
+                errored.add(call_id)
+    return frozenset(errored)
+
+
+@pure
+def scan_skill_invocations(steps: Sequence[Mapping[str, Any]]) -> tuple[SkillInvocation, ...]:
+    """Every skill an agent's steps invoked, in invocation order.
+
+    Reads either a captured stream's ``step`` records or a document's ``steps``, the way
+    ``scan_worker_launches`` does. Repeats are kept: a case that asks what the agent reached for
+    wants each reach, and a reader of the manifest entry sees where each one happened.
+
+    A call whose result came back an error invoked nothing, and is left out: a `Skill` call answered
+    `Unknown skill` never ran the skill (an unresolved plugin, which `harness_quality` counts as a
+    broken workspace), and a command that failed never opened the file. Counting those would score a
+    broken workspace as an agent that worked as asked, and charge an agent for a forbidden skill it
+    never got. The veto is per call, not per command, because a result names the call alone -- so a
+    call that ran several commands (a compound shell line, a codex program) loses every skill it
+    named as soon as any part of it fails, and a required skill really invoked there reads as never
+    invoked. Erring the other way is worse: it is the broken-workspace reading above.
+    """
+    errored_call_ids = _errored_call_ids(steps)
+    invocations: list[SkillInvocation] = []
+    for step in steps:
+        if step.get("source") != "agent":
+            continue
+        for tool_call in step.get("tool_calls") or []:
+            if not isinstance(tool_call, Mapping):
+                continue
+            if str(tool_call.get("tool_call_id") or "") in errored_call_ids:
+                continue
+            invocations.extend(
+                SkillInvocation(
+                    name=name,
+                    tool_call_id=str(tool_call.get("tool_call_id") or ""),
+                    step_id=str(step.get("step_id") or ""),
+                )
+                for name in _skills_invoked_by_call(tool_call)
+            )
+    return tuple(invocations)
 
 
 @pure
@@ -472,7 +668,7 @@ def graft_worker_trajectories(document: Mapping[str, Any], workers: Sequence[Emb
                     "subagent_kind": MNGR_SUBAGENT_KIND,
                     "worker": {
                         "name": worker.launch.name,
-                        "agent_id": worker_id,
+                        "agent_id": worker.agent_id,
                         "state": worker.state.value,
                         "lead_agent_id": document.get("session_id"),
                         "launch_tool_call_id": worker.launch.tool_call_id,

@@ -1,8 +1,16 @@
-// Settings: master-password management (change, clear) and the
-// remember-on-this-device toggle's escape hatch (forget the local key).
+// Settings: master-password management (change, clear), the
+// remember-on-this-device toggle's escape hatch (forget the local key), and
+// the release channel new workspaces are created from.
 
 import m from "mithril";
 import { fetchKeyBundle } from "../api";
+import {
+  WEB_CHANNELS,
+  type WebChannel,
+  normalizeWebChannel,
+  readWebChannel,
+  writeWebChannel,
+} from "../channel";
 import { WrongPasswordOrCorruptDataError } from "../crypto/secretbox";
 import {
   changePassword,
@@ -77,6 +85,13 @@ export function SettingsView(): m.Component {
     await refreshGate();
   }
 
+  let channel: WebChannel = readWebChannel();
+
+  function selectChannel(value: string): void {
+    channel = normalizeWebChannel(value);
+    writeWebChannel(channel);
+  }
+
   return {
     view() {
       return m(
@@ -131,6 +146,32 @@ export function SettingsView(): m.Component {
               onclick: () => void submitForget(),
             },
             "Lock now (forget the key on this device)",
+          ),
+        ),
+        m(
+          "section",
+          { class: "space-y-3" },
+          m("h2", { class: "font-medium" }, "Release channel"),
+          m(
+            "p",
+            { class: "text-sm text-slate-500" },
+            "Which template release new workspaces created from this browser start on. " +
+              "Stable is what everyone gets; alpha and beta pick up new releases sooner. " +
+              "Existing workspaces are not affected.",
+          ),
+          m(
+            "select",
+            {
+              class:
+                "rounded border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2",
+              value: channel,
+              onchange(event: Event) {
+                selectChannel((event.target as HTMLSelectElement).value);
+              },
+            },
+            WEB_CHANNELS.map((name) =>
+              m("option", { value: name, selected: name === channel }, name),
+            ),
           ),
         ),
         m(

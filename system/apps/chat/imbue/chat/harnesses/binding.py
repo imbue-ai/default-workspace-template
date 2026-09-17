@@ -1,14 +1,8 @@
 """Binding an agent to an account, and running a CLI scoped to one.
 
-"Which account" is one environment variable per harness. That is the whole mechanism:
-
-    claude   CLAUDE_CONFIG_DIR
-    codex    CODEX_HOME
-    agy      HOME               (it has no config-dir override -- the home IS the scope)
-    pi       PI_CODING_AGENT_DIR
-
-mngr already sets all four per-agent; today it points them at one shared credential file so
-every agent shares a login. Binding changes what they point at, and nothing else.
+"Which account" is one environment variable per harness (see `account_scope`). mngr already
+sets all four per-agent; today it points them at one shared credential file so every agent
+shares a login. Binding changes what they point at, and nothing else.
 
 The binding has to happen INSIDE `mngr create`, not after it. `mngr create` writes the agent
 env file, provisions, starts the agent, waits for readiness -- destroying the agent if that
@@ -22,40 +16,34 @@ land at the right moments:
 So claude binds through the env file (its launch command carries no inline `env`, so the
 sourced value wins), and the other three bind by replacing the credential symlink that
 provisioning just created -- the same `ln -sfn` mngr itself used, one step later.
+
+A create that names no account gets the same binding from the workspace's own mngr config:
+the account store writes the default account's harness and binding into
+`.mngr/settings.local.toml` (see `create_defaults`), so the arguments here are what the
+chat app adds on top of that default when it binds a chat to a chosen account.
 """
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Final
 
-from loguru import logger as _loguru_logger
-
 from imbue.chat import accounts
 from imbue.chat.accounts import Account
+from imbue.chat.accounts import choose_default_account
+from imbue.chat.accounts import harness_for
+from imbue.chat.harnesses.account_scope import account_credential_path
+from imbue.chat.harnesses.account_scope import agent_credential_path
 from imbue.chat.harnesses.harness_type import HarnessType
-from imbue.chat.harnesses.lanes import LaneNotFoundError
-from imbue.chat.harnesses.lanes import get_lane
-from imbue.chat.harnesses.pi_coding.model import PI_CONFIG_DIR_RELPATH
-from imbue.mngr_antigravity.antigravity_config import get_antigravity_oauth_token_path
 from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
-from imbue.mngr_codex.codex_config import get_codex_auth_path
-from imbue.mngr_codex.codex_config import get_codex_home
-
-logger = _loguru_logger
 
 
 class BindingError(RuntimeError):
     """An agent could not be bound to an account."""
 
-
-# Kept in sync with `_AGY_HOME_RELATIVE_PATH` in mngr_antigravity's plugin.py, which is
-# private there. agy relocates the whole HOME rather than exposing a config-dir override.
-_AGY_HOME_RELATIVE_PATH: Final[tuple[str, ...]] = ("plugin", "antigravity", "home")
-
-_AUTH_FILENAME: Final = "auth.json"
 
 # codex keys its secret by a hash of the canonical CODEX_HOME unless the credential store is
 # pinned to `file`. Without this pin a sign-in against an account dir can land in an OS
@@ -64,50 +52,6 @@ _AUTH_FILENAME: Final = "auth.json"
 # downstream notices. `file` is codex's current default, but `auto` exists and prefers a
 # keyring when one is present, so it is pinned explicitly.
 _CODEX_CONFIG_TOML: Final = 'cli_auth_credentials_store = "file"\n'
-
-
-def account_env(harness: HarnessType, account_dir: Path) -> dict[str, str]:
-    """The environment that scopes a CLI to one account.
-
-    Only the scoping variable -- callers layer this over `os.environ` themselves, because
-    both `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and
-    a child without `PATH` never starts.
-    """
-    if harness is HarnessType.CLAUDE:
-        return {"CLAUDE_CONFIG_DIR": str(account_dir)}
-    if harness is HarnessType.CODEX:
-        return {"CODEX_HOME": str(account_dir)}
-    if harness is HarnessType.ANTIGRAVITY:
-        return {"HOME": str(account_dir)}
-    if harness is HarnessType.PI_CODING:
-        return {"PI_CODING_AGENT_DIR": str(account_dir)}
-    raise BindingError(f"{harness} has no account scoping")
-
-
-def account_credential_path(harness: HarnessType, account_dir: Path) -> Path | None:
-    """Where the credential lives inside an account folder, for the harnesses that link it.
-
-    None for claude: its credential is the `env` block of the account's settings.json plus
-    whatever the CLI writes beside it, and it binds by environment rather than by symlink.
-    """
-    if harness is HarnessType.CODEX:
-        return get_codex_auth_path(account_dir)
-    if harness is HarnessType.ANTIGRAVITY:
-        return get_antigravity_oauth_token_path(account_dir)
-    if harness is HarnessType.PI_CODING:
-        return account_dir / _AUTH_FILENAME
-    return None
-
-
-def agent_credential_path(harness: HarnessType, agent_state_dir: Path) -> Path | None:
-    """The per-agent path provisioning writes, and that binding then repoints."""
-    if harness is HarnessType.CODEX:
-        return get_codex_auth_path(get_codex_home(agent_state_dir))
-    if harness is HarnessType.ANTIGRAVITY:
-        return get_antigravity_oauth_token_path(agent_state_dir.joinpath(*_AGY_HOME_RELATIVE_PATH))
-    if harness is HarnessType.PI_CODING:
-        return agent_state_dir / PI_CONFIG_DIR_RELPATH / _AUTH_FILENAME
-    return None
 
 
 def seed_account(harness: HarnessType, account_dir: Path, work_dir: Path) -> None:
@@ -169,7 +113,8 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     An explicit id wins; otherwise the account the user pinned as the default; otherwise the
     most recently used account, which is bumped on every launch -- so signing in and then
     starting a chat "just works" without the caller having to name what it just created,
-    while a pinned default keeps every unnamed launch on the harness the user chose.
+    while a pinned default keeps every unnamed launch on the harness the user chose. That
+    rule is `accounts.choose_default_account`, shared with the workspace's create defaults.
 
     The account decides the harness (see `harness_for`), not the other way round: asking the
     caller for both invites a chat that names codex while running on an agy credential, and
@@ -187,18 +132,9 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
             raise BindingError(f"account {account_id} is on a lane this build does not have")
         return account
 
-    index = accounts.read_index(home)
-    usable = [a for a in index.accounts if harness_for(a) is not None]
-    if not usable:
+    chosen = choose_default_account(accounts.read_index(home))
+    if chosen is None:
         raise accounts.AccountError("no provider accounts exist yet")
-    # The pinned default, else the most recently used account, else the oldest -- which is
-    # the same rule the picker shows (`Providers.ts`, `getSelectedAccount`). It matters that
-    # the two agree: every launch without an explicit account lands here, and a disagreement
-    # means two chats started seconds apart run on different providers with nothing saying so.
-    # A pin on a lane this build lacks is skipped rather than refused: the user can still
-    # chat, and the picker shows the same fallback.
-    pinned = next((a for a in usable if a.id == index.default_account), None)
-    chosen = pinned if pinned is not None else next((a for a in usable if a.id == index.mru), usable[0])
     # Back through `resolve_account` for the folder check. The explicit-id path above has
     # always had it; this one did not, so a row whose folder had gone bound an agent to a
     # directory that is not there -- which surfaces as an empty model bar, not as an error.
@@ -210,10 +146,59 @@ def has_usable_account(home: Path | None = None) -> bool:
     return any(harness_for(account) is not None for account in accounts.read_index(home).accounts)
 
 
-def harness_for(account: Account) -> HarnessType | None:
-    """The harness an account's lane runs on, or None if this build no longer has that lane."""
-    try:
-        return get_lane(account.lane).harness
-    except LaneNotFoundError:
-        logger.warning("Account {} names unknown lane {}", account.id, account.lane)
-        return None
+# The harnesses a chat may change account on in place (a rebind, spec 6): every one with an
+# account scope. A same-harness target on a harness outside this set takes the handoff path,
+# which is the fallback the spec names for a harness that cannot resume under a swapped
+# credential; drop a harness here to route it that way.
+REBIND_VERIFIED_HARNESSES: Final[frozenset[HarnessType]] = frozenset(
+    {HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY}
+)
+
+# mngr's per-agent env file, sourced into the agent's tmux session on every start.
+AGENT_ENV_FILENAME: Final = "env"
+
+
+def is_rebind_supported(harness: HarnessType) -> bool:
+    return harness in REBIND_VERIFIED_HARNESSES
+
+
+def rebind_agent(harness: HarnessType, account_dir: Path, agent_state_dir: Path) -> None:
+    """Repoint an existing, stopped agent's binding at ``account_dir``: the rebind's edit (spec 6).
+
+    The same two mechanisms ``create_args`` uses, applied to the agent's own files: claude's
+    ``CLAUDE_CONFIG_DIR`` line in the env file mngr sources on the next start, and the
+    credential link in the state dir for the others. Idempotent, and each write lands whole
+    (a temp file or link renamed into place), so a resume that runs it again changes nothing.
+    Raises ``BindingError`` for a harness with nothing to repoint.
+    """
+    if harness is HarnessType.CLAUDE:
+        _rewrite_env_var(agent_state_dir / AGENT_ENV_FILENAME, "CLAUDE_CONFIG_DIR", str(account_dir))
+        return
+    source = account_credential_path(harness, account_dir)
+    dest = agent_credential_path(harness, agent_state_dir)
+    if source is None or dest is None:
+        raise BindingError(f"{harness} has no credential link to repoint")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _replace_symlink(source, dest)
+
+
+def _rewrite_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set one ``KEY=VALUE`` line in an env file mngr wrote, keeping every other line as it is."""
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    kept = [line for line in lines if not line.startswith(f"{key}=")]
+    # mngr's own quoting rule for the values it writes.
+    is_quoted = any(character in value for character in (" ", '"', "'", "\n"))
+    written = '"' + value.replace('"', '\\"') + '"' if is_quoted else value
+    temp_path = env_path.with_name(f"{env_path.name}.rebind-tmp")
+    temp_path.write_text("\n".join([*kept, f"{key}={written}"]) + "\n")
+    if env_path.exists():
+        temp_path.chmod(env_path.stat().st_mode & 0o777)
+    os.replace(temp_path, env_path)
+
+
+def _replace_symlink(source: Path, dest: Path) -> None:
+    """Point ``dest`` at ``source`` in one rename, whatever ``dest`` was before (a link, a copy, or nothing)."""
+    temp_path = dest.with_name(f"{dest.name}.rebind-tmp")
+    temp_path.unlink(missing_ok=True)
+    os.symlink(source, temp_path)
+    os.replace(temp_path, dest)

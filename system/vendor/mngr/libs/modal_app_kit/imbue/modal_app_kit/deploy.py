@@ -9,6 +9,7 @@ model and the reasons behind it.
 
 import os
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Final
 
 import modal
@@ -33,6 +34,14 @@ DEPLOY_ID_ENV_VAR: Final[str] = "MINDS_DEPLOY_ID"
 # ``minds-admin env deploy`` fails with "Secret not found" -- the safety property
 # the timestamped-secret rollback model needs.
 DEPLOY_ID_UNSET_SENTINEL: Final[str] = "MINDS_DEPLOY_ID_UNSET"
+
+# Where the containers behind our web endpoints run. Left unpinned, Modal
+# schedules them anywhere in its fleet -- in practice often Europe -- and every
+# desktop request (auth, lease, share, LLM streaming) pays that round trip.
+# Only the user-facing web functions carry the pin; crons and spawned workers
+# stay unpinned, since nobody waits on their latency and a pin costs a compute
+# multiplier. Modal's broad region groups are ``us`` / ``eu`` / ``ap``.
+WEB_FUNCTION_REGION: Final[str] = "us"
 
 
 def read_deploy_env() -> str:
@@ -75,6 +84,42 @@ def stamped_secret_name(service: str, tier: str, deploy_id: str) -> str:
 
 def stamped_secret(service: str, tier: str, deploy_id: str) -> modal.Secret:
     return modal.Secret.from_name(stamped_secret_name(service, tier, deploy_id))
+
+
+def forwarded_env_secret(env_var_names: Sequence[str]) -> modal.Secret:
+    """An inline Secret forwarding deploy-subprocess env vars into the container.
+
+    A deploy-time-only env var that influences a module-level *dependency
+    object* (the Modal Proxy attach) must evaluate identically at deploy time
+    and inside the container: a Proxy is a function dependency, and a
+    local/container dependency-list mismatch fails container startup outright.
+    Baking the values into an inline Secret makes the container's import-time
+    environment match the deploy's. Unset vars ride along as empty strings
+    (the readers' "absent" value).
+    """
+    return modal.Secret.from_dict({name: os.environ.get(name, "") for name in env_var_names})
+
+
+def read_modal_proxy(env_var: str, environment_env_var: str) -> modal.Proxy | None:
+    """The named Modal Proxy the app's functions egress through, or None for direct egress.
+
+    ``minds-admin env deploy`` threads the tier's proxy name (from its
+    ``deploy.toml`` ``[management_plane]`` table) into the deploy subprocess env; an empty or
+    unset value means the tier has no proxy and the functions egress from
+    Modal's dynamic IPs as before. The named Proxy must already exist in the
+    deploying Modal workspace or the deploy fails.
+
+    Proxy lookup is Modal-environment-scoped, and a workspace holds at most
+    one proxy -- so a tier whose apps deploy into per-env Modal environments
+    (dev) keeps its single shared proxy in one environment (``main``) and
+    threads that environment's name via ``environment_env_var``; an empty or
+    unset value resolves the proxy in the deploy's own environment.
+    """
+    proxy_name = os.environ.get(env_var, "").strip()
+    if not proxy_name:
+        return None
+    proxy_environment = os.environ.get(environment_env_var, "").strip()
+    return modal.Proxy.from_name(proxy_name, environment_name=proxy_environment or None)
 
 
 def deploy_metadata_entries(tier: str, deploy_id: str, deployer_environ: Mapping[str, str]) -> dict[str, str | None]:

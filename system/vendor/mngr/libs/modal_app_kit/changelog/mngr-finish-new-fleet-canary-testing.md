@@ -1,0 +1,3 @@
+`read_modal_proxy` now takes a second env-var name carrying the Modal environment to resolve the proxy in. Proxy lookup is environment-scoped (and a workspace holds at most one proxy), so tiers that deploy into per-env Modal environments can keep one shared proxy in a fixed environment (e.g. `main`) and still resolve it from every deploy.
+
+New `forwarded_env_secret` helper: bakes named deploy-subprocess env vars into an inline Modal Secret so they reach the container's import-time environment. Needed for the proxy attach, where a deploy-time-only env var influences a module-level dependency object and a local/container dependency-list mismatch fails container startup.

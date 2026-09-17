@@ -17,7 +17,16 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
+from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.auto_open import AutoOpenLedger
+from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
+from imbue.chat.auto_open import ShellLayoutClient
+from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
+from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import DEFAULT_SETTINGS_PATH
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -28,7 +37,7 @@ from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -84,28 +93,41 @@ def build_production_state(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
-) -> ChatState:
+) -> ChatAppState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
     app is assembled), so it spawns no ``mngr observe`` pipeline by itself.
-    Tests do not use this; they build a ``ChatState`` with fakes via
+    Tests do not use this; they build a ``ChatAppState`` with fakes via
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH))
+    chat_settings = ChatSettingsStore(path=DEFAULT_SETTINGS_PATH)
+    agent_manager = AgentManager.build(
+        broadcaster,
+        message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
+        # The tab of a chat the Mind app starts is opened through the shell, and which chats
+        # have had theirs is remembered beside the stamps so a restart never re-pops one.
+        auto_open=AutoOpenReactor(
+            ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
+        ),
+        # Which agents each chat has run on, for the chats that have had a handoff.
+        chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
+        chat_settings=chat_settings,
+    )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
-    # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
+    # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         config=config,
         provider_names=provider_names,
         include_filters=include_filters,
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
+        chat_settings=chat_settings,
         event_queues=event_queues,
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the agents
@@ -150,6 +172,10 @@ def _reconcile_account_store() -> None:
     an account that LOOKS usable and silently is not, which is worse. `reconcile` logs
     both, so a dropped row is visible rather than a mystery.
 
+    The workspace's `mngr create` defaults are then rewritten from the index, whether or not
+    the sweep changed it: a workspace updated onto this build has accounts that no file yet
+    names, and this is the one write that reaches them.
+
     Never fatal. supervisord restarts this program a million times, so an unreadable index
     -- a truncated write from a hard host kill, a file from a newer build -- would be an
     unbounded crash loop with no UI and therefore no way to delete the offending account.
@@ -164,6 +190,7 @@ def _reconcile_account_store() -> None:
         if reaped:
             logger.warning("Reaped {} sign-in process(es) left by a previous run", reaped)
         reconcile()
+        regenerate_create_defaults()
     except (AccountError, OSError) as e:
         # OSError as well as AccountError: the sweep walks the accounts root, reads and writes
         # credential files and rewrites the index, and a full disk or a bad mount raises from

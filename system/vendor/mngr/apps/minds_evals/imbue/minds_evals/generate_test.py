@@ -13,6 +13,7 @@ from inline_snapshot import snapshot
 from pydantic import ValidationError
 from rewardkit.runner import discover
 
+from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
@@ -22,6 +23,7 @@ from imbue.minds_evals.data_types import EvalConfig
 from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import MAX_EXCHANGES_CAP
 from imbue.minds_evals.data_types import PerDimensionRewardFloors
+from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import RewardDimension
 from imbue.minds_evals.data_types import RewardFloor
 from imbue.minds_evals.data_types import RewardStrategy
@@ -31,6 +33,7 @@ from imbue.minds_evals.data_types import is_final_step
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
+from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.generate import AGENT_TIMEOUT_GRACE_SECONDS
 from imbue.minds_evals.generate import STEP_FILES_DIRNAME
 from imbue.minds_evals.generate import TYPICAL_EXCHANGE_SECONDS
@@ -652,7 +655,7 @@ def _stepped_config() -> dict[str, Any]:
                             "ui_flows": [
                                 {
                                     "name": "updated-content",
-                                    "steps": "Open the roadmap.",
+                                    "actions": "Open the roadmap.",
                                     "expect": "The updated export's milestones are shown.",
                                 }
                             ],
@@ -1176,6 +1179,13 @@ def test_a_reward_floor_mapping_cannot_be_empty() -> None:
         PerDimensionRewardFloors(floors=())
 
 
+def _oracle_evidence_manifest(solve_text: str) -> dict[str, Any]:
+    """The evidence manifest one generated oracle script fabricates, read back out of its heredoc."""
+    marker = "MINDS_EVALS_EVIDENCE_MANIFEST_JSON_EOF"
+    body = solve_text.split("<< '{}'\n".format(marker), 1)[1]
+    return json.loads(body.split("\n{}".format(marker), 1)[0])
+
+
 def _oracle_state(solve_text: str) -> dict[str, Any]:
     """The state.json one generated oracle script writes, read back out of its heredoc."""
     body = solve_text.split("<< 'MINDS_EVALS_STATE_EOF'\n", 1)[1]
@@ -1266,3 +1276,151 @@ def test_the_shipped_stepped_eval_config_fits_the_workspace_its_steps_share(tmp_
     # And the conversation budget is still plausible for the messages the case can send, which is
     # the warning that pulling the budget down far enough would trip instead.
     assert not is_exchange_budget_implausible(case.prompts, config.timeout_seconds)
+
+
+def test_the_shipped_time_to_mock_eval_config_stays_generatable(tmp_path: Path) -> None:
+    """The config an author copies a process block from must keep loading as the schema moves: its
+    skill names have to stay spellable, its two lists non-contradictory, and its budgets ones the
+    generator does not warn about."""
+    config_dir = Path(__file__).parents[2] / "configs"
+    shutil.copy(config_dir / "eval-config-time-to-mock.json", tmp_path / "eval-config-time-to-mock.json")
+
+    config = load_eval_config(tmp_path / "eval-config-time-to-mock.json")
+
+    assert [case.case_id for case in config.cases] == ["todo-mock", "recipe-box-mock", "habit-tracker-mock"]
+    assert not is_trial_longer_than_the_workspace(config.timeout_seconds, config.verification_timeout_seconds, 1)
+    for case in config.cases:
+        assert not is_exchange_budget_implausible(case.prompts, config.timeout_seconds)
+        assert case.expectations is not None
+        # Every case measures the same route: the skill the mock should come from, the three that
+        # would mean the build went ahead, and the cap that says nothing was handed off. Only
+        # build-app is required, because a design skill that exists as a claude plugin cannot be
+        # invoked on the other lanes at all.
+        assert [(check.check_id, check.kind) for check in expand_expectations(case.expectations).process_checks] == [
+            ("skill_required_build_app", ProcessCheckKind.REQUIRED_SKILL),
+            ("skill_forbidden_crystallize_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("skill_forbidden_update_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("skill_forbidden_heal_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("worker_launches", ProcessCheckKind.MAX_WORKER_LAUNCHES),
+        ]
+        # The clock the cases exist to measure, gated on the app the case commissions: being fast at
+        # something other than the delivered app is not what the class scores.
+        timing_checks = expand_expectations(case.expectations).timing_checks
+        assert [check.requires_no_failures for check in timing_checks] == [(CheckClass.APP,)]
+        assert all(check.fast_seconds < check.slow_seconds for check in timing_checks)
+
+
+def test_generate_dataset_writes_process_checks_into_both_copies_and_the_oracle(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    expectations = {
+        "outcome": "A throwaway mock, with nothing hardened.",
+        "process": {
+            "required_skills": ["build-app"],
+            "forbidden_skills": ["crystallize-creation"],
+            "max_worker_launches": 0,
+        },
+    }
+    config = _valid_config(
+        dwt_repo=str(dwt_repo.repo_dir),
+        personas=[{"id": "mock-only", "prompts": ["Sketch me a mock"], "expectations": expectations}],
+    )
+    output_dir = tmp_path / "dataset"
+
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
+
+    task_dir = output_dir / "mock-only"
+    tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
+    instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
+    assert tests_case == instruction_case.model_dump(mode="json")
+    assert [(check["check_id"], check["kind"]) for check in tests_case["expectations"]["process_checks"]] == [
+        ("skill_required_build_app", "required_skill"),
+        ("skill_forbidden_crystallize_creation", "forbidden_skill"),
+        ("worker_launches", "max_worker_launches"),
+    ]
+    # The oracle fabricates a green entry per check, so `-a oracle` exercises the process criterion.
+    manifest = _oracle_evidence_manifest((task_dir / "solution" / "solve.sh").read_text())
+    process_entries = [entry for entry in manifest["entries"] if entry["check_class"] == "process"]
+    assert [(entry["entry_id"], entry["status"]) for entry in process_entries] == [
+        ("skill_required_build_app", "passed"),
+        ("skill_forbidden_crystallize_creation", "passed"),
+        ("worker_launches", "passed"),
+    ]
+
+
+def test_generate_dataset_writes_timing_checks_into_both_copies_and_the_oracle(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    expectations = {
+        "outcome": "A throwaway mock, fast.",
+        "deliverable": {"kind": "minds-app"},
+        "timing": {"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]},
+    }
+    config = _valid_config(
+        dwt_repo=str(dwt_repo.repo_dir),
+        personas=[
+            {
+                "id": "mock-only",
+                "prompts": ["Sketch me a mock", {"goal": "See the mock", "max_exchanges": 2}],
+                "expectations": expectations,
+            }
+        ],
+    )
+    output_dir = tmp_path / "dataset"
+
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
+
+    task_dir = output_dir / "mock-only"
+    tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
+    instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
+    assert tests_case == instruction_case.model_dump(mode="json")
+    assert tests_case["expectations"]["timing_checks"] == [
+        {
+            "check_id": "time_to_goal",
+            "fast_seconds": 150.0,
+            "slow_seconds": 600.0,
+            "requires_no_failures": ["app"],
+        }
+    ]
+    # The oracle fabricates a green entry at the fast anchor, so `-a oracle` scores the criterion
+    # rather than reporting a trial that took unboundedly long.
+    manifest = _oracle_evidence_manifest((task_dir / "solution" / "solve.sh").read_text())
+    timing_entries = [entry for entry in manifest["entries"] if entry["check_class"] == "timing"]
+    assert [(entry["entry_id"], entry["status"], entry["value"]) for entry in timing_entries] == [
+        ("time_to_goal", "passed", 150.0)
+    ]
+
+
+def test_load_eval_config_rejects_a_flat_case_that_times_a_goal_it_never_holds(tmp_path: Path) -> None:
+    # Only a goal-holding client can ever declare itself satisfied, so such a case would score zero
+    # on the curve however fast the agent was, with nothing in the record saying why.
+    config = _valid_config(
+        personas=[
+            {
+                "id": "mock-only",
+                "prompts": ["Sketch me a mock", "Sounds good."],
+                "expectations": {
+                    "outcome": "A throwaway mock, fast.",
+                    "deliverable": {"kind": "minds-app"},
+                    "timing": {"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]},
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(EvalConfigError, match="declares no goal entry"):
+        load_eval_config(_write_config(tmp_path, config))

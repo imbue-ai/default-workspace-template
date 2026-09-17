@@ -68,7 +68,7 @@ def test_pool_list_covers_every_pool_host_column() -> None:
     """`pool list` must surface every pool_hosts column, not a hand-maintained subset.
 
     Regression test for the drift where region and the slice identifiers
-    (bare_metal_server_id / lima_instance_name / lima_disk_name) were absent from the
+    (bare_metal_server_id / slice_instance_name / slice_disk_name) were absent from the
     list output. Because `_POOL_HOST_LIST_COLUMNS` now drives both the SELECT and the
     emitted JSON keys, asserting it equals the full schema keeps the two in lockstep
     and forces any new pool_hosts migration column to be added here too.
@@ -91,8 +91,8 @@ def test_pool_list_covers_every_pool_host_column() -> None:
         "created_at",
         "region",
         "bare_metal_server_id",
-        "lima_instance_name",
-        "lima_disk_name",
+        "slice_instance_name",
+        "slice_disk_name",
     }
     assert set(_POOL_HOST_LIST_COLUMNS) == expected_columns, (
         "`pool list` columns drifted from the pool_hosts schema; add (or remove) the column in "
@@ -177,3 +177,32 @@ def test_pool_destroy_rejects_nonpositive_max_concurrency() -> None:
     )
     assert result.exit_code != 0
     assert "--max-concurrency must be positive" in result.output
+
+
+def test_pool_reap_orphans_requires_server_id() -> None:
+    result = CliRunner().invoke(pool, ["reap-orphans", "--database-url", "postgres://example"])
+    assert result.exit_code != 0
+    assert "--server-id" in result.output
+
+
+def test_pool_create_rejects_an_unknown_docker_runtime() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        pool,
+        [
+            "create",
+            "--count",
+            "1",
+            "--region",
+            "US-WEST-OR",
+            "--server-id",
+            "11111111-1111-1111-1111-111111111111",
+            "--workspace-dir",
+            ".",
+            "--docker-runtime",
+            "gvisor",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--docker-runtime" in result.output
+    assert "runc" in result.output and "runsc" in result.output

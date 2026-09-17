@@ -1,10 +1,14 @@
 """Decide which arms a scheduled run evaluates.
 
-An arm is a frozen (mngr, dwt) pair times a named harness config, and this module turns the three
-inputs the workflow's free `resolve` job has -- the pairs it froze to SHAs, the checked-in harness
-configs file, and the green markers already in the cache -- into the two job matrices that follow
-it. Everything a cell's job needs is spelled out here, so the workflow reads values and composes
-nothing.
+An arm is a frozen (mngr, dwt) pair times one suite's eval config times a named harness config, and
+this module turns the four inputs the workflow's free `resolve` job has -- the pairs it froze to
+SHAs, the checked-in suite list, the checked-in harness configs file, and the green markers already
+in the cache -- into the two job matrices that follow it. Everything a cell's job needs is spelled
+out here, so the workflow reads values and composes nothing.
+
+A suite is one eval config and the arms it is worth running on: `configs/nightly_suites.json` is the
+single place that names what a night costs. A dispatch can replace it with one ad-hoc suite of its
+own, which is what its `config` and `harness_configs` inputs are.
 
 A green marker's key carries the arm: the pair name, both SHAs, the eval config's path, the harness
 config's name, and a digest of the parsed harness config. The digest is what makes an edited config
@@ -34,7 +38,12 @@ from imbue.minds_evals.data_types import HarnessConfig
 from imbue.minds_evals.data_types import HarnessConfigEntry
 from imbue.minds_evals.data_types import HarnessConfigsFile
 from imbue.minds_evals.data_types import MatrixCell
+from imbue.minds_evals.data_types import NightlySuite
+from imbue.minds_evals.data_types import NightlySuiteArm
+from imbue.minds_evals.data_types import NightlySuitesFile
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import ResolvedSuite
+from imbue.minds_evals.data_types import SuiteArm
 from imbue.minds_evals.data_types import lane_id
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import CiMatrixError
@@ -44,6 +53,13 @@ from imbue.minds_evals.reporting import write_reports
 
 # The harness configs the scheduled run reads when a dispatch names no file of its own.
 CHECKED_IN_HARNESS_CONFIGS_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "harness_configs.json"
+
+# The suites the scheduled run evaluates when a dispatch names no config of its own.
+CHECKED_IN_NIGHTLY_SUITES_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "nightly_suites.json"
+
+# The checkout a suite's repo-relative config path is resolved against. This package sits two levels
+# below `apps/minds_evals`, which sits two below the repository root.
+REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[4]
 
 # What every green marker's cache key starts with, so a human can list them all with one
 # `gh cache list --key` and a run can tell its own markers from anything else in the cache.
@@ -67,10 +83,23 @@ _KWARG_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0
 # but an environment variable name.
 _KEY_ENV_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-# The oracle pass uploads its job directory as `minds-evals-jobs-<pair>-oracle-<run id>`, and a cell
-# uploads its own as `minds-evals-jobs-<pair>-<config>-<run id>`. A config called `oracle` makes the
-# two names identical, and both upload with `overwrite: true`, so one silently replaces the other.
+# An oracle pass uploads its artifacts as `minds-evals-<kind>-<pair>-<config slug>-oracle...`, and a
+# cell of the same suite as `minds-evals-<kind>-<pair>-<config slug>-<harness config>...`. The name
+# `oracle` makes the two identical, and both upload with `overwrite: true`, so one would silently
+# replace the other. The same word is refused as a config slug, so that a suite cannot reach the
+# same collision from the other side.
 _RESERVED_NAMES: Final[frozenset[str]] = frozenset({"oracle"})
+
+# A suite names its eval config by repo-relative path, held to the same shape the freeze step holds a
+# dispatched one to: it is echoed into a green marker key and onto a command line.
+_CONFIG_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\.json$")
+
+# How long `<pair>-<config slug>-<harness config>` may run. That label names a job in the checks
+# list, a concurrency group, two artifacts, a harbor job directory and a summary file, and the
+# tightest of those is the checks list, which elides a long job name to the point where two cells of
+# one suite cannot be told apart. The pair contributes the longest name the freeze step gives one.
+_MAX_CELL_LABEL_LENGTH: Final[int] = 64
+_MAX_PAIR_NAME_LENGTH: Final[int] = len("released")
 
 # How many characters of the harness config digest go in the cache key. Long enough that two configs
 # in one file cannot collide, short enough to keep the key readable.
@@ -98,23 +127,34 @@ def harness_config_kwargs(entry: HarnessConfigEntry) -> HarnessConfig:
     )
 
 
+def _check_label(label: str, kind: str, path: Path) -> None:
+    """Raises CiMatrixError if the label cannot serve as a job, artifact and cache-key component.
+
+    Both halves of a cell's name -- the harness config's own name and the eval config's slug -- are
+    held to this, because both are spelled into all four.
+    """
+    if not _NAME_PATTERN.match(label):
+        raise CiMatrixError(
+            "{} {!r} in {} is not lowercase letters, digits, dashes and dots starting with a letter or digit".format(
+                kind, label, path
+            )
+        )
+    if len(label) > _MAX_NAME_LENGTH:
+        raise CiMatrixError(
+            "{} {!r} in {} is {} characters; names become job and artifact names and may be at most {}".format(
+                kind, label, path, len(label), _MAX_NAME_LENGTH
+            )
+        )
+    if label in _RESERVED_NAMES:
+        raise CiMatrixError(
+            "{} {!r} in {} is reserved: a cell of that name would upload its job "
+            "directory under the same artifact name as its own oracle pass".format(kind, label, path)
+        )
+
+
 def _check_name(name: str, path: Path) -> None:
-    """Raises CiMatrixError if the name cannot serve as a job, artifact and cache-key component."""
-    if not _NAME_PATTERN.match(name):
-        raise CiMatrixError(
-            "harness config name {!r} in {} is not lowercase letters, digits, dashes and dots starting "
-            "with a letter or digit".format(name, path)
-        )
-    if len(name) > _MAX_NAME_LENGTH:
-        raise CiMatrixError(
-            "harness config name {!r} in {} is {} characters; names become job and artifact names and may "
-            "be at most {}".format(name, path, len(name), _MAX_NAME_LENGTH)
-        )
-    if name in _RESERVED_NAMES:
-        raise CiMatrixError(
-            "harness config name {!r} in {} is reserved: a cell of that name would upload its job "
-            "directory under the same artifact name as its pair's oracle pass".format(name, path)
-        )
+    """Raises CiMatrixError if the harness config's name cannot name a cell."""
+    _check_label(name, "harness config name", path)
 
 
 def _check_kwarg_values(entry: HarnessConfigEntry, path: Path) -> None:
@@ -232,6 +272,165 @@ def select_harness_configs(entries: Sequence[HarnessConfigEntry], selection: str
     return tuple(entry for entry in entries if entry.name in wanted)
 
 
+@pure
+def config_slug(config_path: str) -> str:
+    """The eval config's one-word name: its file name, lowercased, with runs of anything that is not
+    a letter, a digit or a dot turned into single dashes.
+
+    A job name, a concurrency group, two artifact names and a summary file name all carry it beside
+    the pair and the arm, and the path itself carries slashes and an extension that none of them
+    take. The file name alone rather than the whole path, because that is the part a reader
+    recognises in a checks list -- which is also why two suites may not name two configs whose file
+    names shorten to the same word.
+    """
+    return re.sub(r"[^a-z0-9.]+", "-", Path(config_path).stem.lower()).strip("-")
+
+
+def _check_dispatched_config_path(config_path: str) -> None:
+    """Raises CiMatrixError unless a dispatched eval config is shaped like a repo-relative json path.
+
+    Only the shape. Whether the file is in the checkout is the workflow's own check, on the same
+    free job, so that a typo is reported against the input the operator typed.
+    """
+    if not _CONFIG_PATH_PATTERN.match(config_path):
+        raise CiMatrixError("the eval config {!r} is not a repo-relative .json path".format(config_path))
+
+
+def load_nightly_suites(path: Path, repo_root: Path) -> tuple[NightlySuite, ...]:
+    """Every suite a scheduled run evaluates, validated whole.
+
+    An arm's name is checked against the harness configs file in `resolve_suites`, where that file
+    is in hand. What is checked here is everything this file can be wrong about on its own: a config
+    that is not a repo-relative json path, one that is not in the checkout, the same config in two
+    suites, and two configs whose file names shorten to one word and would share every job and
+    artifact name.
+
+    Raises CiMatrixError for a file, a config, or a slug that could not name a suite.
+    """
+    try:
+        raw_text = path.read_bytes().decode()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CiMatrixError("cannot read the nightly suites file {}: {}".format(path, exc)) from exc
+    try:
+        payload = json.loads(raw_text)
+    except ValueError as exc:
+        raise CiMatrixError("the nightly suites file {} is not valid JSON: {}".format(path, exc)) from exc
+    try:
+        suites_file = NightlySuitesFile.model_validate(payload)
+    except ValidationError as exc:
+        raise CiMatrixError("the nightly suites file {} is not a nightly suites file: {}".format(path, exc)) from exc
+    suites = suites_file.suites
+    if not suites:
+        raise CiMatrixError("the nightly suites file {} names no suites".format(path))
+    seen_configs: set[str] = set()
+    configs_by_slug: dict[str, str] = {}
+    for suite in suites:
+        if not _CONFIG_PATH_PATTERN.match(suite.config):
+            raise CiMatrixError(
+                "the nightly suites file {} names the config {!r}; a suite's config is a repo-relative "
+                ".json path".format(path, suite.config)
+            )
+        if not (repo_root / suite.config).is_file():
+            raise CiMatrixError(
+                "the nightly suites file {} names the config {!r}, which is not in the checkout at {}".format(
+                    path, suite.config, repo_root
+                )
+            )
+        if suite.config in seen_configs:
+            raise CiMatrixError(
+                "the nightly suites file {} names the config {!r} twice; one suite holds all of a "
+                "config's arms".format(path, suite.config)
+            )
+        seen_configs.add(suite.config)
+        slug = config_slug(suite.config)
+        _check_label(slug, "eval config slug", path)
+        if slug in configs_by_slug:
+            raise CiMatrixError(
+                "the nightly suites file {} names {!r} and {!r}, whose file names both shorten to {!r}: "
+                "the two would share every job, artifact and summary name".format(
+                    path, configs_by_slug[slug], suite.config, slug
+                )
+            )
+        configs_by_slug[slug] = suite.config
+    return suites
+
+
+@pure
+def _dispatched_arms(entries: Sequence[HarnessConfigEntry], selection: str) -> tuple[NightlySuiteArm, ...]:
+    """The arms a dispatched selection names, at one attempt each: attempts are a suite's own
+    decision, and a dispatch form has nowhere to type them."""
+    return tuple(NightlySuiteArm(name=entry.name) for entry in select_harness_configs(entries, selection))
+
+
+@pure
+def suites_for_run(
+    *,
+    suites: Sequence[NightlySuite],
+    entries: Sequence[HarnessConfigEntry],
+    config_path: str,
+    selection: str,
+) -> tuple[NightlySuite, ...]:
+    """Which suites this run evaluates: the checked-in list, or what a dispatch asked for instead.
+
+    A dispatch that names a config replaces the list with that config alone, run on the harness
+    configs it named or, naming none, on the nightly set. One that names only harness configs keeps
+    the checked-in configs and runs every one of them on exactly those arms, which is what makes
+    "try this arm tonight" one input to type. A schedule names neither and gets the file as written.
+
+    Raises CiMatrixError for a config or a selection that could not name a suite.
+    """
+    if config_path:
+        _check_dispatched_config_path(config_path)
+        return (NightlySuite(config=config_path, harness_configs=_dispatched_arms(entries, selection)),)
+    if selection.strip():
+        return tuple(
+            NightlySuite(config=suite.config, harness_configs=_dispatched_arms(entries, selection)) for suite in suites
+        )
+    return tuple(suites)
+
+
+@pure
+def resolve_suites(suites: Sequence[NightlySuite], entries: Sequence[HarnessConfigEntry]) -> tuple[ResolvedSuite, ...]:
+    """Every suite with its arms looked up in the harness configs file.
+
+    A suite that names no arm runs the nightly set in the harness configs file's order; one that
+    names arms runs exactly those, in the order it wrote them, whatever their nightly flag says --
+    an arm too expensive to run against every config is still worth one suite naming it.
+
+    Raises CiMatrixError for an arm the harness configs file does not hold, for a suite naming one
+    arm twice, and for a cell whose name would not fit where it is reported.
+    """
+    entries_by_name = {entry.name: entry for entry in entries}
+    resolved: list[ResolvedSuite] = []
+    for suite in suites:
+        slug = config_slug(suite.config)
+        arms: list[SuiteArm] = []
+        seen_names: set[str] = set()
+        for arm in suite.harness_configs or _dispatched_arms(entries, ""):
+            entry = entries_by_name.get(arm.name)
+            if entry is None:
+                raise CiMatrixError(
+                    "the suite for {} names the harness config {!r}, which the harness configs file does "
+                    "not hold; it holds {}".format(suite.config, arm.name, ", ".join(sorted(entries_by_name)))
+                )
+            if arm.name in seen_names:
+                raise CiMatrixError(
+                    "the suite for {} names the harness config {!r} twice; two cells of one arm share a "
+                    "concurrency group and a green marker key".format(suite.config, arm.name)
+                )
+            seen_names.add(arm.name)
+            label_length = _MAX_PAIR_NAME_LENGTH + len(slug) + len(arm.name) + 2
+            if label_length > _MAX_CELL_LABEL_LENGTH:
+                raise CiMatrixError(
+                    "the suite for {} runs the harness config {!r}, whose cell is named "
+                    "'<pair>-{}-{}': {} characters with the longest pair name, and a cell's name may be "
+                    "at most {}".format(suite.config, arm.name, slug, arm.name, label_length, _MAX_CELL_LABEL_LENGTH)
+                )
+            arms.append(SuiteArm(entry=entry, attempts=arm.attempts))
+        resolved.append(ResolvedSuite(config=suite.config, config_slug=slug, arms=tuple(arms)))
+    return tuple(resolved)
+
+
 def read_frozen_pairs(path: Path) -> tuple[FrozenPair, ...]:
     """The pairs the freeze step wrote, one JSON object per line.
 
@@ -333,9 +532,14 @@ def harbor_args_for(entry: HarnessConfigEntry) -> tuple[str, ...]:
 
 
 @pure
-def _config_slug(config_path: str) -> str:
-    """The eval config's path as a cache-key component, so the key stays one word whatever path a
-    dispatch names."""
+def _dashed_config_path(config_path: str) -> str:
+    """The eval config's whole path as a cache-key component, so the key stays one word whatever path
+    a dispatch names.
+
+    The whole path, unlike the `config_slug` a job name carries: a key is read by machines and by
+    whoever lists the markers, and two configs of one file name under different directories are two
+    arms.
+    """
     return re.sub(r"[^A-Za-z0-9]", "-", config_path)
 
 
@@ -346,6 +550,9 @@ def cache_key_for(pair: FrozenPair, config_path: str, entry: HarnessConfigEntry)
     The digest over the parsed harness config is what the name alone cannot say: editing a config's
     model or lane in place, under an unchanged name, changes the arm, and the edited arm has never
     been verified. Canonical JSON so that a reordered file does not move the key.
+
+    A suite's attempt count is deliberately absent: it says how many samples of an arm a night buys,
+    not which arm ran, so an arm verified at one attempt stays verified when a suite asks for three.
     """
     parsed = harness_config_kwargs(entry)
     canonical = json.dumps(parsed.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
@@ -355,7 +562,7 @@ def cache_key_for(pair: FrozenPair, config_path: str, entry: HarnessConfigEntry)
         pair.pair,
         pair.mngr_sha,
         pair.dwt_sha,
-        _config_slug(config_path),
+        _dashed_config_path(config_path),
         entry.name,
         digest,
     )
@@ -364,27 +571,28 @@ def cache_key_for(pair: FrozenPair, config_path: str, entry: HarnessConfigEntry)
 @pure
 def _decide_cells(
     pair: FrozenPair,
-    entries: Sequence[HarnessConfigEntry],
-    config_path: str,
+    suite: ResolvedSuite,
     green_keys: frozenset[str],
     is_forced: bool,
 ) -> tuple[MatrixCell, ...]:
     cells: list[MatrixCell] = []
-    for entry in entries:
-        parsed = harness_config_kwargs(entry)
-        cache_key = cache_key_for(pair, config_path, entry)
+    for arm in suite.arms:
+        parsed = harness_config_kwargs(arm.entry)
+        cache_key = cache_key_for(pair, suite.config, arm.entry)
         is_green = cache_key in green_keys and not is_forced
         cells.append(
             MatrixCell(
                 pair=pair.pair,
-                harness_config=entry.name,
+                harness_config=arm.entry.name,
                 mngr_ref=pair.mngr_ref,
                 mngr_sha=pair.mngr_sha,
                 dwt_ref=pair.dwt_ref,
                 dwt_sha=pair.dwt_sha,
-                config=config_path,
+                config=suite.config,
+                config_slug=suite.config_slug,
+                attempts=arm.attempts,
                 lane_key_env=parsed.key_env,
-                harbor_args=json.dumps(list(harbor_args_for(entry))),
+                harbor_args=json.dumps(list(harbor_args_for(arm.entry))),
                 cache_key=cache_key,
                 decision=CellDecision.SKIP if is_green else CellDecision.RUN,
             )
@@ -396,8 +604,7 @@ def _decide_cells(
 def decide_matrix(
     *,
     pairs: Sequence[FrozenPair],
-    entries: Sequence[HarnessConfigEntry],
-    config_path: str,
+    suites: Sequence[ResolvedSuite],
     green_keys: frozenset[str],
     is_forced: bool,
 ) -> CiMatrix:
@@ -406,8 +613,11 @@ def decide_matrix(
     A pair whose refs did not resolve has no SHAs to key a marker on and nothing to check out, so it
     gets no cells at all and is reported as unresolved; the other pairs still run, because the pairs
     answer different questions and losing one answer to another's missing ref would give up the one
-    that matters most. A resolved pair runs when any of its cells does, since its oracle pass serves
-    all of them.
+    that matters most. A resolved pair runs when any of its cells does, and each suite it has a
+    running cell in gets an oracle pass of its own.
+
+    The pairs are the outer loop, so a pair's cells stay together in the summary table and in the
+    matrix a job fans out over.
     """
     decided_pairs: list[DecidedPair] = []
     all_cells: list[MatrixCell] = []
@@ -415,13 +625,15 @@ def decide_matrix(
         if not pair.is_resolved:
             decided_pairs.append(DecidedPair(**pair.model_dump(), decision=PairDecision.UNRESOLVED))
             continue
-        cells = _decide_cells(pair, entries, config_path, green_keys, is_forced)
+        cells = tuple(cell for suite in suites for cell in _decide_cells(pair, suite, green_keys, is_forced))
         all_cells.extend(cells)
         is_any_running = any(cell.decision is CellDecision.RUN for cell in cells)
         decided_pairs.append(
             DecidedPair(**pair.model_dump(), decision=PairDecision.RUN if is_any_running else PairDecision.SKIP)
         )
-    return CiMatrix(config=config_path, pairs=tuple(decided_pairs), cells=tuple(all_cells))
+    return CiMatrix(
+        configs=tuple(suite.config for suite in suites), pairs=tuple(decided_pairs), cells=tuple(all_cells)
+    )
 
 
 @pure
@@ -444,14 +656,19 @@ def _marker_listing_hint(repository: str) -> str:
 def render_matrix_summary_markdown(matrix: CiMatrix, repository: str) -> str:
     """The decision as a GitHub step-summary table: one row per arm, plus one per pair that never
     resolved into arms at all."""
-    lines = ["## Arms", "", "| pair | harness config | mngr | dwt | decision |", "|---|---|---|---|---|"]
+    lines = [
+        "## Arms",
+        "",
+        "| pair | config | harness config | mngr | dwt | decision |",
+        "|---|---|---|---|---|---|",
+    ]
     cells_by_pair: dict[str, list[MatrixCell]] = {}
     for cell in matrix.cells:
         cells_by_pair.setdefault(cell.pair, []).append(cell)
     for pair in matrix.pairs:
         if pair.decision is PairDecision.UNRESOLVED:
             lines.append(
-                "| `{}` | - | `{}` (`{}`) | `{}` (`{}`) | **unresolved** |".format(
+                "| `{}` | - | - | `{}` (`{}`) | `{}` (`{}`) | **unresolved** |".format(
                     as_table_cell(pair.pair),
                     as_table_cell(pair.mngr_ref),
                     _short_sha(pair.mngr_sha),
@@ -462,8 +679,9 @@ def render_matrix_summary_markdown(matrix: CiMatrix, repository: str) -> str:
             continue
         for cell in cells_by_pair.get(pair.pair, []):
             lines.append(
-                "| `{}` | `{}` | `{}` (`{}`) | `{}` (`{}`) | **{}** |".format(
+                "| `{}` | `{}` | `{}` | `{}` (`{}`) | `{}` (`{}`) | **{}** |".format(
                     as_table_cell(cell.pair),
+                    as_table_cell(cell.config_slug),
                     as_table_cell(cell.harness_config),
                     as_table_cell(cell.mngr_ref),
                     _short_sha(cell.mngr_sha),
@@ -474,7 +692,7 @@ def render_matrix_summary_markdown(matrix: CiMatrix, repository: str) -> str:
             )
     lines += [
         "",
-        "- config: `{}`".format(as_table_cell(matrix.config)),
+        "- configs: {}".format(", ".join("`{}`".format(as_table_cell(config)) for config in matrix.configs)),
         "- a `skip` means the green marker already holds that exact arm: the pair's mngr SHA and dwt SHA, the "
         "config, and the harness config; dispatch with force=true to re-run it",
         "- an `unresolved` means one of that pair's refs does not exist on its remote; the other pairs still run",

@@ -1,3 +1,4 @@
+import shlex
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
@@ -7,10 +8,13 @@ from pydantic import Field
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.messaging import format_resolution_notice
+from imbue.minds.desktop_client.latchkey.handlers.messaging import is_message_chat_unavailable
+from imbue.minds.desktop_client.latchkey.handlers.messaging import message_chat_argv
 from imbue.minds.desktop_client.latchkey.handlers.messaging import stdout_reports_message_delivered
 from imbue.minds.desktop_client.latchkey.response_events import RequestStatus
 from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.testing import RecordingMngrCaller
+from imbue.mngr.cli.exec import exec_command
 from imbue.mngr.primitives import AgentId
 
 
@@ -67,7 +71,8 @@ def test_send_does_not_raise_on_failure(root_concurrency_group: ConcurrencyGroup
     sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group, retry_delays_seconds=())
 
     # Fire-and-forget: dispatching an eventually-failing send must not raise.
-    sender.send(AgentId(), "hello")
+    chat_id = AgentId()
+    sender.send(chat_id, "hello", exec_agent_id=chat_id)
     # Let the background delivery run so the failure path is exercised.
     assert caller.called_event.wait(5.0)
 
@@ -78,11 +83,11 @@ def test_send_dispatches_on_concurrency_group_thread(root_concurrency_group: Con
     agent_id = AgentId()
 
     # Fire-and-forget: send returns without waiting for the delivery to run.
-    sender.send(agent_id, "hello")
+    sender.send(agent_id, "hello", exec_agent_id=agent_id)
 
     assert caller.called_event.wait(5.0)
-    # send delivers via the jsonl form so the message_sent event is observable.
-    assert caller.calls == [["message", "--format", "jsonl", "-m", "hello", "--", str(agent_id)]]
+    # send goes to the chat's own chat app first, by chat id.
+    assert caller.calls == [message_chat_argv(str(agent_id), str(agent_id), "hello")]
 
 
 def test_send_retries_until_the_agent_receives_the_message(root_concurrency_group: ConcurrencyGroup) -> None:
@@ -95,8 +100,8 @@ def test_send_retries_until_the_agent_receives_the_message(root_concurrency_grou
     caller = _ScriptedMngrCaller(
         results=(
             MngrCallResult(returncode=1, stderr="Agent is not running (state: STOPPED)"),
+            MngrCallResult(returncode=1, stderr="the chat app has not read its agent list from mngr yet"),
             MngrCallResult(returncode=0, stdout=""),
-            MngrCallResult(returncode=0, stdout=_DELIVERED_STDOUT),
         ),
     )
     sender = MngrMessageSender(
@@ -105,12 +110,12 @@ def test_send_retries_until_the_agent_receives_the_message(root_concurrency_grou
         retry_delays_seconds=(0.01, 0.01, 0.01),
     )
 
-    assert sender._send_with_retries("some-agent", "hello") is True
+    assert sender._send_with_retries("some-agent", "hello", "some-agent") is True
     assert len(caller.calls) == 3
 
 
 def test_send_retries_abandon_on_shutdown(root_concurrency_group: ConcurrencyGroup) -> None:
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=""))
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=1, stderr="Agent is not running (state: STOPPED)"))
     sender = MngrMessageSender(
         mngr_caller=caller,
         concurrency_group=root_concurrency_group,
@@ -120,26 +125,118 @@ def test_send_retries_abandon_on_shutdown(root_concurrency_group: ConcurrencyGro
 
     # With the shutdown event already set, the backoff wait returns
     # immediately and the retry loop abandons instead of sleeping 30s.
-    assert sender._send_with_retries("some-agent", "hello") is False
+    assert sender._send_with_retries("some-agent", "hello", "some-agent") is False
     assert len(caller.calls) == 1
 
 
-def test_deliver_uses_jsonl_output_and_reports_delivered(root_concurrency_group: ConcurrencyGroup) -> None:
-    delivered_stdout = '{"event": "message_sent", "agent": "assistant", "message": "ok"}\n'
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=delivered_stdout))
-    sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
-
-    assert sender.deliver("assistant", "hello") is True
-    assert caller.calls == [["message", "--format", "jsonl", "-m", "hello", "--", "assistant"]]
+_SCRIPT_MISSING_STDERR = (
+    "python3: can't open file '/home/user/workspace/system/scripts/message_chat.py': "
+    "[Errno 2] No such file or directory\n"
+)
 
 
-def test_deliver_false_when_exit_zero_but_no_message_sent_event(root_concurrency_group: ConcurrencyGroup) -> None:
-    # The key regression: exit 0 with no message_sent event (agent not found
-    # yet) must NOT be treated as delivered.
+def test_deliver_goes_through_the_chats_own_chat_app_first(root_concurrency_group: ConcurrencyGroup) -> None:
+    """The request's agent id is the chat's id, and the chat may have moved to another agent since,
+    so the nudge is handed to the workspace's chat app, which knows which agent takes it now."""
     caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=""))
     sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
 
-    assert sender.deliver("assistant", "hello") is False
+    assert sender.deliver("agent-chat", "hello", "agent-chat") is True
+    assert caller.calls == [
+        ["exec", "agent-chat", "python3 system/scripts/message_chat.py agent-chat -m hello", "--no-start"]
+    ]
+
+
+def test_deliver_runs_the_script_on_the_chats_agent_and_names_the_chat(
+    root_concurrency_group: ConcurrencyGroup,
+) -> None:
+    """A seeded chat's id is its seed's, not an agent's: the script runs on the agent the resolver
+    named for the chat and still addresses the chat by its own id."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=""))
+    sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
+
+    assert sender.deliver("agent-seeded-chat", "hello", "agent-member") is True
+    assert caller.calls == [
+        ["exec", "agent-member", "python3 system/scripts/message_chat.py agent-seeded-chat -m hello", "--no-start"]
+    ]
+
+
+def test_message_chat_argv_is_one_agent_and_one_shell_command_to_mngr_exec() -> None:
+    """``mngr exec`` takes one shell string as the command after the agents, so the script
+    invocation must be quoted into a single argument or the notice text is run as the command
+    and the other tokens are taken for agent names."""
+    notice = format_resolution_notice("Your request for Slack was granted.", "evt-abc123", RequestStatus.GRANTED)
+    argv = message_chat_argv("agent-chat", "agent-chat", notice)
+
+    context = exec_command.make_context("mngr exec", argv[1:])
+    assert context.params["agents"] == ("agent-chat",)
+    assert shlex.split(context.params["command_arg"]) == [
+        "python3",
+        "system/scripts/message_chat.py",
+        "agent-chat",
+        "-m",
+        notice,
+    ]
+
+
+def test_is_message_chat_unavailable_only_for_pythons_missing_script_complaint() -> None:
+    assert is_message_chat_unavailable(_SCRIPT_MISSING_STDERR) is True
+    assert is_message_chat_unavailable("the chat app refused: the chat is moving to another agent") is False
+
+
+def test_is_message_chat_unavailable_ignores_the_errno_text_of_mngr_provider_warnings() -> None:
+    # An agent lookup that fails with a provider warning carries the same errno text as
+    # python's missing-script complaint; the script may well be there.
+    stderr = (
+        "WARNING: Discovery could not reach provider docker, so its hosts and agents are absent from this "
+        "snapshot: Provider 'docker' is not available: Error while fetching server API version: "
+        "('Connection aborted.', FileNotFoundError(2, 'No such file or directory')).\n"
+        "Error: Agent lookup failed for agent-seeded-chat\n"
+    )
+    assert is_message_chat_unavailable(stderr) is False
+
+
+def test_deliver_falls_back_to_mngr_message_only_when_the_workspace_has_no_script(
+    root_concurrency_group: ConcurrencyGroup,
+) -> None:
+    caller = _ScriptedMngrCaller(
+        results=(
+            MngrCallResult(returncode=1, stderr=_SCRIPT_MISSING_STDERR),
+            MngrCallResult(returncode=0, stdout=_DELIVERED_STDOUT),
+        )
+    )
+    sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
+
+    assert sender.deliver("assistant", "hello", "assistant") is True
+    assert caller.calls == [
+        message_chat_argv("assistant", "assistant", "hello"),
+        ["message", "--format", "jsonl", "-m", "hello", "--", "assistant"],
+    ]
+
+
+def test_deliver_false_when_the_chat_app_refuses_and_never_sends_around_it(
+    root_concurrency_group: ConcurrencyGroup,
+) -> None:
+    # A refusal (exit 1 with the chat app's own words) is the chat app holding or refusing the
+    # message on purpose; a direct send would land on the agent the chat is leaving.
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=1, stderr="refused: the chat is converging"))
+    sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
+
+    assert sender.deliver("assistant", "hello", "assistant") is False
+    assert len(caller.calls) == 1
+
+
+def test_deliver_false_when_mngr_message_exits_zero_but_no_message_sent_event(
+    root_concurrency_group: ConcurrencyGroup,
+) -> None:
+    # The key regression on the backoff path: exit 0 with no message_sent event (agent not
+    # found yet) must NOT be treated as delivered.
+    caller = _ScriptedMngrCaller(
+        results=(MngrCallResult(returncode=1, stderr=_SCRIPT_MISSING_STDERR), MngrCallResult(returncode=0, stdout=""))
+    )
+    sender = MngrMessageSender(mngr_caller=caller, concurrency_group=root_concurrency_group)
+
+    assert sender.deliver("assistant", "hello", "assistant") is False
 
 
 def test_send_keeps_retrying_at_the_final_interval_after_the_ramp(
@@ -153,9 +250,9 @@ def test_send_keeps_retrying_at_the_final_interval_after_the_ramp(
     caller = _ScriptedMngrCaller(
         results=(
             MngrCallResult(returncode=1, stderr="Agent is not running (state: STOPPED)"),
+            MngrCallResult(returncode=1, stderr="Agent is not running (state: STOPPED)"),
+            MngrCallResult(returncode=1, stderr="Agent is not running (state: STOPPED)"),
             MngrCallResult(returncode=0, stdout=""),
-            MngrCallResult(returncode=0, stdout=""),
-            MngrCallResult(returncode=0, stdout=_DELIVERED_STDOUT),
         ),
     )
     # A two-entry ramp; the fourth attempt only happens if the final interval repeats.
@@ -165,5 +262,5 @@ def test_send_keeps_retrying_at_the_final_interval_after_the_ramp(
         retry_delays_seconds=(0.01, 0.01),
     )
 
-    assert sender._send_with_retries("some-agent", "denied") is True
+    assert sender._send_with_retries("some-agent", "denied", "some-agent") is True
     assert len(caller.calls) == 4

@@ -17,11 +17,12 @@ pull.**
 
 One mechanism carries most of the flow: the **baseline diff**. The source repo
 always has a first-parent template-state marker (`bootstrap` writes `Initial
-workspace commit`; `update-self` writes `update-self:` merges), so diffing the
-source's working tree against *its own* template base yields an exact list of
-what the user authored there -- and excludes template-version drift by
-construction. That is what makes auto-porting settings and template-file edits
-safe. **No resolvable base means no automation** (Step 4).
+workspace commit`; `update-self` writes `update-self:` merges, whose upstream
+parent is the base), so diffing the source's working tree against *its own*
+template base yields an exact list of what the user authored there -- and
+excludes template-version drift by construction. That is what makes
+auto-porting settings and template-file edits safe. **No resolvable base means
+no automation** (Step 4).
 
 You are the **lead**: get access, take backups, check this workspace is fresh,
 produce the whole inventory and audit, and surface every question you can *up
@@ -79,7 +80,7 @@ every verb the whole pass needs, before the user starts using anything -- per th
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "workspace",
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-lifecycle",
                                    "minds-workspaces-backups-export", "minds-workspaces-destroy"],
                    "target_workspace_id": "<OLD>"},
@@ -147,8 +148,7 @@ auto-resolved.
 
 ```bash
 git log --first-parent --format='%H %s' HEAD
-git diff --name-status "$(git log --first-parent --format='%H %s' HEAD \
-    | awk '$0 ~ /^[^ ]+ update-self:/ || $0 ~ /^[^ ]+ Initial workspace commit$/ {print $1; exit}')"
+git diff --name-status "$(uv run .agents/shared/scripts/resolve_template_base.py)"
 ```
 
 **Pin the source's state.** If the source has uncommitted work, ask, then commit
@@ -292,10 +292,11 @@ is at /tmp/mind_key; you may re-request the grant yourself if it lapses (script
 exit 3).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (a genuinely undecidable case), `done` / `stuck` (terminal).
-Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/migrate-workspace/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/migrate-workspace/reports`.
+Per `.agents/shared/references/worker-reporting.md`: write the body to a file
+and deliver it with the launcher's `report` subcommand. Valid `name:` values:
+`question` (a genuinely undecidable case; valid at any point of the run),
+`done` / `stuck` (terminal). `<TASK_FILE>` ->
+`data/.tasks/migrate-workspace/task.md`.
 BODY_EOF
 } > data/.tasks/migrate-workspace/task.md
 ```
@@ -329,12 +330,17 @@ workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted pe
 `agent_id`). Copying either would point this workspace at the old one's
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
 
-**Creations.** Each app lands under `system/apps/<package>/`, is added to the root
-`pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`
-that runs `system/scripts/forward_port.py` before its own start command, and
-re-registers its port that way -- never by copying the old registry file, which is
-runtime state. Then `uv sync --all-packages` and
-`supervisorctl reread && supervisorctl update`. An app that will not come up gets
+**Creations.** Each app lands under `system/apps/<package>/` and gets a
+`[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
+`system/scripts/forward_port.py` before its own start command, and re-registers its
+port that way -- never by copying the old registry file, which is runtime state. No
+root `pyproject.toml` entry: the `system/apps/*` member glob picks the package up.
+Land the app in the shape `build-app` writes today -- `uv tool install -e
+system/apps/<package>`, and a program command ending in the app's own name --
+rather than carrying over a source command that runs it out of the root venv with
+`uv run <name>`. Then `uv sync --all-packages` (never a bare `uv sync`: that is
+root-closure-scoped, and it prunes the member and deletes the console script
+supervisord resolves on PATH) and `supervisorctl reread && supervisorctl update`. An app that will not come up gets
 a **bounded** repair attempt (read its stderr log, fix the obvious break, retry
 once or twice); whatever is still broken becomes an explicit summary item naming
 what you tried.
@@ -398,7 +404,8 @@ Commit on `mngr/migrate-workspace` and report `done`.
 Proxy a `question` gate per `.agents/shared/references/lead-proxy.md` (worker
 `migrate-workspace`, branch `mngr/migrate-workspace`, reports dir
 `data/.tasks/migrate-workspace/reports/`): escalate genuine decisions about the
-user's intent to the user, relay the answer with `mngr message`, consume the
+user's intent to the user, relay the answer with `create_worker.py reply
+--task-file data/.tasks/migrate-workspace/task.md -m "..."`, consume the
 report, re-arm. On `stuck` or a dead-worker timeout, follow
 `.agents/skills/launch-task/references/worker-failure.md` -- nothing has been
 applied here, and the source is untouched either way.
@@ -476,9 +483,10 @@ things over themselves first rather than relying on the checklist alone:
 Leave the workspace **names** alone -- renaming is the user's business and they can
 do it from the app.
 
-Finally, tear down per `launch-task`'s conventions: consume the terminal report
-into `data/.tasks/migrate-workspace/reports/consumed/`, destroy the worker, and
-close the ticket last (its own tool call).
+Finally, tear down per `launch-task`'s conventions: destroy the worker (the
+terminal report is already archived under
+`data/.tasks/migrate-workspace/reports/consumed/` by the `await` that printed
+it) and close the ticket last (its own tool call).
 
 ## Running it again against the same source
 

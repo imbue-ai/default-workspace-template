@@ -54,6 +54,10 @@ def _isolate_chat_tests(
     that gap.
     """
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
+    # Every index write rewrites the workspace's create defaults beside mngr's project config,
+    # which mngr and the writer both find through this variable; without it a test's account
+    # writes would land a settings.local.toml in this package's own .mngr.
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path_factory.mktemp("mngr-project-config")))
     # The chat document reads the app registry (for the terminal's origin label) from the
     # working directory otherwise, which in a workspace is the live one.
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
@@ -243,7 +247,8 @@ def agent_manager(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    return AgentManager.build(broadcaster)
+    # A create writes the chat's fast mode under this root; the default is this package's own data/.
+    return AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
 
 
 @pytest.fixture

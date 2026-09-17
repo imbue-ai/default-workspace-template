@@ -685,7 +685,7 @@ jobs:
           fi
           echo
           echo "=== installed lima version (bundled):"
-          /Applications/Minds.app/Contents/Resources/lima/bin/limactl --version 2>&1 || true
+          /Applications/Mind.app/Contents/Resources/lima/bin/limactl --version 2>&1 || true
           true  # never fail the step itself
 
       - name: ensure socat (slack mock TLS terminator)
@@ -717,8 +717,8 @@ jobs:
           fi
           # Sanity check + write browser.json so future runs hit
           # existing-config and skip the system-browser probe.
-          MINDS_ELECTRON_EXEC_PATH=/Applications/Minds.app/Contents/MacOS/Minds \
-            /Applications/Minds.app/Contents/Resources/latchkey/bin/latchkey ensure-browser
+          MINDS_ELECTRON_EXEC_PATH=/Applications/Mind.app/Contents/MacOS/Mind \
+            /Applications/Mind.app/Contents/Resources/latchkey/bin/latchkey ensure-browser
 
       - name: report frozen default workspace template pin
         # Echo the SHA frozen in check_should_run so this job's log + summary
@@ -783,7 +783,7 @@ jobs:
         # docker container inside it for service / network state.
         run: |
           set +e
-          LIMA=/Applications/Minds.app/Contents/Resources/lima/bin/limactl
+          LIMA=/Applications/Mind.app/Contents/Resources/lima/bin/limactl
           mkdir -p /tmp/launch-to-msg-logs
           {
             echo "=== limactl list ==="
@@ -924,7 +924,7 @@ jobs:
           [ -d "$HOME/.minds/logs" ] && cp -R "$HOME/.minds/logs" artifacts/ || true
           [ -d "$HOME/.minds/events" ] && cp -R "$HOME/.minds/events" artifacts/ || true
           [ -d "$HOME/.minds/mngr" ] && cp -R "$HOME/.minds/mngr"/*/events artifacts/agent-events 2>/dev/null || true
-          log show --process Minds --last 5m 2>/dev/null > artifacts/macos-console.log || true
+          log show --process Mind --last 5m 2>/dev/null > artifacts/macos-console.log || true
           ls -la "$HOME/.minds" > artifacts/minds-dir-listing.txt 2>&1 || true
           [ -f /tmp/minds-electron.log ] && cp /tmp/minds-electron.log artifacts/ || true
           [ -d /tmp/slack-mock ] && cp -R /tmp/slack-mock artifacts/ 2>/dev/null || true
@@ -1025,16 +1025,16 @@ jobs:
       # matching launch_to_msg. The binary under test is pinned to the
       # frozen mngr SHA via the build artifact below, not this checkout.
       - uses: actions/checkout@v6
-      - name: install minds.app from the build job's artifact
+      - name: install Mind.app from the build job's artifact
         run: |
           TMP=$(mktemp -d)
           # --retry-all-errors also retries a mid-transfer drop (curl exit 56),
           # which plain --retry does not cover.
           curl -fSL --retry 5 --retry-all-errors --retry-delay 5 --silent --show-error -o "$TMP/minds.zip" "${{ needs.build.outputs.app_zip_url }}"
           unzip -q -d "$TMP" "$TMP/minds.zip"
-          sudo cp -R "$TMP/Minds.app" /Applications/Minds.app
-          sudo xattr -dr com.apple.quarantine /Applications/Minds.app || true
-          defaults read /Applications/Minds.app/Contents/Info.plist CFBundleVersion
+          sudo cp -R "$TMP/Mind.app" /Applications/Mind.app
+          sudo xattr -dr com.apple.quarantine /Applications/Mind.app || true
+          defaults read /Applications/Mind.app/Contents/Info.plist CFBundleVersion
       - name: setup node 24
         uses: actions/setup-node@v6
         with:

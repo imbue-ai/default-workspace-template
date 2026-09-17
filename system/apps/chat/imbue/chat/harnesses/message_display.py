@@ -17,12 +17,10 @@ Order of decision (:func:`classify_user_message`):
 1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
    model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
    ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
-2. else ``is_compact_summary`` (claude's flag on the record injected after
-   auto-compaction) -> a labelled chip; keyed off the structural flag, not the summary
-   text, so wording changes never break it.
-3. else ``is_meta`` (claude's flag for a framework-injected, model-only message) ->
-   hidden. One rule hides the whole family, present and future.
-4. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
+2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
+   whole family, present and future.
+3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
+
 """
 
 import re
@@ -35,9 +33,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 
-# Cross-layer contract: the sentinel the agentic browser fleet wraps its agent-facing
-# nudges in before sending them via ``mngr message``. The wrapping side is
-# ``system/apps/browser/src/browser/session.py`` (``_SYSTEM_MESSAGE_TAG``); keep in sync.
+# Cross-layer contract: the sentinel an automated in-workspace sender (today the agentic
+# browser fleet's wake-ups) wraps its agent-facing nudges in. The wrapping side is
+# ``system/scripts/message_chat.py --system`` (``SYSTEM_MESSAGE_TAG``), which posts through
+# this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
@@ -52,6 +51,21 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
+
+# The slash command the chat app sends a retiring agent for its handoff summary (the
+# ``handoff-summary`` skill), followed by the output path. Shown as a chip rather than hidden:
+# the user sees the chat pause for it, and a chip says why. ``chat_handoffs.py`` builds the
+# message from this constant, so the two cannot drift apart.
+HANDOFF_SUMMARY_COMMAND = "/handoff-summary"
+_HANDOFF_SUMMARY_LABEL = "Asked for a handoff summary"
+
+# The opening words of the prompt a handoff's successor receives as its first message
+# (``.agents/shared/references/continue-chat.md``, filled in by ``chat_handoffs.py``). It goes
+# through the send path, so the successor's transcript records it as a user message; shown as a
+# collapsed chip rather than as the user's own bubble. The words are the contract with the
+# template: an edit to its first sentence has to keep them.
+HANDOFF_PROMPT_PREFIX = 'You are continuing the chat "'
+HANDOFF_PROMPT_LABEL = "Handoff prompt"
 
 # Claude Code wraps the output of ANY local slash command in these. Hiding is keyed on
 # the wrapper alone, not on the text inside it: the wrapper is by construction machine
@@ -73,9 +87,6 @@ _BASH_OUTPUT_RE = re.compile(r"<bash-(?:stdout|stderr)>([\s\S]*?)</bash-(?:stdou
 _BASH_ANY_OPEN = ("<bash-input>", "<bash-stdout>", "<bash-stderr>")
 _BASH_INPUT_LABEL = "Bash"
 _BASH_OUTPUT_LABEL = "Output"
-
-# Chip label for the post-auto-compaction summary.
-_COMPACTION_SUMMARY_LABEL = "Summary of earlier conversation"
 
 # The composer appends a "See attachment(s) here:" block to a message it sends with
 # uploads (see frontend/src/models/attachments.ts -- keep the two in step). Detectors run
@@ -186,6 +197,21 @@ def _match_composer_command(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
+def _match_handoff_summary_request(content: str) -> MessageDisplay | None:
+    """The chat app's request for a handoff summary; a chip, so the pause reads as one."""
+    trimmed = content.strip()
+    if trimmed != HANDOFF_SUMMARY_COMMAND and not trimmed.startswith(f"{HANDOFF_SUMMARY_COMMAND} "):
+        return None
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=_HANDOFF_SUMMARY_LABEL)
+
+
+def _match_handoff_prompt(content: str) -> MessageDisplay | None:
+    """The prompt a handoff's successor was started with; a chip, since the user did not type it."""
+    if not content.lstrip().startswith(HANDOFF_PROMPT_PREFIX):
+        return None
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=HANDOFF_PROMPT_LABEL)
+
+
 def _match_local_command_output(content: str) -> MessageDisplay | None:
     """Any local slash command's captured output -- machine text, never a turn."""
     trimmed = content.lstrip()
@@ -244,6 +270,8 @@ _DETECTORS = (
     _match_task_notification,
     _match_browser_fleet,
     _match_composer_command,
+    _match_handoff_summary_request,
+    _match_handoff_prompt,
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,
@@ -251,9 +279,7 @@ _DETECTORS = (
 
 
 @pure
-def classify_user_message(
-    content: str, *, is_meta: bool = False, is_compact_summary: bool = False
-) -> MessageDisplay | None:
+def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
     """The render decision for one user message, or ``None`` for a genuine human turn.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
@@ -266,8 +292,6 @@ def classify_user_message(
         decision = detect(visible)
         if decision is not None:
             break
-    if decision is None and is_compact_summary:
-        decision = MessageDisplay(display=DisplayKind.CHIP, display_label=_COMPACTION_SUMMARY_LABEL)
     if decision is None and is_meta:
         decision = MessageDisplay(display=DisplayKind.HIDDEN)
     if decision is None:
@@ -279,16 +303,14 @@ def classify_user_message(
     return decision
 
 
-def stamp_user_message_display(
-    event: dict[str, Any], content: str, *, is_meta: bool = False, is_compact_summary: bool = False
-) -> None:
+def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: bool = False) -> None:
     """Stamp the wire's render-decision fields onto one ``user_message`` event.
 
     The ONE call every user-message emit site makes (each harness's normal path AND
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
     """
-    decision = classify_user_message(content, is_meta=is_meta, is_compact_summary=is_compact_summary)
+    decision = classify_user_message(content, is_meta=is_meta)
     if decision is not None:
         decision.apply_to(event)
     if is_non_turn_tail(content, is_meta=is_meta):

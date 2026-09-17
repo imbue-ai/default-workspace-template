@@ -22,7 +22,7 @@ scripted; Step 4a is your recipe for it.
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
-Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
+Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
 no `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 
 ```bash
@@ -126,9 +126,37 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 to the merged set** (the reconciled files); a clean pull-in is trusted as
 upstream-tested. The impact analysis below covers *every* upstream-changed
 file, pulled-in ones included: upstream's testing never answers the local
-question of who depends on the file.
+question of who depends on the file -- but only a workspace that has files of
+its own can have a dependent. The output's `local_only` list is the
+workspace's own content beside the merged set, and `has_local_footprint` says
+whether any local content at all -- `local_only` or merged -- is outside the
+docs class; both 4a and 4b read it.
 
 ### 4a. Identify impacted services, skills, and creations
+
+**Whether this analysis runs is decided by rule.** It exists to find a
+*user-created* consumer of what the update changed. When `has_local_footprint`
+is false -- the workspace's only divergence from the base is prose (the
+version history every apply rewrites, a `PURPOSE.md`) -- there is no code of
+the user's for anything to depend on: skip the whole of 4a except the
+provisioning paragraph at its end, record the footprint evidence
+(`has_local_footprint: false` plus the `local_only` paths) in your report, and
+go to 4b. Every impacted consumer is then built-in, restarted by the apply and
+tested upstream. Enumerating consumers, grepping for retired names, and
+reasoning about coupling all exist to find user code, and with none to find
+they only spend the user's time. The footprint is read from git, so the one
+user consumer it cannot see is a scheduled task: cron drop-ins live under the
+gitignored `data/.state/cron.d`, and your worktree holds none of them (the
+launcher syncs only this run's `data/.tasks/update-self/` into it), so read
+the lead's copy. On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` --
+the main worktree of this same repo when `LEAD_WORK_DIR` is unset, as in Step
+6, since a directory you cannot read answers exactly like a workspace with no
+scheduled task -- and grep its lines for any path the update deleted or
+renamed (`git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"`); a
+hit is a user-created consumer, and 4a runs in full. If you believe the
+analysis should run anyway in a situation this rule does not cover, that is a
+`question` gate (Step 6), never a silent widening. When `has_local_footprint`
+is true, run all of it.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
@@ -138,13 +166,16 @@ prose that no test failure surfaces -- read the merged entries and grep the
 workspace for every name they retire (an environment variable, a port, a
 command).
 
-1. **Enumerate the consumer universe** up front: every `system/supervisord.conf`
-   program (and what its `command` invokes), every app or service under
-   `system/services/` and `system/apps/`, every workspace-added skill under
-   `.agents/skills/`, and any cron or scheduled runners.
+1. **Enumerate the consumer universe** up front: every
+   `system/supervisord.conf.d/` program (and what its `command` invokes), every
+   app or service under `system/services/` and `system/apps/`, every
+   workspace-added skill under `.agents/skills/`, and any cron or scheduled
+   runners.
 2. **Search for dependents of each changed file**: its path, basename, and
-   importable module name; follow each service's code into the shared
-   scripts and libs it calls; check skills' `SKILL.md` and scripts.
+   importable module name; follow each service's code into the shared scripts
+   and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
+   app's `app.toml` claims in `[[references]]`. If the update adds reference-
+   or dependency-declaration machinery, write the declarations it expects.
 3. **Reason about interface-level coupling no grep finds**: an API surface (the
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
@@ -169,20 +200,47 @@ live-applicable, rebuild-only, or `stuck`.
 
 ### 4b. Validate
 
+**Validation depth is decided by rule, not by judgment**, the same way the
+review gates are (4c): each item below names the condition that runs it, and
+an item whose condition does not hold is skipped, not run "as extra coverage".
+A file you edited yourself in the branch reads as merged content for every one
+of those conditions -- `classify-merge` ran on the pre-merge local ref and
+cannot see your edits (4c) -- so a 4a mirror edit selects its project's suite
+and its service's boot. On a clean pull with no local footprint and no edits
+of your own, every condition is false and nothing here runs. The suites would
+test upstream's own code, which upstream already tested; so would the boots,
+of services that arrived exactly as upstream shipped them; and on a two-core
+workspace the full set costs over half an hour, which is what the user waits
+through. Widening the scope is the one deviation this rule never licenses; if
+you believe something should run in a situation the rule does not cover, that
+is a `question` gate (Step 6). Record which branch applied, with its evidence,
+in your report.
+
 - **Environment gate first**, whenever a manifest or lockfile is in the
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate`: root
+- **Suites, lint, ratchets** for each project in `projects_to_validate` plus
+  that of any file you edited yourself in the branch, and for no other (with
+  neither, no suite runs at all): root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
   and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
   or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
   test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
   `uv run pytest`.
-- **Isolated-service boots** for each impacted service, against a scratch
-  data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
-  `update-app`), never the live store. This runs on the host's global
-  toolchain, so it does not exercise a global-dependency bump.
+- **Isolated-service boots** for each service with a file in the merged set,
+  and for each service 4a found impacted that carries local content of its
+  own -- one the workspace created, or a built-in one it has modified (a
+  file of it in `local_only`) -- against a scratch data copy via
+  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  never the live store. A service that arrived exactly as upstream shipped
+  it is not booted here: upstream tested it, and for the shell and the chat
+  app the apply pre-flights the merged copy itself before anything live
+  restarts. Every other built-in program that arrived clean lands on
+  upstream's testing alone, caught after the restart only by the apply's
+  probes and rollback; that is the coverage this rule gives up, on purpose.
+  This runs on the host's global toolchain, so it does not exercise a
+  global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
@@ -215,7 +273,9 @@ gates only on a pure clean pull**: `has_merge_work` false from Step 4 **and**
 your 4a analysis found no user-created code depending on anything the update
 changed (and no global-dep bump with a user-created dependent) **and** you
 authored no in-branch edits of your own (a mirror edit from 4a is merge work
-even though `classify-merge` cannot see it). **Otherwise run the real gates**,
+even though `classify-merge` cannot see it; Step 1's rollback revert is not,
+when the tree it leaves is identical to the landed merge). **Otherwise run
+the real gates**,
 scoped to every file whose merged content differs from the target release. The
 full rule, its scope, and the keep/revert disposition for fix commits are in
 `references/worker-review-gates.md`. If you believe the gates should not run,
@@ -231,14 +291,32 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ## 6. Report back
 
-Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
-`data/.tasks/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
-`data/.tasks/update-self/reports`). Valid `name:` values:
+Take the frontmatter parse, the report frontmatter, and the body shapes from
+`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/update-self/task.md`).
+
+Deliver the report **by hand**, not with that reference's `report` subcommand:
+this flow runs cross-version, and the launcher in your checkout is whatever
+release the workspace is still on, which may predate the subcommand. The
+delivery is a copy either way, so write the file and place it yourself:
+
+```bash
+mkdir -p data/.tasks/update-self/reports
+# write the frontmatter + body to data/.tasks/update-self/reports/report.md, then:
+cp data/.tasks/update-self/reports/report.md "$LEAD_WORK_DIR/$FINISH_REPORT_PATH"
+```
+
+If `LEAD_WORK_DIR` is unset, copy to `$FINISH_REPORT_PATH` under the main
+worktree of this same repo rather than ending the run with the report only in
+yours.
+
+Valid `name:` values:
 
 - `question` (`type: gate`) -- three cases; say which in the first line.
   (a) A genuine, unresolvable merge conflict: the file, what each side did,
-  the options. (b) The 4c review-gate escape hatch: the rule's conditions as
-  you read them, your situation, what you would do instead. (c) A
+  the options. (b) The scope escape hatch of 4a (the impact analysis), 4b (a
+  validation item) or 4c (the review gates): which rule, its conditions as you
+  read them, your situation, what you would do instead. (c) A
   **customization the update cannot keep** (the 4b verdict): what the user
   built, what the update does to it, the adaptation you attempted and why it
   failed, the before/after evidence (paths in your worktree), and the options.
@@ -261,21 +339,26 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
     not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
-    or skill depending on a changed file.
+    or skill depending on a changed file; or, when the 4a rule skipped it,
+    the footprint evidence (`has_local_footprint: false` and the `local_only`
+    paths).
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
     image-level. Version pins live in `setup_system.sh`, so a pin bump is a
     provisioner change, not a Dockerfile hunk.
   - **Provisioning changes** and **global-dependency bumps** (if any) -- per
     `references/worker-provisioning-changes.md`: each classified
     live-applicable (naming the in-branch mirror edits you made) or
-    rebuild-only, with the version delta and what your research turned up; a
-    genuinely breaking, unapplyable change is a `stuck` report, not a `done`.
-  - **Validation** -- suites, boots and Playwright run, all passing; **which
-    branch of the 4c rule applied, with its evidence** (the clean-pull skip's
-    three conditions, or the gate run's kept/reverted fix commits -- or "gate
-    ran clean" -- and the architecture-gate verdicts); any validation gap
-    called out honestly. A report with neither record is incomplete and the
-    lead sends it back.
+    rebuild-only, with the version delta (and, for a user-created dependent,
+    what your research turned up); a genuinely breaking, unapplyable change
+    is a `stuck` report, not a `done`.
+  - **Validation** -- **which branch of the 4b scope rule applied, with its
+    evidence** (each item's condition and whether it held; on a clean pull
+    with no footprint, that nothing ran and why), then the suites, boots and
+    Playwright that did run, all passing; **which branch of the 4c rule
+    applied, with its evidence** (the clean-pull skip's three conditions, or
+    the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
+    architecture-gate verdicts); any validation gap called out honestly. A
+    report missing either record is incomplete and the lead sends it back.
 - `stuck` (`type: status`) -- you could not reach a clean, validated merge, or
   you hit the provisioning escape hatch; one sentence on what blocked you and
   where the work stands. Never report `done` on a merge whose suites or boots

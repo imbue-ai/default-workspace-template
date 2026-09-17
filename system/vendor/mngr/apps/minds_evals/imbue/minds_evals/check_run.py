@@ -31,6 +31,7 @@ from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import JudgeScore
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
+from imbue.minds_evals.data_types import is_model_observable_on_lane
 from imbue.minds_evals.errors import JobReadError
 from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
 from imbue.minds_evals.reporting import as_table_cell
@@ -409,6 +410,10 @@ def _format_arm_cell(trial: TrialCheck) -> str:
         # The default harness config requests no model at all, so there is nothing for the
         # transcript to confirm and no name to print but the workspace's own default.
         return "{} default".format(trial.lane or "-")
+    if not is_model_observable_on_lane(trial.lane):
+        # Never "unconfirmed": nothing confirmed it because the harness names no model at all, which
+        # is a different thing to tell a reader than a claude trial whose transcript went missing.
+        return "{} {} not observable".format(trial.lane, trial.requested_model)
     return "{} {} {}".format(
         trial.lane or "-",
         trial.requested_model,

@@ -9,15 +9,16 @@ A secondary section describes how the same flags become a matrix of arms -- pair
 The audience is the engineer implementing the driver change and whoever maintains the CI workflow.
 Background, the product facts this design rests on, and the measurements behind them are recorded in imbue-ai/mngr-internal issue #712.
 
-Out of scope: codex (its lane cannot be signed in without a human), a metering proxy for non-Anthropic lanes, setting the model at create time (a workspace-template feature, see "Follow-ups"), and per-case arms.
+Out of scope: a metering proxy for non-Anthropic lanes, setting the model at create time (a workspace-template feature, see "Follow-ups"), and per-case arms.
 
 ## Background
 
 Four facts about the workspace template (default-workspace-template `main@112ee09b4`) shape the design.
 
 - **The account decides the harness.** `POST /api/agents/create-chat` takes `name`, `account_id`, `agent_id` and `message` only; the chat runs on the harness of the lane its account was minted on.
-  Lanes that can be minted without a human today: `anthropic` (claude), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
-  The `openai` lane (codex) needs a device-auth flow on a PTY, so it is out of scope.
+  Lanes that can be minted without a human today: `anthropic` (claude), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
+  Each of them accepts a pasted API key through the accounts flow, which is the only kind of sign-in a run can drive; the one lane left out, `google` (antigravity), offers only browser flows on a PTY and so needs a person at it.
+  `openai`'s pasted-key method is newer than the commit pinned above, which offers that lane only codex's device-auth flow; it is on `main` from `ea2fbc2cd` (2026-09-09), and a run on the `openai` lane needs a template at or after that.
 - **Model, effort and speed are set after create.** `POST /api/agents/<id>/model {model_id, effort, fast, axes}` is harness-blind and validated against the agent's catalog.
   `effort` is required whenever the model has an effort axis, even for a model-only change.
   There is no HTTP readback of the live choice; the loopback `GET /api/agents` lists `id`, `name` and `state` only.
@@ -58,7 +59,7 @@ It rides in on harbor agent kwargs through the `just minds-evals-run <dataset> <
 
 | kwarg | meaning | default |
 |---|---|---|
-| `--ak lane=<id>` | the provider lane to sign the workspace in on: `anthropic`, `api-key`, `openrouter`, `opencode-go` | `anthropic` |
+| `--ak lane=<id>` | the provider lane to sign the workspace in on: `anthropic`, `openai`, `api-key`, `openrouter`, `opencode-go` | `anthropic` |
 
 "Lane" is the workspace template's own term, not one coined here: its chat app defines a lane as an AI provider reached through a particular harness (`system/apps/chat/imbue/chat/harnesses/lanes.py`), the accounts API takes it as `lane_id`, and the UI shows lanes under the label "provider".
 The kwarg keeps the wire name so the spec, the driver and the template's API all say the same word.
@@ -73,7 +74,7 @@ It is not an authentication method: each lane lists its own sign-in methods (`ap
 `fast` without `model` is also refused, for the same reason: the endpoint needs a model id to apply any axis, and the driver has no readback to fill one in.
 
 **The default harness config** is a lane with its credentials and nothing else: no `model`, no `effort`, no `fast`.
-It makes no switch and changes no setting of the workspace; the chat runs exactly as the product ships it, which for the first chat on claude means the pinned model in fast mode, and on pi-coding the provider's default at standard speed.
+It makes no switch and changes no setting of the workspace; the chat runs exactly as the product ships it, which for the first chat on claude means the pinned model in fast mode, on pi-coding the provider's default at standard speed, and on codex the first entry its picker would show -- which moves with the codex version the template pins, and is why the checked-in codex configs name a model.
 It still records everything the recording section describes (the harness from the accounts listing, the observed models from the transcript), it just requests nothing.
 A run with no harness flags at all is the default harness config on the `anthropic` lane, on whichever pair the dataset was generated from.
 A run line with no harness flags, and the scheduled CI's `default` cell, are that arm, byte-for-byte the product as shipped.
@@ -84,6 +85,9 @@ Fast mode doubles the rate and changes nothing else, so configs compared on cost
 Model ids are the workspace's catalog ids, not API model names, and they differ by harness.
 claude offers `fable[1m]`, `opus[1m]`, `sonnet[1m]` and `haiku` with efforts `low`, `medium`, `high`, `xhigh`, `max`.
 pi-coding offers `<provider>/<model>` tags gated by the account's key, for example `anthropic/claude-haiku-4-5` or `openrouter/<vendor>/<model>`, with thinking levels `off` through `max` per model.
+codex offers whatever its account's `model/list` returns, which on an API key is the catalog bundled into the codex release the template pins, and so changes with that pin (codex 0.154.0, read 2026-09-13): `gpt-6-astra`, `gpt-5.6-sol` and `gpt-5.6-terra` with efforts `low` through `ultra`, `gpt-5.6-luna` with `low` through `max`, then `gpt-5.5` and `gpt-5.2` with efforts `low`, `medium`, `high` and `xhigh`.
+That catalog names no default model of its own: codex sorts it by the catalog's own priority and takes the first entry its picker would show, which is `gpt-6-astra` under 0.154.0.
+Its `fast` axis is the `priority` service tier, applied through the same endpoint as every other axis and offered per model -- every id above has one except `gpt-5.2`.
 The driver validates nothing about these strings itself; the endpoint's 400 is the validation, and the driver reports its detail, clipped to 300 characters.
 
 Examples:
@@ -101,6 +105,12 @@ just minds-evals-run $DS pi-haiku 3 --ak lane=api-key --ak key_provider=anthropi
 # pi-coding on OpenRouter
 OPENROUTER_API_KEY=... just minds-evals-run $DS pi-gpt-5-mini 3 --ak lane=openrouter \
   --ak model=openrouter/openai/gpt-5-mini --ak effort=medium
+# codex on the 5.6 line's frontier model, at that model's own default effort
+OPENAI_API_KEY=... just minds-evals-run $DS codex-sol-low 3 --ak lane=openai \
+  --ak model=gpt-5.6-sol --ak effort=low
+# codex on the 5.6 line's everyday model, at that model's own default effort
+OPENAI_API_KEY=... just minds-evals-run $DS codex-terra 3 --ak lane=openai \
+  --ak model=gpt-5.6-terra --ak effort=medium
 ```
 
 ### Credentials
@@ -109,7 +119,7 @@ The decider, the judges and the UI-flow agent keep using `ANTHROPIC_API_KEY`; th
 The workspace's key is a separate concern, because the lane decides which provider it must belong to.
 
 The driver reads the workspace key from the variable named by `key_env`.
-The default is `ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENROUTER_API_KEY` on the `openrouter` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
+The default is `ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENAI_API_KEY` on the `openai` lane, `OPENROUTER_API_KEY` on the `openrouter` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores (`key_provider=openrouter` derives `OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives `ANT_LING_API_KEY`).
 The derivation is a convenience, not a contract with the template: the template's own table names the variable per provider and does not always follow the pattern (`google` reads `GEMINI_API_KEY`), and the `opencode-go` lane has no derived default.
 Those two cases are run with an explicit `key_env`.
 A missing variable fails the run at construction with a message naming the variable and the lane; a lane outside the table is refused there as well, and no `key_env` makes one runnable.
@@ -135,7 +145,7 @@ The sequence in `_prepare_workspace` gains one branch and one step.
    The row's `lane` is read in the same pass and logged as a warning when it is not the lane the run asked for; the harness config keeps the requested lane, since the harness is what grading and the record need.
 5. Create the chat against the account and wait for it to reach `WAITING` and to answer its welcome (unchanged).
 6. **Apply the harness config.**
-   If the run names a `model`: `POST /api/agents/<chat_id>/model {model_id, effort, fast, axes: ["model", "effort", "fast"]}`.
+   If the run names a `model`: `POST /api/chats/<chat_id>/model {model_id, effort, fast, axes: ["model", "effort", "fast"]}`.
    All three axes are always sent, so the endpoint applies all three regardless of what the frontend's diffing rule would have considered changed.
    Then wait for the chat to be `WAITING` again, with the same poll the welcome wait uses; on claude the switch is three slash commands typed into the session and the agent is briefly busy answering them.
 7. Capture the pre-turn registrations and continue into the conversation (unchanged).
@@ -190,14 +200,18 @@ A 400 is a configuration error and never a workspace fault; the run should stop 
 
 `mngr_sha` and `dwt_sha` repeat the top-level keys of `state.json` and of the trial metadata, which keep their place; the block carries them so it names the whole treatment on its own, and a reader holding one arm block needs nothing else to say what it was.
 
-- `harness` comes from the accounts listing in step 4; `model_choice_switch` is `applied`, `skipped` (no `model`), or the failure that stopped the trial, and is named for the single call that sets model, effort and fast together (`POST /api/agents/<id>/model`).
+- `harness` comes from the accounts listing in step 4; `model_choice_switch` is `applied`, `skipped` (no `model`), or the failure that stopped the trial, and is named for the single call that sets model, effort and fast together (`POST /api/chats/<chat_id>/model`).
 - `observed_models` is the set of `model_name` values on the ATIF agent steps after the client's first turn, and `welcome_model` the one on the greeting step.
   A step filed under the `<synthetic>` pseudo-model counts towards neither: no inference answered it, and counting it would read a switched trial as one that ran on two models.
   The two halves are separated at the step carrying the driver's own first message: turn 1 is the first `user` step whose stripped message is that text, and everything before it belongs to the greeting, so the greeting falls on the greeting side whether the harness filed it as a `user` step (pi) or a `system` step (claude), without either harness's greeting text being spelled out anywhere.
   Both are read straight out of the captured document, so they are available on every harness -- a document that was captured but did not validate fills them in even though the trajectory beside them is the hand-built one.
   They go empty together, and a trial that captured no document is not the only one that leaves them so: a captured document with no step matching that first message (its shape changed, or the trial never sent a turn) records neither, logs a warning, and leaves `is_model_confirmed` `null` as any other silence does.
-- `is_model_confirmed` is `true` when `observed_models` is exactly one model and it matches the requested catalog id per the harness's naming (`haiku` reports as `claude-haiku-4-5-20251001`, `anthropic/claude-haiku-4-5` reports as `claude-haiku-4-5`).
-  The matching table is small and lives with the harness config parsing; an id it does not know leaves the field `null`, never `false`.
+- `is_model_confirmed` is `true` when `observed_models` is exactly one model and it matches the requested catalog id per the harness's naming (`haiku` reports as `claude-haiku-4-5-20251001`, `anthropic/claude-haiku-4-5` reports as `claude-haiku-4-5`, and a codex id reports as itself).
+  Which of those rules applies is decided by the lane, since the lane is what says which harness reads the id and a bare `haiku` and a bare `gpt-5.5` are indistinguishable as strings.
+  claude's rule is a small table living with the harness config parsing; an id it does not know leaves the field `null`, never `false`.
+  A codex trial leaves it `null` for a different reason: mngr's codex transcript emitter writes no per-step `model_name`, so `observed_models` and `welcome_model` are empty there whatever the switch did, and `model_choice_switch` is all the harness config then says about its model.
+  The workspace's own message feed does name the model each codex turn ran on, so the gap is in what the captured document carries rather than in what the trial ever knew.
+  Such a trial cannot account for its spend either, for a separate reason: the workspace reports no token count for a codex turn, and a message that reports no usage is skipped rather than counted as zero, so `usage.json` holds zero tokens and a `cost_usd` of `null` -- unknown rather than free. A codex trial is read for its conversation and its outcome scores rather than its spend.
 - On a proxied `anthropic` trial the proxy's `per_model` remains the ground truth and the confirmation is computed from it instead.
 
 `usage.json` is unchanged in shape.
@@ -208,9 +222,14 @@ Nothing in this spec changes the cost fields harbor reads.
 
 The verifier's `harness_quality` dimension scores a report built by claude-shaped rules: a skill invocation is recognised as the `Skill` tool, and two of the six failure signatures name claude's own skill and plugin vocabulary -- which is what the judge prompt spends its weight on.
 On a pi-coding trajectory those rules find nothing, so the report is thin because it was built thin rather than because the harness held, and a prompt that reads an empty report as a sound harness returns 1.0: a false pass rather than a measurement.
-The remaining signatures are shell-level and harness-blind (`ModuleNotFoundError`, `command not found`, `Exit code 127`), so the reports are still worth writing on every harness; they are simply not worth two opus judges and a fifth of the reward.
+The remaining signatures are shell-level and harness-blind in what they match (`ModuleNotFoundError`, `command not found`, `Exit code 127`), so the report is still worth writing on a pi-coding trajectory; it is simply not worth two opus judges and a fifth of the reward.
+On a codex trajectory the scanned shell output is the only way into those signatures, because mngr's codex converter records every tool result with `is_error` false, a failed code-mode program included.
+The same tool-name list is what puts command output into the judged transcript, so it carries codex's names too: the code-mode `exec` tool, whose output is whatever the program printed, and `wait`, which returns the output of a program still running at its yield.
+codex runs its shell from inside that JavaScript program, so the command text the timeline's title fallback, the `progress_timeline_was_read` gate and worker discovery look for is a string literal inside it; all three read every `tools.exec_command(...)` and `tools.shell_command(...)` call's command, in any JavaScript string form.
+A command assembled from variables at run time is not a literal and is not recovered.
+The timeline itself carries only what the program printed: a program that runs `tk create --step` without passing its result to `text(...)` declares a step that never reaches the judged transcript, and the `progress_timeline_was_read` gate catches that only when no step in the trial rendered at all.
 
-The verifier reads the harness from the trajectory's `agent.name` (`claude`, `pi-coding`), which mngr's transcript already sets.
+The verifier reads the harness from the trajectory's `agent.name` (`claude`, `pi-coding`, `codex`), which mngr's transcript already sets.
 A trajectory that names none falls back to the `harness` the arm block recorded, and then to `claude`: the driver's hand-built fallback names the *driver* in `agent.name`, and mngr writes `unknown` when it cannot resolve the agent, so a claude trial that merely lost its transcript must not lose a dimension over it.
 For a harness other than `claude`:
 
@@ -263,8 +282,11 @@ A cell is one arm, and two cells that differ in both halves attribute nothing to
 Only `name` and `is_nightly` are required; every other field is one of the run line's own kwargs from the table above and carries the same default an unset kwarg has, so an entry that names nothing beyond its lane is the default harness config.
 A name matches `^[a-z0-9][a-z0-9.-]*$`, is at most 30 characters, is unique in the file, and is never `oracle`, because it labels a job, a concurrency group, an artifact and a line of the report, beside the oracle's own.
 Dots are in the pattern because a model version is part of what names an arm (`pi-glm-4.7-flash`), and a job name, a concurrency group, an artifact name and a cache key all take one.
-The checked-in entries are, in file order, `default` (the `anthropic` lane and nothing else: the product exactly as it ships), `haiku` (`haiku`, effort `medium`), `pi-haiku` (the `api-key` lane on an `anthropic` key, `anthropic/claude-haiku-4-5`, effort `medium`), `pi-gpt-5-mini` (the `openrouter` lane, `openrouter/openai/gpt-5-mini`, effort `medium`), `pi-glm-4.7-flash` (the `openrouter` lane, `openrouter/z-ai/glm-4.7-flash`, effort `medium`) and `opus-standard` (`opus[1m]`, effort `high`).
-`default`, `haiku` and `pi-gpt-5-mini` are nightly; the rest run only when a dispatch names them.
+The checked-in entries are, in file order, `default` (the `anthropic` lane and nothing else: the product exactly as it ships), `haiku` (`haiku`, effort `medium`), `pi-haiku` (the `api-key` lane on an `anthropic` key, `anthropic/claude-haiku-4-5`, effort `medium`), `pi-gpt-5-mini` (the `openrouter` lane, `openrouter/openai/gpt-5-mini`, effort `medium`), `pi-glm-4.7-flash` (the `openrouter` lane, `openrouter/z-ai/glm-4.7-flash`, effort `medium`), `codex-sol-low` (the `openai` lane, `gpt-5.6-sol`, effort `low`), `codex-terra` (the `openai` lane, `gpt-5.6-terra`, effort `medium`), `codex-astra-low` (the `openai` lane, `gpt-6-astra`, effort `low`) and `opus-standard` (`opus[1m]`, effort `high`).
+The codex configs name their models rather than leaving them unset because the catalog names no default of its own, so an unset model would move with the template's pinned codex version; each then takes the effort its own catalog entry defaults to, which is `low` for Sol and Astra and `medium` for Terra.
+That makes the two nightly codex cells a smoke check of the lane at two price points rather than a comparison against each other, since they differ in effort as well as model.
+`default`, `haiku`, `pi-gpt-5-mini`, `codex-sol-low` and `codex-terra` are nightly; the rest run only when a dispatch names them.
+The nightly set is run against every pair, and the `openai` lane's pasted-key sign-in is newer than the tag the `released` pair pins, so until a release carries that template the two nightly codex cells report on the `main` pair alone and the released pair's are refused at sign-in, naming the lane -- a failure of those cells only, which the report must not be read as a regression.
 The file's order is the order the cells are decided in and so the order of the report's grid columns, which is why arms worth reading against each other -- `haiku` beside `pi-haiku` -- are listed side by side.
 Which configs run nightly is a spend decision, and `is_nightly` is where it is recorded: the file carries the decision rather than this spec, and a config the file lists but no night selects costs nothing to keep.
 Every entry is validated through the driver's own `parse_harness_config` on the free `resolve` job, selected or not, so a config the driver would refuse at construction fails before any paid runner starts; a unit test validates the checked-in file on every test run.
@@ -288,7 +310,7 @@ The oracle job's concurrency group is `minds-evals-oracle-<pair>` and a cell's i
 ### Secrets and green markers
 
 Every job that runs a pass -- the oracle and the cells -- fetches `mngr/ci/ANTHROPIC_API_KEY` (the judges spend it on every pass and the decider on every live one) and the Modal token pair; `resolve` fetches nothing and `notify` only the Slack webhook.
-A cell additionally fetches `mngr/ci/<key_env>` when its config's `key_env` is not `ANTHROPIC_API_KEY`, which is how the `pi-gpt-5-mini` cell gets `mngr/ci/OPENROUTER_API_KEY`.
+A cell additionally fetches `mngr/ci/<key_env>` when its config's `key_env` is not `ANTHROPIC_API_KEY`, which is how the `pi-gpt-5-mini` cell gets `mngr/ci/OPENROUTER_API_KEY` and the codex cells get `mngr/ci/OPENAI_API_KEY`.
 A lane's key is never exported into a cell that does not sign in on that lane.
 A `key_env` with no Vault secret behind it fails that cell at the fetch step, before a box is built, and the driver's construction-time check is the backstop for a runner where the fetch succeeded but the variable is empty; either way it is the cell that fails, not the run.
 
@@ -344,7 +366,7 @@ Cost is one box per case per running cell.
 ## Testing
 
 - Unit tests for the kwarg parsing (each refusal above), the `key_env` derivation, the sign-in dispatch by lane, the switch payload, and the arm block written to `state.json` and the trajectory.
-- Unit tests for the observed-model confirmation table, including an unknown id leaving the field `null`.
+- Unit tests for the observed-model confirmation on each lane's naming rule -- claude's table, pi's dropped first segment, a codex id resolving to itself -- including an unknown id leaving the field `null`.
 - A unit test that loads the checked-in `configs/harness_configs.json` and validates every entry through the driver's own kwarg parsing, so a config that would be refused at construction is caught by the test run rather than by a night's `resolve` job.
 - Unit tests for `ci-matrix`: the selection an empty `--select` makes, an unknown name refused, the marker key composed for a cell, a cell skipped on a matching marker and run under `--force`, a marker on a ref the run cannot restore ignored, and a pair with no running cell dropped from the oracle matrix.
 - Unit tests for `ci-report`: a message per pair, a header verdict for each of passed, failed, skipped, not evaluated and broken, the icon each of those posts under, the grid marks for a graded, a never-attempted and a broken cell, a failures-table row carrying a wrong-model reason and a details line naming an unconfirmed model, the judge table's dimension-qualified headings and its dash for an unscored criterion, the criteria dropped from a table that would exceed a Slack row, the rows dropped from one that would exceed the message's character budget, a truncated details block, and a matrix that cannot be read still producing a message.
@@ -355,10 +377,16 @@ Cost is one box per case per running cell.
 ## Follow-ups
 
 - **Model at create time** (workspace template): a `model_id`, `effort`, `fast` triple on `create-chat`, validated against the account's harness catalog and turned into each harness's create-time settings, would let the greeting run on the harness config's model and remove step 6.
-  It is the same design as the account binding extended one step, and it belongs with the codex work.
-- **Codex**: an API-key method on the `openai` lane is the template change that unblocks it; the driver then needs nothing new beyond an entry in the lane table.
+  It is the same design as the account binding extended one step, and it would take the greeting -- most of a trivial case's spend -- off the arm's comparison rather than leaving it to be subtracted.
+- **Codex model and token fields**: a codex trial can say neither what answered it nor what it spent, and the two halves have different owners.
+  The model half is mngr's codex transcript emitter, which writes no per-step `model_name`: that is what leaves `observed_models` empty and `is_model_confirmed` `null`.
+  The cost half is the workspace's own chat app, whose codex session parser reports no token count per message (it defers codex's `token_count` records), where its claude parser reports one: the driver skips a message that reports no usage rather than counting it as zero, so the account has nothing in it to price.
+  Until both are filled in the `openai` lane runs end to end and records what it was asked for; its trial record just cannot say what answered, or what that cost.
+  A metering proxy on the lane would close the cost half without the chat app, and close it wider -- it sees every request the workspace makes, in-harness delegated ones included, and prices them from its own records.
+  It would take over most of the model half too: wherever a proxy meters a trial the confirmation is computed from its `per_model` rows rather than from the transcript, and unanimous rows settle it either way -- none of them the requested model is the wrong-model `false` worth catching, all of them the requested one is `true`.
+  What stays the emitter's is the split: an ordinary switched trial meters the greeting's model alongside the requested one, and only a per-step `model_name` says which was the greeting's, so without one that case answers `null` rather than accusing the trial.
 - **Proxy for other lanes**: OpenAI entries in the LiteLLM model list and a base URL for pi or codex; none of it is a LiteLLM limitation.
-  The accounts flow is where the endpoint belongs: the account already pairs a credential with a provider, and a `base_url` on the submit step would let each lane's writer place it where its harness reads it (claude's env lines, pi's per-provider model config, codex's `model_providers`).
+  The accounts flow is where the endpoint belongs: the account already pairs a credential with a provider, and a `base_url` on the submit step would let each lane's writer place it where its harness reads it (claude's env lines, pi's per-provider model config, codex's `openai_base_url` config key -- verified against codex 0.147.0: it overrides the built-in openai provider's base URL and leaves auth on `auth.json`, whereas a `[model_providers.*]` entry cannot override a built-in provider and would authenticate from an env var instead of the account).
   That is a workspace-template change, and it is also the point at which the driver's `anthropic`-lane split above can be retired, once the flow reports enough to verify a proxied sign-in.
 - **Harness-aware harness quality**: signatures per harness, read from the ATIF tool calls; whether the ATIF carries enough for pi is the open question.
 - **Pre-turn readback from `model_state.json`**: reading the file through the bridged exec right after the switch would confirm the harness config's model before turn 1, on every harness, instead of after the transcript is captured; it is the same file the product's model bar reads.

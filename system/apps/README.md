@@ -30,9 +30,28 @@ registered name, the display name users see, its icon, whether it serves
 instances, its memory-shedding `priority`, whether it is `critical`, and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
-in `system/supervisord.conf`) that registers the manifest and the app's port
-via `system/scripts/forward_port.py --manifest`, from its program line or
-from inside its entry point once its socket is bound, and then runs the app.
+in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
+and the app's port via `system/scripts/forward_port.py --manifest`, from its
+program line or from inside its entry point once its socket is bound, and then
+runs the app.
+
+A manifest may also declare what belongs to the app *outside* its own folder.
+`[[references]]` lists literal repo-root-relative files and directories the app
+owns -- a skill that drives it, a script that launches it, a doc that describes
+it -- each with an optional one-line `note` saying which of the app's surfaces
+it uses; `[scope] exclude` lists gitignore-style globs that no review or test
+pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
+`**/node_modules/**`, `**/dist/**`, `**/.venv/**`); `[wiring] programs` names
+the supervisord programs the app owns beyond its own block and its
+`<name>-<role>` sidecars (the browser declares `xvfb`). A reference may not point
+inside the app's own directory (already implicit) or into another app's (that is
+a `pyproject.toml` dependency), and every one must exist, which
+`system/test_app_manifests.py` checks for every manifest in the tree. Together
+with the app's directory and its `system/supervisord.conf` blocks, these make up
+the app's footprint, which `app-manifest footprint <manifest>` writes out as a
+scope file; `app-manifest references --for-path <path>` runs the lookup the
+other way, from an owned path back to the app that claims it. Registration
+ignores both tables, so a stale reference can never stop the app.
 
 Every Python app with a manifest runs from its own uv tool environment,
 installed from its own `pyproject.toml` (`uv tool install -e
