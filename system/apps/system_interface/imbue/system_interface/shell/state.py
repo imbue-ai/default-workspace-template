@@ -69,7 +69,6 @@ class ShellState(MutableModel):
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
         thread.start()
-        self.inventory.add_removed_listener(self.on_instances_removed)
         self.inventory.start()
 
     def stop(self) -> None:
@@ -165,14 +164,18 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_active_view_changed(str(client_id), str(view_id))
         return outcome.is_active_view_changed
 
-    def on_instances_removed(self, addresses: list[Address]) -> None:
-        """An app stopped listing these instances: drop them from every tab set and every client layout."""
+    def forget_deleted_instance(self, address: Address) -> None:
+        """An instance was deleted through the shell: drop it from every tab set and every client layout.
+
+        Only an explicit delete does this. An instance missing from its app's list keeps its tabs,
+        which show it as unavailable until the app lists it again.
+        """
         now = datetime.now(timezone.utc)
-        changed_projects = self.projects.remove_addresses_everywhere(addresses)
-        rewritten_layouts = self.layouts.remove_addresses_everywhere(addresses, now)
+        changed_projects = self.projects.remove_addresses_everywhere([address])
+        rewritten_layouts = self.layouts.remove_addresses_everywhere([address], now)
         logger.info(
-            "Dropped {} from {} project tab set(s) and {} client layout(s) after their app stopped listing them",
-            [str(address) for address in addresses],
+            "Dropped the deleted {} from {} project tab set(s) and {} client layout(s)",
+            address,
             len(changed_projects),
             len(rewritten_layouts),
         )

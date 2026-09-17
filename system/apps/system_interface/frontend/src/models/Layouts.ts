@@ -41,16 +41,6 @@ export function parsePanelParams(value: unknown): PanelParams | null {
   return { kind: "instance", address: record.address, tabId: record.tabId, lastFocusedMs };
 }
 
-/** The params of every panel a serialized dockview names, keyed by panel id; panels with no readable params are skipped. */
-export function panelParamsInDocument(dockview: SerializedDockview): Record<string, PanelParams> {
-  const found: Record<string, PanelParams> = {};
-  for (const [panelId, entry] of Object.entries(dockview.panels ?? {})) {
-    const params = parsePanelParams(entry.params);
-    if (params !== null) found[panelId] = params;
-  }
-  return found;
-}
-
 /** One client's arrangement of one view. */
 export interface LayoutRecord {
   dockview: SerializedDockview | null;
@@ -145,15 +135,4 @@ export async function saveLayout(
   }
   const answer = (await response.json()) as { updated_at: string | null };
   return { updatedAt: answer.updated_at };
-}
-
-/** The panels of a layout whose params name an address no longer listed, so a restore can drop
- *  them (the observation that prunes references, contracts.md section 4.1). */
-export function panelsWithUnlistedAddresses(
-  paramsByPanelId: Readonly<Record<string, PanelParams>>,
-  isListed: (address: string) => boolean,
-): string[] {
-  return Object.entries(paramsByPanelId)
-    .filter(([, params]) => params.kind === "instance" && !isListed(params.address))
-    .map(([panelId]) => panelId);
 }
