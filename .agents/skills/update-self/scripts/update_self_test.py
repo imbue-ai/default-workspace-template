@@ -4711,9 +4711,7 @@ def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
     )
 
 
-def test_the_refresh_preserves_a_tools_registered_plugins(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_preserves_a_tools_registered_plugins(apply_repo: Path) -> None:
     # A bare --reinstall rebuilds a tool from its base package alone. For the
     # mngr tool the extras ARE its plugins, so dropping them leaves a CLI that
     # cannot parse its own plugin config -- an update that breaks the workspace
@@ -4747,9 +4745,7 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     ]
 
 
-def test_the_refresh_registers_the_merged_trees_new_plugins(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) -> None:
     # The receipt names only the plugins a tool was installed with last time.
     # A release that ships a new plugin (opencode, say) merges a settings.toml
     # its agent type needs, and a reinstall from the receipt alone leaves an
@@ -4815,9 +4811,7 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     ]
 
 
-def test_the_refresh_repins_the_base_to_the_in_tree_source(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_repins_the_base_to_the_in_tree_source(apply_repo: Path) -> None:
     # A receipt that has lost its editable marker must not make us re-resolve
     # the base from the index -- that would silently swap the workspace's own
     # vendored code for a published release.
@@ -5076,9 +5070,7 @@ def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     assert len(runner.argvs_starting("uv", "tool", "install")) == 3
 
 
-def test_the_refresh_reports_a_receipt_it_cannot_read(
-    apply_repo: Path, tmp_path: Path, capsys
-) -> None:
+def test_the_refresh_reports_a_receipt_it_cannot_read(apply_repo: Path, capsys) -> None:
     # A garbled receipt is not the fresh-install case: we had a tool and lost
     # the record of what it was installed with, so the reinstall below rebuilds
     # it without its plugins. Degrading silently would hand back exactly the
