@@ -492,6 +492,11 @@ def test_subscribe_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
 # what an ACCOUNT offers, asked of the account rather than of one of its agents
 
 
+def _refuse_to_probe(account_dir: Path) -> tuple[CodexModel, ...]:
+    """A probe that cannot reach codex at all -- absent, signed out, offline."""
+    raise AccountModelProbeError("codex is not installed")
+
+
 def test_an_accounts_models_are_probed_and_kept_for_when_the_probe_cannot_run(tmp_path: Path) -> None:
     """The probe's answer is what the account offers, and it is written through: the switch dialog for an
     account no agent has ever run on is exactly the case the sidecar cannot already cover."""
@@ -507,21 +512,14 @@ def test_an_accounts_models_fall_back_to_the_sidecar_when_the_probe_fails(tmp_pa
     """Codex unreachable (absent, signed out, offline) leaves the last known set rather than an empty picker."""
     kept = (_codex_model("gpt-5.5", "GPT-5.5", ("low",)),)
     write_codex_model_options(codex_model_options_path(tmp_path), kept)
-
-    def _refuse(account_dir: Path) -> tuple[CodexModel, ...]:
-        raise AccountModelProbeError("codex is not installed")
-
-    assert [option.id for option in CodexModelResolver.list_account_options(tmp_path, probe=_refuse)] == ["gpt-5.5"]
+    offered = CodexModelResolver.list_account_options(tmp_path, probe=_refuse_to_probe)
+    assert [option.id for option in offered] == ["gpt-5.5"]
 
 
 def test_an_account_with_no_probe_and_no_sidecar_offers_nothing(tmp_path: Path) -> None:
     """Nothing known means the dialog offers only the default -- never another account's models, which the
     destination may not be able to run at all."""
-
-    def _refuse(account_dir: Path) -> tuple[CodexModel, ...]:
-        raise AccountModelProbeError("codex is not installed")
-
-    assert CodexModelResolver.list_account_options(tmp_path, probe=_refuse) == ()
+    assert CodexModelResolver.list_account_options(tmp_path, probe=_refuse_to_probe) == ()
 
 
 def test_a_probe_that_answers_with_nothing_leaves_the_sidecar_both_kept_and_offered(tmp_path: Path) -> None:
