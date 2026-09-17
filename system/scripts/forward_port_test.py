@@ -509,19 +509,26 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
 
 
 def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
-    """Drift guard: three places carry the reserved-name set, because two of
+    """Drift guard: four places carry the reserved-name set, because three of
     them cannot import the one that owns it -- ``forward_port.py`` is stdlib-only
-    by contract, and ``layout.py`` is an agent-facing script run from any cwd.
-    Comparing the sets is what makes the copies safe; sampling names cannot,
-    since any name absent from the sample is free to diverge.
+    by contract, and ``layout.py`` and ``migrate_workspace_layouts.py`` are
+    agent-facing scripts run from any cwd. Comparing the sets is what makes the
+    copies safe; sampling names cannot, since any name absent from the sample is
+    free to diverge. Every carrier belongs here: one left out is one free to
+    drift, which is the state this guard was written to end.
     """
     forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
     layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
+    migrate = _load_module(
+        "_migrate_set_drift_check", _SCRIPT.parent / "migrate_workspace_layouts.py"
+    )
 
     assert forward_port.RESERVED_NAMES == RESERVED_APP_NAMES
     assert forward_port.RESERVED_NAMES == layout._RESERVED_APP_NAMES
+    assert forward_port.RESERVED_NAMES == migrate.RESERVED_APP_NAMES
     assert forward_port.RESERVED_NAME_PREFIXES == RESERVED_APP_NAME_PREFIXES
     assert forward_port.RESERVED_NAME_PREFIXES == layout._RESERVED_APP_NAME_PREFIXES
+    assert forward_port.RESERVED_NAME_PREFIXES == migrate.RESERVED_APP_NAME_PREFIXES
 
 
 def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:

@@ -1,6 +1,6 @@
 Fixed a family of app-name bugs found while updating a workspace to minds-v0.6.2.
 
-The reserved-name set is carried in three places, because two of them cannot import the one that owns it: `forward_port.py` is stdlib-only by contract, and `layout.py` is an agent-facing script. `layout.py`'s copy had drifted to two of the eight names, so a bare word like `share` or `host` waited five seconds for a registration that could never happen instead of being refused at once. The drift test that was supposed to catch this sampled a fixed list of names rather than comparing the sets, so it could not see the gap; it now compares them.
+The reserved-name set is carried in four places, because three of them cannot import the one that owns it: `forward_port.py` is stdlib-only by contract, and `layout.py` and `migrate_workspace_layouts.py` are agent-facing scripts. `layout.py`'s copy had drifted to two of the eight names, so a bare word like `share` or `host` waited five seconds for a registration that could never happen instead of being refused at once, and the layout migration carried the same two-name copy. The drift test that was supposed to catch this sampled a fixed list of names rather than comparing the sets, so it could not see the gap; it now compares every carrier's set.
 
 `github` is now reserved. Enabling GitHub sync writes a `github-sync` supervisord program, and an app named `github` would have claimed it as a sidecar -- so turning GitHub sync on would have failed the manifest suite in that workspace.
 
