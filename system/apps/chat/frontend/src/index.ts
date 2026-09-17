@@ -55,9 +55,9 @@ async function bootstrap(): Promise<void> {
   const sessionId = getChatSessionId();
   // The chat app's own WebSocket, read for this page's own chat.
   initChats();
-  // Before anything else reads the chat list: a send the switch could not deliver goes back
-  // into the composer on the first snapshot that carries it.
-  connectUndeliveredSends();
+  // A send the switch could not deliver goes back into this chat's composer on the first
+  // snapshot that carries it.
+  connectUndeliveredSends(chatId);
   trackBackendArrivals(isMessageCarriedBySwitch);
   trackPendingLaneSettlement();
   // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an

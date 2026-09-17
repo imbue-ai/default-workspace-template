@@ -31,6 +31,7 @@ from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -243,7 +244,7 @@ class ChatRecord(FrozenModel):
         default=None,
         description="The display name a seeded chat was minted with, shown until its first agent carries one; None otherwise",
     )
-    undelivered_sends: tuple[HeldSend, ...] = Field(
+    undelivered_sends: tuple[UndeliveredSend, ...] = Field(
         default=(),
         description=(
             "Sends a finished switch could not hand to the agent, waiting to go back to the composer. Held here "

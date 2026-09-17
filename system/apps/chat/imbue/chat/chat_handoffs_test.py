@@ -52,6 +52,7 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import write_summary_for_request
@@ -131,14 +132,14 @@ class _FakeWorkspace(MutableModel):
             self.store.write(updated)
             return updated
 
-    def park_undelivered_send(self, chat_id: ChatId, held: HeldSend) -> None:
+    def park_undelivered_send(self, chat_id: ChatId, undelivered: UndeliveredSend) -> None:
         """The manager's park: onto the record, where the composer reads it off the snapshot."""
         with self._lock:
             record = self.store.read(chat_id)
             assert record is not None, "a send was parked on a chat with no record"
             self.store.write(
                 record.model_copy_update(
-                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, held))
+                    to_update(record.field_ref().undelivered_sends, (*record.undelivered_sends, undelivered))
                 )
             )
 

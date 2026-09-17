@@ -8,4 +8,4 @@ A message sent while a chat was switching accounts is no longer lost when the ag
 
 Sending during a switch is answered as accepted and the message is held for the agent the chat is moving to. If that agent then refused it -- which is what happens when the account being switched to is itself out of usage -- the refusal was written to a log and the message was dropped, with nothing in front of the user to say so. The app was holding the only copy.
 
-It now waits on the chat, and the composer takes it back on the next update, above whatever has been typed since. The chat's record survives for it, which for a chat on its first agent it previously did not.
+It now waits on the chat, and the composer takes it back on the next update, above whatever has been typed since, with a note saying why it came back in the agent's own words -- handing the text back silently invites pressing send again, which on the commonest cause of this earns the same refusal. The chat's record survives for it, which for a chat on its first agent it previously did not. This covers cancelling a switch as well as finishing one.

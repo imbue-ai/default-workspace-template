@@ -28,6 +28,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -88,6 +89,7 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -4008,8 +4010,10 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         # Cancel: the trigger comes back, the other held send goes to the agent the chat stays on, and a
         # first-handoff record disappears so the chat is its one agent again.
         assert manager.cancel_handoff(chat_id) == "Carry on in Codex"
-        assert store.read(chat_id) is None
         wait_for(lambda: (first, "and this", "m-2") in sent, timeout=5.0)
+        # The record goes only once that delivery is done, not with the cancel: a send refused
+        # there has nowhere to be parked if its record is already gone.
+        wait_for(lambda: store.read(chat_id) is None, timeout=5.0)
         assert manager.get_chat_snapshot(first) is not None and manager.get_handoff_state(chat_id) is None
         with pytest.raises(HandoffError):
             manager.cancel_handoff(chat_id)
@@ -4406,12 +4410,16 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 # Undelivered sends: a send a finished switch could not hand over waits on the record for the composer.
 
 
-def _parked_send(message_id: str, text: str) -> HeldSend:
-    return HeldSend(
-        message_id=message_id,
-        text=text,
-        origin=HeldSendOrigin.CLIENT,
-        received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+def _parked_send(message_id: str, text: str) -> UndeliveredSend:
+    return UndeliveredSend(
+        send=HeldSend(
+            message_id=message_id,
+            text=text,
+            origin=HeldSendOrigin.CLIENT,
+            received_at=datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+        detail="You've hit your session limit",
+        kind="rejected_by_agent",
     )
 
 
@@ -4435,7 +4443,9 @@ def test_a_parked_send_reaches_the_composer_and_leaves_once_taken(broadcaster: W
 
         snapshot = manager.get_chat_snapshot(first)
         assert snapshot is not None
-        assert [(held.message_id, held.text) for held in snapshot.undelivered_sends] == [("m-1", "the thing I typed")]
+        assert [(held.message_id, held.text, held.kind) for held in snapshot.undelivered_sends] == [
+            ("m-1", "the thing I typed", "rejected_by_agent")
+        ]
 
         manager.take_undelivered_send(ChatId(first), "m-1")
 
@@ -4489,5 +4499,47 @@ def test_parking_the_same_send_twice_keeps_one_copy(broadcaster: WebSocketBroadc
         snapshot = manager.get_chat_snapshot(first)
         assert snapshot is not None
         assert len(snapshot.undelivered_sends) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_cancelled_handoffs_refused_send_is_parked_rather_than_lost(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A send refused on the cancel path survives, on a chat whose record the cancel used to take.
+
+    The narrow case the ordering guards: the cancel dropped a first-handoff chat's record before
+    starting the delivery, so the guard could not see a send that was about to be refused and the
+    park had nothing to put it on. The record now waits for the delivery to finish.
+    """
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _ = _handoff_manager(broadcaster, tmp_path, sent)
+
+    def refuse(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        raise SendFailedError("You've hit your session limit", kind="rejected_by_agent")
+
+    capabilities = _handoff_capabilities(sent)
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=capabilities.ensure_watcher,
+            drain_to_composer=capabilities.drain_to_composer,
+            deliver=refuse,
+        )
+    )
+    try:
+        chat_id_str, _ = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+        chat_id = ChatId(chat_id_str)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SUMMARIZING
+
+        manager.cancel_handoff(chat_id)
+
+        wait_for(lambda: (record := store.read(chat_id)) is not None and record.undelivered_sends != (), timeout=5.0)
+        record = store.read(chat_id)
+        assert record is not None
+        assert [(parked.send.message_id, parked.send.text) for parked in record.undelivered_sends] == [
+            ("m-2", "and this")
+        ]
+        assert record.undelivered_sends[0].kind == "rejected_by_agent"
+        assert "session limit" in record.undelivered_sends[0].detail
     finally:
         manager.stop()
