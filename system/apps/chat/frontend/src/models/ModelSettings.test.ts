@@ -198,6 +198,7 @@ describe("effectiveChoice", () => {
     // What a handoff does: the successor becomes the chat's agent before the harness has reported
     // the model applied to it. The pick was made FOR that successor, so it is not the old agent's
     // to forget -- forgetting it is what put the successor's own startup model on the chip.
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a12", { active_agent: { agent_id: "successor" } }));
     showSwitchChoice("a12", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
     forgetPendingChoice("a12");
     expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.matched).toBe(SONNET);
@@ -205,6 +206,19 @@ describe("effectiveChoice", () => {
     setModelChoice("a12", { model_id: "opus[1m]", effort: "high", fast: false }, OPUS, ["model"]);
     forgetPendingChoice("a12");
     expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("gives a switch's pick up once the chat moves on again, to an agent it was never made for", async () => {
+    // A second switch inside the window the first one's pick is held for: its successor is not the
+    // agent the pick was handed over for, and nothing else would drop it -- a pick with no POST
+    // behind it settles only against a live choice that will never match, or the 5-minute timeout.
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a13", { active_agent: { agent_id: "successor" } }));
+    showSwitchChoice("a13", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a13", { active_agent: { agent_id: "third" } }));
+    forgetPendingChoice("a13");
+    expect(effectiveChoice("a13", live("claude-opus-4-8", "medium", false, OPUS))?.isPending).toBe(false);
     await flush();
   });
 
