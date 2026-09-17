@@ -338,7 +338,7 @@ class CodexModelResolver(HarnessModelResolver):
         try:
             models = probe(account_dir)
         except AccountModelProbeError as e:
-            logger.info("Falling back to the sidecar for the models of account {}: {}", account_dir.name, e)
+            logger.warning("Falling back to the sidecar for the models of account {}: {}", account_dir.name, e)
             return codex_models_to_options(read_codex_model_options(options_path))
         # A daemon that came up but listed nothing is not evidence that the account has no models, so
         # that answer neither clobbers the sidecar nor is handed on in place of it.
