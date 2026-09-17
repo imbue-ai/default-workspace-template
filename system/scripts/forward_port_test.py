@@ -18,7 +18,11 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from app_manifest.primitives import describe_app_name_problem
+from app_manifest.primitives import (
+    RESERVED_APP_NAME_PREFIXES,
+    RESERVED_APP_NAMES,
+    describe_app_name_problem,
+)
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
@@ -504,10 +508,31 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
     return module
 
 
+def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
+    """Drift guard: three places carry the reserved-name set, because two of
+    them cannot import the one that owns it -- ``forward_port.py`` is stdlib-only
+    by contract, and ``layout.py`` is an agent-facing script run from any cwd.
+    Comparing the sets is what makes the copies safe; sampling names cannot,
+    since any name absent from the sample is free to diverge.
+    """
+    forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
+    layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
+
+    assert forward_port.RESERVED_NAMES == RESERVED_APP_NAMES
+    assert forward_port.RESERVED_NAMES == layout._RESERVED_APP_NAMES
+    assert forward_port.RESERVED_NAME_PREFIXES == RESERVED_APP_NAME_PREFIXES
+    assert forward_port.RESERVED_NAME_PREFIXES == layout._RESERVED_APP_NAME_PREFIXES
+
+
 def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
     """Drift guard: the app_manifest library validates names on read with its
     own copy of this script's rule (the script is stdlib-only and cannot import
-    the library). The two must accept and reject exactly the same names."""
+    the library). The two must accept and reject exactly the same names.
+
+    The reserved sets are compared wholesale in the test above; these samples
+    cover the rest of the rule -- pattern, length, prefixes -- where there is no
+    finite set to compare.
+    """
     forward_port = _load_module("_forward_port_manifest_drift_check", _SCRIPT)
     names = (
         "web",
@@ -572,18 +597,17 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
         "trail-",
         "UPPER",
         "under_score",
+        *sorted(forward_port.RESERVED_NAMES),
     )
     for name in names:
-        is_scaffold_accepted = (
-            bool(scaffold.KEBAB_RE.match(name))
-            and not any(
-                name.startswith(prefix) for prefix in scaffold.RESERVED_NAME_PREFIXES
-            )
-            and name not in scaffold.RESERVED_NAMES
-            and scaffold._kebab_to_snake(name) not in scaffold.RESERVED_NAMES
-        )
-        if is_scaffold_accepted:
-            assert forward_port.validate_service_name(name) is None, name
+        # Run the scaffold's real check rather than a restatement of it: a
+        # restatement goes stale the moment the check changes, which is the
+        # failure this guard exists to catch.
+        try:
+            scaffold._validate_name(name)
+        except SystemExit:
+            continue
+        assert forward_port.validate_service_name(name) is None, name
 
 
 # --- manifests -----------------------------------------------------------------
