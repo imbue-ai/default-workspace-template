@@ -383,6 +383,7 @@ via the Step 4 cycle (say what is missing, consume the report into
 over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly as
 a caveat.
+
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
 message is composed *after* the apply, per `references/results-message.md`.
