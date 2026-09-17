@@ -1005,7 +1005,17 @@ def apply_update(
         marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
         _advance(PHASE_SNAPSHOTTED)
 
-        if plan.frontend_manifest and usable_worker_bundles is None:
+        # Whether the npm manifest *changed* says nothing about whether the
+        # dependencies are *installed*: a merge that touches neither
+        # package.json nor package-lock.json still has to build, and a tree with
+        # no node_modules has no tsc or vite to build with. Both conditions are
+        # asked, as the recovery path already asks them
+        # (``_is_recovery_npm_ci_needed``). The bundle-copy shortcut still wins
+        # over both: installing a verified worker bundle needs no node_modules.
+        if usable_worker_bundles is None and (
+            plan.frontend_manifest
+            or (plan.frontend and not (repo_root / NPM_ROOT_DIR / "node_modules").is_dir())
+        ):
             run_checked(
                 runner,
                 expend(["npm", "ci"]),
