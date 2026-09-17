@@ -409,6 +409,14 @@ class HandoffState(FrozenModel):
             "too) keeps showing them until they land in the transcript"
         ),
     )
+    model_pick: ModelPick | None = Field(
+        default=None,
+        description=(
+            "The model the chat runs on once the switch lands, applied on the far side of the restart or the "
+            "create; None when none was picked. Read by a page with no armed switch of its own to name it (one "
+            "reloaded mid-switch), since the pushed live choice cannot carry it until the harness has taken it"
+        ),
+    )
     error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"

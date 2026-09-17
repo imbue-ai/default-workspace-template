@@ -35,6 +35,7 @@ import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./harness-labels";
+import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import { raiseFailureNotice, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
 
@@ -149,7 +150,8 @@ function chosenOption(dialog: OpenDialog): CatalogModelOption | null {
   return (dialog.options ?? []).find((option) => option.id === dialog.modelId) ?? null;
 }
 
-/** The pick the dialog's state amounts to: null for the default, else the identity and the label the page shows. */
+/** The pick the dialog's state amounts to: null for the default, else the identity, the option it
+ *  names, and the label the page shows. */
 function pickOf(dialog: OpenDialog): PendingPick | null {
   const option = chosenOption(dialog);
   if (option === null) return null;
@@ -158,12 +160,7 @@ function pickOf(dialog: OpenDialog): PendingPick | null {
     effort: option.efforts.length > 0 ? dialog.effort : null,
     fast: option.supports_fast ? dialog.fast : false,
   };
-  const effortPart = identity.effort === null ? "" : ` · ${capitalize(identity.effort)}`;
-  return { identity, label: `${option.label}${effortPart}${identity.fast ? " · fast" : ""}` };
-}
-
-function capitalize(level: string): string {
-  return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
+  return { identity, label: modelPickLabel(option.label, identity.effort, identity.fast), option };
 }
 
 /** The effort to start from when a model is chosen: the first shown, else the first declared. */
@@ -243,7 +240,11 @@ function renderPicker(dialog: OpenDialog): m.Children {
             },
           },
           shownEfforts.map((effort) =>
-            m("option", { value: effort.level, selected: effort.level === dialog.effort }, capitalize(effort.level)),
+            m(
+              "option",
+              { value: effort.level, selected: effort.level === dialog.effort },
+              capitalizeEffort(effort.level),
+            ),
           ),
         )
       : null,

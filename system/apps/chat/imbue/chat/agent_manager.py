@@ -598,6 +598,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
         held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
     )

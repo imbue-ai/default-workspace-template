@@ -34,6 +34,9 @@ interface PendingPick {
   identity: ModelIdentity;
   // The option the user clicked -- rendered directly, so no client-side matching.
   option: CatalogModelOption;
+  // Whether a switch carries this pick rather than the bar: it was made for the agent the chat
+  // ends up on, so the move to that agent must not forget it (see forgetPendingChoice).
+  isCarriedBySwitch: boolean;
 }
 
 // The optimistic overlay per chat, and the tail of each chat's apply chain.
@@ -127,7 +130,7 @@ export function setModelChoice(
   optimistic = true,
 ): void {
   if (optimistic) {
-    pendingByChat.set(chatId, { identity, option });
+    pendingByChat.set(chatId, { identity, option, isCarriedBySwitch: false });
     m.redraw();
   }
 
@@ -161,9 +164,26 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
   }
 }
 
+/** Show the model a switch picked as the chat's own until the harness confirms it, without POSTing:
+ *  the switch applies the pick itself, on the far side of a restart or a create.
+ *
+ *  Installed when the armed switch stops covering the pick (``PendingLane``), because from there to
+ *  the harness writing its model state the pushed live choice is a sequence of values the user never
+ *  asked for: the account the chat is leaving, then the model the new account last ran. Settles like
+ *  any other overlay, once the live choice matches. */
+export function showSwitchChoice(chatId: string, identity: ModelIdentity, option: CatalogModelOption): void {
+  pendingByChat.set(chatId, { identity, option, isCarriedBySwitch: true });
+  schedulePendingTimeout(chatId, identity);
+  m.redraw();
+}
+
 /** Drop the optimistic pick for a chat that now runs on another agent: the pick was the old agent's,
- *  and a live choice that could settle it will never come from the new one. */
+ *  and a live choice that could settle it will never come from the new one. A pick a switch carries
+ *  is kept: it was made for the very agent the chat moved to, which is about to take it. */
 export function forgetPendingChoice(chatId: string): void {
+  if (pendingByChat.get(chatId)?.isCarriedBySwitch === true) {
+    return;
+  }
   if (pendingByChat.delete(chatId)) {
     m.redraw();
   }

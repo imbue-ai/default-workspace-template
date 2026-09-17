@@ -5,8 +5,10 @@
  * that account, and it clears on its own once the chat runs there.
  */
 
-import { addActiveAgentChangedListener, addChatsUpdatedListener, getChatById } from "./Chats";
+import { addChatsUpdatedListener, getChatById } from "./Chats";
 import type { ChatSnapshot, TransitionKind } from "./Chats";
+import type { CatalogModelOption } from "./HarnessCatalog";
+import { showSwitchChoice } from "./ModelSettings";
 import type { ModelIdentity } from "./ModelSettings";
 import { accountForAgent } from "./Providers";
 import type { ProviderAccount } from "./Providers";
@@ -16,10 +18,16 @@ import type { ProviderAccount } from "./Providers";
 export interface PendingPick {
   identity: ModelIdentity;
   label: string;
+  // The catalog option the label was built from, handed to the model bar's overlay once the switch
+  // stops covering the pick, so the chip keeps reading it until the harness confirms it.
+  option: CatalogModelOption;
 }
 
 const pendingAccountIdByChat = new Map<string, string>();
 const pendingPickByChat = new Map<string, PendingPick>();
+// The agent each chat was running on when its choice was made: a chat that has moved off it has
+// spent the choice, wherever it landed.
+const armedAgentIdByChat = new Map<string, string>();
 
 /** Choose the account the chat's next send switches it to, or clear the choice with null. A pick
  *  made for an earlier choice does not survive: it named a model of that account's harness. */
@@ -32,9 +40,13 @@ export function setPendingSwitch(chatId: string, accountId: string | null, pick:
   pendingPickByChat.delete(chatId);
   if (accountId === null) {
     pendingAccountIdByChat.delete(chatId);
+    armedAgentIdByChat.delete(chatId);
     return;
   }
   pendingAccountIdByChat.set(chatId, accountId);
+  const armedOn = getChatById(chatId)?.active_agent.agent_id;
+  if (armedOn === undefined) armedAgentIdByChat.delete(chatId);
+  else armedAgentIdByChat.set(chatId, armedOn);
   if (pick !== null) pendingPickByChat.set(chatId, pick);
 }
 
@@ -76,21 +88,48 @@ export function pendingSwitchTarget(chatId: string): ProviderAccount | null {
   return account;
 }
 
+/** Whether a switch is still being carried out, so the choice it is carrying is not spent yet. A
+ *  failed one is done: its notice governs from there, and its retry names its own account. */
+function isSwitchUnderway(chat: ChatSnapshot): boolean {
+  return chat.handoff !== null && chat.handoff.phase !== "failed";
+}
+
+/** Whether ``chat`` has applied the choice it was carrying: it runs on the account that was chosen,
+ *  or it has moved off the agent the choice was made on, whatever account it landed on (a failed
+ *  switch retried from its notice on another account lands there, not on the one picked). */
+function hasSpentItsChoice(chat: ChatSnapshot): boolean {
+  if (pendingAccountIdByChat.get(chat.chat_id) === chat.active_agent.account_id) return true;
+  const armedOn = armedAgentIdByChat.get(chat.chat_id);
+  return armedOn !== undefined && armedOn !== chat.active_agent.agent_id;
+}
+
+/** Give up the choice ``chat`` was carrying, leaving the model bar showing the model it picked until
+ *  the harness reports it: the chip would otherwise fall back to the pushed live choice, which does
+ *  not carry the pick until the harness has written it.
+ *
+ *  A switch that failed carries nothing over: it never applied the pick, whether it broke at the
+ *  agent's start or at the pick itself, so the chip stays on the model the agent is really on and
+ *  the failure notice says what happened. */
+function settle(chat: ChatSnapshot): void {
+  const pick = pendingPickByChat.get(chat.chat_id);
+  setPendingSwitch(chat.chat_id, null, null);
+  if (pick !== undefined && chat.handoff === null) showSwitchChoice(chat.chat_id, pick.identity, pick.option);
+}
+
 /**
- * Follow the chat list: a chat that now runs on its pending account has applied the choice, and
- * so has one that moved to a new agent, whatever account that agent runs on (a failed switch
- * retried from its notice on another account lands there, not on the one picked). A cancelled
- * switch changes neither, so the choice survives it for the next try (spec 5.6).
+ * Follow the chat list: a chat that has applied its choice gives it up. A cancelled switch applies
+ * nothing, so the choice survives it for the next try (spec 5.6).
+ *
+ * Never while the switch is still running. A rebind relabels the agent with the target account
+ * partway through its restart -- before the agent is even started, let alone put on the picked
+ * model -- and a handoff's successor becomes the chat's agent before the harness has reported the
+ * model applied to it; either reading, taken then, would give the choice up in the middle of the
+ * switch, which is exactly where the pushed live choice cannot be trusted.
  */
 export function trackPendingLaneSettlement(): void {
   addChatsUpdatedListener((chats) => {
     for (const chat of chats) {
-      if (pendingAccountIdByChat.get(chat.chat_id) === chat.active_agent.account_id) {
-        setPendingSwitch(chat.chat_id, null, null);
-      }
+      if (!isSwitchUnderway(chat) && hasSpentItsChoice(chat)) settle(chat);
     }
-  });
-  addActiveAgentChangedListener((chatId) => {
-    setPendingSwitch(chatId, null, null);
   });
 }

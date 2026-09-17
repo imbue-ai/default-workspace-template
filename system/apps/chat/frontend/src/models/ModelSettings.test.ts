@@ -15,6 +15,7 @@ import {
   getChatFastMode,
   setFastMode,
   setModelChoice,
+  showSwitchChoice,
 } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
@@ -170,6 +171,40 @@ describe("effectiveChoice", () => {
     // Nothing pending is nothing to forget.
     forgetPendingChoice("a10");
     expect(effectiveChoice("a10", opusLive)?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("shows a switch's pick without posting it, and holds it through the models a switch passes through", async () => {
+    // The switch applies the pick itself, on the far side of a restart or a create; from there until
+    // the harness writes its model state the pushed live choice names models the user never asked
+    // for -- the account the chat is leaving, then the one the new account last ran.
+    showSwitchChoice("a11", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+    expect(mockRequest).not.toHaveBeenCalled();
+
+    const leaving = effectiveChoice("a11", live("claude-opus-4-8", "high", false, OPUS));
+    expect(leaving).toEqual({
+      identity: { model_id: "sonnet", effort: "medium", fast: false },
+      matched: SONNET,
+      isPending: true,
+    });
+    // The agent came up on the new account, on the model IT last ran: still not the pick.
+    expect(effectiveChoice("a11", live("claude-opus-4-8", "medium", false, OPUS))?.matched).toBe(SONNET);
+    // The harness took the pick.
+    expect(effectiveChoice("a11", live("claude-sonnet-5", "medium", false, SONNET))?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("keeps a switch's pick when the chat moves to the new agent, unlike the bar's own", async () => {
+    // What a handoff does: the successor becomes the chat's agent before the harness has reported
+    // the model applied to it. The pick was made FOR that successor, so it is not the old agent's
+    // to forget -- forgetting it is what put the successor's own startup model on the chip.
+    showSwitchChoice("a12", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+    forgetPendingChoice("a12");
+    expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.matched).toBe(SONNET);
+
+    setModelChoice("a12", { model_id: "opus[1m]", effort: "high", fast: false }, OPUS, ["model"]);
+    forgetPendingChoice("a12");
+    expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.isPending).toBe(false);
     await flush();
   });
 

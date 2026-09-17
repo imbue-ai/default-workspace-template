@@ -17,6 +17,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
+import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
@@ -40,6 +41,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import { FastModeModal } from "./FastModeModal";
+import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -60,8 +62,19 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   return (shown[0] ?? option.efforts[0]).level;
 }
 
-function capitalizeEffort(level: string): string {
-  return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
+/** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat is
+ *  not converging or the switch picked no model, which leaves the chip on the live choice.
+ *
+ *  Named from the target harness's catalog, and by its raw id for a harness whose option set is per
+ *  agent (codex), which no catalog holds -- an id the user has not seen spelled that way, but the
+ *  model they picked, which is the point. */
+function convergingPickLabel(chat: ChatSnapshot): string | null {
+  const converging = chat.handoff;
+  const pick = converging?.model_pick ?? null;
+  if (converging === null || pick === null) return null;
+  const options = getHarnessCatalog(converging.target_harness)?.options ?? [];
+  const option = options.find((each) => each.id === pick.model_id);
+  return modelPickLabel(option?.label ?? pick.model_id, pick.effort, pick.fast);
 }
 
 // A search picker (pi) can carry thousands of models; never lay out more than
@@ -632,6 +645,10 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const pendingPick = getPendingPick(chatId);
       const isPendingRebind = pending !== null && switchKind(chat, pending) === "rebind";
       const pendingModelLabel = pendingPick?.label ?? (isPendingRebind ? (matched?.label ?? null) : null);
+      // A page with no armed switch of its own can still be watching one: reloaded mid-switch, it
+      // has only what the chat carries. Read the same way, so the chip does not fall back to a live
+      // choice that cannot name the picked model until the harness has taken it.
+      const convergingLabel = pending !== null ? null : convergingPickLabel(chat);
 
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
@@ -661,9 +678,9 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             }
           },
         },
-        pending !== null
+        pending !== null || convergingLabel !== null
           ? [
-              m("span", pendingModelLabel ?? pending.harness_label),
+              m("span", convergingLabel ?? pendingModelLabel ?? pending?.harness_label ?? ""),
               m(
                 "span",
                 {
