@@ -234,7 +234,7 @@ class AppInventoryEntry(FrozenModel):
     instances: tuple[InventoryInstance, ...] = Field(description="The app's instances, in the app's list order")
     # False until the app's instances API has answered a list once (a single-instance app's one
     # record is synthesized, so it counts as listed): an empty list that was never fetched is
-    # not evidence that an address is gone, and a client must not prune on it.
+    # not evidence that an address is missing, and a client shows nothing as unavailable on it.
     is_listed: bool = Field(description="Whether the instance list is the app's own answer rather than the seed")
     # A record the shell has held for less than the grace period is not deleted for being
     # unreferenced: the create that made it has returned but the tab docking it may not have
