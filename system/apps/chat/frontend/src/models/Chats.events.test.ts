@@ -48,7 +48,7 @@ function open(): void {
 const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error };
+  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error, is_seeded: false };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A

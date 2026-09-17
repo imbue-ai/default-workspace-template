@@ -198,6 +198,53 @@ on first bring-up.
 
 ---
 
+## 3b. (dev / ci only) Stand up the tier's box registry
+
+Staging and production have one pool database, so the `host_pool` DB
+above is both the connector's database and the fleet's box registry.
+The dynamic tiers (dev, ci) give every env its own pool database, so
+the tier needs a standing **box registry**: one Neon project no connector
+runs against, whose `bare_metal_servers` rows are the fleet and whose
+pooled DSN is the tier's `secrets/minds/<tier>/neon/DATABASE_URL` leaf.
+`minds-admin env deploy` copies its `ready` rows into every fresh env, and
+the tier-addressed `minds-admin wireguard` commands read it directly. The
+dev registry (`minds-dev-infra`) was created 2026-09-16; the ci one
+(`minds-ci-infra`) with specs/remote-workspaces-in-ci.md. To stand one up
+for a new dynamic tier, with the tier's `employee`-role Vault login:
+
+```bash
+uv run python - <<'PY'
+from pydantic import SecretStr
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.minds.envs.primitives import DevEnvName
+from imbue.minds.envs.vault_reader import VaultPath, read_vault_kv, write_vault_kv
+from imbue.minds_admin.envs.migrations import apply_pool_hosts_migrations
+from imbue.minds_admin.envs.providers.neon_db import create_neon_project, pool_hosts_migrations_dir
+
+TIER = "dev"
+with ConcurrencyGroup(name="registry-bringup") as cg:
+    admin = read_vault_kv(VaultPath(f"secrets/minds/{TIER}/neon-admin"), parent_concurrency_group=cg)
+    record = create_neon_project(
+        DevEnvName(f"{TIER}-infra"), org_id=admin["NEON_ORG_ID"],
+        api_token=SecretStr(admin["NEON_API_TOKEN"]), parent_cg=cg,
+    )
+    apply_pool_hosts_migrations(record.host_pool_dsn, migrations_dir=pool_hosts_migrations_dir(), parent_cg=cg)
+    write_vault_kv(
+        VaultPath(f"secrets/minds/{TIER}/neon"),
+        {"DATABASE_URL": record.host_pool_dsn.get_secret_value()},
+        parent_concurrency_group=cg,
+    )
+PY
+```
+
+Then register or import the tier's boxes into it (`minds-admin server
+import-boxes --source-database-url <old pool DB> --database-url <registry>`
+copies rows id-preserving from an env that already holds them). Operate on
+the registry through the activation-only `<tier>-infra` env root:
+`eval "$(uv run minds-admin env activate --create dev-infra)"` and
+`eval "$(just registry-dsn dev)"`. Details: the "Box registry" section of
+[host-pool-setup.md](../host-pool-setup.md).
+
 ## 4. Push every Vault entry the staging deploy reads
 
 For each service below: copy the template, fill in values, push,

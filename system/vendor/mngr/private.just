@@ -190,7 +190,7 @@ test-offload-minds-snapshot snapshot_image_id args="":
         cp test-results/junit.xml "$MAIN_WORKTREE/test-results/junit.xml"
     fi
 
-# === TMR (test map-reduce) variants ===
+# TMR (test map-reduce) variants
 # Canonical per-suite flag sets for `mngr tmr` (one agent per test, run + fix in
 # parallel). Each variant gets its own --name prefix so its agents, branches, and
 # PRs stay separate and reviewable on their own. The CI workflow
@@ -223,7 +223,7 @@ tmr-minds *args:
 witness-minds *args:
   uv run mngr witness --root apps/minds/behaviors {{args}}
 
-# === minds deployment / services test orchestrator ===
+# minds deployment / services test orchestrator
 # Wraps apps/minds_admin/scripts/test_deployments.py. See specs/minds-deployment-tests.md
 # and apps/minds/deployment_tests/README.md for the full design + usage.
 
@@ -298,8 +298,9 @@ minds-test-electron *args:
   xvfb-run -a uv run pytest apps/minds/test_snapshot_resume.py::test_create_workspace_and_sign_in_via_modal_then_chat_via_electron -v --no-cov --cov-fail-under=0 {{args}}
 
 # Drive the FULL Electron workspace lifecycle end-to-end (create local Docker
-# workspace -> send a chat message + await reply -> open a terminal -> navigate
-# home -> destroy via the v1 settings flow), wrapped in `xvfb-run` for headless
+# workspace -> message the welcome chat it opens on + await reply -> start a
+# second chat from the New Tab page -> open a terminal -> navigate home ->
+# destroy via the v1 settings flow), wrapped in `xvfb-run` for headless
 # Linux. Unlike `minds-test-electron` (create-only pytest acceptance test), this
 # is an operator/debug harness: it needs Docker + live AI creds, so activate an
 # env with a logged-in account first, e.g.
@@ -558,7 +559,7 @@ sync-vendor-mngr-live default_workspace_template="":
         --exclude=uv.lock \
         ./ "$vendor_mngr/"
 
-# === Modal deploy / minds iteration helpers ===
+# Modal deploy / minds iteration helpers
 #
 # Every recipe below requires an activated minds env. Activate first via
 # `eval "$(uv run minds-admin env activate <name>)"`, then run the recipe in
@@ -1505,7 +1506,7 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
     [ -n "$base_url" ] && printf 'export ANTHROPIC_BASE_URL=%s\n' "$base_url" >> "$env_file"
     echo "Wrote $env_file (mode 600)"
 
-# === minds pool hosts (leased mode) ===
+# minds pool hosts (leased mode)
 #
 # Thin wrappers around the env-aware `minds-admin pool {create,list,destroy}` CLI,
 # which resolves the pool SSH key AND (for staging / production) the host_pool
@@ -1517,7 +1518,7 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 # Pool hosts are baked as bare-metal SLICES (recipes below). List them with
 # `just pool-list` and remove them with `just pool-destroy`.
 
-# === minds bare-metal SLICES (carved on a pre-registered bare-metal box) ===
+# minds bare-metal SLICES (carved on a pre-registered bare-metal box)
 #
 # These bake "slices": lima/QEMU VMs carved on a bare-metal box you already
 # ordered, `minds-admin server register`ed, and `... prep`ped
@@ -1527,6 +1528,15 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 #
 # Prereqs: activate a minds env first (`eval "$(uv run minds-admin env activate <name>)"`)
 # AND `vault login -method=oidc` (the wrapper's Vault reads need a live token).
+#
+# Box commands (server-*, and `minds-admin cutover repave`) on the dev and ci
+# tiers must run from the tier's box REGISTRY, not a personal env: activate the
+# activation-only `<tier>-infra` root and export the registry DSN --
+#   eval "$(uv run minds-admin env activate --create dev-infra)"
+#   eval "$(just registry-dsn dev)"
+# -- so the box row lands where every env's `env deploy` imports from
+# (see "Box registry" in apps/minds/docs/deploy/host-pool-setup.md). Bakes stay
+# on the personal env (they write that env's pool_hosts rows).
 #
 # `region` is the lease-region LABEL stamped on each row (what the connector
 # region-matches at lease time, e.g. US-EAST-VA) -- NOT the box's raw
@@ -1621,6 +1631,33 @@ pool-bake region tag count="1" *extra_args:
         --region "{{region}}" \
         --from-tag "{{tag}}" \
         {{extra_args}}
+
+# Print the `export MINDS_HOST_POOL_DSN=...` line for a tier's box registry
+# (secrets/minds/<tier>/neon/DATABASE_URL; requires a vault login), to eval
+# after activating the tier's `<tier>-infra` root. stdout carries only the
+# export line; a failure (no `vault login`, missing leaf) is reported on stderr
+# and exits non-zero, so eval sees nothing.
+#
+#   eval "$(just registry-dsn dev)"
+[group("minds ops")]
+registry-dsn tier:
+    #!/bin/bash
+    set -ueo pipefail
+    dsn="$(uv run python - "{{tier}}" <<'PYEOF'
+    import sys
+
+    import click
+
+    from imbue.minds_admin.cli._tier_secrets import resolve_tier_pool_database_url
+
+    try:
+        print(resolve_tier_pool_database_url(sys.argv[1]))
+    except click.ClickException as exc:
+        exc.show()
+        sys.exit(exc.exit_code)
+    PYEOF
+    )"
+    printf 'export MINDS_HOST_POOL_DSN=%q\n' "$dsn"
 
 # Add a paid user to the activated minds env. Resolves the connector URL (from the
 # env's client.toml) and the paid-list admin key (from the tier's Vault) automatically,

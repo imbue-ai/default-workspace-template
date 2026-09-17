@@ -354,6 +354,17 @@ for pool host rows and LiteLLM spend tracking. `minds-admin env destroy`
 deletes the project outright (everything inside goes with it); no
 cross-dev contamination, no leftover roles to clean up.
 
+The bare-metal boxes themselves are tier-shared and are never registered
+in a personal env: the dev tier keeps their canonical rows in its standing
+box registry (Neon project `minds-dev-infra`, the pool DB at
+`secrets/minds/dev/neon/DATABASE_URL`), and `minds-admin env deploy` copies
+the registry's `ready` rows into the env's `host_pool` DB right after
+migrating it. A fresh dev env can therefore bake and lease slices on every
+dev box from its first deploy, and a box added to the registry reaches
+existing envs on their next deploy. Box operations (order, setup, prep,
+register, audit) run from the `dev-infra` registry activation; see the
+"Box registry" section of [host-pool-setup.md](../host-pool-setup.md).
+
 Bootstrap a brand-new dev env:
 
 ```bash

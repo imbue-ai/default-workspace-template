@@ -1,6 +1,8 @@
 from datetime import datetime
 from datetime import timezone
 
+from imbue.imbue_common.model_update import to_update
+from imbue.minds.config.data_types import management_overlay_for_tier
 from imbue.minds_admin.slices.bare_metal_db import _CLAIM_POOL_HOST_FOR_REMOVAL_SQL
 from imbue.minds_admin.slices.bare_metal_db import _COUNT_SLICES_SQL
 from imbue.minds_admin.slices.bare_metal_db import _FINISH_BAKING_SLICE_POOL_HOST_SQL
@@ -12,6 +14,7 @@ from imbue.minds_admin.slices.bare_metal_db import _SERVER_COLUMNS
 from imbue.minds_admin.slices.bare_metal_db import _UPSERT_BARE_METAL_SERVER_SQL
 from imbue.minds_admin.slices.bare_metal_db import _render_server_columns
 from imbue.minds_admin.slices.bare_metal_db import _server_from_row
+from imbue.minds_admin.slices.bare_metal_db import allocate_box_wireguard_address
 from imbue.minds_admin.slices.bare_metal_db import build_baking_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_insert_values
 from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_upsert_values
@@ -253,6 +256,59 @@ def test_server_from_row_round_trips() -> None:
     assert reconstructed.uplink_mbps == 1000
     assert reconstructed.wireguard_address == "10.202.1.7"
     assert reconstructed.wireguard_public_key == "wgboxpubkey="
+
+
+def _server_select_row(server: BareMetalServer) -> tuple:
+    """A ``_SELECT_SERVERS_SQL`` row for ``server`` (the column order ``_server_from_row`` reads)."""
+    insert_values = build_bare_metal_server_insert_values(server)
+    return (
+        insert_values[:15]
+        + insert_values[16:-2]
+        + (
+            server.created_at,
+            server.updated_at,
+            server.box_host_public_key,
+            server.box_generation,
+            server.uplink_mbps,
+            server.wireguard_address,
+            server.wireguard_public_key,
+        )
+    )
+
+
+def test_allocate_box_wireguard_address_locks_then_reads_then_stamps_in_one_transaction() -> None:
+    dev_allocation = management_overlay_for_tier("dev")
+    stamped_box = _ready_server().model_copy_update(
+        to_update(_ready_server().field_ref().wireguard_address, "10.112.1.1")
+    )
+    fake_conn = RecordingConnection([_server_select_row(stamped_box)], rowcount=1)
+    new_box_id = BareMetalServerDbId("22222222-2222-2222-2222-222222222222")
+
+    address = allocate_box_wireguard_address(fake_conn, new_box_id, None, dev_allocation)
+
+    assert address == "10.112.1.2"
+    executed = fake_conn.recording_cursor.executed
+    assert len(executed) == 3
+    assert "pg_advisory_xact_lock" in executed[0][0]
+    assert executed[1][0].lstrip().upper().startswith("SELECT")
+    assert executed[2][0].startswith("UPDATE bare_metal_servers SET wireguard_address = %s, wg_address = %s")
+    assert executed[2][1] == ("10.112.1.2", "10.112.1.2", str(new_box_id))
+    assert fake_conn.commit_count == 1
+
+
+def test_allocate_box_wireguard_address_keeps_an_in_plan_address_and_only_releases_the_lock() -> None:
+    dev_allocation = management_overlay_for_tier("dev")
+    stamped_box = _ready_server().model_copy_update(
+        to_update(_ready_server().field_ref().wireguard_address, "10.112.1.1")
+    )
+    fake_conn = RecordingConnection([_server_select_row(stamped_box)], rowcount=1)
+
+    address = allocate_box_wireguard_address(fake_conn, stamped_box.id, "10.112.1.1", dev_allocation)
+
+    assert address == "10.112.1.1"
+    assert [sql for sql, _params in fake_conn.recording_cursor.executed if sql.startswith("UPDATE")] == []
+    assert "pg_advisory_xact_lock" in fake_conn.recording_cursor.executed[0][0]
+    assert fake_conn.commit_count == 1
 
 
 def test_fetch_unleased_slice_teardown_row_ids_maps_rows_to_strings() -> None:

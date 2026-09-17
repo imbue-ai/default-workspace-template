@@ -8,6 +8,8 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds.config.data_types import ManagementOverlayAllocation
+from imbue.minds_admin.slices.management_plane import resolve_box_overlay_address
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyTarget
@@ -367,6 +369,43 @@ def update_server(conn: Any, server_id: BareMetalServerDbId, **fields: Any) -> N
             tuple(params),
         )
     conn.commit()
+
+
+# Serializes overlay-address allocation across operator invocations: two
+# concurrent `server setup`s on one tier once each read the free set before
+# the other had stamped, and both took the same address. Transaction-scoped,
+# so it releases with the stamping commit and is safe through Neon's
+# transaction-mode pooler (the lock and the stamp share one transaction).
+_WIREGUARD_ADDRESS_ALLOCATION_LOCK_SQL: Final[str] = (
+    "SELECT pg_advisory_xact_lock(hashtext('bare_metal_servers.wireguard_address'))"
+)
+
+
+def allocate_box_wireguard_address(
+    conn: Any,
+    server_id: BareMetalServerDbId,
+    current_address: str | None,
+    allocation: ManagementOverlayAllocation,
+) -> str:
+    """Resolve the box's overlay address and stamp it, under the fleet-wide allocation lock, in one transaction.
+
+    Reading every stamped address and stamping the chosen one must be one
+    atomic step: a concurrent allocation blocks on the lock until this
+    transaction commits, then sees the address it just took. An address that
+    already fits the plan is kept and nothing is written (the commit only
+    releases the lock).
+    """
+    with conn.cursor() as cur:
+        cur.execute(_WIREGUARD_ADDRESS_ALLOCATION_LOCK_SQL)
+    assigned_addresses = {server.wireguard_address for server in fetch_servers(conn) if server.wireguard_address}
+    wireguard_address = resolve_box_overlay_address(current_address, assigned_addresses, allocation)
+    if wireguard_address == current_address:
+        conn.commit()
+        return wireguard_address
+    # CLEANUP: drop the legacy wg_address dual write once every tier's pool DB
+    # has applied migration 037 and no pre-rename checkout is in use.
+    update_server(conn, server_id, wireguard_address=wireguard_address, wg_address=wireguard_address)
+    return wireguard_address
 
 
 def fetch_servers(conn: Any) -> list[BareMetalServer]:

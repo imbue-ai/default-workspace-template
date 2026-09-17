@@ -1,0 +1,3 @@
+The `welcome` skill runs on every chat that starts with no message, not only the workspace's first, and varies its greeting by how many times it has run (`python3 system/scripts/welcome_count.py`): the first greeting after the onboarding chat explains that every chat talks to the same Mind, the next three each offer one hint (building apps, connecting services, scheduling), and the rest are a plain greeting. The suggestions section is unchanged.
+
+Carries the phase 7 and 8 changes of the chat-agent split (`mngr/chat-agent-refactor-8`) into this branch: the `agentic-browser-fleet`, `find-transcripts`, and `handoff-summary` skill updates.

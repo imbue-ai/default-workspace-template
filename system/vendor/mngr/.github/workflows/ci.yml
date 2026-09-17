@@ -649,18 +649,25 @@ jobs:
 
 
   # Clean up old Azure test VMs left behind by the mngr_azure release tests.
-  # The script no-ops if Azure credentials or a subscription cannot be resolved,
-  # so this job is safe before the secrets are configured. Migrate to Vault
-  # (mngr/ci/AZURE_*) once the Azure test subscription is provisioned.
+  # The Vault credential fetch fails the job if the entries are absent.
   cleanup-azure-instances:
     runs-on: ubuntu-latest
-    env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    permissions:
+      contents: read
+      # Lets the use-vault-secrets step below mint a GitHub OIDC token for Vault.
+      id-token: write
 
     steps:
+      - name: Fetch Azure credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/AZURE_CLIENT_ID
+            mngr/ci/AZURE_TENANT_ID
+            mngr/ci/AZURE_CLIENT_SECRET
+            mngr/ci/AZURE_SUBSCRIPTION_ID
+
       - uses: actions/checkout@v6
 
       - name: Set up Python

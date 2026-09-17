@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 import click
-import psycopg2
 import pytest
 from click.testing import CliRunner
 from inline_snapshot import snapshot
@@ -21,7 +20,6 @@ from imbue.minds_admin.cli.server import _box_ssh_host_key_options
 from imbue.minds_admin.cli.server import _build_slice_create_args
 from imbue.minds_admin.cli.server import _destroy_one_pool_host
 from imbue.minds_admin.cli.server import _format_capacity_table
-from imbue.minds_admin.cli.server import _import_ready_servers
 from imbue.minds_admin.cli.server import _is_seed_phase_needed
 from imbue.minds_admin.cli.server import _kill_bake_worker_processes
 from imbue.minds_admin.cli.server import _resolve_gen2_guest_image
@@ -52,7 +50,6 @@ from imbue.minds_admin.cli.server import sweep_ci_slices_across_boxes
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_SHA512
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_URL
 from imbue.minds_admin.slices.operator_identity import POOL_KEY_FILENAME
-from imbue.minds_admin.slices.testing import RecordingConnection
 from imbue.minds_admin.slices.testing import make_test_management_identities
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import generate_ed25519_host_keypair
@@ -106,34 +103,6 @@ def _server(
         updated_at=now,
         uplink_mbps=1000,
     )
-
-
-def test_import_ready_servers_skips_a_box_the_target_already_registers() -> None:
-    # A source box the target DB already holds under another row id trips the
-    # ovh_service_name unique index; the import must roll that statement back,
-    # report the box as skipped, and still import the rest.
-    source = _server(slot_count=15, cpu_threads=32)
-    fresh = source.model_copy_update(to_update(source.field_ref().ovh_service_name, "ns-fresh"))
-    duplicate = fresh.model_copy_update(
-        to_update(fresh.field_ref().id, BareMetalServerDbId("22222222-2222-2222-2222-222222222222")),
-        to_update(fresh.field_ref().ovh_service_name, "ns-duplicate"),
-    )
-    conn = RecordingConnection(
-        [],
-        rowcount=1,
-        error_by_param={
-            "ns-duplicate": psycopg2.errors.UniqueViolation(
-                'duplicate key value violates unique constraint "bare_metal_servers_service_name_idx"'
-            )
-        },
-    )
-    imported, skipped = _import_ready_servers(conn, [duplicate, fresh])
-    assert [server.id for server in imported] == [fresh.id]
-    assert [(server.id, "bare_metal_servers_service_name_idx" in reason) for server, reason in skipped] == [
-        (duplicate.id, True)
-    ]
-    assert conn.rollback_count == 1
-    assert [params[0] for _sql, params in conn.recording_cursor.executed] == [str(fresh.id)]
 
 
 def test_build_registered_server_derives_slot_count_from_memory_per_slice() -> None:

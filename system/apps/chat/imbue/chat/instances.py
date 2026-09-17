@@ -4,7 +4,8 @@ Every chat is an ``explicit``, renameable instance keyed by its chat id, with it
 taken from the chat's snapshot (the activity state, the pending permission requests, and the
 lifecycle of its active agent). A chat whose first agent mngr does not know yet (a provisional
 chat) is a ``referenced`` instance under its chat id, whose status is its phase: waiting for
-an account (``attention``), being created (``working``), or failed (``error``). A subagent
+an account (``attention``), waiting for the user's first message on a seeded transcript
+(``idle``), being created (``working``), or failed (``error``). A subagent
 view is a ``referenced`` instance keyed ``<chat-id>.<agent-id>.<session-id>`` that the
 parent's page creates on demand; the middle part names the agent whose harness session the
 subagent belongs to.
@@ -131,6 +132,8 @@ def _refuse_while_moving(snapshot: ChatSnapshot) -> None:
 
 _STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] = {
     ProvisionalChatPhase.AWAITING_ACCOUNT: InstanceStatus.ATTENTION,
+    # The conversation is on the page waiting for the user, like an idle chat's.
+    ProvisionalChatPhase.AWAITING_FIRST_SEND: InstanceStatus.IDLE,
     ProvisionalChatPhase.CREATING: InstanceStatus.WORKING,
     ProvisionalChatPhase.FAILED: InstanceStatus.ERROR,
 }

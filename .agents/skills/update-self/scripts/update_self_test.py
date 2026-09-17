@@ -619,7 +619,7 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
     ]
     local_changed = [
         "system/apps/system_interface/src/App.tsx",
-        "PURPOSE.md",  # local only, not an upstream update -> ignored
+        "PURPOSE.md",  # local only, not an upstream update
     ]
     result = update_classification.classify_merge(upstream_changed, local_changed)
 
@@ -692,6 +692,86 @@ def test_classify_merge_empty() -> None:
     assert result.pulled_in == []
     assert result.projects_to_validate == []
     assert result.has_merge_work is False
+
+
+def test_classify_merge_reports_the_local_footprint_beyond_docs() -> None:
+    # The impact analysis exists to find user-created consumers of what the
+    # update changed. The footprint is every local change outside the docs
+    # class, whether upstream also touched the file (merged) or not (local
+    # only); docs/VERSION_HISTORY.md, which every apply rewrites, and other
+    # prose never make one.
+    result = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"],
+        ["docs/VERSION_HISTORY.md", "PURPOSE.md", "system/apps/my_app/server.py"],
+    )
+    assert [entry["path"] for entry in result.local_only] == [
+        "PURPOSE.md",
+        "docs/VERSION_HISTORY.md",
+        "system/apps/my_app/server.py",
+    ]
+    assert [entry["disposition"] for entry in result.local_only] == ["local_only"] * 3
+    assert result.has_local_footprint is True
+
+    docs_only = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"], ["docs/VERSION_HISTORY.md", "PURPOSE.md"]
+    )
+    assert docs_only.has_local_footprint is False
+
+    # A file that diverged on both sides is local content too, even though it
+    # is not in the local-only list.
+    merged_code = update_classification.classify_merge(
+        ["system/scripts/forward_port.py"], ["system/scripts/forward_port.py"]
+    )
+    assert merged_code.local_only == []
+    assert merged_code.has_local_footprint is True
+
+
+def test_classify_merge_cli_reads_the_local_footprint_from_git(
+    tmp_path, capsys
+) -> None:
+    # The footprint is read off the local side of the diff -- the same set the
+    # command splits the upstream set against. A workspace whose only commits
+    # since the base add an app and rewrite the version history must report
+    # that app as its footprint.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write("docs/VERSION_HISTORY.md", "base\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("checkout", "-q", "-b", "upstream-line")
+    _write("system/scripts/forward_port.py", "upstream change\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "upstream")
+    _git("tag", "target")
+    _git("checkout", "-q", "-")
+    _write("docs/VERSION_HISTORY.md", "base\nupdated to a release\n")
+    _write("system/apps/my_app/server.py", "print('mine')\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "local work")
+
+    code = update_self.main(
+        ["classify-merge", "--target", "target", "--repo-root", str(tmp_path)]
+    )
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [entry["path"] for entry in result["pulled_in"]] == [
+        "system/scripts/forward_port.py"
+    ]
+    assert [entry["path"] for entry in result["local_only"]] == [
+        "docs/VERSION_HISTORY.md",
+        "system/apps/my_app/server.py",
+    ]
+    assert result["has_merge_work"] is False
+    assert result["has_local_footprint"] is True
 
 
 # --- CLI wiring --------------------------------------------------------------
@@ -1645,6 +1725,7 @@ def _apply(
     target_ref: str | None = None,
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
+    sweep_homes: Sequence[Path] = (),
 ) -> int:
     return update_apply.apply_update(
         merge_ref,
@@ -1661,6 +1742,7 @@ def _apply(
         today=_TODAY,
         is_pid_live=is_pid_live,
         expend=expend,
+        sweep_homes=sweep_homes,
     )
 
 
@@ -3427,10 +3509,11 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
         assert "CLAUDE_CODE_VERSION" not in env
         assert "NODE_VERSION" not in env
-    # Only the recovery re-run is forced past the provision guard: the rolled-
-    # back tree is the one the guard's marker was written for, so an unforced
-    # re-run would skip and leave the global tools at the merged versions.
-    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == [None, "1"]
+    # Both runs are forced past the provision guard. The recovery re-run lands
+    # on the tree the guard's marker was written for; and that marker outlives
+    # the rollback, so a retry of the same merge would otherwise skip the
+    # provisioner and report UPDATED with the toolchain still rolled back.
+    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == ["1", "1"]
 
 
 def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None:
@@ -4813,7 +4896,7 @@ def _install_tool(home: Path, tool_name: str, executable: str) -> tuple[Path, Pa
 
 
 def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
-    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    apply_repo: Path, tmp_path: Path
 ) -> None:
     # Not gated on the merge's manifests: the box is already broken, whatever
     # this release changes.
@@ -4823,11 +4906,18 @@ def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
     stale_shim, stale_tools = _install_tool(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
 
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[tmp_path / "home", tmp_path / "root"],
+    )
+
+    assert code == 0
 
     assert not stale_shim.exists()
     assert not (stale_tools / update_layout.MNGR_TOOL_NAME).exists()
@@ -4836,7 +4926,7 @@ def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
 
 
 def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     # The console script under $HOME/.local/bin may belong to something else
     # (a venv script, a hand-written wrapper); only the stale tool's own goes.
@@ -4847,30 +4937,50 @@ def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
     stale_shim.write_text('#!/bin/sh\nexec /somewhere/else/mngr "$@"\n')
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
 
-    removed = update_environment.remove_shadowing_mngr_installs(runner)
+    removed = update_environment.remove_shadowing_mngr_installs(
+        runner, [tmp_path / "home", tmp_path / "root"]
+    )
 
     assert removed == [stale_tools / update_layout.MNGR_TOOL_NAME]
     assert stale_shim.exists()
 
 
-def test_the_only_mngr_install_is_never_removed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_only_mngr_install_is_never_removed(tmp_path: Path) -> None:
     # The install on PATH is the one being refreshed, even when it lives under $HOME.
     shim, tools = _install_tool(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(shim)
 
-    assert update_environment.remove_shadowing_mngr_installs(runner) == []
+    removed = update_environment.remove_shadowing_mngr_installs(
+        runner, [tmp_path / "home", tmp_path / "root"]
+    )
+
+    assert removed == []
     assert shim.exists()
     assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
+
+
+def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An agent runs the apply under HOME=/home/user, where a pre-minds-v0.4.3
+    # apply left its copy; the image build's /root is where the refreshed one
+    # lives. Both are swept, the caller's first, and a caller with no HOME
+    # still sweeps the build's.
+    monkeypatch.setenv("HOME", "/home/user")
+    assert update_environment.default_sweep_homes() == [
+        Path("/home/user"),
+        Path(update_layout.PROVISIONER_HOME),
+    ]
+    monkeypatch.delenv("HOME")
+    assert update_environment.default_sweep_homes() == [
+        Path(update_layout.PROVISIONER_HOME)
+    ]
 
 
 def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(

@@ -970,7 +970,9 @@ def test_driver_creates_the_chat_only_after_the_workspace_is_signed_in(tmp_path:
     sign_in_index = next(
         index for index, command in enumerate(environment.exec_commands) if "submit-credentials" in command
     )
-    create_index = next(index for index, command in enumerate(environment.exec_commands) if "create-chat" in command)
+    create_index = next(
+        index for index, command in enumerate(environment.exec_commands) if minds_bridge.CREATE_CHAT_PATH in command
+    )
     assert sign_in_index < create_index
     # The chat is named after the workspace host and bound to the account the sign-in minted.
     assert len(conversation.create_chat_commands) == 1
@@ -2165,12 +2167,16 @@ def _run_goal_driver(
     snapshot_mode: str = "per-turn",
     timeout_seconds: float = 1800.0,
     refused_send_index: int | None = None,
+    events_poll_failing_after_message: int | None = None,
 ) -> tuple[ScriptedTurnSource, MockBoxEnvironment, AgentContext]:
     """Drive a two-entry case -- the opening literal ask, then one scripted goal entry -- through the
     real conversation loop, and hand back the goal source so a test can assert on what it was asked.
 
-    A tiny `timeout_seconds` plus a short `replies` (or a `refused_send_index`) is how the timing-out
-    paths are reached: the trial's budget expires on a reply or a send that never lands.
+    The timing-out paths each have their own knob. A `refused_send_index` plus a tiny `timeout_seconds`
+    reaches the send that never lands: the trial's budget expires retrying it. An
+    `events_poll_failing_after_message` reaches the message that went out and drew no reply with no
+    budget in play: the events poll stops answering once that message went out, and the driver gives
+    up on the reply after a run of failed polls.
     """
     goal_source = ScriptedTurnSource(
         actions=actions,
@@ -2181,6 +2187,7 @@ def _run_goal_driver(
     sources: list[TurnSource] = [LiteralTurnSource(prompt=_OPENING_PROMPT), goal_source]
     conversation = _goal_conversation(replies)
     conversation.refused_send_index = refused_send_index
+    conversation.events_poll_failing_after_message = events_poll_failing_after_message
     _driver, environment, context = _run_driver(
         tmp_path,
         (_OPENING_PROMPT, GoalEntry(goal=goal, max_exchanges=max_exchanges)),
@@ -2350,11 +2357,11 @@ def test_driver_audits_a_message_that_went_out_but_drew_no_reply_as_sent(tmp_pat
         goal="See it running",
         max_exchanges=3,
         actions=[say("Where is it?")],
-        # One reply for the opening ask and nothing for the goal entry's message, so the trial's tiny
-        # budget expires waiting for a reply that never comes.
+        # One reply for the opening ask and nothing for the goal entry's message: once that message
+        # has gone out the events poll stops answering, so the wait for its reply gives up.
         replies=("Building it.",),
         is_decider_call_simulated=True,
-        timeout_seconds=0.3,
+        events_poll_failing_after_message=2,
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -2431,9 +2438,9 @@ def test_driver_records_the_clients_own_reason_for_ending_a_goal_entry(tmp_path:
 
 # What one bridged curl in the recorded exec commands is, by the URL it carries. The state poll is
 # the bare `/api/agents` listing, which ends the quoted inner command; the sends and the event
-# fetches all address a path under it.
+# fetches address `/api/chats/<chat_id>/...`.
 _CALL_KIND_BY_URL_MARKER: Final[tuple[tuple[str, str], ...]] = (
-    ("/api/agents/chat-1/message", "send"),
+    ("/api/chats/chat-1/message", "send"),
     ("/api/agents'", "state"),
 )
 
@@ -3321,7 +3328,7 @@ def test_driver_records_why_it_gave_up_on_a_workspace_that_never_became_usable(t
     # silent for the whole budget.
     driver_log = (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
     assert "Still waiting for the workspace's create-chat endpoint to answer" in driver_log
-    assert "nothing readable from /api/agents/create-chat" in driver_log
+    assert "nothing readable from /api/chats/create" in driver_log
 
 
 def test_driver_records_a_welcome_that_never_arrived_as_a_preparation_failure(tmp_path: Path) -> None:

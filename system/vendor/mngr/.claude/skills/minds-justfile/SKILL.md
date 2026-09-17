@@ -67,7 +67,15 @@ destroyable. First order + set up a box with `just server-order` (pass
 <server-id>`, and `just server-setup <server-id>` (or `minds-admin server
 register` for an already-provisioned box); the box must be `ready` with a
 free slot. These are env-aware: OVH creds, pool DSN, and pool SSH key resolve
-from the activated tier.
+from the activated tier. On dev and ci, box commands (order / setup / prep /
+register / list / audit / repave) run from the tier's registry activation, not
+a personal env: `eval "$(uv run minds-admin env activate --create dev-infra)"`
+plus `eval "$(just registry-dsn dev)"` (the registry is the standing
+`minds-<tier>-infra` Neon DB at `secrets/minds/<tier>/neon/DATABASE_URL`; a
+personal env only holds copies `env deploy` imports). Adding an operator's
+WireGuard key to every box is `minds-admin wireguard sync-peers --tier dev`,
+which needs no activation. See the "Box registry" section of
+`apps/minds/docs/deploy/host-pool-setup.md`.
 - `just pool-bake-from-worktree <region> [workspace_dir] [count] [extra flags]` -- DEV
   bake from a working tree; the stamped identity (`repo_url` + `repo_branch_or_tag`)
   is DERIVED from the folder's `origin` remote + current branch (best-effort label,

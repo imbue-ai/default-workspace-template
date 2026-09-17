@@ -208,7 +208,9 @@ def _source_repo(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     source.mkdir()
     (source / "README.md").write_text("# real-claude-subagent test repo\n")
-    (source / ".gitignore").write_text(".claude/settings.local.json\n")
+    (source / ".gitignore").write_text(
+        ".claude/settings.local.json\n.claude/agents/mngr-proxy/\n.claude/skills/mngr-proxy/\n"
+    )
     init_git_repo(source, initial_commit=True)
     return source
 
