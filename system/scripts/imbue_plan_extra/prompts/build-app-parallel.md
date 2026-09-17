@@ -258,9 +258,9 @@ the plan.
 For "build me a to-do list", where everything the app needs is already here:
 
 ```
-<thinking>
+<rationale>
 Where you cut the work and why, and why each node got the capability it got.
-</thinking>
+</rationale>
 <output>
 capability = ["high", "medium", "medium", "interactive", "medium", "high", "interactive"]
 subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec and the contract the page reads through.", "Pre-flight and scaffold the app, serving its placeholder page. Build no routes and no UI beyond scaffolding. Hand back the app name, lib path and URL segment.", "Build a throwaway mock of the page to that spec inside the scaffolded service: hard-coded content only, covering every state the spec names. Hand back what it shows.", "Put the mock in front of the user and ask whether the look and feel is right. Bring back what they confirmed and any change they want.", "Build the storage and routes to that spec, behind the contract settled upstream. Leave the page alone. Hand back the routes and what each returns.", "Replace the mock with the real page on those routes, keeping the confirmed look exactly. Verify it serves, and leave hardening to the handoff.", "Put the working site in front of the user and ask whether it does what they wanted. Bring back their answer."]
