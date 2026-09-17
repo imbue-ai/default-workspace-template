@@ -797,10 +797,14 @@ def apply_update(
     today: str | None = None,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
     expend: ExpendWrapper = as_expendable,
+    sweep_homes: Sequence[Path],
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
+
+    ``sweep_homes`` are the homes swept for a stale mngr install after the
+    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -1021,7 +1025,7 @@ def apply_update(
                 expend,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
-        for stale in remove_shadowing_mngr_installs(runner):
+        for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
             )

@@ -269,8 +269,19 @@ def _installed_tool_location(
 # CLEANUP: remove once no supported workspace can still carry a tool install
 # left by a pre-minds-v0.4.3 apply (those followed uv's $HOME default instead
 # of targeting the installation on PATH).
-def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
-    """Delete stale copies of the mngr tool that shadow the one this apply refreshes.
+def default_sweep_homes() -> list[Path]:
+    """The homes a live apply sweeps for a stale mngr install: the caller's
+    ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the image
+    build's."""
+    homes = [Path(PROVISIONER_HOME)]
+    if os.environ.get("HOME"):
+        homes.insert(0, Path(os.environ["HOME"]))
+    return homes
+
+
+def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> list[Path]:
+    """Delete stale copies of the mngr tool under ``homes`` that shadow the one
+    this apply refreshes.
 
     A pre-minds-v0.4.3 apply reinstalled the tool wherever uv's default pointed, which at
     runtime is ``$HOME/.local`` rather than the ``/root/.local`` the image was built
@@ -281,14 +292,14 @@ def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
 
     This resolves which installation to keep -- the one behind ``mngr`` on this apply's
     PATH, which is what ``Runner`` is for -- and hands the rest to the shared sweep the
-    build also runs.
+    build also runs. The homes are the caller's, never read from here: the
+    apply's tests drive this with a fake ``mngr`` on PATH, and a sweep that
+    reached for the real ``/root`` on its own deleted the workspace's live
+    install from under the suite that was validating a release.
     """
     canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if canonical is None:
         return []
-    homes = [Path(PROVISIONER_HOME)]
-    if os.environ.get("HOME"):
-        homes.insert(0, Path(os.environ["HOME"]))
     return tool_env.remove_shadowing_mngr_installs(canonical[0], homes)
 
 

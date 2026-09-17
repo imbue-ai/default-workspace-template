@@ -1725,6 +1725,7 @@ def _apply(
     target_ref: str | None = None,
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
+    sweep_homes: Sequence[Path] = (),
 ) -> int:
     return update_apply.apply_update(
         merge_ref,
@@ -1741,6 +1742,7 @@ def _apply(
         today=_TODAY,
         is_pid_live=is_pid_live,
         expend=expend,
+        sweep_homes=sweep_homes,
     )
 
 
@@ -4893,7 +4895,7 @@ def _install_tool(home: Path, tool_name: str, executable: str) -> tuple[Path, Pa
 
 
 def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
-    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    apply_repo: Path, tmp_path: Path
 ) -> None:
     # Not gated on the merge's manifests: the box is already broken, whatever
     # this release changes.
@@ -4903,11 +4905,18 @@ def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
     stale_shim, stale_tools = _install_tool(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
 
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[tmp_path / "home", tmp_path / "root"],
+    )
+
+    assert code == 0
 
     assert not stale_shim.exists()
     assert not (stale_tools / update_layout.MNGR_TOOL_NAME).exists()
@@ -4916,7 +4925,7 @@ def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
 
 
 def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     # The console script under $HOME/.local/bin may belong to something else
     # (a venv script, a hand-written wrapper); only the stale tool's own goes.
@@ -4927,30 +4936,50 @@ def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
     stale_shim.write_text('#!/bin/sh\nexec /somewhere/else/mngr "$@"\n')
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
 
-    removed = update_environment.remove_shadowing_mngr_installs(runner)
+    removed = update_environment.remove_shadowing_mngr_installs(
+        runner, [tmp_path / "home", tmp_path / "root"]
+    )
 
     assert removed == [stale_tools / update_layout.MNGR_TOOL_NAME]
     assert stale_shim.exists()
 
 
-def test_the_only_mngr_install_is_never_removed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_only_mngr_install_is_never_removed(tmp_path: Path) -> None:
     # The install on PATH is the one being refreshed, even when it lives under $HOME.
     shim, tools = _install_tool(
         tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(shim)
 
-    assert update_environment.remove_shadowing_mngr_installs(runner) == []
+    removed = update_environment.remove_shadowing_mngr_installs(
+        runner, [tmp_path / "home", tmp_path / "root"]
+    )
+
+    assert removed == []
     assert shim.exists()
     assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
+
+
+def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An agent runs the apply under HOME=/home/user, where a pre-minds-v0.4.3
+    # apply left its copy; the image build's /root is where the refreshed one
+    # lives. Both are swept, the caller's first, and a caller with no HOME
+    # still sweeps the build's.
+    monkeypatch.setenv("HOME", "/home/user")
+    assert update_environment.default_sweep_homes() == [
+        Path("/home/user"),
+        Path(update_layout.PROVISIONER_HOME),
+    ]
+    monkeypatch.delenv("HOME")
+    assert update_environment.default_sweep_homes() == [
+        Path(update_layout.PROVISIONER_HOME)
+    ]
 
 
 def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(

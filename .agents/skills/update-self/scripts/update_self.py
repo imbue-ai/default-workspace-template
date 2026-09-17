@@ -151,6 +151,7 @@ from update_apply_contract import (
 )
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
+from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -521,6 +522,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         runner=Runner(),
         http=HttpClient(),
         spawner=Spawner(),
+        sweep_homes=default_sweep_homes(),
     )
 
 
