@@ -1228,7 +1228,9 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
     with agent_manager._lock:
         assert created_id in agent_manager._activity_tracked_agents
-        assert created_id in agent_manager._model_watcher_by_agent
+    # Model tracking follows ``_agents`` membership: the shared poller lists its paths
+    # from it, so a held created agent is polled...
+    assert created_id in agent_manager._list_model_state_paths()
 
     for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
         agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
@@ -1236,7 +1238,8 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     assert agent_manager.get_agent_by_id(created_id) is None
     with agent_manager._lock:
         assert created_id not in agent_manager._activity_tracked_agents
-        assert created_id not in agent_manager._model_watcher_by_agent
+    # ...and a let-go one is not.
+    assert created_id not in agent_manager._list_model_state_paths()
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
@@ -3155,13 +3158,13 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
     choice = agent_manager._agents[agent_id].model_choice
     assert choice is not None
     assert choice.identity.model_id == "gpt-5.6-terra"
-    msg = _last_agents_updated(_drain(client_queue))
+    msg = _last_chats_updated(_drain(client_queue))
     assert msg is not None
-    assert msg["agents"][0]["model_choice"] is not None
+    assert msg["chats"][0]["active_agent"]["model_choice"] is not None
 
     # An unchanged file stays quiet: no further broadcast on the next pass.
     agent_manager._model_state_poller.poll_once()
-    assert _last_agents_updated(_drain(client_queue)) is None
+    assert _last_chats_updated(_drain(client_queue)) is None
 
 
 def test_tracking_many_agents_spawns_no_per_agent_threads(
