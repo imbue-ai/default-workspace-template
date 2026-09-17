@@ -123,8 +123,7 @@ Make the change interactive and keep the user's view in sync as you go.
 ### 1. Make the change
 
 Edit the service's code under `system/apps/<package>/` (or wherever the program's
-command points). If the change renders HTML a person looks at, invoke the
-`frontend-design:frontend-design` skill before writing markup, and if it calls Claude,
+command points). If the change calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
 built. Anything the change creates for the app outside its own directory --
 a skill that drives it, a script, a doc -- is registered in the app's `app.toml`

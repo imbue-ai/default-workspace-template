@@ -19,11 +19,6 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
-IMPORTANT: Providing the first mock/feedback to the user quickly is critical!
-Before you do any lengthy work, think briefly about how you can parallelize the task,
-and delegate as much as possible to parallel background agents to reduce the user's
-wait times.
-
 ## First: fire off the plan recorder
 
 Before anything else, run this once to record what the user requested:
@@ -70,15 +65,6 @@ Map of the flow:
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
   confirms the *working* site looks right, hand thorough testing + the review
   gates to a background worker. The main agent never runs those itself.
-
-### Declaring steps up front
-
-Per AGENTS.md, decompose the planned flow into user-facing steps and create them up front.
-To avoid 10-15s of serial tool execution latency, **batch all your `tk create --step` commands in a single tool call** using `;`:
-```bash
-tk create --step "Clarify app design and plan architecture"; tk create --step "Scaffold app and show prototype"; tk create --step "Implement core features"; tk create --step "Verify and launch app"
-```
-*(Reminder: `tk start` and `tk close` must each be standalone commands in their own separate tool calls per AGENTS.md, but `tk create --step` commands can and should be batched together).*
 
 If you were sent here by `fetch-process-show` for an app over fetched data,
 the data sample is already confirmed -- but you still run your own mock
