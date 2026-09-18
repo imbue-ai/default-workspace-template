@@ -202,6 +202,29 @@ def test_every_console_script_into_a_removed_environment_goes_with_it(
     assert other_script.is_file()
 
 
+def test_a_console_script_uv_linked_into_the_bin_dir_goes_with_its_environment(
+    tmp_path: Path,
+) -> None:
+    """uv links a tool's console scripts into the bin dir as symlinks to the copies in the
+    environment's own bin/, so the sweep reads the shebang through the link and must
+    remove the link itself before deleting what it points at."""
+    runtime_home = tmp_path / "home" / "user"
+    pinned_home = tmp_path / "root"
+    shadow_env, planted_script = _install_mngr_tool(runtime_home)
+    _install_mngr_tool(pinned_home)
+    env_script = shadow_env / "bin" / planted_script.name
+    planted_script.rename(env_script)
+    planted_script.symlink_to(env_script)
+
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home), [runtime_home], tool_env.MNGR_TOOL_NAME
+    )
+
+    assert set(removed) == {shadow_env, planted_script}
+    assert not planted_script.is_symlink()
+    assert not shadow_env.exists()
+
+
 def test_nothing_is_removed_when_the_install_being_kept_is_missing(
     tmp_path: Path,
 ) -> None:
