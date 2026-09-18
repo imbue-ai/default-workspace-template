@@ -55,12 +55,20 @@ function appliedAtText(notice: UpdateNotice): string {
   return new Date(notice.appliedAt * 1000).toLocaleString();
 }
 
+/** The band's state, as its progress and outcome define it (open, rolling back, settled). */
+function stateKey(notice: UpdateNotice): string {
+  return JSON.stringify([notice.progress, notice.outcome]);
+}
+
 export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
   let isDialogOpen = false;
   let isRequestInFlight = false;
   let error: string | null = null;
+  // The notice state the error was raised in: it explains why that state's verb did nothing, so it
+  // goes once the notice moves on (a rollback's progress or outcome arriving from another window).
+  let errorState: string | null = null;
 
-  async function run(verb: () => Promise<void>): Promise<void> {
+  async function run(verb: () => Promise<void>, notice: UpdateNotice): Promise<void> {
     isRequestInFlight = true;
     error = null;
     m.redraw();
@@ -68,6 +76,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
       await verb();
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
+      errorState = stateKey(notice);
     } finally {
       isRequestInFlight = false;
       m.redraw();
@@ -83,7 +92,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
           sm: true,
           extra: "update-notice-close",
           disabled: isRequestInFlight,
-          onclick: () => void run(confirmUpdate),
+          onclick: () => void run(confirmUpdate, notice),
         },
         "Close",
       );
@@ -108,7 +117,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
           variant: "primary",
           extra: "update-notice-confirm",
           disabled: isRequestInFlight,
-          onclick: () => void run(confirmUpdate),
+          onclick: () => void run(confirmUpdate, notice),
         },
         "Everything seems good",
       ),
@@ -141,7 +150,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
       confirmLabel: "Roll back",
       onConfirm() {
         isDialogOpen = false;
-        void run(rollbackUpdate);
+        void run(rollbackUpdate, notice);
       },
       onCancel() {
         isDialogOpen = false;
@@ -155,6 +164,10 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
       const marker = vnode.attrs.marker ?? UPDATE_NOTICE_BAND_MARKER;
       const notice = updateNoticeForApp(appName);
       if (notice === null) return null;
+      if (error !== null && errorState !== stateKey(notice)) {
+        error = null;
+        errorState = null;
+      }
       const tone = isNoticeSettled(notice) || isRollbackRunning(notice) ? "neutral" : "warning";
       return [
         m("div", { class: bannerClass(marker, tone) }, [
