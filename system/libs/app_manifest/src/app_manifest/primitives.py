@@ -17,11 +17,11 @@ MAX_APP_NAME_LENGTH: Final[int] = 32
 # ``localhost`` and ``auth`` are origin labels. The rest are the first label of every
 # standalone supervisord program with a hyphen in its name (``share-gateway``,
 # ``app-watcher``, ``owner-exec``, ``vm-exec-register``, ``host-backup``,
-# ``env-converge``): an app named after one would claim that program as its
-# ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this set in step
-# with ``system/supervisord.conf``.
+# ``env-converge``, ``agent-observer``): an app named after one would claim that
+# program as its ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this
+# set in step with ``system/supervisord.conf``.
 RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
-    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env"}
+    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"}
 )
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
