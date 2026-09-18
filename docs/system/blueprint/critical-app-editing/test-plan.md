@@ -448,6 +448,150 @@ Run them after sections A to F pass, in a clean workspace state (S0.4).
 | manifest `PreviewSpec`, scaffold | F5 F6 |
 | the flow composed | X1 to X6 |
 
+## 5. Second run: scenarios added after the first run
+
+The first run's findings (below) were fixed on the branch and then reviewed; both the
+fixes and the review changed behaviour the scenarios above do not name. Run the
+scenarios above again (the ones the fixes touched first: B1, C3, C5, C6, C10, E2, E4,
+E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
+
+### Plan corrections
+
+- **E2's pid criterion is for the rollback, not the apply.** The forward apply restarts
+  every critical program through the services agent, so after an apply every critical pid
+  has changed whatever the record names. The scoped restart is the rollback's: after Roll
+  back, only the recorded `programs`' pids have changed. Read E2, E5, E6, E7 that way.
+- **`rollback-last` now also asks whether a page is served.** After the restart it reads
+  the shell's health and each restored app's health route for `is_frontend_built`; a
+  restored copy that serves no page is an emergency (exit 3, copies kept), not a success.
+  E15's bundle variant is therefore expected to fail the rollback, not to pass it.
+- **`confirm-last` keeps a touched point's copies.** Close on a settled notice drops the
+  record, and the copies only when no rollback ran on the point. E3's "snapshots dir gone"
+  holds for an untouched point; after a rollback that failed, the copies must survive Close.
+- **D5's `--timeout` is the worker's own completion time.** Pass one the stand-in can meet,
+  or accept `timed_out: true` beside the right `branch`.
+- **Tool-environment copies need uv-tool launchers.** The staging image's root-venv
+  entrypoints are not uv tools, so its snapshots held bundles only (F3, E15). E20 and E24's
+  tool-environment variants need an image whose critical apps run from uv tools; record
+  which the target is (`uv tool list`, and the snapshot locator's note in the apply output).
+
+### B. The shared script
+
+- **B11 Inner path without a leading slash.** B4's `up` with `--inner-path tp`: refused
+  before anything is spawned, exit 1, the message names the path; no state dir, no
+  registry rows, no wrapper process. (Before: the wrapper died at once and the health
+  wait burned its whole budget on it after the inner server was up and registered.)
+- **B12 A page that says it is not built.** `up --name tp-unbuilt --cwd . --port-env PORT
+  --health-path /api/health -- python3 <script>` where the script serves 200
+  `{"is_frontend_built": false}` on that path: the boot fails within the health budget,
+  the "last probe" line quotes the body, the state dir is gone. The same script answering
+  `true` boots. This is the probe C10 and C16 rely on.
+
+### C. Previews per app
+
+- **C14 A sibling taken down alone points the frame back at the live app.** With C4 up,
+  `down --app chat`: exit 0; the shell preview's registry copy has the `chat` row's `url`
+  and `instances_url` on the live chat (8010) again and its label the live label; the
+  shell preview tab frames the live chat. Record whether `system_interface-preview.preview.json`
+  still lists `chat` under `with`. Then `up --app chat --instance-key ...` again: the copy
+  names the new preview port (C5's gap, now expected closed), and `down --app system_interface`
+  takes both down.
+- **C15 A terminal preview touches nothing of the live workspace.** Note the line count of
+  the lead agent's `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl`. `up --app terminal`,
+  then `refresh --app terminal`: the count is unchanged (before: each boot appended a
+  `server_registered` event naming a throwaway loopback URL). Create a session through the
+  preview's sidecar: the live shell receives no `POST /api/apps/terminal/changed` from it
+  (the shell's access log, or the live terminal's tab list in a live window, which must not
+  refetch) and the live terminal's `/_instances` is unchanged. Before, the preview's
+  nudger posted to the live shell, which refetched the live terminal on the preview's word.
+- **C16 An unbuilt sibling fails the boot.** C10 again with the fix in place: hide the
+  worktree chat's `static/`, `up --app system_interface --with chat --instance-key ...`: the
+  chat fails with the probe's line saying its health reports the page unbuilt, the shell
+  never boots, exit 1, and `down --app system_interface` afterwards leaves no record,
+  registry row, or state dir. Restore the directory.
+
+### E. The apply, the rollback point, and the rollback
+
+- **E19 Bundle ownership by source stamp.** Both bundles carry `.source-tree-hash`
+  (`static/.source-tree-hash` under `system/apps/chat/imbue/chat/` and
+  `system/apps/system_interface/imbue/system_interface/`), the hashes of the app's frontend
+  tree, `system/libs/workspace_ui`, and the npm lockfile. Three applies with the flag:
+  - chat-only frontend edit: `apps: ["chat"]`, `programs: ["chat"]`; the kept shell copy's
+    stamp equals the live shell bundle's, the chat's differ; band on chat tabs only.
+  - shell-only frontend edit (New Tab copy): `apps: ["system_interface"]`; chat tabs carry
+    no band.
+  - the chat-only edit again with the worker bundle's `.source-tree-hash` deleted before
+    the apply: both apps named, and the apply's stderr carries the "carries no
+    .source-tree-hash stamp" note. A build outside a git checkout has no stamp, so this is
+    what a bundle from such a build does.
+- **E20 A shared backend manifest touches every critical app.** Apply a harmless edit to
+  `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
+  Pass: the plan reinstalls every app's tool environment (`plan.app_tools` names all three;
+  the apply output lists three reinstalls); the record's `apps` and `programs` name `chat`,
+  `system_interface`, and `terminal`; `snapshots` include a tool-environment copy per app on
+  a uv-tool image; band on chat and terminal tabs and the shell's banner. Roll back: all
+  three restart, each instances API is held to the settled verdict, every band shows the
+  outcome. Before, the record named the shell alone and the rollback left the chat and
+  terminal running the updated code over the restored environment.
+- **E21 A startup-only change, through the banner.** E8 through the UI: a comment change
+  under `system/libs/bootstrap/`, applied with the flag. Pass: `apps: []`, `programs: []`,
+  `needs_workspace_restart: true`; the shell's top banner reads "The workspace was
+  updated..."; no tab carries a band; the dialog names "the workspace", says "no app
+  restarts on its own", and carries the details paragraph. Press Roll back: this rollback
+  settles within a second (nothing to restart, no probe), and the route must still answer
+  202 and the banner show the outcome naming `mngr start --restart system-services`, with a
+  single Close. Before, a script that settled and exited between the shell's two reads was
+  answered as a 409 refusal beside an already-settled notice. `rollback-last.log` ends
+  with exit 0, pids unchanged, the comment gone.
+- **E22 Two windows press Roll back at once.** E4's concurrency again: both presses within
+  a second. Pass: exactly one 202; the other is a 409 "already running" shown in its band;
+  when the progress arrives over the socket that refusal text disappears from the second
+  window's band (before: it stayed beside "Rolling back: ..." and through the outcome);
+  both windows show the outcome and one Close. `pgrep -af rollback-last` never shows two;
+  `git log` has one revert commit and `git status` is clean afterwards. If a revert fails
+  with exit 128 again, `rollback-last.log` now captures git's stderr: record it, the first
+  run left this undiagnosed.
+- **E23 The shell relays the script's own refusal.** With a notice open, dirty the tree
+  (`touch system/scratch.txt && git add system/scratch.txt`) and press Roll back: 409, the
+  band shows the script's dirty-tree message verbatim, the notice has no `progress` (the
+  script refused before writing any). Undo the staging; Roll back succeeds. Then, with a
+  real apply in flight (E11's setup), press Roll back: 409 in the script's "an apply is
+  running" words.
+- **E24 A rollback that fails keeps its copies, and Close leaves them.** Run last, in a
+  workspace you can afford to break. Two variants:
+  - E15's bundle variant: empty the kept chat bundle copy, Roll back. Pass: the outcome
+    says the previous version did not come back healthy and that the copies are kept,
+    `emergency.json` exists, exit 3 in the log, the snapshots dir is still there, the
+    staleness banner takes over. From the CLI, `rollback-last` again is refused (exit 1)
+    with a reason that says the point was rolled back and the copies kept. Press Close:
+    the record is gone, `emergency.json` and the snapshots dir remain. Recover by hand and
+    confirm the banner clears; the next apply (any) discards the leftover copies.
+  - the revert-conflict variant: after an apply with the flag, commit an edit on the
+    served branch to a line the merge changed, then Roll back. Pass: the revert is aborted
+    (no revert commit, `git status` clean, no `supervisorctl restart` in the log), the
+    outcome names git's conflict and says the copies are kept, snapshots remain, a second
+    `rollback-last` is refused, Close leaves the copies, and reverting the extra commit by
+    hand then `rollback-last` from a fresh apply works.
+- **E25 Nothing to restart, nothing to keep.** Two checks from the first run's warning:
+  a drop-in-only apply and rollback (E9) invokes no `supervisorctl restart` (the log has no
+  "restart requires a process name") while `reread` and `update` still run; and
+  `apply --merge-ref HEAD --keep-rollback-point` (a merge that changes no files) writes no
+  record and says so on stderr. Record whether an earlier record's snapshots are still
+  discarded first (E10's rule).
+
+### Coverage of the additions
+
+| Surface | Scenarios |
+|---|---|
+| `serve_isolated_instance.py up` inner-path check, `is_frontend_built` probe | B11 B12 C16 |
+| `preview_app.py` reframe on sibling down / re-up | C14 |
+| unregistered sidecar: no nudge, no discovery event | C15 |
+| bundle stamp comparison, tool-environment touch | E19 E20 |
+| workspace-only notice, fast-settling rollback answered as under way | E21 |
+| serialized launch, refusal relayed verbatim, refusal scoped to its notice state | E22 E23 |
+| restored-page check, copies kept on failure, `confirm-last` on a touched point | E24 |
+| empty program list, no-op merge | E25 |
+
 ## Findings
 
 ### 2026-09-18 — `criticaltest` Docker staging acceptance run
