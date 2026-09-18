@@ -335,8 +335,9 @@ interleave.
    they roll back, the branch and the worker's report are the retry's input.
 
 4. **Tear down and release.** Whatever the exit code, and after a rejection
-   where nothing was merged, tear down the preview and its tab, destroy the
-   worker, close the ticket, and release the lease:
+   where nothing was merged, tear down the preview and its tab, retire the
+   worker (destroy it, or stop it after a failed apply; see below), close the
+   ticket, and release the lease:
 
    ```bash
    uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
