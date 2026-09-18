@@ -656,7 +656,7 @@ describe("the combo card", () => {
     expect(submenu.querySelector('[data-fast-mode="on"]')?.getAttribute("aria-checked")).toBe("false");
     // Auto's own row carries both what auto does and that it has already happened.
     expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain(
-      "Fast for the first 3 turns, then standard speed.",
+      "Fast for the first 3 turns, then standard.",
     );
     expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain("(off now)");
 
