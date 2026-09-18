@@ -5259,7 +5259,8 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
             "system/apps/system_interface/pyproject.toml",
         ]
     )
-    runner = _RecordingRunner()  # no tools on PATH -> no tool-env targets
+    # No tools on PATH and an empty pinned home -> no tool-env copies.
+    runner = _RecordingRunner()
 
     snapshots = update_environment.take_snapshots(
         plan,
