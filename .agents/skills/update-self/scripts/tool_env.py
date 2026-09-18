@@ -70,6 +70,14 @@ def bin_dir(home: Path) -> Path:
     return home / ".local" / "bin"
 
 
+def home_of_tools_dir(tools: Path) -> Path | None:
+    """The home whose :func:`tools_dir` is ``tools``, or ``None`` for any other layout."""
+    if len(tools.parents) < 4:
+        return None
+    home = tools.parents[3]
+    return home if tools_dir(home) == tools else None
+
+
 def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     """``(tool_dir, bin_dir)`` for the uv tool that owns console ``script``, else ``None``.
 
@@ -94,7 +102,13 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     tool_dir = parents[2]
     if not (tool_dir / tool_name / RECEIPT).is_file():
         return None
-    return tool_dir, script.parent
+    # uv installs entry points in the bin directory of the home that owns ``tool_dir``. Neither
+    # ``script`` nor its target names that one: ``mngr`` also answers from ``/usr/local/bin``
+    # (the build links it there for shells whose PATH lacks the uv bin directory), and each
+    # entry point is itself a symlink into the tool environment's own ``bin``. A tool directory
+    # in any other layout has no such home, so the directory holding the script stands.
+    home = home_of_tools_dir(tool_dir)
+    return tool_dir, bin_dir(home) if home is not None else script.parent
 
 
 def remove_shadowing_mngr_installs(
