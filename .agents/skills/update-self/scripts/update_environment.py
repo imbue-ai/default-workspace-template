@@ -253,14 +253,13 @@ def default_sweep_homes() -> list[Path]:
     ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the one the
     build installs tools under.
 
-    The build's comes from ``tool_env``, the module :func:`_pinned_tool_location`
-    also reads, so the home being swept and the home a last-resort install lands
-    in cannot be pointed apart -- and a test that reaches here sweeps whatever
-    ``TOOL_ENV_HOME`` gave it rather than the real ``/root``. Which installation
-    survives the sweep is a separate question, answered from ``PATH`` by
+    The build's is ``tool_env``'s literal default, not :func:`tool_env.tool_home`:
+    this list feeds a deletion, and ``TOOL_ENV_HOME`` is a test override that
+    must not be able to redirect it. Which installation survives the sweep is
+    a separate question, answered from ``PATH`` by
     :func:`remove_shadowing_mngr_installs`.
     """
-    homes = [tool_env.tool_home()]
+    homes = [Path(tool_env.DEFAULT_TOOL_HOME)]
     if os.environ.get("HOME"):
         homes.insert(0, Path(os.environ["HOME"]))
     return homes
