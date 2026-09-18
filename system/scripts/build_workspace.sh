@@ -86,3 +86,6 @@ uv sync --all-packages --frozen
 # /home/user/workspace is in place (on docker, after the first-boot seed).
 ln -sf "$REPO_ROOT/system/vendor/tk/ticket" /usr/local/bin/tk
 ln -sf "$REPO_ROOT/system/vendor/tk/ticket" /usr/local/bin/ticket
+# Expose the mngr tool on PATH for non-login shells too (sshd's default PATH has
+# no $UV_TOOL_BIN_DIR).
+ln -sf "$UV_TOOL_BIN_DIR/mngr" /usr/local/bin/mngr
