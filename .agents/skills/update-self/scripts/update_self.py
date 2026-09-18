@@ -22,19 +22,12 @@ belong in tested code rather than agent prose:
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
-
-    The output also carries ``held_back_by_ceiling`` -- whether the ceiling, and
-    not the user, is why a newer release was not taken -- alongside
-    ``latest_available``, the newest stable tag upstream *ignoring* the ceiling
-    (``null`` if there is none) and so the release that flag names.
+    Releases above the ceiling are treated as absent: nothing it prints names one.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
     than spending a backup, a worker, and a validation run on a merge that changes
-    nothing. This is what makes the ceiling bite for a workspace sitting *at* it:
-    with a newer release upstream the refusal names the app as the reason it
-    cannot be had, and without one it is a plain "already up to date". A workspace
-    *behind* the ceiling still updates to it.
+    nothing. A workspace *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -159,8 +152,6 @@ from update_target import (
     NoUpdateTargetError,
     already_current_message,
     fetch_app_template_ref,
-    is_held_back_by_ceiling,
-    pick_latest_stable_tag,
     resolve_target,
 )
 
@@ -226,21 +217,10 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
         tags = [line.rsplit("/", 1)[-1] for line in tags]
     ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
     target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
-    latest_available = pick_latest_stable_tag(tags)
-    is_held_back = is_held_back_by_ceiling(
-        resolved_ref=target.ref,
-        latest_available=latest_available,
-        ceiling=target.ceiling,
-        has_override=args.override is not None,
-    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
-        raise NoUpdateTargetError(
-            already_current_message(
-                target.ref, latest_available, target.ceiling, is_held_back
-            )
-        )
+        raise NoUpdateTargetError(already_current_message(target.ref))
     print(
         json.dumps(
             {
@@ -248,8 +228,6 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
                 "kind": target.kind,
                 "ceiling": target.ceiling,
                 "exceeds_ceiling": target.exceeds_ceiling,
-                "latest_available": latest_available,
-                "held_back_by_ceiling": is_held_back,
             }
         )
     )

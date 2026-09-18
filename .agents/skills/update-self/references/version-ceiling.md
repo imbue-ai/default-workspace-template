@@ -10,15 +10,18 @@ rather than a release tag (a dev build) there is nothing to compare against and
 `ceiling` caps nothing. When the app cannot be reached, or is too old to report
 a version, `resolve-target` **fails** rather than updating uncapped.
 
+Releases above the ceiling are treated as if they do not exist: never name one
+to the user or suggest updating the app to reach it. The Mind app announces its
+own updates, on the user's release channel.
+
 ## At the ceiling vs behind it
 
 A workspace already sitting *at* the ceiling gets a refusal rather than a pass:
 the capped target is the release it was created from, so there is nothing to
 merge, and `resolve-target` says so instead of spending a backup, a worker and
-a validation run on a no-op -- naming the newer release the app is holding back
-when there is one (`held_back_by_ceiling`, `latest_available`). A workspace
-*behind* the ceiling still updates to it. The two are distinguished by whether
-the resolved ref is already an ancestor of `HEAD`, not by the ceiling alone.
+a validation run on a no-op. A workspace *behind* the ceiling still updates to
+it. The two are distinguished by whether the resolved ref is already an
+ancestor of `HEAD`, not by the ceiling alone.
 
 ## Overrides past the ceiling
 

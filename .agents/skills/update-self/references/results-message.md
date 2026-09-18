@@ -24,36 +24,30 @@ Write it for a non-technical reader skimming top to bottom, in this order:
 1. **Verdict headline** (one line): "your workspace is updated", "updated, with
    one thing to know", or -- after a rollback -- "the update hit a problem, so
    I undid it; everything is safe".
-2. **Held back by your app version** -- if and only if `held_back_by_ceiling`
-   is `true` in `/tmp/update-self-target.json`: "there's a newer version
-   available (`latest_available`), but it needs a newer Mind app than you're
-   running, so I stopped at X". Do not derive this by comparing `ref` against
-   `latest_available` yourself -- those also differ when the user's own
-   `--override` picked an older tag, and the flag already accounts for that.
-3. **What's new** -- always first after the ceiling note, and *detailed*: carry
+2. **What's new** -- always first after the headline, and *detailed*: carry
    the worker's digest in prose a lay reader parses (what each change does,
    not file names). Some readers want the specifics; the rest skim it.
-4. **Conflicts** -- "none", or what needed reconciling. When the worker kept
+3. **Conflicts** -- "none", or what needed reconciling. When the worker kept
    local code over the release's version, do not present that as settled: say
    what was kept, what the release's version would have changed, and offer
    the alternative in the same breath ("I kept your version; if you'd rather
    match the official release exactly there, I can do that instead").
-5. **Your customizations** -- anything the report classed intact-but-changed:
+4. **Your customizations** -- anything the report classed intact-but-changed:
    what moved or changed (before/after, with the worker's evidence when the
    surface supports it) and the offer to restore the old arrangement. A
    cannot-be-kept creation never reaches this message unresolved; it stopped
    the pass at the Step 4 hold.
-6. **Validation** -- did the suites pass; is any failure pre-existing or
+5. **Validation** -- did the suites pass; is any failure pre-existing or
    unrelated. When the worker's rule ran none of them (the update touched
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
-7. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
+6. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
    missing backup, a deviation the worker disclosed that could not be closed.
-8. **Pre-existing issues** -- only if any, and only after verifying
+7. **Pre-existing issues** -- only if any, and only after verifying
    attribution (worker guide §4a): whether each lives in **built-in** code
    (present at the target ref -> report upstream) or the **user's own** code.
    Never call built-in code "workspace-added".
-9. **The offer** -- see the language rules.
+8. **The offer** -- see the language rules.
 
 When the report marks a surface's merge work nontrivial (the system interface,
 a user app), name that surface, say what was reconciled, and attach the
@@ -68,7 +62,7 @@ changes nothing until the workspace is someday recreated) is one line at most,
 or nothing; a change to something they built, or a decision they might have
 made differently, always makes the cut.
 
-Detail in the informational sections (3-6); plain language at the decision
+Detail in the informational sections (2-5); plain language at the decision
 points -- the headline, any caveat that needs the user's action, and the
 closing offer. Those carry no jargon: never "merge", "land" or "fast-forward"
 there. Frame the close around *what changed in their workspace and how to undo

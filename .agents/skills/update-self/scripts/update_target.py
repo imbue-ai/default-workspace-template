@@ -148,25 +148,6 @@ def pick_latest_stable_tag(
     return max(stable, key=lambda item: item[0])[1]
 
 
-def is_held_back_by_ceiling(
-    *,
-    resolved_ref: str,
-    latest_available: str | None,
-    ceiling: str | None,
-    has_override: bool,
-) -> bool:
-    """Whether the ceiling -- and not the user -- is why a newer release was not taken.
-
-    Only true when the flow chose the target itself. With an explicit override the
-    user picked the ref, so a gap between it and ``latest_available`` is their own
-    doing; reporting "your app held this back" there blames the app for the user's
-    choice (an ``--override`` to an *older* tag would otherwise trip it every time).
-    """
-    if has_override or ceiling is None or latest_available is None:
-        return False
-    return latest_available != resolved_ref
-
-
 def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
     """Whether ``ref`` is provably a release at or below ``ceiling``.
 
@@ -209,7 +190,7 @@ def resolve_target(
     if override is None:
         latest = pick_latest_stable_tag(tags, ceiling=ceiling)
         if latest is None:
-            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
+            raise NoUpdateTargetError(_no_target_message(ceiling))
         return ResolvedTarget(latest, "tag", ceiling, False)
     exceeds = not _is_within_ceiling(override, ceiling)
     if override == "main":
@@ -219,13 +200,12 @@ def resolve_target(
     return ResolvedTarget(override, "ref", ceiling, exceeds)
 
 
-def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
-    """Explain why no default target could be picked, distinguishing the two causes."""
-    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
+def _no_target_message(ceiling: str | None) -> str:
+    """Explain why no default target could be picked, never naming a release above the ceiling."""
+    if ceiling is not None and parse_version(ceiling) is not None:
         return (
-            f"every stable minds-v* tag upstream is newer than this workspace's minds "
-            f"app ({ceiling}); update the app first, or pass an explicit --override "
-            f"to update past it anyway"
+            f"no stable minds-v* tag upstream is at or below this workspace's minds app "
+            f"({ceiling}); there is nothing it can update to"
         )
     return (
         "no stable minds-v* tag found upstream; pass an explicit "
@@ -233,25 +213,9 @@ def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
     )
 
 
-def already_current_message(
-    ref: str, latest_available: str | None, ceiling: str | None, is_held_back: bool
-) -> str:
-    """Explain that the default target is already merged, naming the ceiling when it is why.
-
-    The two cases read very differently to a user and need different next steps.
-    Held back: a newer release exists and the app is the only thing standing
-    between them and it, so the message has to say so -- updating the app is the
-    action that unblocks them. Not held back: the workspace is simply current,
-    and there is nothing to do.
-    """
-    if is_held_back:
-        return (
-            f"this workspace is already on {ref}, the newest release your minds app "
-            f"({ceiling}) supports; {latest_available} is available upstream but needs a "
-            f"newer app -- update the app first, or pass an explicit --override to update "
-            f"past it anyway"
-        )
-    return f"this workspace is already on {ref}, the newest release upstream; nothing to update"
+def already_current_message(ref: str) -> str:
+    """Explain that the default target is already merged."""
+    return f"this workspace is already on {ref}; nothing to update"
 
 
 # The minds app's version route, addressed through the latchkey gateway's
