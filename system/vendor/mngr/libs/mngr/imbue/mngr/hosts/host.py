@@ -431,8 +431,15 @@ def _read_checked_out_branch_name(host: OnlineHostInterface, work_dir_path: Path
     value is persisted and surfaced as the branch an agent's work lands on, so
     recording the request would point callers at a ref that need not exist.
     """
-    branch = _git_command_stdout(host, "git rev-parse --abbrev-ref HEAD", work_dir_path)
-    return None if branch == _DETACHED_HEAD_REF else branch
+    return _branch_from_abbrev_ref(_git_command_stdout(host, _READ_BRANCH_COMMAND, work_dir_path))
+
+
+@pure
+def _branch_from_abbrev_ref(abbrev_ref: str | None) -> str | None:
+    """The branch ``git rev-parse --abbrev-ref HEAD`` names, or None for no output or a detached HEAD."""
+    if not abbrev_ref:
+        return None
+    return None if abbrev_ref == _DETACHED_HEAD_REF else abbrev_ref
 
 
 @pure
@@ -524,6 +531,7 @@ _DEFAULT_TMUX_HEIGHT: Final[int] = 50
 # What ``git rev-parse --abbrev-ref HEAD`` prints for a repo that is not on a branch.
 # It works as a checkout target but names no branch.
 _DETACHED_HEAD_REF: Final[str] = "HEAD"
+_READ_BRANCH_COMMAND: Final[str] = "git rev-parse --abbrev-ref HEAD"
 
 # Resource script (shipped under mngr/resources/) that sends SIGWINCH to an agent's
 # pane processes so they repaint after a client attaches. Installed at host level and
@@ -1902,6 +1910,10 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                     target_exclude = ".git/info/exclude"
                     config_commands.append(f"printf '%s' '{escaped}' > {shlex.quote(target_exclude)}")
 
+                # Last, so its output is the final stdout line: reading the branch
+                # back here saves a separate round trip to a remote target.
+                config_commands.append(_READ_BRANCH_COMMAND)
+
                 result = self.execute_idempotent_command(
                     " && ".join(config_commands),
                     cwd=target_path,
@@ -1909,7 +1921,8 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 if not result.success:
                     raise MngrError(f"Failed to configure git repo on target: {result.stderr}")
 
-        return new_branch_name, _read_checked_out_branch_name(self, target_path)
+        stdout_lines = result.stdout.strip().splitlines()
+        return new_branch_name, _branch_from_abbrev_ref(stdout_lines[-1].strip() if stdout_lines else None)
 
     def _read_source_git_info_exclude(
         self,
