@@ -377,6 +377,75 @@
   font-style: italic;
 }
 
+/* Subtle inline status messages (e.g. "Context was compacted") */
+.message-system-status-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.message-system-status-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.message-system-status {
+  font-size: var(--font-size-helper);
+  color: var(--c-text-faint);
+  background: var(--c-fill-hover);
+  border-radius: 12px;
+  padding: 3px 12px;
+  text-align: center;
+  user-select: none;
+}
+
+.message-system-status--toggleable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    background var(--dur-base) ease,
+    color var(--dur-base) ease;
+}
+
+.message-system-status--toggleable:hover {
+  background: var(--c-fill-active);
+  color: var(--c-text-secondary);
+}
+
+.message-system-status-container--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+.message-system-status-details {
+  display: none;
+  margin-top: 8px;
+  max-width: 85%;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--c-text-secondary);
+  text-align: left;
+  user-select: text;
+}
+
+.message-system-status-container--expanded .message-system-status-details {
+  display: block;
+}
+
+.message-system-status-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Progress view (the per-turn task timeline rendered from tk tickets).
    The timeline's structure lives as utilities in views/ProgressBlock.ts and the
    library's components/icons.ts. What stays here is what utilities cannot carry: the

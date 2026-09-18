@@ -6,8 +6,10 @@ program. Reach for this from any service flow (`update-app`,
 `build-app`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
-Background services are defined as `[program:<name>]` sections in
-`system/supervisord.conf` at the repo root. `uv run bootstrap` runs first-boot
+Background services are defined as `[program:<name>]` sections, one program
+per file under `system/supervisord.conf.d/`, pulled in by an `[include]` glob
+in `system/supervisord.conf` at the repo root (which otherwise holds only the
+daemon's own config). `uv run bootstrap` runs first-boot
 setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
 tmux window); supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
@@ -78,8 +80,10 @@ Key fields:
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.
-(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: every claude
-in the workspace uses claude's own default `~/.claude`.)
+(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: a claude is bound
+to a provider account on its `mngr create`, and a create that names no account
+gets the workspace's default one from `.mngr/settings.local.toml`, which the
+chat app maintains; `~/.claude` holds no credential.)
 
 One built-in program has no app directory and no manifest: `agent-observer`
 runs `mngr observe --quiet` from the primary agent's work dir and writes the
@@ -109,7 +113,7 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Adding a service
 
-1. Add a new `[program:<name>]` section to `system/supervisord.conf`.
+1. Write a new `[program:<name>]` section to its own `system/supervisord.conf.d/<name>.conf`.
 2. Apply it:
 
    ```bash
@@ -122,7 +126,7 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Removing a service
 
-1. Delete the `[program:<name>]` section from `system/supervisord.conf`.
+1. Delete the program's `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
@@ -133,7 +137,7 @@ environment with `uv tool uninstall <name>`; for a scaffolded web lib,
 
 ## Modifying a service
 
-1. Change the program's `command` (or other fields) in `system/supervisord.conf`.
+1. Change the program's `command` (or other fields) in its `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
    without editing its config, use `supervisorctl restart <name>`.
@@ -155,8 +159,9 @@ Or read the log files directly under `/var/log/supervisor/`.
   letters/digits with single hyphens, underscores only for legacy names,
   not `localhost`, not starting with `host-` or `agent-`) because it becomes
   the leading label of the service's origin hostname.
-- supervisord only manages the programs in `system/supervisord.conf`; it does not touch
-  the main agent window or other tmux windows.
+- supervisord only manages the programs declared under
+  `system/supervisord.conf.d/`; it does not touch the main agent window or
+  other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new app (Flask lib or wrapping a third-party

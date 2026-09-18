@@ -91,6 +91,7 @@ COPY system/vendor/mngr/libs/mngr_opencode/pyproject.toml /home/user/workspace/s
 COPY system/vendor/mngr/libs/mngr_antigravity/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_antigravity/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_autocompact/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_autocompact/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
 COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
 

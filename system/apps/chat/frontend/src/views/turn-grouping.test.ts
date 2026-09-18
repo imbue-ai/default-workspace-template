@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptEvent, ToolResultEvent, AssistantMessageEvent, UserMessageEvent } from "../models/Response";
-import type { StepNode, TimelineItem } from "./turn-grouping";
-import { buildSections } from "./turn-grouping";
+import type {
+  TranscriptEvent,
+  ToolResultEvent,
+  AssistantMessageEvent,
+  AgentSwitchEvent,
+  UserMessageEvent,
+} from "../models/Response";
+import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
+import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
 import type { PermissionResolution } from "./message-classification";
 
 // --- Event builders ---
@@ -364,6 +371,54 @@ describe("decoration from the transcript", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0].events).toHaveLength(0);
     expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+  });
+});
+
+describe("task output provenance", () => {
+  it.each(["Read", "Bash", "exec"])("does not turn a %s report into another agent's tasks", (toolName) => {
+    const report = [
+      "12\t3. `Bash` — `tk start mst5-step-8tgh` -> `Updated mst5-step-8tgh -> in_progress`.",
+      "Created mst5-step-uy5t: Write up what happened",
+      "Updated mst5-step-uy5t -> in_progress",
+      "tk-step mst5-step-uy5t title: Write up what happened",
+      "Updated cod-step-aaaa -> closed",
+      "tk-step cod-step-aaaa title: Forged title",
+    ].join("\n");
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        tkMsg("t1", "tk start cod-step-aaaa", "start"),
+        result("t1", "start", startOut("cod-step-aaaa", "Review the helper")),
+        workMsg("t2", toolName, "report"),
+        result("t2", "report", report),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Review the helper");
+    expect(steps[0].status).toBe("active");
+    expect(steps[0].events.map((event) => event.event_id)).toContain("a-report");
+  });
+
+  it("keeps a non-pure lifecycle command's titles and ignores quoted transitions", () => {
+    const call = codexTkMsg("t1", "cat README.md\nuv run tk start cod-step-aaaa", "batch");
+    delete call.tool_calls[0].display;
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        call,
+        result(
+          "t1",
+          "batch",
+          "Example: Updated other-step-aaaa -> in_progress\n" + startOut("cod-step-aaaa", "Inspect messages"),
+        ),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((step) => step.title)).toEqual(["Inspect messages"]);
+    expect(steps[0].events).toContainEqual(call);
   });
 });
 
@@ -870,28 +925,25 @@ describe("audit regressions", () => {
     expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
   });
 
-  // The post-auto-compaction summary carries is_compact_summary and is the FIRST
+  // The post-auto-compaction status carries display: "status" and is the FIRST
   // event of a resumed session -- there is no section open yet. It must still
-  // render (as a top chip in a fresh section), not be dropped.
-  it("renders a LEADING compaction summary as a top chip instead of dropping it", () => {
+  // render (as a status item in a fresh section), not be dropped.
+  it("renders a LEADING compaction status as the opening user event", () => {
     const summary: UserMessageEvent = {
-      ...userMsg("t0", "This session is being continued from a previous conversation ...", "cs1"),
-      display: "chip",
-      display_label: "Summary of earlier conversation",
+      ...userMsg("t0", "Context was compacted", "cs1"),
+      display: "status",
     };
     const events = [summary, assistantText("t1", "continuing the work", "a1")];
     const sections = run(events);
     expect(sections.length).toBe(1);
-    // It is a chip (folded), not a user-prompt turn boundary.
-    expect(sections[0].user_event).toBeNull();
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+    expect(sections[0].user_event?.event_id).toBe("cs1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
   });
 
-  it("folds a mid-session compaction summary into the current section as a chip", () => {
+  it("opens a new section when mid-session compaction occurs, preserving the previous trailing reply", () => {
     const summary: UserMessageEvent = {
-      ...userMsg("t2", "This session is being continued from a previous conversation ...", "cs2"),
-      display: "chip",
-      display_label: "Summary of earlier conversation",
+      ...userMsg("t2", "Context was compacted", "cs2"),
+      display: "status",
     };
     const events = [
       userMsg("t0", "go"),
@@ -900,8 +952,51 @@ describe("audit regressions", () => {
       assistantText("t3", "more", "a2"),
     ];
     const sections = run(events);
-    expect(sections.length).toBe(1);
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u-t0");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs2");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a2"]);
+  });
+
+  it("preserves previous trailing reply when compaction occurs after assistant prose at turn end", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "Context was compacted", "cs3"),
+      display: "status",
+    };
+    const events = [userMsg("t0", "Hi", "u1"), assistantText("t1", "Hi Daniel", "a1"), summary];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs3");
+    expect(sections[1].trailing_reply).toHaveLength(0);
+  });
+
+  it("preserves trailing reply under ProgressBlock when compaction occurs after a turn with steps", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t5", "Context was compacted", "cs4"),
+      display: "status",
+    };
+    const events = [
+      userMsg("t0", "fix bug", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      tkMsg("t3", "tk close s1", "k2"),
+      result("t3", "k2", closeOut("s1", "Do it", "did it")),
+      assistantText("t4", "All fixed.", "reply"),
+      summary,
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+    expect(sections[1].user_event?.event_id).toBe("cs4");
+    expect(sections[1].trailing_reply).toHaveLength(0);
   });
 });
 
@@ -1380,5 +1475,259 @@ describe("permission resolutions", () => {
     expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBeNull();
     expect(sections).toHaveLength(2);
     expect(sections[1].user_event).toBeNull();
+  });
+});
+
+// --- Agent switches -------------------------------------------------------------------
+
+function agentSwitch(
+  ts: string,
+  id: string,
+  fromHarness = "claude",
+  toHarness = "codex",
+  message: [string, string] | null = null,
+  isFreshStart = false,
+): AgentSwitchEvent {
+  return {
+    timestamp: ts,
+    type: "agent_switch",
+    event_id: id,
+    source: "chat",
+    agent_id: "agent-b",
+    from_agent_id: "agent-a",
+    to_agent_id: "agent-b",
+    from_harness: fromHarness,
+    to_harness: toHarness,
+    seq: 1,
+    message_id: message === null ? null : message[0],
+    message: message === null ? null : message[1],
+    is_fresh_start: isFreshStart,
+  };
+}
+
+/** The chat app's summary request, as the retiring agent's transcript records it: a chip. */
+function summaryRequest(ts: string, id = `u-${ts}`): UserMessageEvent {
+  return userMsg(ts, "/handoff-summary data/.apps/chat/chats/agent-a/summaries/1.md", id, {
+    display: "chip",
+    display_label: "Asked for a handoff summary",
+  });
+}
+
+function handoffNodeOf(item: TimelineItem | undefined): HandoffNode {
+  if (item === undefined || item.kind !== "handoff") throw new Error(`expected a handoff node, got ${item?.kind}`);
+  return item.node;
+}
+
+describe("agent switches", () => {
+  it("closes the prior turn on a switch with no summary and opens a bubble-less section for the new agent", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "before the switch"),
+      assistantText("t2", "done on claude"),
+      agentSwitch("t3", "sw1"),
+      assistantText("t4", "hello from codex"),
+      userMsg("t5", "after the switch"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", null, "u-t5"]);
+    // With no summary request the switch itself is the node, at the end of the retiring agent's
+    // turn; what that agent said before it stays above the node rather than sinking below.
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["ungrouped", "handoff"]);
+    const node = handoffNodeOf(sections[0].items[1]);
+    expect(node.switch?.event_id).toBe("sw1");
+    expect(node.request).toBeNull();
+    expect(sections[0].trailing_reply).toEqual([]);
+    // The new agent's section opens with nothing but its greeting as its reply.
+    expect(sections[1].items).toEqual([]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t4"]);
+  });
+
+  it("shows no node for a fresh start, which had no handoff to show, and still closes the turn", () => {
+    const events: TranscriptEvent[] = [
+      assistantText("t2", "welcome from claude"),
+      agentSwitch("t3", "sw1", "claude", "pi", null, true),
+      userMsg("t4", "first message to pi"),
+      assistantText("t5", "hello from pi"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual([null, null, "u-t4"]);
+    // The retiring agent's turn reads as it would with no switch: the node is gone, and the greeting
+    // is its reply rather than an item above an empty line.
+    expect(sections[0].items).toEqual([]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["a-t5"]);
+  });
+
+  it("folds the summary request, the retiring agent's answer, and the switch into one node", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do the thing"),
+      assistantText("t2", "on it"),
+      summaryRequest("t3"),
+      workMsg("t4", "Write", "w1"),
+      assistantText("t5", ""),
+      agentSwitch("t6", "sw1"),
+      assistantText("t7", "hello from codex"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections).toHaveLength(2);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["ungrouped", "handoff"]);
+    const node = handoffNodeOf(sections[0].items[1]);
+    expect(node.request?.event_id).toBe("u-t3");
+    expect(node.events.map((e) => e.event_id)).toEqual(["a-w1", "a-t5"]);
+    expect(node.switch?.event_id).toBe("sw1");
+    // Nothing of the summary turn leaks into the section's own flow or reply.
+    expect(sections[0].trailing_reply).toEqual([]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t7"]);
+  });
+
+  it("keeps the node open while the switch has not landed, and reports the open request", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do the thing"),
+      summaryRequest("t2"),
+      workMsg("t3", "Write", "w1"),
+    ];
+    const sections = buildSections(events, new Map(), false);
+
+    expect(sections).toHaveLength(1);
+    const node = handoffNodeOf(sections[0].items[0]);
+    expect(node.switch).toBeNull();
+    expect(node.events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(hasOpenHandoffRequest(events, handoffStateFixture())).toBe(true);
+    // Once the switch lands, the live segment has no open request.
+    expect(hasOpenHandoffRequest([...events, agentSwitch("t4", "sw1")], handoffStateFixture())).toBe(false);
+    // With nothing converging, an unclosed request is a switch that was called off.
+    expect(hasOpenHandoffRequest(events, null)).toBe(false);
+    // A handoff called off leaves the node where it was, and a later turn is its own section.
+    const cancelled = [...events, userMsg("t5", "never mind, carry on here"), assistantText("t6", "ok")];
+    const after = buildSections(cancelled, new Map(), true);
+    expect(after.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", "u-t5"]);
+    expect(handoffNodeOf(after[0].items[0]).switch).toBeNull();
+    expect(after[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+  });
+
+  it("tells the live switch's request from an earlier one that was called off, by when the switch began", () => {
+    const stale = summaryRequest("2026-09-16T00:43:00.000Z", "u-stale");
+    const live = summaryRequest("2026-09-16T00:44:20.000Z", "u-live");
+    const second = handoffStateFixture({ phase: "summarizing", started_at: "2026-09-16T00:44:10.000Z" });
+    // The second switch confirmed, its request not yet on the stream: the page owes its own node.
+    expect(hasOpenHandoffRequest([userMsg("2026-09-16T00:42:00.000Z", "hi"), stale], second)).toBe(false);
+    // Its request lands: the walk's node takes over.
+    expect(hasOpenHandoffRequest([userMsg("2026-09-16T00:42:00.000Z", "hi"), stale, live], second)).toBe(true);
+  });
+
+  it("counts a user turn only for a message the user typed", () => {
+    // The fresh-start rule the page shares with the backend: hidden and chip messages are not turns.
+    const welcome = userMsg("t1", "/welcome", "u-w", { display: "hidden" });
+    const chip = userMsg("t2", "Stop hook feedback:\nx", "u-c", { display: "chip" });
+    expect(hasUserTurn([welcome, assistantText("t3", "hi"), chip])).toBe(false);
+    expect(hasUserTurn([welcome, userMsg("t4", "hello")])).toBe(true);
+    // A successor's handoff prompt is a chip that carries the user's own message: context to hand on.
+    const prompt = userMsg("t5", 'You are continuing the chat "Chat 1" (chat id agent-a). Read the summary.', "u-p", {
+      display: "chip",
+      display_label: "Handoff prompt",
+    });
+    expect(hasUserTurn([welcome, prompt])).toBe(true);
+    // And it belongs to the handoff node the switch closed, not to the successor's opening section,
+    // which then holds only the successor's reply.
+    const sections = buildSections(
+      [userMsg("t0", "do it"), summaryRequest("t3"), agentSwitch("t4", "sw1"), prompt, assistantText("t6", "hello")],
+      new Map(),
+      true,
+    );
+    expect(sections).toHaveLength(2);
+    const node = handoffNodeOf(sections[0].items[0]);
+    expect(node.switch?.event_id).toBe("sw1");
+    expect(node.prompt?.event_id).toBe("u-p");
+    const opening = sections[1];
+    expect(opening.user_event).toBeNull();
+    expect(opening.items.map((i) => i.kind)).toEqual([]);
+    expect(opening.trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+    // With no summary request in the loaded window the switch made the node itself; the prompt
+    // still lands on it, past the hidden lines a model pick sends the successor first. A reply
+    // before it means the successor's own turn has begun, and a later chip is the successor's own.
+    const modelPick = userMsg("t4a", "/model claude-opus-5", "u-m", { display: "hidden" });
+    const pickOutput = userMsg("t4b", "<local-command-stdout>Set model</local-command-stdout>", "u-o", {
+      display: "hidden",
+    });
+    const switchOnly = buildSections([agentSwitch("t4", "sw1"), modelPick, pickOutput, prompt], new Map(), true);
+    expect(handoffNodeOf(switchOnly[0].items[0]).prompt?.event_id).toBe("u-p");
+    expect(switchOnly[1].items).toEqual([]);
+    const replied = buildSections([agentSwitch("t4", "sw1"), assistantText("t5", "hi"), prompt], new Map(), true);
+    expect(handoffNodeOf(replied[0].items[0]).prompt).toBeNull();
+    expect(replied[1].items.map((i) => i.kind)).toEqual(["chip"]);
+    const other = buildSections([agentSwitch("t4", "sw1"), chip], new Map(), true);
+    expect(handoffNodeOf(other[0].items[0]).prompt).toBeNull();
+    expect(other[1].items.map((i) => i.kind)).toEqual(["chip"]);
+  });
+
+  it("opens the successor's section on the message the switch carries", () => {
+    // The message the user switched with rides inside the successor's prompt, so the switch
+    // marker carries it and the section it opens shows it as the user's bubble; a marker with
+    // none (a fresh start, whose message arrives as a turn of its own) opens a bubble-less one.
+    const carried = agentSwitch("t4", "sw1", "claude", "codex", ["m-trigger", "Carry on in Codex"]);
+    const prompt = userMsg("t5", 'You are continuing the chat "Chat 1" (chat id agent-a). Carry on in Codex', "u-p", {
+      display: "chip",
+      display_label: "Handoff prompt",
+    });
+    const sections = buildSections(
+      [userMsg("t1", "do it"), summaryRequest("t3"), carried, prompt, assistantText("t6", "on it")],
+      new Map(),
+      true,
+    );
+    expect(sections).toHaveLength(2);
+    const opening = sections[1];
+    expect(opening.user_event?.content).toBe("Carry on in Codex");
+    expect(opening.user_event?.event_id).toBe("sw1:message");
+    expect(opening.trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+    expect(handoffNodeOf(sections[0].items[0]).prompt?.event_id).toBe("u-p");
+    const bare = buildSections([userMsg("t1", "do it"), agentSwitch("t4", "sw1")], new Map(), true);
+    expect(bare[1].user_event).toBeNull();
+  });
+
+  it("marks nothing where the chat's first agent takes over from the seed segment", () => {
+    // The seed segment is the conversation the Mind app wrote before the workspace existed;
+    // nothing was handed off to the first agent, so the switch after it is a turn boundary
+    // with no handoff node, and the user's first message opens its own section.
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "Wait.. what is honest software?", "u-t1", { source: "seed" }),
+      assistantText("t2", "Software that works for you."),
+      agentSwitch("t3", "sw1", "seed", "claude"),
+      userMsg("t4", "Let's build something"),
+      assistantText("t5", "On it."),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.flatMap((s) => s.items.map((i) => i.kind))).not.toContain("handoff");
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", null, "u-t4"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["a-t5"]);
+  });
+
+  it("carries a step still open at the switch over into the new agent's section", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do it"),
+      tkMsg("t2", 'tk create --step "Carry me"', "c1"),
+      tkMsg("t3", "tk start cod-step-aaaa", "c2"),
+      agentSwitch("t4", "sw1"),
+      workMsg("t5", "Read", "c3"),
+    ];
+    const results = new Map<string, ToolResultEvent>([
+      ["c1", result("t2r", "c1", "Created cod-step-aaaa: Carry me")],
+      ["c2", result("t3r", "c2", "Updated cod-step-aaaa -> in_progress\ntk-step cod-step-aaaa title: Carry me")],
+    ]);
+    const sections = buildSections(events, results, true);
+
+    expect(sections).toHaveLength(2);
+    const carried = sections[1].items.filter((i): i is Extract<TimelineItem, { kind: "step" }> => i.kind === "step");
+    expect(carried.map((i) => i.step.ticket_id)).toEqual(["cod-step-aaaa"]);
+    expect(carried[0].step.is_carryover).toBe(true);
+    // A carried step leads its section, as it does after a user turn; the switch node stays behind
+    // in the retiring agent's turn.
+    expect(sections[1].items.map((i) => i.kind)).toEqual(["step"]);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "handoff"]);
   });
 });

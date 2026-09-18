@@ -80,6 +80,8 @@ class PasteSink(StrEnum):
     CLAUDE_ENV = "claude_env"
     # A 0600 JSON map keyed by pi's provider id.
     PI_AUTH_JSON = "pi_auth_json"
+    # codex's own 0600 auth.json, holding a raw key in API-key mode.
+    CODEX_AUTH_JSON = "codex_auth_json"
 
 
 class Scrape(FrozenModel):
@@ -192,27 +194,14 @@ class Lane(FrozenModel):
     key_providers: tuple[KeyProvider, ...] = ()
 
 
-# The word a LANE's chat tabs count under, where the harness's own word would be ambiguous.
-#
-# Tab names come from the harness (`AUTO_NAME_WORD_BY_HARNESS`), which is right until two lanes
-# share one: Opencode Go and OpenRouter both run on pi, so both minted "Pi 1", "Pi 2", and a
-# glance at the tab strip could not tell you which provider a chat was spending. Only the lanes
-# that collide are listed; everything else keeps the harness's word.
-AUTO_NAME_WORD_BY_LANE: Final[dict[str, str]] = {
-    "opencode-go": "Opencode",
-    "openrouter": "OpenRouter",
-}
-
-
-# The harness name shown in parentheses after a provider. Distinct from
-# `AUTO_NAME_WORD_BY_HARNESS` and the table above, which name chat TABS -- different strings for
-# different surfaces, so they are separate tables rather than one pretending to serve both.
+# The harness name shown in parentheses after a provider.
 HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.CLAUDE: "Claude Code",
     HarnessType.CODEX: "Codex",
     HarnessType.PI_CODING: "Pi",
     HarnessType.ANTIGRAVITY: "Antigravity CLI",
     HarnessType.OPENCODE: "OpenCode",
+    HarnessType.SEED: "Mind",
 }
 
 # --- claude -----------------------------------------------------------------------------
@@ -289,14 +278,16 @@ LANE_ANTHROPIC = Lane(
 )
 
 # --- codex ------------------------------------------------------------------------------
-# Inverted from every other lane: the URL is fixed and the CODE is what gets scraped, the
-# user types it into the browser, and nothing comes back to the terminal. The CLI polls and
-# exits 0 on its own, so process exit is the success signal.
+# Its device flow is inverted from every other PTY method: the URL is fixed and the CODE is
+# what gets scraped, the user types it into the browser, and nothing comes back to the
+# terminal. The CLI polls and exits 0 on its own, so process exit is the success signal.
+# Pasting a key skips all of that -- it is a plain file write, and the only method on this
+# lane that can be driven without a person at a browser.
 
 LANE_OPENAI = Lane(
     id="openai",
     provider_name="OpenAI",
-    subtitle="Use your ChatGPT Plus or Pro subscription. Free accounts get limited coding usage.",
+    subtitle="Use your ChatGPT Plus or Pro subscription, or pay per token.",
     harness=HarnessType.CODEX,
     methods=(
         PtyMethod(
@@ -314,6 +305,15 @@ LANE_OPENAI = Lane(
             eof_policy=EofPolicy.SUCCESS,
             # codex renders plainly, without Ink's synchronized updates.
             frame_marker=None,
+        ),
+        # `codex login status`, the promote probe for this lane, is a presence check: it
+        # exits 0 for any key in the file. So a key with a typo in it commits happily here
+        # and surfaces as a failed first turn instead.
+        PasteMethod(
+            id="api_key",
+            label="Use an API key",
+            description="Paste a raw sk-... API key.",
+            sink=PasteSink.CODEX_AUTH_JSON,
         ),
     ),
 )

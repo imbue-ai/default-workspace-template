@@ -4,8 +4,8 @@
  * Both views render the same way: a single in-order walk of the transcript
  * (buildSections) into turn sections, flattened into the virtualized list's
  * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
- * that has tk steps, an ungrouped assistant message, a stop-hook chip, or a
- * trailing wrap-up reply. Sharing it here means a subagent's "View conversation"
+ * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
+ * node, or a trailing wrap-up reply. Sharing it here means a subagent's "View conversation"
  * gets the real progress view -- step timeline, statuses, summaries -- and the
  * same windowed virtualization as the main chat, with zero rendering drift.
  *
@@ -28,6 +28,7 @@ import {
 import { isHiddenUserMessage } from "./message-classification";
 import { buildSections, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
+import { renderHandoffNode } from "./handoff-node";
 
 // Per-type fallback row heights, used until a row has been measured (live or
 // offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
@@ -95,7 +96,7 @@ export function renderTranscriptSegments(rows: RowDescriptor[], segments: Window
  * measureRows can read its height.
  */
 function buildRows(
-  agentId: string,
+  chatId: string,
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
 ): RowDescriptor[] {
@@ -125,7 +126,7 @@ function buildRows(
             items: section.items,
             trailing_reply: section.trailing_reply,
             toolResults,
-            agentId,
+            chatId,
           }),
       });
       continue;
@@ -140,7 +141,7 @@ function buildRows(
             key: event.event_id,
             estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
             anchorEventId: event.event_id,
-            render: () => renderAssistantMessage(event, toolResults, agentId),
+            render: () => renderAssistantMessage(event, toolResults, chatId),
           });
         }
       } else if (item.kind === "permission") {
@@ -155,7 +156,7 @@ function buildRows(
           anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
-          render: () => renderPermissionItem(permissionEvent, toolResults, agentId, resolutionsByRequestId, permKey),
+          render: () => renderPermissionItem(permissionEvent, toolResults, chatId, resolutionsByRequestId, permKey),
         });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
@@ -167,6 +168,32 @@ function buildRows(
             render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
+      } else if (item.kind === "handoff") {
+        // The handoff node as a row of its own: the same timeline node a progress block
+        // draws, in its own thread-less frame. The row's id is the node's key so the
+        // virtualized list can measure it.
+        const node = item.node;
+        const key = `handoff-${node.key}`;
+        rows.push({
+          key,
+          estimate: ESTIMATED_USER_HEIGHT_PX,
+          anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
+          render: () =>
+            m(
+              "div",
+              {
+                id: key,
+                key,
+                class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
+              },
+              m("div.pv.pv--timeline.relative", [
+                m(
+                  "div.pv-timeline-nodes",
+                  renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
+                ),
+              ]),
+            ),
+        });
       }
     }
     for (const event of section.trailing_reply) {
@@ -174,7 +201,7 @@ function buildRows(
         key: event.event_id,
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
         anchorEventId: event.event_id,
-        render: () => renderAssistantMessage(event, toolResults, agentId),
+        render: () => renderAssistantMessage(event, toolResults, chatId),
       });
     }
   }
@@ -189,7 +216,7 @@ function buildRows(
  * from the transcript walk.
  */
 export function buildConversationRows(
-  agentId: string,
+  chatId: string,
   events: TranscriptEvent[],
   agentIsIdle: boolean,
 ): RowDescriptor[] {
@@ -197,7 +224,7 @@ export function buildConversationRows(
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, agentIsIdle);
-  return buildRows(agentId, sections, toolResults);
+  return buildRows(chatId, sections, toolResults);
 }
 
 /**

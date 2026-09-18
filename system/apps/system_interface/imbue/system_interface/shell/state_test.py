@@ -1,4 +1,4 @@
-"""Tests for ``ShellState``: the referenced-lifetime deletion and the pruning that follows an app's list shrinking."""
+"""Tests for ``ShellState``: the referenced-lifetime deletion, and that an app's list shrinking takes no tab away."""
 
 from datetime import timedelta
 from pathlib import Path
@@ -10,6 +10,7 @@ from app_instances.testing import wait_until
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -19,7 +20,6 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
-from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import layout_showing
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -92,26 +92,30 @@ def test_a_refused_delete_keeps_the_instance_listed_for_the_next_sweep(
         shell.stop()
 
 
-def test_instances_an_app_stopped_listing_leave_the_tab_sets_and_layouts(
+def test_an_instance_its_app_stops_listing_keeps_its_tabs_and_layouts_until_it_is_listed_again(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
 ) -> None:
+    """Missing from a list is not deleted: an app can drop an instance for a moment (a new chat
+    before the observe stream reports its agent), so only an explicit delete takes a tab away."""
     stub_source.records.extend([instance_record("stub-1"), instance_record("stub-2")])
     shell = _shell_over_stub(tmp_path, broadcaster, stub_app_url, [0.0])
+    shell.projects.create_project("Alpha", "#111111", 0, ())
+    shell.projects.add_tab("alpha", _STUB_1)
+    shell.projects.add_tab("alpha", _STUB_2)
+    shell.layouts.save_browser_layout("alpha", "c1", layout_showing(_STUB_1, _STUB_2), None, TEST_NOW)
+    shell.start()
     try:
-        shell.projects.create_project("Alpha", "#111111", 0, ())
-        shell.projects.add_tab("alpha", _STUB_1)
-        shell.projects.add_tab("alpha", _STUB_2)
-        shell.layouts.save_browser_layout("alpha", "c1", layout_showing(_STUB_1, _STUB_2), None, TEST_NOW)
-        shell.inventory.add_removed_listener(shell.on_instances_removed)
-        client_queue = broadcaster.register()
-
         stub_source.records = [record for record in stub_source.records if str(record.key) != "stub-1"]
         shell.inventory.refetch_now("stub")
+        assert shell.inventory.listed_addresses() == {_STUB_2}
 
-        assert shell.projects.get_project("alpha").tabs == (_STUB_2,)
-        assert set(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs) == {"p1"}
-        types = [message["type"] for message in drain_messages(client_queue)]
-        assert "projects_updated" in types and "apps_updated" in types
+        assert shell.projects.get_project("alpha").tabs == (_STUB_1, _STUB_2)
+        kept = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
+        assert set(instance_panel_params_by_id(kept.dockview)) == {"p0", "p1"}
+
+        stub_source.records.append(instance_record("stub-1"))
+        shell.inventory.refetch_now("stub")
+        assert shell.inventory.listed_addresses() == {_STUB_1, _STUB_2}
     finally:
         shell.stop()
 

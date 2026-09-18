@@ -8,7 +8,7 @@ branches on the harness name.
 Adding a harness is one :class:`HarnessSpec` entry here, one subclass per concern, and --
 if it emits markers of its own -- one member of
 :class:`~imbue.chat.harnesses.events.SpecialEventKind`. Nothing else changes:
-``ChatState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
+``ChatAppState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
 trackers through :func:`build_tracker`, and neither names a harness.
 
 One spec per harness rather than a dict per concern, deliberately: parallel registries
@@ -37,12 +37,14 @@ from imbue.chat.harnesses.claude.model import ClaudeModelResolver
 from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
+from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.model import CodexModelResolver
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
+from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
@@ -58,14 +60,18 @@ from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.pi_coding.model import PiModelResolver
 from imbue.chat.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.chat.harnesses.pi_coding.watcher import PiSessionWatcher
+from imbue.chat.harnesses.pi_coding.watcher import PiTranscriptLoader
 from imbue.chat.harnesses.placeholder import EMPTY_CATALOG
 from imbue.chat.harnesses.placeholder import PlaceholderModelResolver
 from imbue.chat.harnesses.placeholder import PlaceholderSessionWatcher
+from imbue.chat.harnesses.seed.activity import SeedActivityTracker
+from imbue.chat.harnesses.seed.loader import SeedSessionWatcher
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -74,7 +80,7 @@ class PopupTrigger(StrEnum):
 
     # Matches a typed message's first token against the popup's commands at send time.
     COMPOSER_COMMAND = "composer_command"
-    # Runs on every chat render -- the fast-mode grace-period check.
+    # Runs on every chat render -- the fast-mode turn-limit check.
     TURN_CHECK = "turn_check"
 
 
@@ -86,8 +92,9 @@ class PopupAction(StrEnum):
     # Open the provider chooser. Every harness signs in the same way now, so this needs
     # nothing per-harness beyond the commands that trigger it.
     OPEN_AUTH = "open_auth"
-    # The keep-fast-mode prompt flow.
-    FAST_MODE_PROMPT = "fast_mode_prompt"
+    # The harness can launch fast: the chat app turns fast mode off after the workspace's
+    # configured number of user turns.
+    FAST_MODE_LIMIT = "fast_mode_limit"
 
 
 class HarnessPopup(FrozenModel):
@@ -118,7 +125,7 @@ class HarnessPopup(FrozenModel):
 # and a future re-measure would find these three send fine and drop them.
 # Split by whether the harness HAS a fast mode. /model and /effort are universal, but
 # only claude and codex can launch fast (they are the harnesses declaring
-# ``_FAST_MODE_PROMPT_POPUP``), and their catalogs are the only ones carrying
+# ``_FAST_MODE_LIMIT_POPUP``), and their catalogs are the only ones carrying
 # ``supports_fast``. Declining /fast on a harness with no fast mode would point the user at
 # a picker control that is not rendered for it -- worse than letting the text through.
 _MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
@@ -131,7 +138,7 @@ _MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     action=PopupAction.NOTICE,
     notice_body=_MODEL_BAR_NOTICE,
 )
-# For the fast-capable harnesses; pairs with ``_FAST_MODE_PROMPT_POPUP`` on the same spec.
+# For the fast-capable harnesses.
 _MODEL_BAR_POPUP_WITH_FAST: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.COMPOSER_COMMAND,
     commands=_MODEL_BAR_COMMANDS_WITH_FAST,
@@ -235,9 +242,9 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 # the harness's agent-auth surface instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
 
-# The fast-mode grace-period prompt, declared by the harnesses that can launch fast.
-_FAST_MODE_PROMPT_POPUP: Final[HarnessPopup] = HarnessPopup(
-    trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_PROMPT
+# The fast-mode turn limit, declared by the harnesses that can launch fast.
+_FAST_MODE_LIMIT_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_LIMIT
 )
 
 
@@ -249,6 +256,9 @@ class HarnessSpec(FrozenModel):
 
     name: HarnessType
     watcher_class: type[AgentSessionWatcher]
+    # The read-only half of the watcher: what an archived segment of a chat is read through
+    # (``chat_transcript.py``). The same discovery and parsing, with no thread and no watches.
+    loader_class: type[TranscriptLoader]
     # The transcript-derived activity tracker. Every harness has one -- claude/pi infer the
     # turn from the transcript tail, codex latches its explicit turn markers.
     tracker_class: type[HarnessActivityTracker]
@@ -304,6 +314,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     HarnessType.CLAUDE: HarnessSpec(
         name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
+        loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
         resolver_class=ClaudeModelResolver,
@@ -323,12 +334,13 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
             _MODEL_BAR_POPUP_WITH_FAST,
-            _FAST_MODE_PROMPT_POPUP,
+            _FAST_MODE_LIMIT_POPUP,
         ),
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
+        loader_class=CodexTranscriptLoader,
         # The dot is a latch on the transcript's turn markers (task_started/task_complete in the
         # rollout); the mngr lifecycle is deliberately NOT consulted -- it is polled, hence laggy
         # and unreliable for codex (see harnesses/codex/activity.py). (The old design drove the dot
@@ -357,7 +369,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
             _MODEL_BAR_POPUP_WITH_FAST,
-            _FAST_MODE_PROMPT_POPUP,
+            _FAST_MODE_LIMIT_POPUP,
         ),
     ),
     HarnessType.PI_CODING: HarnessSpec(
@@ -366,6 +378,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # queue from mngr's pi_inbox. pi's transcript carries no turn markers (like claude),
         # so activity is the lifecycle-plus-tail heuristic.
         watcher_class=PiSessionWatcher,
+        loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
         resolver_class=PiModelResolver,
@@ -393,6 +406,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     HarnessType.OPENCODE: HarnessSpec(
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
+        loader_class=PlaceholderSessionWatcher,
         tracker_class=OpenCodePlaceholderActivityTracker,
         process_started_marker_filename=OpenCodePlaceholderActivityTracker.marker_filename,
         resolver_class=PlaceholderModelResolver,
@@ -413,6 +427,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # lifecycle-plus-tail heuristic -- with one agy-specific correction, see
         # antigravity/activity.py.
         watcher_class=AntigravitySessionWatcher,
+        loader_class=AntigravitySessionWatcher,
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
         # Display-only model bar: agy's `/model` is an interactive TUI picker with no
@@ -444,6 +459,21 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
     ),
+    # The seed segment of a chat the Mind app opened (``chat_seed.py``): turns the app wrote
+    # before the workspace had any agent, read like an archived segment. No agent ever runs
+    # on it, so every live part is inert: the watcher watches nothing, the tracker reads
+    # idle, the resolver switches nothing, and there is no catalog and no popup.
+    HarnessType.SEED: HarnessSpec(
+        name=HarnessType.SEED,
+        watcher_class=SeedSessionWatcher,
+        loader_class=SeedSessionWatcher,
+        tracker_class=SeedActivityTracker,
+        process_started_marker_filename=SeedActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+    ),
 }
 
 
@@ -455,6 +485,11 @@ def get_harness_spec(harness: HarnessType) -> HarnessSpec:
 def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSessionWatcher:
     """Build the session watcher for ``agent_info``'s harness, not yet started."""
     return get_harness_spec(agent_info.harness).watcher_class.build(agent_info, on_events)
+
+
+def build_loader(agent_info: AgentInfo) -> TranscriptLoader:
+    """Build the transcript loader for ``agent_info``'s harness: its transcript with nothing watching it."""
+    return get_harness_spec(agent_info.harness).loader_class.build_loader(agent_info)
 
 
 def build_tracker(harness: HarnessType) -> HarnessActivityTracker:

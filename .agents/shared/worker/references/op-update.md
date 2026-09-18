@@ -26,16 +26,19 @@ absent or unrecognized.
 ## Valid report `name:` values
 
 - Gates: `outline-approval` (emergent only -- the design gate), `final-creation`
-  (both).
+  (both), and `question` mid-flight in every shape, whenever the answer is not
+  in your task file or the repo.
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
 **Critical-app handoff.** When the task says it is the careful flow's handoff
 for a critical app (the shell, the chat, the terminal, or a user app whose
 manifest says `critical = true`; see `type-app.md`, "Critical apps"), there is
-no `## Change origin` toggle and **no gate report at all**. The user already
+no `## Change origin` toggle and **no approval gate**. The user already
 approved the shape in the lead's live editing loop, before you existed, and the
 lead committed every round it showed them, so the branch you are checked out on
-*already carries the approved change*. There is nothing for a worker gate to ask.
+*already carries the approved change*. There is nothing for an approval gate to
+ask; a mid-flight `question` is still valid when the answer is not in your task
+file or the repo.
 
 Read the task body for which of the two handoff shapes you were given:
 
@@ -151,6 +154,8 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
 - Scenarios run: <list, with pass/fail>
 - Shape changes: <none, or the output-schema / field / CLI / exit-code deltas a
   consumer or surface would need to adapt to>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
 
 **App or service:**
@@ -160,7 +165,12 @@ Updated app or service `<name>`:
 - Change: <one-sentence>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
+
+The last two lines come from the scope file (`harden-creation.md`); a
+creation with no footprint writes `none` for both.
 
 Push it and stop. On approval, emit a `name: done` terminal report. In the
 committed path a clean verification may produce no new worker commits -- that is

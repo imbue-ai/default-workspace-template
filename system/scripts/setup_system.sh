@@ -38,15 +38,16 @@ else
         "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
 fi
 
-# Pinned versions (single source of truth; override via env if needed -- the
-# update apply's live re-run deliberately drops any *_VERSION it inherited, so
-# only an explicit by-hand override reaches here). Keep CLAUDE_CODE_VERSION in
-# sync with agent_types.claude.version in .mngr/settings.toml.
+# Pinned versions (single source of truth). An inherited *_VERSION is dropped
+# first, so only an override made on purpose (PROVISION_PIN_OVERRIDE=1) reaches
+# the defaults below. Keep CLAUDE_CODE_VERSION in sync with
+# agent_types.claude.version in .mngr/settings.toml.
+provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.227}"
-: "${CODEX_VERSION:=0.147.0}"
+: "${CLAUDE_CODE_VERSION:=2.1.269}"
+: "${CODEX_VERSION:=0.154.0}"
 : "${PI_VERSION:=0.83.0}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"

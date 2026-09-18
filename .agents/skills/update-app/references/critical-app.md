@@ -344,8 +344,17 @@ interleave.
    ```
 
    `down` is idempotent and tears down the siblings it booted; the tab is a
-   layout panel you close yourself. Then destroy the worker per `launch-task`
-   (after a failed apply, keep it until the diagnosis is done), close the
+   layout panel you close yourself. This flow does not pass through
+   `update-creation` step 4, so the worker's teardown is yours. After a `0`,
+   destroy it:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
+   ```
+
+   After a failed apply (`1`, `2`, `3`), stop it instead
+   (`create_worker.py stop --name "update-$SLUG"`) and keep it until the
+   diagnosis is done. Then close the
    `update-$SLUG` ticket, remove the worktree if it still exists (again without
    `--force`), and release the lease with `tk close "$LEASE_ID" "Live edit
    hardened, applied, and torn down."`.

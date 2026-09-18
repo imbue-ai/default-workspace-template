@@ -1,7 +1,7 @@
 """Guard: ``mngr <subcommand>`` references in skill markdown name real commands.
 
 Skills carry ``mngr ...`` command examples in their prose that agents copy and
-run verbatim. When system/vendor/mngr renames or removes a subcommand, those examples
+run verbatim. When mngr renames or removes a subcommand, those examples
 go stale silently. This test scans skill markdown for code-formatted
 ``mngr <subcommand>`` tokens and asserts each subcommand exists in the live mngr
 CLI, so that drift fails at merge.
@@ -51,7 +51,9 @@ def _valid_subcommands() -> frozenset[str]:
 
 
 def _code_regions(text: str) -> list[str]:
-    return _FENCED_CODE.findall(text) + [m.group(1) for m in _INLINE_CODE.finditer(text)]
+    return _FENCED_CODE.findall(text) + [
+        m.group(1) for m in _INLINE_CODE.finditer(text)
+    ]
 
 
 def _iter_skill_markdown() -> list[Path]:
@@ -68,14 +70,16 @@ def test_skill_markdown_mngr_subcommands_exist() -> None:
             for match in _MNGR_SUBCOMMAND.finditer(region):
                 subcommand = match.group(1)
                 if subcommand not in valid:
-                    offenders.append(f"{md.relative_to(_REPO_ROOT)}: `mngr {subcommand}`")
+                    offenders.append(
+                        f"{md.relative_to(_REPO_ROOT)}: `mngr {subcommand}`"
+                    )
 
     # Vacuity guard: the skills genuinely use mngr, so the scan must have walked
     # real files. (A zero here would mean the globs broke, not that all is well.)
     assert scanned > 0, "no skill markdown found -- check _SKILL_MD_ROOTS"
     assert not offenders, (
         "Skill markdown references mngr subcommands that the live CLI does not "
-        "have (and that are not known plugin commands). The vendored mngr CLI "
+        "have (and that are not known plugin commands). The mngr CLI "
         "likely renamed/removed them -- update the skill prose (or, for a new "
         "plugin command, add it to _KNOWN_PLUGIN_SUBCOMMANDS):\n  "
         + "\n  ".join(offenders)

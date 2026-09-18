@@ -68,14 +68,19 @@
 
 import type {
   TranscriptEvent,
+  AgentSwitchEvent,
   AssistantMessageEvent,
   UserMessageEvent,
   ToolResultEvent,
   ToolCall,
 } from "../models/Response";
+import type { HandoffState } from "../models/Chats";
+import { SEED_HARNESS } from "../models/Response";
+import { isHandoffPromptChip } from "../models/handoffPrompt";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import {
+  isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
@@ -111,6 +116,28 @@ export interface StepNode {
   events: AssistantMessageEvent[];
 }
 
+/** The handoff between two agents of one chat, as one node: the chat app's summary request, the
+ *  retiring agent's work in answer (the summary write), and the switch that closed it. Open while
+ *  the switch has not landed: a handoff still running, one that failed, or one called off. */
+export interface HandoffNode {
+  key: string;
+  /** The summary request that opened the node; null for a node the switch alone made: the
+   *  loaded window starts after the request, or a fresh start asked for no summary. */
+  request: UserMessageEvent | null;
+  /** The retiring agent's turn after the request: what expanding the node shows. */
+  events: AssistantMessageEvent[];
+  /** The switch that completed the handoff, once it has. */
+  switch: AgentSwitchEvent | null;
+  /** The prompt the successor was started with (the chip carrying the summary and the user's message),
+   *  once it has reached the successor's segment: shown inside the node rather than as a chip of its own. */
+  prompt: UserMessageEvent | null;
+}
+
+/** Whether the node's switch was a fresh start, which had no handoff to show. */
+export function isFreshStartNode(node: HandoffNode): boolean {
+  return node.switch !== null && node.switch.is_fresh_start;
+}
+
 /** One item on a section's timeline, in transcript order. */
 export type TimelineItem =
   | { kind: "step"; step: StepNode }
@@ -130,7 +157,10 @@ export type TimelineItem =
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
     }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
-  | { kind: "chip"; event: UserMessageEvent };
+  | { kind: "chip"; event: UserMessageEvent }
+  /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
+   *  request in the window, at the switch itself, when its prompt reached it). */
+  | { kind: "handoff"; node: HandoffNode };
 
 /** A turn: the user message, its timeline, and the wrap-up reply below it. */
 export interface SectionView {
@@ -147,7 +177,7 @@ export interface SectionView {
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
-const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
+const TK_UPDATED_RE = /^Updated (\S+) -> (open|in_progress|closed)\r?$/gm;
 
 /** A step id (minted by `tk create --step`) carries a literal `-step-` segment,
  *  e.g. `cod-step-f1zl`; a regular ticket id has none (`cod-f1zl`). The walk
@@ -240,6 +270,8 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
   for (const e of events) {
     if (e.type !== "assistant_message") continue;
     for (const tc of e.tool_calls) {
+      const command = tkCommand(tc);
+      if (command === null) continue;
       // The backend stamps the tk-relevant output lines resident (`tk_stamp`); the raw
       // output never rides the event.
       const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
@@ -259,8 +291,6 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
       }
 
       // Historical input fallback (fills only what the output lines did not).
-      const command = tkCommand(tc);
-      if (command === null) continue;
       applyInputFallback(command, output, ensure, registerCreated, knownSteps);
     }
   }
@@ -311,12 +341,12 @@ interface ParsedMessage {
 /** Split an assistant message into the tk transitions it caused and the
  *  renderable remainder (text + non-tk tool calls). */
 function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): ParsedMessage {
-  // Transitions are read from EVERY tool call's output -- the
-  // `Updated <id> -> <status>` line is specific enough that a genuine
-  // transition is never missed, even if the command form isn't recognised as a
-  // tk lifecycle call (so e.g. `cd x && tk close s1` still closes the step).
+  // Only actual lifecycle commands can change the timeline. A Read/search result
+  // can quote another agent's commands or even a whole transcript verbatim.
+  // Non-pure invocations (e.g. `cd x && tk close s1`) still carry tk_command.
   const transitions: { id: string; status: "in_progress" | "closed" }[] = [];
   for (const tc of e.tool_calls) {
+    if (tkCommand(tc) === null) continue;
     const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
     TK_UPDATED_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -370,6 +400,8 @@ type SectionEntry =
    *  what lets the ejection pass tell a delivered reply from mid-step narration
    *  (see collectEjectedProse). */
   | { kind: "chip"; event: UserMessageEvent }
+  /** The handoff node, at the summary request that opened it or at a switch with no request. */
+  | { kind: "handoff"; node: HandoffNode }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
 interface SectionBuilder {
@@ -382,6 +414,9 @@ interface SectionBuilder {
    *  SectionEntry), used to assemble timeline items in transcript order. */
   entries: SectionEntry[];
   current_step_id: string | null;
+  /** The handoff node open in this section: every assistant message from the summary request
+   *  on belongs to it, until the switch closes it. */
+  open_handoff: HandoffNode | null;
 }
 
 function newSection(user_event: UserMessageEvent | null, key: string): SectionBuilder {
@@ -392,7 +427,60 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     step_order: [],
     entries: [],
     current_step_id: null,
+    open_handoff: null,
   };
+}
+
+/** True for a transcript event that carries the user's own words: a ``user_message`` with no display
+ *  decision, or the handoff prompt a successor started with (a chip that holds the message the user
+ *  switched with). The backend's rule for whether a handoff has anything to summarize
+ *  (``has_user_turn``), read here so the page can tell a fresh chat, whose switch needs no dialog,
+ *  from one with context. */
+export function isGenuineUserTurn(event: TranscriptEvent): boolean {
+  if (event.type !== "user_message") return false;
+  return event.display === undefined || isHandoffPromptChip(event);
+}
+
+export function hasUserTurn(events: readonly TranscriptEvent[]): boolean {
+  return events.some(isGenuineUserTurn);
+}
+
+/** The successor's opening turn, built from the switch that carries the message the user switched
+ *  with: folded into the successor's prompt, that message is no event of the transcript's own. Null
+ *  for a switch that carries none (a fresh start's message arrives as a turn of its own). */
+export function openingTurnOf(event: AgentSwitchEvent): UserMessageEvent | null {
+  if (event.message === null || event.message_id === null) return null;
+  return {
+    type: "user_message",
+    event_id: `${event.event_id}:message`,
+    timestamp: event.timestamp,
+    source: event.source,
+    role: "user",
+    content: event.message,
+  };
+}
+
+/** Whether a summary request on the transcript is the chat's live switch's own, rather than one an
+ *  earlier switch sent before it was called off: the live switch asked after it was confirmed. Timestamps
+ *  that do not parse cannot be told apart, and read as the live switch's. */
+export function isLiveHandoffRequest(request: UserMessageEvent, handoff: HandoffState | null): boolean {
+  if (handoff === null) return false;
+  const requestedAt = Date.parse(request.timestamp);
+  const startedAt = Date.parse(handoff.started_at);
+  if (Number.isNaN(requestedAt) || Number.isNaN(startedAt)) return true;
+  return requestedAt >= startedAt;
+}
+
+/** Whether the transcript's live segment holds the live switch's summary request, with no switch
+ *  closing it yet: the handoff node the walk builds from it is then the one showing the switch's
+ *  progress, and the page needs no node of its own for it. */
+export function hasOpenHandoffRequest(events: readonly TranscriptEvent[], handoff: HandoffState | null): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type === "agent_switch") return false;
+    if (event.type === "user_message" && isHandoffSummaryRequest(event)) return isLiveHandoffRequest(event, handoff);
+  }
+  return false;
 }
 
 /** Walk the visible transcript into ordered sections. `toolResults` resolves tk
@@ -427,8 +515,56 @@ export function buildSections(
     return section;
   };
 
+  // The node a switch just closed, until the successor's first turn-making event: the handoff
+  // prompt lands on it rather than in the successor's section. Hidden lines the successor's
+  // setup sends before the prompt (a model pick's slash commands) leave it armed.
+  let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
+    if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
+      // The chat's first agent taking over from the seed segment the Mind app wrote: nothing
+      // was handed off, so no node marks it; the agent's first turn simply opens a section.
+      if (current !== null) carryover = openStepsAtEnd(current);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      continue;
+    }
+    if (e.type === "agent_switch") {
+      // The chat moved to another agent. The switch closes the handoff node the summary
+      // request opened (the node stays where the request was, at the end of the retiring
+      // agent's last turn); with no request (a fresh start) the switch is the node. The new
+      // agent starts fresh, so the switch is a turn boundary: the prior section closes,
+      // carrying whatever was still open, and the successor's opens on the message the user
+      // switched with when the switch carries it, else with no bubble.
+      if (current === null) current = ensureSection(null, "section-pre");
+      if (current.open_handoff !== null) {
+        current.open_handoff.switch = e;
+        lastSwitched = current.open_handoff;
+        current.open_handoff = null;
+      } else {
+        lastSwitched = { key: e.event_id, request: null, events: [], switch: e, prompt: null };
+        current.entries.push({ kind: "handoff", node: lastSwitched });
+      }
+      carryover = openStepsAtEnd(current);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      continue;
+    }
     if (e.type === "user_message") {
+      if (lastSwitched !== null && isHandoffPromptChip(e)) {
+        // The prompt the switch started the successor with: it belongs to the handoff, so the
+        // node shows it and the successor's section opens on its reply.
+        lastSwitched.prompt = e;
+        lastSwitched = null;
+        continue;
+      }
+      if (isHandoffSummaryRequest(e)) {
+        lastSwitched = null;
+        // The chat app asked the agent for its handoff summary: the node opens here and takes
+        // the agent's answer, so the pause reads as one thing rather than a chip and a write.
+        if (current === null) current = ensureSection(null, "section-pre");
+        const node: HandoffNode = { key: e.event_id, request: e, events: [], switch: null, prompt: null };
+        current.entries.push({ kind: "handoff", node });
+        current.open_handoff = node;
+        continue;
+      }
       // A granted/denied notification for an earlier permission request. Record
       // the verdict (it reflects on that request's card, not as a user prompt),
       // then treat the notification as the turn boundary it naturally is: the
@@ -446,6 +582,7 @@ export function buildSections(
       // break-with-no-bubble applies either way.
       const resolution = resolutionOf(e);
       if (resolution !== null) {
+        lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
         carryover = current === null ? [] : openStepsAtEnd(current);
@@ -453,17 +590,13 @@ export function buildSections(
         continue;
       }
       if (isNonBoundaryUserMessage(e)) {
-        // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications, the post-compaction summary -- fold into
-        // the current section as a chip rather than opening a new turn. The
-        // backend's display decision says which is which; nothing is re-derived
-        // here. A chip goes into the skeleton so it both renders at its
-        // chronological spot and marks the turn end that ends a step's stint
-        // (see collectEjectedProse).
+        // Collapsed system chips (Stop-hook feedback, browser-fleet nudges,
+        // background task-notifications) fold into the current section as a chip
+        // rather than opening a new turn. The backend's display decision says
+        // which is which; nothing is re-derived here. A chip goes into the skeleton
+        // so it both renders at its chronological spot and marks the turn end that
+        // ends a step's stint (see collectEjectedProse).
         if (isSystemChipUserMessage(e)) {
-          // The compaction summary can be the FIRST event of a resumed session,
-          // with no section open yet; open a pre-section so it is not dropped
-          // (mirrors the leading-assistant-message case below).
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }
@@ -472,14 +605,22 @@ export function buildSections(
         // nowhere on the user rail, so they are dropped here.
         continue;
       }
+
       // Real user turn: close the prior section (carrying open steps) and open
       // a new one.
+      lastSwitched = null;
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
       continue;
     }
     if (e.type === "assistant_message") {
+      lastSwitched = null;
       if (current === null) current = ensureSection(null, "section-pre");
+      if (current.open_handoff !== null) {
+        // The retiring agent's answer to the summary request, whole: the node shows it.
+        current.open_handoff.events.push(e);
+        continue;
+      }
       const parsed = parseMessage(e, toolResults);
       // Apply transitions in transcript order so each step node lands at its
       // real position -- a batched `tk close a && tk start b` must keep a's node
@@ -663,6 +804,10 @@ function finalizeSection(
   // closing remark, since the step has not closed.
   const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
 
+  // A fresh start asked for no summary and delivered no prompt: there was no handoff to show, so
+  // its node comes off the timeline rather than standing as an empty line.
+  section.entries = section.entries.filter((entry) => entry.kind !== "handoff" || !isFreshStartNode(entry.node));
+
   // 1. Ejection: prose spoken inside a step at the end of a stint (so it is NOT
   //    narration, which is prose *followed* by more work in the same stint). It
   //    is the step's closing remark -- ejected from the step so it renders in
@@ -690,7 +835,8 @@ function finalizeSection(
     // reply.
     if (en.kind === "permission") lastWorkEntryIdx = i;
     else if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
-    if (en.kind === "step") lastStepEntryIdx = i;
+    // A handoff node bounds the reply too: what the agent said before the switch stays above it.
+    else if (en.kind === "step" || en.kind === "handoff") lastStepEntryIdx = i;
   }
   const replyBoundary = Math.max(lastWorkEntryIdx, lastStepEntryIdx);
   const trailingIds = new Set<string>();
@@ -771,6 +917,9 @@ function finalizeSection(
       // own transcript position.
       flushUngrouped();
       items.push({ kind: "chip", event: entry.event });
+    } else if (entry.kind === "handoff") {
+      flushUngrouped();
+      items.push({ kind: "handoff", node: entry.node });
     } else if (trailingIds.has(entry.event.event_id)) {
       // Trailing reply: rendered below the timeline (see trailing_reply).
     } else if (entry.step_id === null || ejectedIds.has(entry.event.event_id)) {

@@ -2,17 +2,21 @@
 
 from pathlib import Path
 
+from imbue.chat.chat_settings import SETTINGS_FILENAME
+from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
 from imbue.chat.main import build_application
 from imbue.chat.main import build_production_state
 from imbue.chat.message_stamps import STAMPS_FILENAME
-from imbue.chat.state import ChatState
+from imbue.chat.primitives import ChatId
+from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
 
-def _built_state(argv: list[str]) -> ChatState:
+def _built_state(argv: list[str]) -> ChatAppState:
     return state_of(build_application(Config(), _parse_args(argv)))
 
 
@@ -69,11 +73,13 @@ def test_secondary_is_off_by_default_and_names_its_own_shell() -> None:
     assert secondary.nudge_shell_url == "http://127.0.0.1:9"
 
 
-def test_message_stamps_land_in_the_configured_data_dir(tmp_path: Path) -> None:
+def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
     """The chat's data directory is the config's: a secondary chat pointed at a scratch copy writes nowhere else."""
     state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=True)
     try:
-        state.agent_manager.record_message_sent("agent-stamped")
+        state.agent_manager.record_message_sent(ChatId("agent-stamped"))
+        state.chat_settings.write(ChatSettings(fast_mode_default=FastModeMode.ON))
         assert (tmp_path / "scratch" / STAMPS_FILENAME).exists()
+        assert (tmp_path / "scratch" / SETTINGS_FILENAME).exists()
     finally:
         state.shutdown()

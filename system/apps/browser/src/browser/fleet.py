@@ -101,13 +101,24 @@ def _daemon_url() -> str:
     return _DEFAULT_URL
 
 
+def _own_chat_id() -> str | None:
+    """The caller's chat id: ``MINDS_CHAT_ID`` on an agent the chat app created, else the agent's
+    own id (a background agent is its own chat), else None outside an agent.
+
+    A browser is owned by a CHAT, not by the agent that happened to claim it: a chat can move
+    to another agent (``docs/system/blueprint/chat-agent-split/``), and the daemon's wake-ups
+    reach the chat through the chat app, which delivers to whichever agent runs it now.
+    """
+    return os.environ.get("MINDS_CHAT_ID") or os.environ.get("MNGR_AGENT_ID")
+
+
 def _agent_headers() -> dict[str, str]:
-    """Identity headers; hard-fail if ``MNGR_AGENT_ID`` is unset (no null owner)."""
-    agent_id = os.environ.get("MNGR_AGENT_ID")
-    if not agent_id:
+    """Identity headers; hard-fail with no chat id to send (no null owner)."""
+    chat_id = _own_chat_id()
+    if not chat_id:
         _err("MNGR_AGENT_ID is not set -- run agentic-browser-fleet from inside an agent.")
         raise SystemExit(_EXIT_USAGE)
-    headers = {"X-Mngr-Agent-Id": agent_id, "Content-Type": "application/json"}
+    headers = {"X-Mngr-Agent-Id": chat_id, "Content-Type": "application/json"}
     name = os.environ.get("MNGR_AGENT_NAME")
     if name:
         headers["X-Mngr-Agent-Name"] = name
@@ -190,9 +201,9 @@ def _resolve_active_view() -> tuple[bool, str | None]:
       ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
       silently: there is no screen of ours to surface into.
     * When reachable, ``view`` is the view to target -- the active view of the connected
-      client that most recently messaged THIS agent (its chat instance is addressed by the
-      agent id), else the most-recently-active connected client's view, else None
-      (reachable but nothing to place it on).
+      client that most recently messaged THIS chat (its chat instance is addressed by the
+      chat id, see ``_own_chat_id``), else the most-recently-active connected client's view,
+      else None (reachable but nothing to place it on).
     """
     root = _repo_root()
     script = root / "system" / "scripts" / "layout.py"
@@ -213,9 +224,9 @@ def _resolve_active_view() -> tuple[bool, str | None]:
         for client in clients
         if isinstance(client, dict) and client.get("is_connected") and client.get("active_view")
     ]
-    my_id = os.environ.get("MNGR_AGENT_ID")
-    if my_id:
-        my_address = f"app:chat?instance={my_id}"
+    my_chat_id = _own_chat_id()
+    if my_chat_id:
+        my_address = f"app:chat?instance={my_chat_id}"
         for client in connected:
             if any(msg.get("address") == my_address for msg in client.get("recent_messages", [])):
                 return (True, str(client["active_view"]))
@@ -291,7 +302,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
     if not browsers:
         _out("no browsers yet -- use `new` to start one (it prints a name to drive by)")
         return _EXIT_OK
-    me = os.environ.get("MNGR_AGENT_ID")
+    me = _own_chat_id()
     for browser in browsers:
         tabs = browser.get("tabs", [])
         active = next((t for t in tabs if t.get("active")), None)

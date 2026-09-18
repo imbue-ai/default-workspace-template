@@ -15,7 +15,7 @@ Signals, and where each comes from:
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
-  stream via ``record_running_agents``. Entering a running state counts as
+  stream via ``record_running_chats``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
   ``mngr message`` or by another agent), and staying in one marks the chat
   mid-turn, which suspends its staleness climb until the turn ends.
@@ -26,8 +26,8 @@ fresh. Across a system-interface restart the message stamps are re-seeded from
 the durable client-activity log (``seed_last_message_times``), so a restart does
 not hand every chat a fresh grace period.
 
-Only chat agents are managed. Workers and the primary (services) agent are
-excluded by the caller's ``list_chat_agent_ids`` (they keep their launch bands --
+Only chats are managed. Workers and the primary (services) agent are
+excluded by the caller's ``list_chat_ids`` (they keep their launch bands --
 workers stay maximally expendable, the primary stays pinned), so opening,
 switching to, or messaging one of them never moves its score. A chat with no live
 process (dormant, revives on its next message) is simply skipped until its
@@ -58,6 +58,7 @@ from oom_priority import bands
 
 from imbue.chat.presence import PresenceState
 from imbue.chat.presence import PresenceTracker
+from imbue.chat.primitives import ChatId
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
 # minute-granularity is ample; each pass is a handful of stats and ``/proc``
@@ -68,9 +69,9 @@ SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 class ChatOomPrioritizer:
     """Holds chat activity state and re-tags each chat's ``oom_score_adj``.
 
-    ``list_chat_agent_ids`` returns the ids of the agents to manage (chats only;
-    the caller excludes workers and the primary). ``resolve_pid`` maps a chat's
-    agent id to its live main-process pid, or None when it has no running process.
+    ``list_chat_ids`` returns the ids of the chats to manage (the caller excludes workers and
+    the primary agent). ``resolve_pid`` maps a chat to its active agent's live main-process
+    pid, or None when it has no running process.
     ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort; its return value
     is ignored). ``resolve_process_started_at`` returns the epoch time at which a
     chat's claude process last started, or None when unknown; it floors the
@@ -84,15 +85,15 @@ class ChatOomPrioritizer:
     def __init__(
         self,
         *,
-        list_chat_agent_ids: Callable[[], Iterable[str]],
-        resolve_pid: Callable[[str], int | None],
+        list_chat_ids: Callable[[], Iterable[ChatId]],
+        resolve_pid: Callable[[ChatId], int | None],
         set_adj: Callable[[int, int], bool],
-        resolve_process_started_at: Callable[[str], float | None],
+        resolve_process_started_at: Callable[[ChatId], float | None],
         clock: Callable[[], float] = time.time,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
         presence: PresenceTracker | None = None,
     ) -> None:
-        self._list_chat_agent_ids = list_chat_agent_ids
+        self._list_chat_ids = list_chat_ids
         self._resolve_pid = resolve_pid
         self._set_adj = set_adj
         self._resolve_process_started_at = resolve_process_started_at
@@ -100,13 +101,13 @@ class ChatOomPrioritizer:
         self._sweep_interval_seconds = sweep_interval_seconds
         self._lock = threading.Lock()
         self._presence = presence if presence is not None else PresenceTracker(clock=clock)
-        # agent_id -> time of its most recent message, for recency ranking.
-        self._last_message_at: dict[str, float] = {}
-        # agent_id -> time of its most recent engagement of *any* kind (messaged,
+        # chat_id -> time of its most recent message, for recency ranking.
+        self._last_message_at: dict[ChatId, float] = {}
+        # chat_id -> time of its most recent engagement of *any* kind (messaged,
         # switched to, or entered a running state), for the staleness clock.
-        self._last_engaged_at: dict[str, float] = {}
-        # Agents currently in a running lifecycle state, i.e. mid-turn.
-        self._running: set[str] = set()
+        self._last_engaged_at: dict[ChatId, float] = {}
+        # Chats whose active agent is in a running lifecycle state, i.e. mid-turn.
+        self._running: set[ChatId] = set()
         self._sweep_stop = threading.Event()
         self._sweep_thread: threading.Thread | None = None
 
@@ -131,7 +132,7 @@ class ChatOomPrioritizer:
             thread.join(timeout=5)
             self._sweep_thread = None
 
-    def seed_last_message_times(self, last_message_at_by_agent_id: dict[str, float]) -> None:
+    def seed_last_message_times(self, last_message_at_by_chat_id: dict[ChatId, float]) -> None:
         """Seed per-chat last-message times from a durable record, at startup.
 
         Without this, a system-interface restart would leave every chat with no
@@ -141,10 +142,10 @@ class ChatOomPrioritizer:
         forward, so seeding cannot un-engage a chat that was already reported.
         """
         with self._lock:
-            for agent_id, messaged_at in last_message_at_by_agent_id.items():
-                self._stamp_message_locked(agent_id, messaged_at)
+            for chat_id, messaged_at in last_message_at_by_chat_id.items():
+                self._stamp_message_locked(chat_id, messaged_at)
 
-    def record_presence(self, agent_id: str, client_id: str, state: PresenceState) -> None:
+    def record_presence(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
         """Apply one client's presence report about one chat, then re-tag every chat.
 
         The report replaces that client's standing one (idempotent and self-healing:
@@ -156,27 +157,27 @@ class ChatOomPrioritizer:
         continuing engagement, and re-stamping it every heartbeat would make it
         permanently fresh.
         """
-        was_visible = self._presence.is_visible(agent_id)
-        self._presence.record(agent_id, client_id, state)
-        if not was_visible and self._presence.is_visible(agent_id):
+        was_visible = self._presence.is_visible(chat_id)
+        self._presence.record(chat_id, client_id, state)
+        if not was_visible and self._presence.is_visible(chat_id):
             now = self._clock()
             with self._lock:
-                self._stamp_engagement_locked(agent_id, now)
+                self._stamp_engagement_locked(chat_id, now)
         self.reapply()
 
-    def record_message(self, agent_id: str) -> None:
+    def record_message(self, chat_id: ChatId) -> None:
         """Stamp a chat as just-messaged so it ranks newest, then re-tag every chat."""
         now = self._clock()
         with self._lock:
-            self._stamp_message_locked(agent_id, now)
+            self._stamp_message_locked(chat_id, now)
         self.reapply()
 
-    def forget_agent(self, agent_id: str) -> None:
+    def forget_chat(self, chat_id: ChatId) -> None:
         """Drop a destroyed chat's presence so its reports never count again."""
-        self._presence.forget_agent(agent_id)
+        self._presence.forget_chat(chat_id)
 
-    def record_running_agents(self, running_ids: Iterable[str]) -> None:
-        """Record which agents are currently mid-turn, then re-tag if it changed.
+    def record_running_chats(self, running_ids: Iterable[ChatId]) -> None:
+        """Record which chats are currently mid-turn, then re-tag if it changed.
 
         Called from the observe stream on every lifecycle change. Both edges of a
         turn stamp engagement: entering a running state means something addressed
@@ -186,16 +187,16 @@ class ChatOomPrioritizer:
         three days idle the instant its turn ended, and jump straight to the stale
         ceiling. Between the two edges the chat is exempt from the climb entirely.
 
-        The ids may include workers and the primary agent; they are ignored by
-        ``reapply``, which only iterates the managed chats.
+        The ids may include workers and the primary agent (own chats under the own-chat
+        rule); they are ignored by ``reapply``, which only iterates the managed chats.
         """
         now = self._clock()
         with self._lock:
             new_running = set(running_ids)
             if new_running == self._running:
                 return
-            for agent_id in new_running ^ self._running:
-                self._stamp_engagement_locked(agent_id, now)
+            for chat_id in new_running ^ self._running:
+                self._stamp_engagement_locked(chat_id, now)
             self._running = new_running
         self.reapply()
 
@@ -214,9 +215,9 @@ class ChatOomPrioritizer:
             last_engaged_at = dict(self._last_engaged_at)
 
         now = self._clock()
-        open_ids = self._presence.open_agent_ids()
-        visible_ids = self._presence.visible_agent_ids()
-        chat_ids = list(self._list_chat_agent_ids())
+        open_ids = self._presence.open_chat_ids()
+        visible_ids = self._presence.visible_chat_ids()
+        chat_ids = list(self._list_chat_ids())
 
         # Rank the chats that have been messaged, newest first (rank 0 = most
         # recent). A chat never messaged this session is absent from this map, so
@@ -244,7 +245,7 @@ class ChatOomPrioritizer:
             )
             self._set_adj(pid, adj)
 
-    def _idle_seconds(self, chat_id: str, last_engaged_at: dict[str, float], now: float) -> float | None:
+    def _idle_seconds(self, chat_id: ChatId, last_engaged_at: dict[ChatId, float], now: float) -> float | None:
         """How long ``chat_id`` has gone without engagement, or None if unknown.
 
         The chat's own process-start time floors the answer: a chat revived a
@@ -259,18 +260,18 @@ class ChatOomPrioritizer:
             return None
         return max(0.0, now - max(candidates))
 
-    def _stamp_engagement_locked(self, agent_id: str, at: float) -> None:
-        """Record engagement with ``agent_id``, never moving the stamp backwards."""
-        previous = self._last_engaged_at.get(agent_id)
+    def _stamp_engagement_locked(self, chat_id: ChatId, at: float) -> None:
+        """Record engagement with ``chat_id``, never moving the stamp backwards."""
+        previous = self._last_engaged_at.get(chat_id)
         if previous is None or at > previous:
-            self._last_engaged_at[agent_id] = at
+            self._last_engaged_at[chat_id] = at
 
-    def _stamp_message_locked(self, agent_id: str, at: float) -> None:
-        """Record a message to ``agent_id`` (which is also engagement with it)."""
-        previous = self._last_message_at.get(agent_id)
+    def _stamp_message_locked(self, chat_id: ChatId, at: float) -> None:
+        """Record a message to ``chat_id`` (which is also engagement with it)."""
+        previous = self._last_message_at.get(chat_id)
         if previous is None or at > previous:
-            self._last_message_at[agent_id] = at
-        self._stamp_engagement_locked(agent_id, at)
+            self._last_message_at[chat_id] = at
+        self._stamp_engagement_locked(chat_id, at)
 
     def _run_sweep(self) -> None:
         """Re-tag every managed chat on a slow cadence until stopped.

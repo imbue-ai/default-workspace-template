@@ -5,22 +5,27 @@ shape rather than a property -- a path that drifts binds nothing and fails silen
 the agent quietly running on the shared credential instead.
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
+from imbue.chat.harnesses.account_scope import ScopeError
+from imbue.chat.harnesses.account_scope import account_credential_path
+from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.account_scope import agent_credential_path
 from imbue.chat.harnesses.binding import BindingError
-from imbue.chat.harnesses.binding import account_credential_path
-from imbue.chat.harnesses.binding import account_env
-from imbue.chat.harnesses.binding import agent_credential_path
+from imbue.chat.harnesses.binding import REBIND_VERIFIED_HARNESSES
 from imbue.chat.harnesses.binding import create_args
-from imbue.chat.harnesses.binding import harness_for
+from imbue.chat.harnesses.binding import is_rebind_supported
+from imbue.chat.harnesses.binding import rebind_agent
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -44,7 +49,7 @@ def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> Non
 
 
 def test_a_harness_with_no_scoping_raises_rather_than_binding_nothing(tmp_path: Path) -> None:
-    with pytest.raises(BindingError):
+    with pytest.raises(ScopeError):
         account_env(HarnessType.OPENCODE, tmp_path)
 
 
@@ -221,3 +226,63 @@ def test_claude_is_bound_by_an_export_that_children_inherit(tmp_path: Path) -> N
 
     assert args == ["--env", f"CLAUDE_CONFIG_DIR={account}"]
     assert account_env(HarnessType.CLAUDE, account) == {"CLAUDE_CONFIG_DIR": str(account)}
+
+
+def test_every_scoped_harness_can_be_rebound_and_the_unscoped_one_cannot() -> None:
+    assert REBIND_VERIFIED_HARNESSES == frozenset(_BOUND_HARNESSES)
+    assert all(is_rebind_supported(harness) for harness in _BOUND_HARNESSES)
+    assert not is_rebind_supported(HarnessType.OPENCODE)
+
+
+def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    env_path = state / "env"
+    env_path.write_text(f"MNGR_AGENT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'old'}\nMINDS_CHAT_ID=agent-1\n")
+    env_path.chmod(0o600)
+
+    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", state)
+
+    assert (
+        env_path.read_text() == f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
+    )
+    assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+    assert not env_path.with_name("env.rebind-tmp").exists()
+    # Again is the same file; a value with a space is quoted the way mngr quotes its own.
+    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", state)
+    assert env_path.read_text().count("CLAUDE_CONFIG_DIR=") == 1
+    rebind_agent(HarnessType.CLAUDE, tmp_path / "with space", state)
+    assert env_path.read_text().endswith(f'CLAUDE_CONFIG_DIR="{tmp_path / "with space"}"\n')
+    # An agent with no env file yet gets one holding just the line.
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", bare)
+    assert (bare / "env").read_text() == f"CLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
+
+
+@pytest.mark.parametrize("harness", [HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY])
+def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
+    tmp_path: Path, harness: HarnessType
+) -> None:
+    state = tmp_path / "state"
+    dest = agent_credential_path(harness, state)
+    source = account_credential_path(harness, tmp_path / "account")
+    assert dest is not None and source is not None
+    # Nothing there yet (a fresh state dir), then a copy, then an older link: each ends as the new link.
+    for before in (None, "a copied credential", str(tmp_path / "elsewhere")):
+        if before is None:
+            pass
+        elif before.startswith(str(tmp_path)):
+            dest.unlink(missing_ok=True)
+            os.symlink(before, dest)
+        else:
+            dest.unlink(missing_ok=True)
+            dest.write_text(before)
+        rebind_agent(harness, tmp_path / "account", state)
+        assert dest.is_symlink() and os.readlink(dest) == str(source)
+    assert not dest.with_name(f"{dest.name}.rebind-tmp").exists()
+
+
+def test_a_harness_with_no_binding_cannot_be_rebound(tmp_path: Path) -> None:
+    with pytest.raises(BindingError):
+        rebind_agent(HarnessType.OPENCODE, tmp_path / "account", tmp_path / "state")

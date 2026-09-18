@@ -54,7 +54,7 @@ describe("presence reporting", () => {
 
     expect(requests()).toEqual([
       {
-        url: "/api/agents/agent-1/presence",
+        url: "/api/chats/agent-1/presence",
         body: { client_id: "client-1", state: "hidden" },
         keepalive: true,
       },

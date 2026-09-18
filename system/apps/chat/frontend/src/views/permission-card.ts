@@ -120,7 +120,7 @@ export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolRes
 }
 
 /**
- * Ask the outer Minds app to open its permission-request modal. The chat UI
+ * Ask the outer Mind app to open its permission-request modal. The chat UI
  * runs inside an iframe, so we hand the request id to the embedding chrome
  * via the embed contract rather than rendering the modal ourselves.
  */
@@ -271,7 +271,7 @@ const GENERIC_PERMISSION_TITLE = "Permission request";
 
 /** The card title: what's being asked for, in a few words. "Local files" for a
  *  file-sharing request; "Other machines" for a workspace request (acting on the
- *  user's other Minds workspaces); "Device accounts" for an accounts request;
+ *  user's other Mind workspaces); "Device accounts" for an accounts request;
  *  the friendly service name for a predefined request once the gateway catalog
  *  resolves (the raw scope until then); null when nothing named the subject, so
  *  each caller decides whether a generic stand-in beats no row at all. The
@@ -485,27 +485,27 @@ export function PermissionCard(): m.Component<{
   toolResult: ToolResultEvent | null;
   resolution: PermissionResolution | null;
   // For the raw disclosure's on-demand payload fetch (the wire is payload-free).
-  agentId: string;
+  chatId: string;
   assistantEventId: string;
 }> {
   let rawOpen = false;
   return {
     view(vnode) {
-      const { toolCall, toolResult, resolution, agentId, assistantEventId } = vnode.attrs;
+      const { toolCall, toolResult, resolution, chatId, assistantEventId } = vnode.attrs;
       const details = parsePermissionRequest(toolCall, toolResult);
       const scopeInfo = details?.scope ? getScopeInfo(details.scope) : null;
       // The raw disclosure fetches the full input/output on open (cached frontend-side);
       // until they land, the structured request object stands in.
       if (rawOpen) {
         if (toolCall.input_chars > 0) {
-          requestEventDetail(agentId, assistantEventId);
+          requestEventDetail(chatId, assistantEventId);
         }
         if (toolResult && toolResult.output_chars > 0) {
-          requestEventDetail(agentId, toolResult.event_id);
+          requestEventDetail(chatId, toolResult.event_id);
         }
       }
-      const inputDetail = rawOpen ? getEventDetailState(agentId, assistantEventId) : undefined;
-      const outputDetail = rawOpen && toolResult ? getEventDetailState(agentId, toolResult.event_id) : undefined;
+      const inputDetail = rawOpen ? getEventDetailState(chatId, assistantEventId) : undefined;
+      const outputDetail = rawOpen && toolResult ? getEventDetailState(chatId, toolResult.event_id) : undefined;
       const rawInput =
         inputDetail?.state === "loaded"
           ? (inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? "")

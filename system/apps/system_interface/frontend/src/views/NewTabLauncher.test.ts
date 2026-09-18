@@ -7,6 +7,7 @@ import m from "mithril";
 
 import { markPageAsPreviewShell } from "../testing/previewShell";
 import { appRecord, catalogTemplateRecord } from "../testing/records";
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 import type { TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
 import {
   NewTabLauncher,
@@ -26,6 +27,7 @@ import {
 } from "./NewTabLauncher";
 import type { LaunchTile, LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
+import { HOVER_LIFT_TRANSITION } from "./hoverLift";
 
 function row(
   address: string,
@@ -188,7 +190,7 @@ describe("the messages a template's actions seed", () => {
     const orchard = catalogTemplateRecord("orchard");
     expect(adoptTemplateMessage(orchard)).toBe("/use-template https://github.com/someone/orchard");
     expect(createMachineFromTemplateMessage(orchard)).toContain("https://github.com/someone/orchard");
-    expect(createMachineFromTemplateMessage(orchard)).toContain("new Minds machine");
+    expect(createMachineFromTemplateMessage(orchard)).toContain("new Mind machine");
   });
 });
 
@@ -203,6 +205,7 @@ describe("NewTabLauncher", () => {
   afterEach(() => {
     m.mount(root, null);
     root.remove();
+    vi.useRealTimers();
   });
 
   function mount(overrides: Partial<NewTabLauncherAttrs>): NewTabLauncherAttrs {
@@ -366,6 +369,35 @@ describe("NewTabLauncher", () => {
     expect(attrs.onRunAction).not.toHaveBeenCalled();
   });
 
+  it("stops explaining a prompt tile's stand-down once the apps arrive", () => {
+    vi.useFakeTimers();
+    // Rendered before the inventory loads: no tiles yet, so no app can take a first message.
+    const attrs = mount({ tiles: [] });
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    expect(buildTile.getAttribute("aria-disabled")).toBe("true");
+    expect(hoverTooltipText(buildTile)).toBe("No app on this machine can start a chat");
+
+    attrs.tiles = TILES;
+    m.redraw.sync();
+    // The same element carries on, now pickable: mithril patches it rather than replacing it.
+    expect(root.querySelector('[data-start="build-app"]')).toBe(buildTile);
+    expect(buildTile.getAttribute("aria-disabled")).toBeNull();
+    expect(hoverTooltipText(buildTile)).toBeNull();
+  });
+
+  it("stops naming an Open new tile's action while the tiles stand down for a create", () => {
+    vi.useFakeTimers();
+    const attrs = mount({});
+    const terminalTile = root.querySelector<HTMLElement>('.new-tab-launcher-tiles [data-launch="terminal:new"]')!;
+    expect(hoverTooltipText(terminalTile)).toBe("New terminal");
+
+    attrs.isAwaitingCreate = true;
+    m.redraw.sync();
+    expect(root.querySelector('.new-tab-launcher-tiles [data-launch="terminal:new"]')).toBe(terminalTile);
+    expect(terminalTile.getAttribute("aria-disabled")).toBe("true");
+    expect(hoverTooltipText(terminalTile)).toBeNull();
+  });
+
   it("scrolls to the templates from the Start from a template tile, even when picked from search", () => {
     // jsdom has no scrollIntoView; the stub lives only as long as this test.
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
@@ -392,6 +424,55 @@ describe("NewTabLauncher", () => {
     const templateTile = root.querySelector<HTMLElement>('[data-start="template"]')!;
     expect(templateTile.getAttribute("aria-disabled")).toBe("true");
     expect(root.querySelector<HTMLElement>('[data-start="build-app"]')!.getAttribute("aria-disabled")).toBeNull();
+    // A tile that cannot be picked does not answer the pointer with the lift.
+    expect(templateTile.className).not.toContain(HOVER_LIFT_TRANSITION);
+    expect(root.querySelector<HTMLElement>('[data-start="build-app"]')!.className).toContain(HOVER_LIFT_TRANSITION);
+  });
+
+  it("floats a tile without moving it, and grows its glyph instead", () => {
+    mount({});
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    const glyph = buildTile.querySelector<HTMLElement>("span")!;
+    // The tile takes the shadow and nothing else -- its text stays put under the pointer.
+    expect(buildTile.className).toContain("hover:shadow-overlay");
+    expect(buildTile.className).not.toContain("scale-");
+    expect(buildTile.classList).toContain("group");
+    // The glyph is the one thing that grows, and it is the tile that drives it.
+    expect(glyph.className).toContain("group-hover:scale-[1.15]");
+    // The lift is the whole answer: a tile no longer fills behind it.
+    expect(buildTile.className).not.toContain("hover:bg-fill-hover");
+  });
+
+  it("brings a pickable tile's sentence up to the title's colour under the pointer", () => {
+    mount({});
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="build-app"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("group-hover:text-primary");
+    // It rides the lift's timing, so the tile answers the pointer all at once.
+    expect(sentence.className).toContain("duration-300");
+  });
+
+  it("leaves a standing-down tile's sentence faint", () => {
+    mount({ catalog: { kind: "disabled" } });
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="template"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("text-faint");
+    expect(sentence.className).not.toContain("group-hover:text-primary");
+  });
+
+  it("times the tile, its glyph and a template's drawing alike", () => {
+    mount({});
+    // One shared transition across all three, so the page's answers cannot drift apart.
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    expect(buildTile.className).toContain(HOVER_LIFT_TRANSITION);
+    expect(buildTile.querySelector<HTMLElement>("span")!.className).toContain(HOVER_LIFT_TRANSITION);
+    const art = root.querySelector<HTMLElement>("[data-template] .new-tab-template-art")!;
+    expect(art.className).toContain(HOVER_LIFT_TRANSITION);
+    // A card's drawing still grows, driven by the button around it.
+    expect(art.className).toContain("group-hover:scale-[1.02]");
+    expect(root.querySelector<HTMLElement>("[data-template]")!.classList).toContain("group");
   });
 
   it("reveals the intents a page at a time behind See more, until every one is shown", () => {

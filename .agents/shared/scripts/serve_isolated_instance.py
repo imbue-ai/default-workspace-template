@@ -1267,9 +1267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Re-boot the inner server on its existing port (to pick up a rebuild "
         "/ edit) without changing the port, wrapper, or the user's tab.",
     )
-    refresh_parser.add_argument(
-        "--name", required=True, help="The name passed to 'up'."
-    )
+    refresh_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
     _add_repo_root_arg(refresh_parser)
 
     args = parser.parse_args(argv)
