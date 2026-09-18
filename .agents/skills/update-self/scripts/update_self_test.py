@@ -7255,6 +7255,30 @@ def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
 
 
+def test_confirm_refuses_while_a_rollback_holds_the_lock(apply_repo: Path) -> None:
+    """A confirm landing after a just-launched rollback read the record, but before it wrote
+    its progress, would discard the copies that rollback is about to restore from."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = update_apply.confirm_last(apply_repo)
+
+    assert code == 1
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+
+
 def test_rollback_and_confirm_without_a_kept_point_change_nothing(
     apply_repo: Path,
 ) -> None:

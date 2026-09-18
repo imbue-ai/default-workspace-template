@@ -73,7 +73,8 @@ PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 # updated" notice, and only a person closes it -- confirming discards the copies,
 # rolling back restores them. Any later apply replaces it.
 LAST_GOOD_FILENAME = "last-good.json"
-# Held by a running ``rollback-last`` for its whole run, so a second one refuses.
+# Held by a running ``rollback-last`` for its whole run and by ``confirm-last``, so
+# a second rollback, or a confirm that would discard the copies, refuses.
 ROLLBACK_LOCK_FILENAME = "rollback-last.lock"
 
 # The apply's phases, recorded in the marker as each completes so an

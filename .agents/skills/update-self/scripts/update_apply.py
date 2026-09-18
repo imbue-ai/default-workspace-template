@@ -27,7 +27,8 @@ import sys
 import time
 import tomllib
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
@@ -1452,6 +1453,23 @@ def _needs_services_restart(plan: ApplyPlan, paths: Sequence[str]) -> bool:
     return False
 
 
+class RollbackPointBusyError(Exception):
+    """Another rollback-last or confirm-last holds the rollback point's lock."""
+
+
+@contextmanager
+def _holding_rollback_point_lock(repo_root: Path) -> Iterator[None]:
+    """Hold the rollback point's lock for the body, or raise ``RollbackPointBusyError`` at once."""
+    lock_path = rollback_lock_path(repo_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RollbackPointBusyError(str(lock_path)) from exc
+        yield
+
+
 # What the notice reads while a rollback runs, step by step.
 _ROLLBACK_PROGRESS_REVERTING = "Reverting the update"
 _ROLLBACK_PROGRESS_RESTORING = "Restoring the previous version"
@@ -1510,25 +1528,22 @@ def rollback_last(
     record or the copies, or its failed revert would settle the record and discard
     the copies the first is restoring from.
     """
-    lock_path = rollback_lock_path(repo_root)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.stderr.write(
-                "error: another rollback of this point is already running.\n"
+    try:
+        with _holding_rollback_point_lock(repo_root):
+            return _rollback_last_locked(
+                repo_root,
+                runner=runner,
+                http=http,
+                sleeper=sleeper,
+                base_url=base_url,
+                now=now,
+                is_pid_live=is_pid_live,
             )
-            return 1
-        return _rollback_last_locked(
-            repo_root,
-            runner=runner,
-            http=http,
-            sleeper=sleeper,
-            base_url=base_url,
-            now=now,
-            is_pid_live=is_pid_live,
+    except RollbackPointBusyError:
+        sys.stderr.write(
+            "error: another rollback or confirm of this point is already running.\n"
         )
+        return 1
 
 
 def _rollback_last_locked(
@@ -1725,12 +1740,23 @@ def _run_rollback(
 
 
 def confirm_last(repo_root: Path) -> int:
-    """Close the notice: discard the kept copies and the record. Idempotent."""
-    if read_last_good(repo_root) is None:
-        sys.stderr.write("no kept rollback point; nothing to confirm.\n")
-        return 0
-    clear_last_good(repo_root)
-    discard_snapshots(repo_root)
+    """Close the notice: discard the kept copies and the record. Idempotent.
+
+    Refused (1) while a rollback holds the rollback point's lock: it restores from the
+    copies this would discard.
+    """
+    try:
+        with _holding_rollback_point_lock(repo_root):
+            if read_last_good(repo_root) is None:
+                sys.stderr.write("no kept rollback point; nothing to confirm.\n")
+                return 0
+            clear_last_good(repo_root)
+            discard_snapshots(repo_root)
+    except RollbackPointBusyError:
+        sys.stderr.write(
+            "error: a rollback of this point is running; confirm once it has settled.\n"
+        )
+        return 1
     sys.stderr.write("confirmed: the kept rollback point is discarded.\n")
     return 0
 
