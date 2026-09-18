@@ -906,9 +906,19 @@ def apply_update(
     # A fresh apply replaces whatever rollback point the last one kept: its copies
     # describe a tree this apply is about to move past. A resumed apply already
     # did this on its first run, and its own copies now live where the old ones did.
+    # Under the rollback point's lock: a rollback-last launched from the notice may be
+    # restoring from those copies right now.
     if read_last_good(repo_root) is not None and marker.phase == PHASE_STARTED:
-        clear_last_good(repo_root)
-        discard_snapshots(repo_root)
+        try:
+            with _holding_rollback_point_lock(repo_root):
+                clear_last_good(repo_root)
+                discard_snapshots(repo_root)
+        except RollbackPointBusyError:
+            sys.stderr.write(
+                "error: a rollback of the last update is running; apply once it has "
+                "settled. Nothing was changed.\n"
+            )
+            return 1
     write_marker(marker, repo_root, now)
 
     def _advance(phase: str) -> None:

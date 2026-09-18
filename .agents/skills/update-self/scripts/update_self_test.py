@@ -7279,6 +7279,36 @@ def test_confirm_refuses_while_a_rollback_holds_the_lock(apply_repo: Path) -> No
     assert _rollback_point(apply_repo) is None
 
 
+def test_an_apply_refuses_to_replace_a_point_a_rollback_is_restoring_from(
+    apply_repo: Path,
+) -> None:
+    """A fresh apply replaces the kept point by discarding its copies, which a running
+    rollback-last is restoring from; it refuses rather than pulling them out from under it."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _apply(
+            _apply_runner(_FRONTEND_DIFF, apply_repo),
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+        )
+
+    assert code == 1
+    assert not _marker_exists(apply_repo)
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
 def test_rollback_and_confirm_without_a_kept_point_change_nothing(
     apply_repo: Path,
 ) -> None:
