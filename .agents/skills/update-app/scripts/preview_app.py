@@ -332,6 +332,11 @@ def up(
     manifest_path, manifest = find_manifest(worktree, app_name)
     for sibling in with_apps:
         _require_frameable_sibling(worktree, sibling)
+    dump = (
+        dump_registry
+        if dump_registry is not None
+        else _load_forward_port_module().dump_registry
+    )
     # Siblings first, because the registry copy this app is booted with has to name their
     # URLs. A sibling therefore boots before this app exists: a chat previewed under a shell
     # resolves {shell_url} to "" and runs without a nudger, so the preview shell refetches
@@ -347,7 +352,7 @@ def up(
                 repo_root,
                 instance_key=instance_key,
                 runner=runner,
-                dump_registry=dump_registry,
+                dump_registry=dump,
             )
             != 0
         ):
@@ -362,14 +367,7 @@ def up(
     registry_copy: Path | None = None
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
-        write_registry_copy(
-            registry_path(),
-            registry_copy,
-            preview_url_by_app,
-            dump_registry
-            if dump_registry is not None
-            else _load_forward_port_module().dump_registry,
-        )
+        write_registry_copy(registry_path(), registry_copy, preview_url_by_app, dump)
     shell_url = (
         ""
         if app_name == SHELL_APP_NAME
@@ -408,13 +406,7 @@ def up(
         # a retry, which reuses them.
         _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     if code == 0:
-        _reframe_previews_naming(
-            repo_root,
-            app_name,
-            dump_registry
-            if dump_registry is not None
-            else _load_forward_port_module().dump_registry,
-        )
+        _reframe_previews_naming(repo_root, app_name, dump)
     return code
 
 
@@ -519,6 +511,11 @@ def down(
     shell preview) leaves that preview's registry copy pointing at the live app again.
     """
     siblings = _recorded_siblings(repo_root, app_name)
+    dump = (
+        dump_registry
+        if dump_registry is not None
+        else _load_forward_port_module().dump_registry
+    )
     code = runner.run(
         [
             sys.executable,
@@ -535,15 +532,9 @@ def down(
         return code
     _registry_copy_path(repo_root, app_name).unlink(missing_ok=True)
     _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
-    _reframe_previews_naming(
-        repo_root,
-        app_name,
-        dump_registry
-        if dump_registry is not None
-        else _load_forward_port_module().dump_registry,
-    )
+    _reframe_previews_naming(repo_root, app_name, dump)
     for sibling in siblings:
-        code = down(sibling, repo_root, runner=runner, dump_registry=dump_registry)
+        code = down(sibling, repo_root, runner=runner, dump_registry=dump)
         if code != 0:
             return code
     return 0
