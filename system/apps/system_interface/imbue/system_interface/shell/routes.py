@@ -570,7 +570,8 @@ def confirm_pending_update() -> ResponseReturnValue:
 
 
 def rollback_pending_update() -> ResponseReturnValue:
-    """ "Roll back": start the rollback detached and answer at once; the record's progress and outcome follow on the socket."""
+    """ "Roll back": start the rollback detached and answer once it is under way, with its first progress in the
+    record; the rest of its progress and its outcome follow on the socket."""
     refusal = _refuse_if_preview()
     if refusal is not None:
         return refusal
