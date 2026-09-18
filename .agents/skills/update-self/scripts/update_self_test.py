@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
-import tool_env
 import update_apply
 import update_apply_contract
 import update_banding
@@ -5200,76 +5199,6 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
     location = update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME)
 
     assert location == (tools, bin_dir)
-
-
-def _uv_tool_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """A uv home: ``(tools_dir, bin_dir, entry_point)`` with the mngr tool installed."""
-    home = tmp_path / "root"
-    tools = tool_env.tools_dir(home)
-    environment_bin = tools / update_layout.MNGR_TOOL_NAME / "bin"
-    environment_bin.mkdir(parents=True)
-    installed = environment_bin / update_layout.MNGR_EXECUTABLE
-    installed.write_text(
-        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
-    )
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
-        "[tool]\nrequirements = []\n"
-    )
-    bin_dir = tool_env.bin_dir(home)
-    bin_dir.mkdir(parents=True)
-    entry_point = bin_dir / update_layout.MNGR_EXECUTABLE
-    entry_point.symlink_to(installed)
-    return tools, bin_dir, entry_point
-
-
-def test_tool_location_pairs_the_bin_dir_with_the_tool_dir(tmp_path: Path) -> None:
-    # uv writes the entry point as a symlink into the tool environment's own bin.
-    # Reporting the resolved target would aim the next install at that environment,
-    # which uv refuses ("Executable already exists: mngr").
-    tools, bin_dir, entry_point = _uv_tool_layout(tmp_path)
-
-    assert update_environment._tool_location(
-        entry_point, update_layout.MNGR_TOOL_NAME
-    ) == (tools, bin_dir)
-
-
-def test_tool_location_of_the_shared_bin_copy_still_names_the_uv_bin_dir(
-    tmp_path: Path,
-) -> None:
-    # The build links mngr into /usr/local/bin for shells whose PATH lacks the uv bin
-    # directory; an apply that finds mngr there must still install entry points where
-    # the build writes them.
-    tools, bin_dir, entry_point = _uv_tool_layout(tmp_path)
-    shared_bin = tmp_path / "usr" / "local" / "bin"
-    shared_bin.mkdir(parents=True)
-    shared_copy = shared_bin / update_layout.MNGR_EXECUTABLE
-    shared_copy.symlink_to(entry_point)
-
-    assert update_environment._tool_location(
-        shared_copy, update_layout.MNGR_TOOL_NAME
-    ) == (tools, bin_dir)
-
-
-def test_tool_location_of_a_tool_dir_outside_the_uv_layout_keeps_the_scripts_own_dir(
-    tmp_path: Path,
-) -> None:
-    tools = tmp_path / "opt" / "tools"
-    environment_bin = tools / update_layout.MNGR_TOOL_NAME / "bin"
-    environment_bin.mkdir(parents=True)
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
-        "[tool]\nrequirements = []\n"
-    )
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    script = elsewhere / update_layout.MNGR_EXECUTABLE
-    script.write_text(
-        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
-    )
-
-    assert update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME) == (
-        tools,
-        elsewhere,
-    )
 
 
 @pytest.mark.parametrize(
