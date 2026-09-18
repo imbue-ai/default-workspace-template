@@ -7039,6 +7039,24 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record.programs == ["chat", "system_interface", "terminal"]
 
 
+def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
+    apply_repo: Path,
+) -> None:
+    """A shared backend manifest moves every app tool's closure, so the apply reinstalls
+    (and copies aside) each critical app's tool environment: a rollback that restores
+    those copies has to restart those apps too, so the record names them, not the shell
+    alone."""
+    _write_app(apply_repo, "chat", "chat", "chat-app", True)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface"]
+    assert record.programs == ["chat", "system_interface"]
+
+
 @pytest.mark.parametrize(
     ("diff", "needs_restart"),
     [
