@@ -221,6 +221,7 @@ import functools
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -747,6 +748,30 @@ def rsync_dir(
     )
 
 
+def copy_dir_into_work_folder(
+    source_dir: Path, work_folder: Path, toplevel: Path | None = None
+) -> None:
+    """Copy ``source_dir`` into ``work_folder`` at the same repo-relative path.
+
+    The push for a worker that runs in a folder the lead already has
+    (``--work-folder``): that folder is a directory on this machine, not a
+    worktree mngr made, so the files go there with a plain copy and no agent
+    has to exist yet. That ordering is the point -- the runtime dir is in place
+    *before* the create, so the task can be staged as the worker's initial
+    message and read at startup.
+
+    Existing files are overwritten and nothing at the destination is removed,
+    matching what ``rsync_dir``'s ``--uncommitted-changes=clobber`` does for a
+    worktree worker: the destination is under ``data/``, which is gitignored, so
+    no tracked work can be lost, and the other workers' files in the same folder
+    are left untouched.
+    """
+    rel = _repo_relative_path(source_dir, toplevel)
+    destination = work_folder / rel
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, destination, dirs_exist_ok=True)
+
+
 def rsync_dir_from(
     name: str,
     source_dir: Path,
@@ -1048,6 +1073,21 @@ def launch(
     if work_folder is not None:
         # Absolute, so the worker lands in that folder whatever the lead's cwd.
         create_argv += ["--from", f":{work_folder.resolve()}"]
+        # The worker's folder is a directory on this machine that already
+        # exists, so its runtime dir is put there directly, before the agent is
+        # created -- which is what lets the task ride the create as a staged
+        # initial message (below) instead of being sent afterwards.
+        copy_dir_into_work_folder(runtime_dir, work_folder, toplevel)
+        if artifacts_dir is not None:
+            copy_dir_into_work_folder(artifacts_dir, work_folder, toplevel)
+        _flush_common_transcript(state_dir, runner)
+        # A shared-folder worker is headless: it has no chat and cannot be sent
+        # a message, so its task is staged on disk by the create and read by the
+        # agent's own command at startup. That removes the send that a chat
+        # worker needs after its create -- and with it the window where the chat
+        # app does not yet know the agent, which is where a task message went
+        # missing and left two workers idle with their reports never written.
+        create_argv += ["--message-file", str(task_file)]
     if model is not None:
         create_argv += ["-S", f"agent_types.claude.settings_overrides.model={model}"]
     try:
@@ -1074,22 +1114,23 @@ def launch(
             file=sys.stderr,
         )
 
-    rsync_dir(name, runtime_dir, runner, toplevel)
-    if artifacts_dir is not None:
-        rsync_dir(name, artifacts_dir, runner, toplevel)
+    if work_folder is None:
+        rsync_dir(name, runtime_dir, runner, toplevel)
+        if artifacts_dir is not None:
+            rsync_dir(name, artifacts_dir, runner, toplevel)
 
-    _flush_common_transcript(state_dir, runner)
+        _flush_common_transcript(state_dir, runner)
 
-    if worker_agent_id is not None:
-        runner.run(
-            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
-            check=True,
-        )
-    else:
-        runner.run(
-            ["mngr", "message", name, "--message-file", str(task_file)],
-            check=True,
-        )
+        if worker_agent_id is not None:
+            runner.run(
+                [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+                check=True,
+            )
+        else:
+            runner.run(
+                ["mngr", "message", name, "--message-file", str(task_file)],
+                check=True,
+            )
 
     print(
         f"create_worker: worker {name} launched and runtime synced"
