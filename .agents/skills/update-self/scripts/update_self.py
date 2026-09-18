@@ -5,9 +5,9 @@
 """Deterministic helpers for the safe, background-worker-driven update-self flow.
 
 The update-self orchestration is mostly agent judgement (triage conflicts,
-decide validation depth, work the report's impact analysis). This script owns
-the parts that are *deterministic* and therefore belong in tested code rather
-than agent prose:
+judge whether the user's creations survived, work the report's impact
+analysis). This script owns the parts that are *deterministic* and therefore
+belong in tested code rather than agent prose:
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
@@ -17,7 +17,7 @@ than agent prose:
     ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
-    app talks to (the system interface, the vendored ``mngr``), so updating past
+    app talks to (the system interface, ``mngr``), so updating past
     the app's own release would leave the workspace speaking a protocol its app
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
@@ -48,7 +48,12 @@ than agent prose:
     necessary but not sufficient to skip the gates -- the worker's impact
     analysis must also find no user-created code affected, and the worker must
     have authored no in-branch edits of its own (which this diff cannot see at
-    all); the worker reference owns that half.
+    all); the worker reference owns that half. ``local_only`` lists the files
+    only the workspace changed, and ``has_local_footprint`` says whether any
+    local content (merged or local-only) is outside the docs class -- the
+    mechanical answer to "does this workspace have code of its own that the
+    update could break", which scopes the worker's impact analysis and its
+    validation.
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -146,6 +151,7 @@ from update_apply_contract import (
 )
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
+from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -296,6 +302,8 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
                 "reveal_classes_pulled_in": result.reveal_classes_pulled_in,
                 "projects_to_validate": result.projects_to_validate,
                 "has_merge_work": result.has_merge_work,
+                "local_only": result.local_only,
+                "has_local_footprint": result.has_local_footprint,
             },
             indent=2,
         )
@@ -311,8 +319,8 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     # system/scripts/check_changelog_entries.py for the bucket definition).
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
-    # under the bucketed layout. Exclude the vendored subtree, which carries
-    # its own separate changelog system. ``top`` anchors both pathspecs at the
+    # under the bucketed layout. Exclude system/vendor, whose snapshots carry
+    # their own changelog systems. ``top`` anchors both pathspecs at the
     # repository root: a git pathspec is otherwise relative to the cwd, so run
     # from a subdirectory the glob matched nothing and the digest came back
     # empty with no error.
@@ -514,6 +522,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         runner=Runner(),
         http=HttpClient(),
         spawner=Spawner(),
+        sweep_homes=default_sweep_homes(),
     )
 
 
@@ -680,7 +689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     classify_parser = sub.add_parser(
         "classify-merge",
-        help="Split upstream-changed files into merged vs pulled-in and classify each.",
+        help="Split the changed files into merged, pulled-in and local-only, and classify each.",
         parents=[common],
     )
     classify_parser.add_argument(

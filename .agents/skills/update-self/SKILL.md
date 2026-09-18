@@ -11,7 +11,7 @@ This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
 the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
 `Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
-the system interface, the vendored `mngr`.
+the system interface, `mngr`.
 
 Merging upstream can break the live workspace, so this flow never mutates the
 live tree from an unverified state: an isolated **worker** does the merge and
@@ -247,8 +247,8 @@ Per §6 of the worker guide: the report shapes come from
 `.agents/shared/references/worker-reporting.md`, but you write and push the
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
-review-gate escape hatch, or a §4b customization the update cannot keep),
+`question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
+scope escape hatch, or a §4b customization the update cannot keep),
 `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -287,9 +287,15 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 ```bash
+# Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
+
+Once the poll is armed, **end your turn**; its completion wakes you with the
+report. Never wait on the worker any other way -- no `sleep`, no polling its
+reports directory or its pane -- see "Never sleep on a worker" in
+`.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
@@ -308,10 +314,12 @@ report, re-arm the poll.
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
    a merge question; it is the hold below.
-2. **The worker's review-gate escape hatch** (its §4c): a process question
-   about whether or at what scope the gates run. Answer it by the §4c rule as
-   written; where the rule is silent, the fallback is more coverage, never
-   less. Escalate only if it contains a real question of user intent.
+2. **The worker's scope escape hatch** (its §4a, §4b or §4c): a process
+   question about whether its impact analysis runs, whether a validation item
+   runs, or whether and at what scope the review gates run. Answer it by the
+   rule it names as written; where the rule is silent, the fallback is more
+   coverage, never less. Escalate only if it contains a real question of user
+   intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
    This is the one gate that reaches the user; see below. A cosmetic shift
@@ -359,18 +367,22 @@ carry on into §5 and get their verdict there.
 ### 5a. Audit the report
 
 The worker contract (the staged copy's `references/update-self-worker.md`,
-§4c and §6) makes the review gates rule-driven and the report evidence-bearing.
-It must either show the clean-pull skip's three conditions held
-(`has_merge_work: false`, no impacted user-created code, no worker-authored
-in-branch edits) or carry the gate run's own evidence (fix commits kept or
-reverted, or a clean run, plus architecture-gate verdicts); a side-picked
-conflict must carry the discarded-side accounting. A report missing any of
-this -- including one that openly discloses skipping a gate outside the rule
--- goes back to the worker via the Step 4 cycle (say what is missing, consume
-the report into `data/.tasks/update-self/reports/consumed/`, re-arm). Do not
-run the apply over the gap. A deviation stands only when the worker is gone
-and the gap cannot be closed from here, and then the results message states
-it plainly as a caveat.
+§4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
+review gates rule-driven and the report evidence-bearing. It must show which
+branch of the 4a and 4b rules applied (the footprint evidence, and each
+validation item's condition and whether it held), and either show the
+clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
+user-created code, no worker-authored in-branch edits beyond a retry's
+rollback revert, shown by an empty diff against the landed merge) or carry
+the gate run's own evidence (fix commits kept or reverted, or a clean run,
+plus architecture-gate verdicts); a side-picked conflict must carry the
+discarded-side accounting. A report missing any of this -- including one that
+openly discloses skipping a gate outside the rule -- goes back to the worker
+via the Step 4 cycle (say what is missing, consume the report into
+`data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
+over the gap. A deviation stands only when the worker is gone and the gap
+cannot be closed from here, and then the results message states it plainly
+as a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results

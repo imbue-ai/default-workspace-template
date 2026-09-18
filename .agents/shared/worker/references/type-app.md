@@ -58,7 +58,7 @@ App specifics:
   ```
 
   Without the guard, a bare `uv run pytest` from the repo root runs the whole
-  monorepo suite, vendored code included. A referenced file, and a referenced
+  monorepo suite. A referenced file, and a referenced
   directory with no tests beneath it, stay out of the run. A pre-manifest app
   carries no scope file, so the app-directory run is its whole test set.
 
