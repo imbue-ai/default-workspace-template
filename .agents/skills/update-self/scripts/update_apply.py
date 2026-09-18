@@ -686,10 +686,10 @@ def _recover_running_state(
                 "mngr start --restart",
             )
         # Settled, not point-in-time, for the same reason as the apply path: a
-        # single 200 can land while supervisord is still turning the pid over.
-        # Every critical app with an instances
-        # API is held beside the shell, read off the restored tree: a tree whose
-        # manifests declare none is confirmed by the shell alone.
+        # single 200 can land while supervisord is still turning the pid over. Every
+        # critical app with an instances API is held beside the shell, read off the
+        # restored tree: a tree whose manifests declare none is confirmed by the
+        # shell alone.
         instance_apps = read_critical_instance_apps(repo_root)
         unsettled = wait_settled(
             http,
