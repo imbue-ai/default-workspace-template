@@ -1827,9 +1827,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         if options.git and options.git.base_branch:
             base_branch_name = options.git.base_branch
         else:
-            base_branch_name = (
-                _git_command_stdout(source_host, "git rev-parse --abbrev-ref HEAD", source_path) or "main"
-            )
+            base_branch_name = _git_command_stdout(source_host, _READ_BRANCH_COMMAND, source_path) or "main"
 
         # Get git author info and origin remote URL from source repo
         git_author_name = _git_command_stdout(source_host, "git config user.name", source_path)
