@@ -38,6 +38,7 @@ from imbue.mngr.plugins.hookspecs import OnBeforeCreateArgs
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.providers.registry import resolve_backend_and_config
 from imbue.mngr.utils.env_utils import parse_env_file
@@ -458,7 +459,13 @@ def create(
                 emit_discovery_events_for_host(mngr_ctx.config, host)
                 is_success = True
             finally:
-                if not is_success and create_work_dir:
+                # A transfer of NONE means the work_dir is a directory the caller
+                # handed us and ran the agent in place, so it is not ours to remove
+                # -- and removing it destroys whatever else lives there (several
+                # agents share one directory in that mode). Only a work_dir this
+                # create actually made is cleaned up.
+                is_work_dir_ours = agent_options.transfer_mode is not TransferMode.NONE
+                if not is_success and create_work_dir and is_work_dir_ours:
                     _cleanup_failed_worktree_create(work_dir_path, created_branch_name, mngr_ctx)
 
         return result

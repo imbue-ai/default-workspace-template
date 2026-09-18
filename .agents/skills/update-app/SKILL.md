@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app-parallel; for the workspace UI itself use update-system-interface."
 metadata:
   author: imbue
 ---
@@ -13,7 +13,7 @@ there's a tab to refresh:
 
 - **App** -- the user opens it as a tab rendering at the service's own
   origin, `http://<name>.<workspace-host>/` (scaffolded via
-  `build-app`). Lives under `system/apps/<package>/`.
+  `build-app-parallel`). Lives under `system/apps/<package>/`.
 - **Background service** -- a supervisord program with no tab (`host-backup`,
   `share-gateway`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
@@ -25,7 +25,7 @@ refreshed. The live change loop below handles both.
 
 If you're doing something *other* than editing an existing app or service:
 
-- **Creating a new app** -> `build-app`.
+- **Creating a new app** -> `build-app-parallel`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
   dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
@@ -43,7 +43,7 @@ the request is -- it changes what you do *before* touching code:
 
 - **Larger-scope change** -- a redesign, a new page or view, a meaningful
   shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
+  mock-confirm flow that created the service: **read
   `.agents/shared/references/interactive-delivery.md`**, put a cheap,
   throwaway version of the *proposed* change in front of the user, loop until
   they **explicitly confirm** the shape, and only then build the real thing
@@ -221,7 +221,7 @@ would (not just "the process is up"):
 - **App**: `curl` against the registered backend URL
   `http://127.0.0.1:<port>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
-  `build-app`'s [verify reference](../build-app/references/verify.md);
+  the [verify reference](../../shared/build-app/references/verify.md);
   the symptom-indexed gotchas (connection refused, a tab stuck on the
   loading page, broken WebSockets) are in that skill's
   `cross-flow-gotchas.md`.
@@ -314,7 +314,7 @@ Dropping a service is the definition-level case of step 2: remove its
 and (for an app) `python3 system/scripts/forward_port.py --name <name>
 --remove` plus reverting the scaffolded lib. The mechanics are in
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
-scaffolded web lib, `build-app`'s `cleanup.md` reference has the
+scaffolded web lib, `.agents/shared/build-app/references/cleanup.md` has the
 full teardown.
 
 Teardown stops at the code and the process. **Leave the service's data
@@ -337,7 +337,7 @@ response as another live iteration -- make the change, show it, ask again --
 and hold the harden pass until you are sure the user is satisfied. A single
 "looks fine" mid-thread while they're still tweaking isn't done. (For a
 larger-scope change this gate is the *working* result, not just the mock,
-exactly as `build-app`'s Step 5 gates on the working site.)
+exactly as a build gates on the working site.)
 
 - **A change you and the user discussed and applied live, or repeatable
   work you did by hand** -> invoke `update-creation` with

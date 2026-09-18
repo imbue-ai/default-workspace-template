@@ -539,7 +539,7 @@ def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
 
 
 def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
-    """Drift guard: the build-app scaffold's name validation must stay a
+    """Drift guard: the app scaffold's name validation must stay a
     subset of this script's, or the scaffold could mint an app whose
     ``forward_port.py`` registration then fails at runtime. (The scaffold is
     deliberately stricter -- letter-start, no underscores, its own reserved
@@ -551,7 +551,7 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
         "_scaffold_drift_check",
         repo_root
         / ".agents"
-        / "skills"
+        / "shared"
         / "build-app"
         / "scripts"
         / "scaffold_flask_lib.py",

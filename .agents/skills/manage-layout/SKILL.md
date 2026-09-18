@@ -219,7 +219,7 @@ commands. Descriptions always go to stderr.
 
 ## When NOT to use this skill
 
-- **Building a brand-new app.** Use `build-app` to scaffold it first; it
+- **Building a brand-new app.** Use `build-app-parallel` to build it first; it
   ends with a `layout.py open` call to surface the new tab.
 - **Projects themselves** (what a project shows, its rail shortcuts, adding
   a tab to a project without opening it): see `manage-projects`.

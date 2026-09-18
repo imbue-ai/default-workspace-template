@@ -141,6 +141,8 @@ Launch lifecycle commands:
                                      --label lead_agent=<LEAD_ID>
                                      --label runtime_dir=<RUNTIME_DIR>
                                      --format jsonl   (its ``created`` event names the worker's id)
+                                     [--from :<WORK_FOLDER>]  (``--work-folder``)
+                                     [-S agent_types.claude.settings_overrides.model=<MODEL>]
     mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=clobber
     mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=clobber
                 (when frontmatter declares it)
@@ -188,6 +190,29 @@ dispatches syncing at once (a lead and one of its workers, or two hardening
 siblings) pop each other's entries into the wrong trees. See ``rsync_dir`` and
 ``rsync_dir_from`` for the full reasoning on each direction.
 
+Four options exist for templates that do not fit the default shape above, and
+are off unless asked for:
+
+``--work-folder`` runs the worker in place inside a folder that already exists,
+instead of a fresh worktree of the lead's HEAD (mngr's ``--from :<path>``, for a
+template whose transfer mode is ``none``). The lead's own uncommitted changes
+cannot reach such a worker, so the clean-tree check is skipped, and the runtime
+dir is copied into the folder directly rather than rsynced through the agent --
+the folder is a directory on this machine, so no agent has to exist first.
+
+``--message-with-mngr`` sends the task (and any later ``reply``) with ``mngr
+message <name>`` instead of through the chat app, for a worker nobody opens in
+the chat UI. The chat app is the right address for a chat, which can hand off
+between agents and so has only one component that knows which agent is currently
+taking its messages; a worker never hands off, and the route knows it only once
+it has re-read mngr's agent list -- answering 404 until then, which a worker
+messaged seconds after its create can run into. mngr talks to the agent it just
+created.
+
+``--create-arg`` passes anything else through to ``mngr create`` verbatim,
+repeatably: the template's own flags, a settings override, whatever the caller's
+agent type needs. This script does not interpret them.
+
 Why the task message goes *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
 dir sync lands in its worktree, the task file's ``finish_report_path`` will
@@ -212,6 +237,7 @@ import functools
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -738,6 +764,35 @@ def rsync_dir(
     )
 
 
+def copy_dir_into_work_folder(
+    source_dir: Path, work_folder: Path, toplevel: Path | None = None
+) -> None:
+    """Copy ``source_dir`` into ``work_folder`` at the same repo-relative path.
+
+    The push for a worker that runs in a folder the lead already has
+    (``--work-folder``): that folder is a directory on this machine, not a
+    worktree mngr made, so the files go there with a plain copy and no agent
+    has to exist yet. That ordering is the point -- the runtime dir is in place
+    *before* the create, so the task can be staged as the worker's initial
+    message and read at startup.
+
+    Existing files are overwritten and nothing at the destination is removed,
+    matching what ``rsync_dir``'s ``--uncommitted-changes=clobber`` does for a
+    worktree worker: the destination is under ``data/``, which is gitignored, so
+    no tracked work can be lost, and the other workers' files in the same folder
+    are left untouched.
+    """
+    rel = _repo_relative_path(source_dir, toplevel)
+    destination = work_folder / rel
+    if destination.resolve() == source_dir.resolve():
+        # The worker was pointed at the folder the lead is already in, so the
+        # runtime dir is where it needs to be and copying it onto itself would
+        # only raise.
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, destination, dirs_exist_ok=True)
+
+
 def rsync_dir_from(
     name: str,
     source_dir: Path,
@@ -848,6 +903,9 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
+    work_folder: Path | None = None,
+    create_args: Sequence[str] = (),
+    is_messaged_with_mngr: bool = False,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -871,9 +929,21 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``work_folder`` (must already exist) runs the worker in place in that folder
+    and skips the clean-tree check, ``create_args`` go to ``mngr create``
+    verbatim, and ``is_messaged_with_mngr`` addresses the worker with ``mngr
+    message`` rather than through the chat app. See the module docstring for when
+    each applies.
     """
     runner = runner or Runner()
 
+    if work_folder is not None and not work_folder.is_dir():
+        print(
+            f"create_worker: --work-folder is not a directory: {work_folder}",
+            file=sys.stderr,
+        )
+        return 2
     if not runtime_dir.is_dir():
         print(
             f"create_worker: --runtime-dir is not a directory: {runtime_dir}",
@@ -953,8 +1023,9 @@ def launch(
     # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
     # stash: stashed work silently drops out of multi-agent coordination and
-    # gets lost.
-    if not _worktree_is_clean(runner):
+    # gets lost. A worker given a work folder runs in that folder, not on the
+    # lead's HEAD, so the lead's tree is irrelevant and the check is skipped.
+    if work_folder is None and not _worktree_is_clean(runner):
         print(
             f"create_worker: refusing to launch {name}: the working tree has "
             "uncommitted changes. The worker is created from your committed "
@@ -1024,6 +1095,19 @@ def launch(
         "--label",
         f"{_RUNTIME_DIR_LABEL}={_repo_relative_path(runtime_dir, toplevel)}",
     ]
+    if work_folder is not None:
+        # Absolute, so the worker lands in that folder whatever the lead's cwd.
+        create_argv += ["--from", f":{work_folder.resolve()}"]
+        # The folder is a directory on this machine, so the runtime dir goes
+        # there directly. Doing it before the create is what lets the create
+        # carry the first message: whatever that message points at is in place
+        # by the time the agent reads it.
+        copy_dir_into_work_folder(runtime_dir, work_folder, toplevel)
+        if artifacts_dir is not None:
+            copy_dir_into_work_folder(artifacts_dir, work_folder, toplevel)
+        _flush_common_transcript(state_dir, runner)
+    create_argv += list(create_args)
+
     try:
         created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as exc:
@@ -1048,20 +1132,23 @@ def launch(
             file=sys.stderr,
         )
 
-    rsync_dir(name, runtime_dir, runner, toplevel)
-    if artifacts_dir is not None:
-        rsync_dir(name, artifacts_dir, runner, toplevel)
+    if work_folder is None:
+        # A worker in a folder of its own gets the runtime dir through the
+        # agent; one running in a folder the lead has already had it copied in.
+        rsync_dir(name, runtime_dir, runner, toplevel)
+        if artifacts_dir is not None:
+            rsync_dir(name, artifacts_dir, runner, toplevel)
 
-    _flush_common_transcript(state_dir, runner)
+        _flush_common_transcript(state_dir, runner)
 
-    if worker_agent_id is not None:
+    if is_messaged_with_mngr or worker_agent_id is None:
         runner.run(
-            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+            ["mngr", "message", name, "--message-file", str(task_file)],
             check=True,
         )
     else:
         runner.run(
-            ["mngr", "message", name, "--message-file", str(task_file)],
+            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
             check=True,
         )
 
@@ -1078,14 +1165,17 @@ def reply(
     message_file: Path | None,
     name: str | None,
     runner: Runner | None = None,
+    is_messaged_with_mngr: bool = False,
 ) -> int:
-    """Send the lead's reply to the worker's chat. Returns the process exit code.
+    """Send the lead's reply to the worker. Returns the process exit code.
 
     Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
     through the chat app; a task file without it (a worker launched before the
     stamp existed) is reached by ``mngr message`` with ``--name``, and is a usage
-    error without one. The messenger's exit status (``mngr message``'s codes) is
-    passed through.
+    error without one. ``is_messaged_with_mngr`` takes the same ``mngr message``
+    route by name, for a worker launched that way -- pass it whenever the launch
+    had it. The messenger's exit status (``mngr message``'s codes) is passed
+    through.
     """
     runner = runner or Runner()
     if (message is None) == (message_file is None):
@@ -1106,7 +1196,9 @@ def reply(
         else [f"--message={message}"]
     )
     worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
-    if worker_agent_id is not None:
+    if name and is_messaged_with_mngr:
+        argv = ["mngr", "message", name, *source]
+    elif worker_agent_id is not None:
         argv = [*_message_chat_argv(worker_agent_id), *source]
     elif name:
         # CLEANUP: drop this name-addressed fallback once no in-flight worker
@@ -2193,6 +2285,9 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
+        work_folder=args.work_folder,
+        create_args=tuple(args.create_args),
+        is_messaged_with_mngr=args.is_messaged_with_mngr,
     )
 
 
@@ -2271,6 +2366,7 @@ def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
         message_file=args.message_file,
         name=args.name,
         runner=runner,
+        is_messaged_with_mngr=args.is_messaged_with_mngr,
     )
 
 
@@ -2306,6 +2402,32 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--work-folder",
+        type=Path,
+        default=None,
+        help="Existing folder the worker runs in place (mngr --from :PATH), "
+        "instead of a new worktree of your HEAD, for a template whose transfer "
+        "is none. Skips the clean-tree check.",
+    )
+    launch_parser.add_argument(
+        "--message-with-mngr",
+        action="store_true",
+        dest="is_messaged_with_mngr",
+        help="Send the task with `mngr message <name>` instead of through the "
+        "chat app, for a worker nobody opens in the chat UI. Pass the same flag "
+        "to `reply`.",
+    )
+    launch_parser.add_argument(
+        "--create-arg",
+        action="append",
+        default=[],
+        dest="create_args",
+        metavar="ARG",
+        help="Extra argument passed to `mngr create` verbatim [repeatable]. "
+        "Write it joined with '=' (--create-arg=--foreground, --create-arg=-S), "
+        "since an argument starting with '-' is otherwise read as an option here.",
     )
 
     await_parser = subparsers.add_parser(
@@ -2484,7 +2606,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reply_parser.add_argument(
         "--name",
-        help="Worker name, used only when the task file predates the `worker_agent_id` stamp.",
+        help="Worker name. Required with --message-with-mngr, and otherwise used "
+        "only when the task file predates the `worker_agent_id` stamp.",
+    )
+    reply_parser.add_argument(
+        "--message-with-mngr",
+        action="store_true",
+        dest="is_messaged_with_mngr",
+        help="Send with `mngr message <name>` instead of through the chat app. "
+        "Pass this when the worker was launched with it.",
     )
 
     return parser

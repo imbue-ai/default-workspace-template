@@ -22,6 +22,17 @@
 #   meta.json    ids and timings for correlating this run with the agent's transcript
 #   log          this run's own log
 #
+# Foreground mode, for a flow that carries its plan out (build-app-parallel):
+#
+#   system/scripts/imbue_plan_extra/write_plan.sh --run-dir <dir> <flow>
+#
+# reads the brief from <dir>/brief.md, which the caller wrote, and plans in the
+# foreground into that same directory: plan.md (with no header, because this plan
+# is meant to be used), meta.json and log. It exits 0 once plan.md is written and
+# 1 when no plan was written (the reason is in <dir>/log), and refuses (exit 2) a
+# missing brief or an existing plan.md. The planner itself runs exactly as in the
+# default mode below.
+#
 # Strict mode is on, so every failure this script tolerates is written out as an
 # explicit `|| true` or a checked branch at the point it can happen. Nothing here
 # may propagate a non-zero exit to the agent that called it.
@@ -54,6 +65,13 @@ set -euo pipefail
 
 readonly SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORK_DIR="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+# --run-dir selects foreground mode (see the header). Parsed before the flow.
+FOREGROUND_RUN_DIR=""
+if [ "${1:-}" = "--run-dir" ]; then
+    FOREGROUND_RUN_DIR="${2:-}"
+    shift 2 || shift $#
+fi
+readonly FOREGROUND_RUN_DIR
 # $1 names the flow being routed and selects its prompt. Declared before the
 # paths below, which are built from it.
 readonly FLOW="${1:-}"
@@ -83,9 +101,25 @@ readonly OOM_SCORE_ADJ=900
 # in meta.json in full; a sanitized copy names the run directory.
 readonly CALLER_REF="${MNGR_AGENT_NAME:-${MNGR_AGENT_ID:-pid$$}}"
 
+# ---- Foreground: validate the caller's run directory, then plan below ---------
+if [ -n "$FOREGROUND_RUN_DIR" ]; then
+    if [ -z "$FLOW" ] || [ ! -f "$INSTRUCTIONS" ]; then
+        echo "write_plan: no prompt for flow '${FLOW}' at ${INSTRUCTIONS}" >&2
+        exit 2
+    fi
+    if [ ! -s "${FOREGROUND_RUN_DIR}/brief.md" ]; then
+        echo "write_plan: no brief at ${FOREGROUND_RUN_DIR}/brief.md" >&2
+        exit 2
+    fi
+    if [ -e "${FOREGROUND_RUN_DIR}/plan.md" ]; then
+        echo "write_plan: a plan already exists at ${FOREGROUND_RUN_DIR}/plan.md; move it aside to plan again" >&2
+        exit 2
+    fi
+fi
+
 # ---- Parent: create the run directory, announce it, detach --------------------
 # The caller gets its shell back here, before any of the work below runs.
-if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ]; then
+if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ] && [ -z "$FOREGROUND_RUN_DIR" ]; then
     if [ -z "$FLOW" ] || [ ! -f "$INSTRUCTIONS" ]; then
         exit 0
     fi
@@ -118,7 +152,12 @@ fi
 
 # ---- Child: everything below runs detached ------------------------------------
 
-readonly RUN_DIR="$IMBUE_PLAN_EXTRA_RUN_DIR"
+# Absolute in foreground mode, because the planner runs from the work dir below.
+if [ -n "$FOREGROUND_RUN_DIR" ]; then
+    readonly RUN_DIR="$(cd "$FOREGROUND_RUN_DIR" && pwd)"
+else
+    readonly RUN_DIR="$IMBUE_PLAN_EXTRA_RUN_DIR"
+fi
 readonly LOG_FILE="${RUN_DIR}/log"
 readonly STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -130,6 +169,17 @@ readonly CALLER_SESSION_ID="${MAIN_CLAUDE_SESSION_ID:-}"
 
 log() {
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" || true
+}
+
+# Ends a run that wrote no plan. The detached recorder must never fail its caller,
+# so it exits 0; in foreground mode the caller is waiting on the plan, so exit 1.
+end_without_plan() {
+    write_meta "$1"
+    if [ -n "$FOREGROUND_RUN_DIR" ]; then
+        echo "write_plan: no plan written (${1}); see ${LOG_FILE}" >&2
+        exit 1
+    fi
+    exit 0
 }
 
 # Written on every exit path so a run that produced no plan still says why.
@@ -151,19 +201,16 @@ META
 readonly BRIEF_FILE="${RUN_DIR}/brief.md"
 if [ ! -s "$BRIEF_FILE" ]; then
     log "no brief on stdin; nothing to plan"
-    write_meta "no_brief"
-    exit 0
+    end_without_plan "no_brief"
 fi
 
 if [ ! -f "$INSTRUCTIONS" ]; then
     log "instructions missing at ${INSTRUCTIONS}; skipping"
-    write_meta "no_instructions"
-    exit 0
+    end_without_plan "no_instructions"
 fi
 if ! command -v claude >/dev/null 2>&1; then
     log "no claude on PATH; skipping"
-    write_meta "no_claude"
-    exit 0
+    end_without_plan "no_claude"
 fi
 
 # Guarded rather than redirected: a failing redirection reports on the shell's own
@@ -207,33 +254,35 @@ nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
 
 if [ "$claude_status" -ne 0 ]; then
     log "claude exited ${claude_status}; no plan written"
-    write_meta "claude_failed"
-    exit 0
+    # claude -p reports some failures (budget, auth, API errors) on stdout.
+    cat "$body_file" >>"$LOG_FILE" || true
+    end_without_plan "claude_failed"
 fi
 if [ ! -s "$body_file" ]; then
     log "claude produced no output; no plan written"
-    write_meta "empty_output"
-    exit 0
+    end_without_plan "empty_output"
 fi
 
 # The header is written here rather than asked of the model so that it is on
-# every plan regardless of what the model did with its instructions.
+# every recorded plan regardless of what the model did with its instructions. A
+# foreground plan is the one its caller carries out, so it gets no header.
 write_status=0
 {
-    cat <<'HEADER'
+    if [ -z "$FOREGROUND_RUN_DIR" ]; then
+        cat <<'HEADER'
 > DO NOT USE THIS PLAN. It was written by a separate process that is not part
 > of building anything, it was never reviewed, and the work it describes was
 > done by someone else. It is recorded for offline analysis only. Do not read
 > it, act on it, cite it, or offer it to the user.
 
 HEADER
+    fi
     cat "$body_file"
 } >"$output_file" || write_status=$?
 
 if [ "$write_status" -ne 0 ]; then
     log "could not write ${output_file} (exit ${write_status})"
-    write_meta "write_failed"
-    exit 0
+    end_without_plan "write_failed"
 fi
 log "wrote ${output_file}"
 write_meta "ok"

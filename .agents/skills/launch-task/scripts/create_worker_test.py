@@ -66,6 +66,13 @@ class _RecordingRunner(create_worker_mod.Runner):
     def respond(self, prefix: tuple[str, ...], result: Any) -> None:
         self._responses[prefix] = result
 
+    spawns: list[_RecordedCall] = field(default_factory=list)
+
+    def spawn(self, argv: Sequence[str], log_path: Path) -> int:
+        """Record the spawn instead of starting a process, and answer a pid."""
+        self.spawns.append(_RecordedCall(argv=list(argv), kwargs={"log_path": log_path}))
+        return 4242
+
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
@@ -521,6 +528,233 @@ def test_launch_refuses_dirty_worktree(
     assert "uncommitted changes" in err
     assert "Commit" in err
     assert "stash" in err
+
+
+def test_work_folder_and_create_args_reach_create_and_skip_clean_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A work folder runs the worker in place (``--from :<absolute folder>``) and
+    every ``--create-arg`` reaches ``mngr create`` untouched. The lead's dirty tree
+    does not block the launch, because the worker never starts from the lead's HEAD."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+    runner.respond(("git", "status"), _StubResult(stdout=" M some_file.py\n"))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+        create_args=("--foreground", "-S", "agent_types.demo.model=sonnet"),
+    )
+
+    assert rc == 0
+    argvs = [c.argv for c in runner.calls]
+    assert ["git", "status", "--porcelain"] not in argvs
+    create_calls = [argv for argv in argvs if argv[:2] == ["mngr", "create"]]
+    expected = [
+        part.replace("worker", "folder_worker") if part == "worker" else part
+        for part in _create_argv(runtime)
+    ]
+    assert create_calls == [
+        expected
+        + [
+            "--from",
+            f":{work_folder.resolve()}",
+            "--foreground",
+            "-S",
+            "agent_types.demo.model=sonnet",
+        ]
+    ]
+
+
+def test_work_folder_gets_the_runtime_dir_copied_in_at_the_same_relative_path(
+    tmp_path: Path,
+) -> None:
+    """The folder is a directory on this machine, so the runtime dir is put there
+    directly -- at the path it has in the repo, which is the path the worker will
+    read it from."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, work_folder, tmp_path)
+
+    assert (work_folder / runtime.relative_to(tmp_path) / task.name).read_text() == (
+        task.read_text()
+    )
+
+
+def test_a_runtime_dir_already_in_the_work_folder_is_left_alone(tmp_path: Path) -> None:
+    """A worker pointed at the folder the lead is already in needs no copy, and
+    copying a directory onto itself would only raise."""
+    runtime, task, _ = _make_layout(tmp_path)
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, tmp_path, tmp_path)
+
+    assert task.is_file()
+
+
+def test_work_folder_does_not_rsync_the_runtime_dir(tmp_path: Path) -> None:
+    """Nothing waits on the agent to hand it its runtime dir."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+    )
+
+    assert rc == 0
+    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
+
+
+def test_message_with_mngr_sends_the_task_by_name_not_through_the_chat_app(
+    tmp_path: Path,
+) -> None:
+    """A worker nobody opens in the chat UI is messaged by mngr directly, even
+    though the create stamped an agent id that the chat app would accept."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        is_messaged_with_mngr=True,
+    )
+
+    assert rc == 0
+    assert ["mngr", "message", "demo-worker", "--message-file", str(task)] in [
+        c.argv for c in runner.calls
+    ]
+    assert not any("message_chat.py" in " ".join(c.argv) for c in runner.calls)
+
+
+def test_the_task_goes_through_the_chat_app_by_default(tmp_path: Path) -> None:
+    """The flag is opt-in: without it a worker is addressed by its stamped agent
+    id through the chat app, as every dispatch has been."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert any("message_chat.py" in " ".join(c.argv) for c in runner.calls)
+    assert not any(c.argv[:2] == ["mngr", "message"] for c in runner.calls)
+
+
+def test_reply_with_mngr_addresses_the_worker_by_name(tmp_path: Path) -> None:
+    """A reply takes the same route the launch did, so a worker launched off the
+    chat app is still reachable -- which is what keeps a change to what it built
+    a reply rather than a new worker."""
+    _, task, _ = _make_layout(tmp_path)
+    task.write_text(
+        "---\nfinish_report_path: reports/report.md\nworker_agent_id: agent-abc\n---\n",
+        encoding="utf-8",
+    )
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.reply(
+        task_file=task,
+        message="make the header blue",
+        message_file=None,
+        name="demo-worker",
+        runner=runner,
+        is_messaged_with_mngr=True,
+    )
+
+    assert rc == 0
+    assert [c.argv for c in runner.calls] == [
+        ["mngr", "message", "demo-worker", "--message=make the header blue"]
+    ]
+
+
+def test_work_folder_gets_the_runtime_dir_copied_in_at_the_same_relative_path(
+    tmp_path: Path,
+) -> None:
+    """The folder is a directory on this machine, so the runtime dir is put there
+    directly -- at the path it has in the repo, which is the path the worker will
+    read it from."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, work_folder, tmp_path)
+
+    assert (work_folder / runtime.relative_to(tmp_path) / task.name).read_text() == (
+        task.read_text()
+    )
+
+
+def test_a_runtime_dir_already_in_the_work_folder_is_left_alone(tmp_path: Path) -> None:
+    """A worker pointed at the folder the lead is already in needs no copy, and
+    copying a directory onto itself would only raise."""
+    runtime, task, _ = _make_layout(tmp_path)
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, tmp_path, tmp_path)
+
+    assert task.is_file()
+
+
+def test_work_folder_does_not_rsync_the_runtime_dir(tmp_path: Path) -> None:
+    """Nothing waits on the agent to hand it its runtime dir."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+    )
+
+    assert rc == 0
+    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
+
+
+def test_work_folder_missing_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A work folder that does not exist aborts before any command runs."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="shared_folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=tmp_path / "no-such-folder",
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert "--work-folder" in capsys.readouterr().err
 
 
 def test_launch_proceeds_when_not_a_git_repo(tmp_path: Path) -> None:
@@ -1064,6 +1298,37 @@ def _launch_argv(runtime: Path, task: Path) -> list[str]:
         "--task-file",
         str(task),
     ]
+
+
+def test_main_launch_threads_the_create_options(tmp_path: Path) -> None:
+    """The ``launch`` CLI passes ``--work-folder``, every ``--create-arg`` and
+    ``--message-with-mngr`` through."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(
+        _launch_argv(runtime, task)
+        + [
+            "--work-folder",
+            str(work_folder),
+            "--create-arg=-S",
+            "--create-arg=agent_types.demo.model=opus",
+            "--message-with-mngr",
+        ],
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    assert create_calls[0][-4:] == [
+        "--from",
+        f":{work_folder.resolve()}",
+        "-S",
+        "agent_types.demo.model=opus",
+    ]
+    assert any(c.argv[:3] == ["mngr", "message", "x"] for c in runner.calls)
 
 
 def test_main_create_carries_no_workspace_label(

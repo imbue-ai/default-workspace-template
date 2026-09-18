@@ -3,7 +3,7 @@
 Shared reference for the supervisord layer beneath a service -- its
 `[program:<name>]` definition, and how to add, remove, modify, or inspect a
 program. Reach for this from any service flow (`update-app`,
-`build-app`) when a change touches *how a service runs* (its port,
+`build-app-parallel`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
 Background services are defined as `[program:<name>]` sections, one program
@@ -126,7 +126,7 @@ than ~1s later, and it keeps the command self-documenting.
 For an app, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove` and its tool
 environment with `uv tool uninstall <name>`; for a scaffolded web lib,
-`build-app`'s `cleanup.md` reference covers the full teardown.
+`.agents/shared/build-app/references/cleanup.md` covers the full teardown.
 
 ## Modifying a service
 
@@ -158,5 +158,5 @@ Or read the log files directly under `/var/log/supervisor/`.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new app (Flask lib or wrapping a third-party
-  server), use the `build-app` skill -- it generates the `[program:*]`
+  server), use the `build-app-parallel` skill -- its build generates the `[program:*]`
   block and `forward_port.py` wiring for you.
