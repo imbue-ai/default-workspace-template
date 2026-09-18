@@ -51,11 +51,13 @@ time" describes. Three deltas:
   teardown for whatever the abandoned pass left behind. A stale lease is broken
   only on the user's call, never silently.
 
-**Check for an open notice.** If the app's tabs still carry the "recently
-updated" notice from an earlier apply (`GET /api/updates/pending` on the shell
-answers a record naming the app), the previous update is unconfirmed. Proceed,
-but tell the user so, and that this pass's apply will replace that rollback
-point.
+**Check for an open notice.** If a "recently updated" notice from an earlier
+apply is still open (`GET /api/updates/pending` on the shell answers a record
+rather than `null`; its `apps` are the apps whose tabs carry it, or empty when
+that apply changed only how the workspace starts and the shell's banner carries
+it alone), the previous update is unconfirmed. Proceed, but tell the user so,
+and that this pass's apply will replace that rollback point, whichever apps it
+named.
 
 **Pick a slug** `$SLUG` for the change. The branch is `mngr/update-$SLUG`; the
 worktree lives at `data/.tasks/critical-live/update-$SLUG/` (gitignored, and
