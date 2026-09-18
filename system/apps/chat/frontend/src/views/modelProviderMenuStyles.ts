@@ -4,9 +4,10 @@
  * The menu's frame, rows, divider, sheet and submenus are the workspace's `Menu`
  * (`components/menu`), so this menu behaves and dresses like the tab menu and the
  * rail's row menus. What lives here is the part no other menu has: the composer
- * chip that opens it, the effort slider, the model list's search field, and the
- * row geometry that reserves a lane for each of an account row's trailing
- * controls -- plus the switch the composer's under-bar borrows.
+ * chip that opens it, the effort slider, the model list's search field, the
+ * fast-mode rows, and the row geometry that reserves a lane for each of an
+ * account row's trailing controls -- plus the switch the composer's under-bar
+ * borrows.
  *
  * Every colour, size and elevation below comes from the semantic utility layer,
  * the `type-*` roles and the shadow tokens. Tailwind v4 emits nothing for an
@@ -102,8 +103,9 @@ export const SLIDER =
  *  and the on-position is `width - inset - knob`, which leaves the knob the same 2px from
  *  either end.
  *
- *  The chat's one switch, the composer's under-bar "Source view", is `sm`: it sits beside a
- *  line of helper text. `md` is the full-size step. */
+ *  Both switches in the chat are `sm`: the composer's under-bar "Source view", beside a line of
+ *  helper text, and the fast submenu's default row, in a column of settings. `md` is the
+ *  full-size step. */
 const SWITCH_SIZES = {
   md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
   sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
@@ -197,9 +199,12 @@ export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-f
  *  what separates them is not their names but what each one DOES ("fast for the first 5 turns,
  *  then standard speed") -- a sentence that cannot ride the row's own line and would be lost
  *  entirely in a tooltip on a list you are choosing from. Hence the shared slab and focus ring
- *  without the fixed height, and `items-start` so the tick lines up with the mode rather than
- *  floating beside the sentence. */
-const FAST_ROW_SHAPE = `flex w-full items-start gap-1.5 py-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
+ *  with padding in place of the fixed height.
+ *
+ *  No width of its own: the slab carries one, and a `w-full` beside it wins by however Tailwind
+ *  happens to order the two, taking the row 8px past the slab's margins -- which puts its
+ *  trailing tick in a different lane from every other row's. */
+const FAST_ROW_SHAPE = `flex items-center gap-1.5 py-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
 export const FAST_ROW = `${FAST_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FAST_ROW_SELECTED = `${FAST_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
 /** The mode and its sentence, stacked. `min-w-0` so the sentence wraps inside the row instead of
@@ -214,12 +219,20 @@ export const FAST_LIMIT_ROW = "fast-mode-limit flex h-8 items-center gap-2 white
  *  recipe is `w-full`, and two width utilities on one element are settled by the order Tailwind
  *  emits them in rather than by the order the caller wrote them. A box the field fills is
  *  decided by the caller either way. */
-export const FAST_LIMIT_FIELD = "inline-flex w-14 shrink-0";
-export const FAST_LIMIT_INPUT_EXTRA = "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-row)";
-/** A submenu row that states a fact rather than offering a choice -- "new chats already start in
- *  this mode". It keeps the row's hover (a row that does not react at all reads as broken rather
- *  than as settled) and drops the pointer; the tick is what says it is already so. */
-export const SUBMENU_ROW_INERT = `${SUBMENU_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-default`;
+export const FAST_LIMIT_FIELD = "inline-flex w-[72px] shrink-0";
+/** The steppers stay out. Chromium's user-agent sheet fades `::-webkit-inner-spin-button` to
+ *  nothing until the field is hovered or focused, which leaves a number field looking like a
+ *  text field: the one affordance saying "this is a number you can nudge" only appears once you
+ *  have already gone looking. An author `opacity` outranks the UA sheet's.
+ *
+ *  Left padding only. The arrows sit at the content box's right edge, so the right padding is
+ *  space between them and nothing. */
+export const FAST_LIMIT_INPUT_EXTRA =
+  "fast-limit-input h-6 pl-2 pr-0 py-0 text-right text-(length:--font-size-row) " +
+  "[&::-webkit-inner-spin-button]:opacity-100";
+/** The default row: a label and the switch that makes this mode the one new chats start in. Laid
+ *  out like the limit row above it, so the two settings under the modes read as a pair. */
+export const FAST_DEFAULT_ROW = `fast-mode-default ${ROW_STATIC}`;
 
 /** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
  *  row's reserved right padding. It takes the row's LAST lane, the one the tick occupies at
