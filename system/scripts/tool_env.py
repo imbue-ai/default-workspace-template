@@ -44,7 +44,6 @@ RECEIPT = "uv-receipt.toml"
 # The vendored mngr distribution's name (its ``[project] name``), which is what uv names
 # its environment directory -- not the ``mngr`` console script, which is the executable.
 MNGR_TOOL_NAME = "imbue-mngr"
-MNGR_EXECUTABLE = "mngr"
 
 # The home every tool this workspace installs is reached through: the one the image build
 # ran under, and the one whose bin directory is first on PATH in a login shell.
@@ -70,6 +69,24 @@ def bin_dir(home: Path) -> Path:
     return home / ".local" / "bin"
 
 
+def _shebang_interpreter(script: Path) -> Path | None:
+    """The interpreter ``script``'s shebang names, else ``None``.
+
+    Only the first line is read: a bin directory also holds large compiled programs.
+    """
+    try:
+        with script.open("rb") as handle:
+            first_line = handle.readline(4096)
+    except OSError:
+        return None
+    shebang = first_line.decode(errors="replace").split("\n", 1)[0]
+    if not shebang.startswith("#!"):
+        return None
+    # ``strip`` before splitting, so the ``#! /path`` spelling resolves like ``#!/path``.
+    interpreter = shebang[2:].strip().split(" ", 1)[0]
+    return Path(interpreter) if interpreter else None
+
+
 def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     """``(tool_dir, bin_dir)`` for the uv tool that owns console ``script``, else ``None``.
 
@@ -77,17 +94,10 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     default tool dir follows ``$HOME``, which is not the one the workspace was built
     under, and a venv console script must not masquerade as a tool.
     """
-    try:
-        shebang = script.read_text(errors="replace").split("\n", 1)[0]
-    except OSError:
+    interpreter = _shebang_interpreter(script)
+    if interpreter is None:
         return None
-    if not shebang.startswith("#!"):
-        return None
-    # ``strip`` before splitting, so the ``#! /path`` spelling resolves like ``#!/path``.
-    interpreter = shebang[2:].strip().split(" ", 1)[0]
-    if not interpreter:
-        return None
-    parents = Path(interpreter).parents
+    parents = interpreter.parents
     if len(parents) < 3:
         return None
     # uv writes ``#!<tool_dir>/<tool_name>/bin/python``, so the tool dir is three up.
@@ -98,7 +108,7 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
 
 
 def remove_shadowing_installs(
-    canonical_tools: Path, homes: Sequence[Path], tool_name: str, executable: str
+    canonical_tools: Path, homes: Sequence[Path], tool_name: str
 ) -> list[Path]:
     """Delete ``tool_name``'s environments outside ``canonical_tools``, and the scripts into them.
 
@@ -109,10 +119,11 @@ def remove_shadowing_installs(
 
     Directories are compared after ``resolve()``: a home reached as ``/root/`` or through a
     symlink is the installation being kept, not a shadow of it, and deleting it would
-    destroy exactly what this is protecting. A console script goes only when it resolves
-    into the environment being removed; one already pointing at the kept installation is a
-    working shim, and removing the environment while stranding the script would leave a
-    ``executable`` on PATH with a dead interpreter -- worse than the stale copy it replaced.
+    destroy exactly what this is protecting. Every console script in the home's bin
+    directory that resolves into the environment being removed goes with it -- a tool can
+    install several, and stranding any would leave it on PATH with a dead interpreter,
+    worse than the stale copy it replaced. One already pointing at the kept installation is
+    a working shim and stays.
 
     Returns what was removed.
     """
@@ -130,13 +141,29 @@ def remove_shadowing_installs(
             is_present = False
         if not is_present or tools.resolve() == canonical:
             continue
-        shim = bin_dir(home) / executable
-        shim_location = tool_location(shim, tool_name)
-        if shim_location is not None and shim_location[0].resolve() == tools.resolve():
-            shim.unlink()
-            removed.append(shim)
+        removed.extend(_remove_scripts_into(bin_dir(home), stale_env.resolve()))
         shutil.rmtree(stale_env)
         removed.append(stale_env)
+    return removed
+
+
+def _remove_scripts_into(scripts_dir: Path, environment: Path) -> list[Path]:
+    """Unlink every console script in ``scripts_dir`` whose interpreter lives in
+    ``environment`` (already resolved); return them.
+
+    Only the environment directory is resolved, never the interpreter itself: uv's
+    ``bin/python`` is a symlink out to the base interpreter.
+    """
+    if not scripts_dir.is_dir():
+        return []
+    removed: list[Path] = []
+    for script in sorted(scripts_dir.iterdir()):
+        interpreter = _shebang_interpreter(script)
+        if interpreter is None or len(interpreter.parents) < 2:
+            continue
+        if interpreter.parents[1].resolve() == environment:
+            script.unlink()
+            removed.append(script)
     return removed
 
 
@@ -147,7 +174,6 @@ def _drop_shadowing_mngr() -> list[Path]:
         tools_dir(tool_home()),
         [Path(home)] if home else [],
         MNGR_TOOL_NAME,
-        MNGR_EXECUTABLE,
     )
 
 

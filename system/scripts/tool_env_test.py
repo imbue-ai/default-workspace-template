@@ -44,7 +44,7 @@ def _install_mngr_tool(home: Path, *, shebang_prefix: str = "#!") -> tuple[Path,
     env_dir = tool_env.tools_dir(home) / tool_env.MNGR_TOOL_NAME
     (env_dir / "bin").mkdir(parents=True)
     (env_dir / tool_env.RECEIPT).write_text("")
-    script = tool_env.bin_dir(home) / tool_env.MNGR_EXECUTABLE
+    script = tool_env.bin_dir(home) / "mngr"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(f"{shebang_prefix}{env_dir}/bin/python\n")
     return env_dir, script
@@ -121,7 +121,6 @@ def test_an_install_under_another_home_goes_with_its_console_script(
         tool_env.tools_dir(pinned_home),
         [swept],
         tool_env.MNGR_TOOL_NAME,
-        tool_env.MNGR_EXECUTABLE,
     )
 
     assert not shadow_env.exists()
@@ -150,7 +149,6 @@ def test_the_pinned_install_is_not_removed_when_reached_by_another_path(
         tool_env.tools_dir(pinned_home),
         [linked_home, Path(f"{pinned_home}/")],
         tool_env.MNGR_TOOL_NAME,
-        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []
@@ -173,11 +171,35 @@ def test_a_console_script_already_resolving_to_the_pinned_install_is_left_alone(
         tool_env.tools_dir(pinned_home),
         [runtime_home],
         tool_env.MNGR_TOOL_NAME,
-        tool_env.MNGR_EXECUTABLE,
     )
 
     assert not shadow_env.exists()
     assert shim.is_file()
+
+
+def test_every_console_script_into_a_removed_environment_goes_with_it(
+    tmp_path: Path,
+) -> None:
+    """A tool can install several console scripts (the browser app ships two). Removing
+    its environment while leaving any of them would put a script with a dead interpreter
+    first on a login shell's PATH; a script into another environment is not the sweep's."""
+    runtime_home = tmp_path / "home" / "user"
+    pinned_home = tmp_path / "root"
+    shadow_env, first_script = _install_mngr_tool(runtime_home)
+    _install_mngr_tool(pinned_home)
+    second_script = first_script.with_name("mngr-second")
+    second_script.write_text(f"#!{shadow_env}/bin/python\n")
+    other_env = tool_env.tools_dir(runtime_home) / "other-tool"
+    (other_env / "bin").mkdir(parents=True)
+    other_script = first_script.with_name("other")
+    other_script.write_text(f"#!{other_env}/bin/python\n")
+
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home), [runtime_home], tool_env.MNGR_TOOL_NAME
+    )
+
+    assert set(removed) == {shadow_env, first_script, second_script}
+    assert other_script.is_file()
 
 
 def test_nothing_is_removed_when_the_install_being_kept_is_missing(
@@ -192,7 +214,6 @@ def test_nothing_is_removed_when_the_install_being_kept_is_missing(
         tool_env.tools_dir(tmp_path / "root"),
         [runtime_home],
         tool_env.MNGR_TOOL_NAME,
-        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []
@@ -208,7 +229,6 @@ def test_a_home_with_no_install_is_a_no_op(tmp_path: Path) -> None:
         tool_env.tools_dir(pinned_home),
         [tmp_path / "home" / "user"],
         tool_env.MNGR_TOOL_NAME,
-        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []
