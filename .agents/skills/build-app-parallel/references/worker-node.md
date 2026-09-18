@@ -72,22 +72,31 @@ is a separate node the orchestrator runs.
 
 ## How to check your work
 
-Do a quick check of your own piece and nothing more: it imports, it runs, it
-serves, the page renders. To run the app from this folder without touching the
-live one, start a throwaway instance on a spare port:
+One command, and only one: whatever proves the files you wrote load. For Python
+that is importing the module you added (`uv run python -c "import <module>"`);
+for a page or a static asset it is that the file parses. Then report.
 
-```bash
-python3 .agents/shared/scripts/serve_isolated_instance.py up --name <slug> \
-    --cwd "$PWD" --port-env <PACKAGE_UPPER>_PORT \
-    --env <PACKAGE_UPPER>_DATA_DIR=<scratch dir> -- uv run <app-name>
-# ... curl it or load it with Playwright ...
-python3 .agents/shared/scripts/serve_isolated_instance.py down --name <slug>
-```
+**Do not build anything to check with.** No test suite, no throwaway script that
+drives your piece, no serving the app and loading it with curl or Playwright,
+and none of the full test suite, coverage, ratchets, `/autofix` or any review
+gate, even where `CLAUDE.md` asks for them. In a build this instruction used to
+ask for a served check, and four of five workers answered it by writing their own
+`check_*.py` -- between a third and two thirds of each worker's time, which found
+nothing that mattered.
 
-Always bring it down before you report. Do not write a test suite, and do not run
-the full test suite, coverage, ratchets, `/autofix` or any review gate, even
-where `CLAUDE.md` asks for them. One hardening pass runs all of those once the
-whole app is built.
+What that check would have caught is already caught, later and in one place: the
+orchestrator serves a preview of the whole app at each review, in front of the
+user, and one hardening pass runs the real tests once everything is built. Your
+job is to hand over a piece that loads and a report that says what you built.
+
+## Two hooks that will refuse your commands
+
+Both refusals cost you a turn, and both are easy to avoid:
+
+- **Never pipe anything through `tail` or `head`** to shorten it. Redirect to a
+  file and read the file instead.
+- **A `tk` command must be the only thing in its tool call** -- no `cd` in front,
+  nothing chained after it with `&&` or `;`, no redirect.
 
 ## Reporting back
 
