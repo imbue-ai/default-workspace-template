@@ -120,7 +120,8 @@ append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
 `kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
-above `ceiling`: the Mind app announces its own updates.
+above `ceiling` that they did not ask for by name: the Mind app announces its
+own updates.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
 Its single `error:` line says why no target could be chosen (the Mind app

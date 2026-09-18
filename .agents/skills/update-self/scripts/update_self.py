@@ -22,7 +22,8 @@ belong in tested code rather than agent prose:
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
-    Releases above the ceiling are treated as absent: nothing it prints names one.
+    Releases above the ceiling are treated as absent: unless an override names
+    one, nothing it prints does.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather

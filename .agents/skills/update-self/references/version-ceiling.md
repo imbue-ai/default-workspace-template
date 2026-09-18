@@ -11,8 +11,9 @@ rather than a release tag (a dev build) there is nothing to compare against and
 a version, `resolve-target` **fails** rather than updating uncapped.
 
 Releases above the ceiling are treated as if they do not exist: never name one
-to the user or suggest updating the app to reach it. The Mind app announces its
-own updates, on the user's release channel.
+the user did not ask for by name, or suggest updating the app to reach it. The
+Mind app announces its own updates, on the user's release channel. A version
+the user does name is an override, covered below.
 
 ## At the ceiling vs behind it
 
