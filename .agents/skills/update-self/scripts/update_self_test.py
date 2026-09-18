@@ -5201,28 +5201,30 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
     assert location == (tools, bin_dir)
 
 
-def test_tool_location_of_a_symlinked_script_is_the_uv_bin_dir(tmp_path: Path) -> None:
-    # /usr/local/bin/mngr is a symlink to the uv entry point, so non-login shells find it.
+def test_tool_location_of_a_uv_entry_point_is_the_directory_holding_it(
+    tmp_path: Path,
+) -> None:
+    # uv writes each entry point in UV_TOOL_BIN_DIR as a symlink into the tool
+    # environment's own bin. Reporting the resolved target instead aims the next install
+    # at that environment, which uv refuses ("Executable already exists: mngr").
     bin_dir = tmp_path / "root" / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
-    script = bin_dir / update_layout.MNGR_EXECUTABLE
-    script.write_text(
+    environment_bin = tools / update_layout.MNGR_TOOL_NAME / "bin"
+    environment_bin.mkdir(parents=True)
+    installed = environment_bin / update_layout.MNGR_EXECUTABLE
+    installed.write_text(
         f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
     )
-    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
     (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
-    shared_bin = tmp_path / "usr" / "local" / "bin"
-    shared_bin.mkdir(parents=True)
-    symlink = shared_bin / update_layout.MNGR_EXECUTABLE
-    symlink.symlink_to(script)
+    entry_point = bin_dir / update_layout.MNGR_EXECUTABLE
+    entry_point.symlink_to(installed)
 
-    assert update_environment._tool_location(symlink, update_layout.MNGR_TOOL_NAME) == (
-        tools,
-        bin_dir,
-    )
+    assert update_environment._tool_location(
+        entry_point, update_layout.MNGR_TOOL_NAME
+    ) == (tools, bin_dir)
 
 
 @pytest.mark.parametrize(

@@ -94,9 +94,10 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     tool_dir = parents[2]
     if not (tool_dir / tool_name / RECEIPT).is_file():
         return None
-    # ``resolve`` the script: reached through a symlink (``/usr/local/bin/mngr``), its own
-    # parent is not the bin directory uv installs entry points into.
-    return tool_dir, script.resolve().parent
+    # The script's own directory, never the resolved target: uv writes each entry point in
+    # ``UV_TOOL_BIN_DIR`` as a symlink into the tool environment's ``bin``, so resolving would
+    # name that environment and an install aimed there refuses ("Executable already exists").
+    return tool_dir, script.parent
 
 
 def remove_shadowing_mngr_installs(
