@@ -7245,6 +7245,47 @@ def test_a_rollback_that_dies_partway_settles_the_notice_and_keeps_the_copies(
     )
 
 
+def test_a_rollback_whose_revert_conflicts_aborts_it_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """Work committed since the update can make the forward revert conflict. Nothing has
+    changed at that point, so the revert is aborted and the record settled with git's
+    reason; the copies stay, since the agent the outcome sends the user to finishes the
+    revert by hand and restores the previous version from them."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "revert", "-m"),
+        _Result(returncode=1, stderr="CONFLICT (content): Merge conflict in chat.html"),
+    )
+
+    assert _rollback(runner, apply_repo) == 1
+
+    assert runner.ran("git", "revert", "--abort")
+    assert not runner.ran("git", "commit")
+    assert not runner.ran("supervisorctl", "restart")
+    assert not _refreshed_the_view(runner, apply_repo)
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.progress is None
+    assert settled.outcome is not None
+    assert "could not be reverted" in settled.outcome
+    assert "Merge conflict in chat.html" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    # Settled, the point is refused a second rollback; Close drops the record and leaves the copies.
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
 @pytest.mark.parametrize("is_other_rollback_running", [True, False])
 def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
     apply_repo: Path, is_other_rollback_running: bool
