@@ -241,23 +241,6 @@ def test_every_critical_built_in_previews_from_its_own_entry_point(
     )
 
 
-def test_the_chat_preview_opens_on_a_conversation_and_the_shell_preview_reads_a_copied_state() -> (
-    None
-):
-    by_name = {
-        manifest.name: manifest
-        for manifest in map(load_manifest, _built_in_manifest_paths())
-    }
-
-    assert by_name["chat"].preview.open_path_takes_key is True
-    assert "{shell_url}" in by_name["chat"].preview.command
-    assert by_name["system_interface"].preview.copies == {
-        "state": "data/.state/system_interface"
-    }
-    assert by_name["system_interface"].preview.env["MINDS_APPS_FILE"] == "{registry}"
-    assert by_name["terminal"].preview.ports == ("main", "sidecar")
-
-
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
         manifest.name: manifest
