@@ -4066,6 +4066,35 @@ def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadc
         manager.stop()
 
 
+def test_a_secondary_chat_refuses_every_switch(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A preview's chat records are a scratch copy, so a switch from it would split the live chat's view."""
+    sent: list[tuple[str, str, str]] = []
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=InMemoryChatRecordStore(),
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        is_secondary=True,
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities(sent))
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.begin_switch(ChatId(first), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.cancel_handoff(ChatId(first))
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.retry_handoff(ChatId(first), _openai_account())
+        assert manager.get_handoff_state(ChatId(first)) is None
+        assert sent == []
+        assert not argv_log.exists() or argv_log.read_text() == ""
+    finally:
+        manager.stop()
+
+
 # The rebind: changing a chat's account in place (``chat_rebinds.py`` runs it; these cover the manager's side).
 
 

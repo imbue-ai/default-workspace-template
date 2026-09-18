@@ -913,7 +913,8 @@ class AgentManager:
         workspace's fast-mode turn limit; the default keeps it in memory only.
         ``is_secondary`` marks a second chat instance beside the live one (a preview): it
         withholds the chat memory scores, the automatic context compaction, and the
-        resumption of unfinished switches, all of which belong to the live chat alone.
+        resumption of unfinished switches, all of which belong to the live chat alone, and
+        refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -1480,6 +1481,7 @@ class AgentManager:
         converging and ``HandoffError`` when the chat has no active agent or the account is
         unknown or the chat's own. ``begin_switch`` decides between this and a rebind.
         """
+        self._refuse_switch_in_secondary(chat_id)
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
@@ -1523,6 +1525,7 @@ class AgentManager:
         ``begin_handoff`` does, plus ``HandoffError`` when the account is not one the agent can be
         rebound to (another harness or lane, or a harness that cannot be).
         """
+        self._refuse_switch_in_secondary(chat_id)
         runner = self._rebind_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
@@ -1685,6 +1688,7 @@ class AgentManager:
         once switching has begun, the point of no return, or when the switch is a rebind, which
         has no window to call it off in.
         """
+        self._refuse_switch_in_secondary(chat_id)
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
             transition = record.converging if record is not None else None
@@ -1733,6 +1737,7 @@ class AgentManager:
         handoff whose successor the chat already runs on.
         """
         # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
+        self._refuse_switch_in_secondary(chat_id)
         self._require_switch_capabilities()
         target = _resolve_switch_target(account_id)
         discarded_successor_id: str | None = None
@@ -1926,6 +1931,12 @@ class AgentManager:
             note_agent_alive=self.note_agent_alive,
         )
         return RebindRunner.build(deps)
+
+    def _refuse_switch_in_secondary(self, chat_id: ChatId) -> None:
+        """Refuse every switch verb in a secondary chat: a switch writes the chat's record, and a
+        secondary's records are a scratch copy the live chat never reads."""
+        if self._is_secondary:
+            raise HandoffError(f"Chat '{chat_id}' cannot change account from a preview; switch it from the live chat")
 
     def _require_switch_capabilities(self) -> HandoffCapabilities:
         capabilities = self._handoff_capabilities

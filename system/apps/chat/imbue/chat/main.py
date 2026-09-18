@@ -92,7 +92,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=(
             "Boot as a second chat beside the live one (a preview): follows the same agent "
             "observer and reads the live accounts, but reconciles no accounts, writes no memory "
-            "scores, runs no automatic compaction, resumes no switch, opens no tabs, registers "
+            "scores, runs no automatic compaction, starts or resumes no switch, opens no tabs, registers "
             "nothing, and nudges no shell unless --nudge-shell-url names one; point CHAT_DATA_DIR "
             "at a scratch copy so its writes never land in the live data"
         ),
@@ -238,7 +238,7 @@ def main() -> None:
     Under ``--secondary`` the app is a second chat beside the live one: it follows the
     same observer and tracks the same agents, but withholds the writes a second instance
     must not make (the account reconcile, the memory scores, the registration, the
-    automatic compaction and switch resumption, the tab auto-opening) and nudges only the
+    automatic compaction, the switches, the tab auto-opening) and nudges only the
     shell ``--nudge-shell-url`` names.
     """
     args = _parse_args(None)
@@ -246,7 +246,9 @@ def main() -> None:
     if args.preflight:
         logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
     elif args.secondary:
-        logger.info("Booting as a secondary chat: no account reconciliation, memory scores, compaction, or registration")
+        logger.info(
+            "Booting as a secondary chat: no account reconciliation, memory scores, compaction, or registration"
+        )
     else:
         _reconcile_account_store()
     application = build_application(config, args)

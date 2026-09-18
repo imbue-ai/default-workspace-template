@@ -279,7 +279,8 @@ change: it follows the same observer, reads the live accounts, and tracks every
 agent the live chat tracks, but reconciles no accounts, writes no memory scores,
 runs no automatic compaction, resumes no unfinished switch, opens no tabs,
 registers nothing, and nudges no shell unless `--nudge-shell-url` names one (a
-preview shell). Sends from it are real. Point `CHAT_DATA_DIR` at a scratch copy of
+preview shell). Sends from it are real, but a switch to another account is
+refused, since it would write the chat's record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
 `data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
 never land in the live chat's data.
 
