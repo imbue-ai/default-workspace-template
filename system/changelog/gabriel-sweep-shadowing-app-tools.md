@@ -1,1 +1,0 @@
-The shared tool-environment sweep in `tool_env.py` takes the tool to sweep as a parameter instead of handling `mngr` only, so the update apply can reuse it for app tools. The build's `drop-shadowing-mngr` behaves as before.
