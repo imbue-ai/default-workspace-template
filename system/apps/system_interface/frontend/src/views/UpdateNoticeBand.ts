@@ -38,7 +38,7 @@ export const OPEN_SHELL_NOTICE_TEXT =
 /** The apply touched no app's program or bundle (how the workspace starts, say): the banner is the only surface. */
 export const OPEN_WORKSPACE_NOTICE_TEXT =
   "The workspace was updated a moment ago. If something is not working, you can go back to the previous version.";
-export const SERVICES_RESTART_DETAILS =
+export const WORKSPACE_RESTART_DETAILS =
   "This update also changed the workspace's own setup, so after the files are restored an agent has to " +
   "restart the workspace before the previous version runs.";
 
@@ -146,7 +146,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
         m("strong", apps),
         `? Work saved since then is kept; ${restarts}.`,
       ],
-      details: notice.needsServicesRestart ? SERVICES_RESTART_DETAILS : undefined,
+      details: notice.needsWorkspaceRestart ? WORKSPACE_RESTART_DETAILS : undefined,
       confirmLabel: "Roll back",
       onConfirm() {
         isDialogOpen = false;

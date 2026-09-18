@@ -297,7 +297,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
 - **E2 Chat-only apply keeps its point.** Apply with `--keep-rollback-point` and both
   `--worker-bundle` args pointing at the worktree (stand-in for the worker's work_dir).
   Pass: exit 0; `last-good.json` has `apps: ["chat"]`, `programs: ["chat"]`,
-  `needs_services_restart: false`, `snapshots` non-empty and every `copy` path present on
+  `needs_workspace_restart: false`, `snapshots` non-empty and every `copy` path present on
   disk; `marker.json` gone; the chat's pid changed and the shell's did not (only the
   services agent restart is expected to turn both over: record which actually happened,
   since the apply restarts the services agent). Every chat tab carries the band with the
@@ -333,7 +333,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   the terminal program only; the tmux sessions behind the tabs survive (ttyd restarted,
   tmux did not) and the tabs reconnect.
 - **E8 Services-restart case.** A change under `system/libs/bootstrap/` (a comment):
-  `needs_services_restart: true`; the dialog carries the extra details paragraph. Roll
+  `needs_workspace_restart: true`; the dialog carries the extra details paragraph. Roll
   back: files restored (the comment gone), no `supervisorctl restart` (pids unchanged),
   outcome names `mngr start --restart system-services`, exit 0 in the log.
 - **E9 supervisord table change.** A change to a drop-in under `system/supervisord.conf.d/`
@@ -583,7 +583,7 @@ code-level tests only; the live scenarios were not re-run.
    Forward apply restarts all critical programs through the services agent.
 6. **E8 — a startup-only change has no visible rollback notice.** A comment in
    `system/libs/bootstrap/src/bootstrap/manager.py` correctly set
-   `needs_services_restart: true`, but `apps` and `programs` were empty. There was
+   `needs_workspace_restart: true`, but `apps` and `programs` were empty. There was
    no app band/banner from which to open the required explanatory dialog. CLI
    rollback restored the source without changing service pids and correctly
    requested `mngr start --restart system-services`.

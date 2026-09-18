@@ -19,7 +19,7 @@ export interface UpdateNoticeWire {
   driven_by: string;
   apps: string[];
   programs: string[];
-  needs_services_restart: boolean;
+  needs_workspace_restart: boolean;
   progress: string | null;
   outcome: string | null;
 }
@@ -34,7 +34,7 @@ export interface UpdateNotice {
   programs: string[];
   /** The diff reached the workspace's own setup: a rollback restores the files but an agent
    *  must restart the workspace. */
-  needsServicesRestart: boolean;
+  needsWorkspaceRestart: boolean;
   /** What a running rollback is doing right now. */
   progress: string | null;
   /** How the rollback ended; the notice is settled once set. */
@@ -50,7 +50,7 @@ export function noticeFromWire(wire: UpdateNoticeWire): UpdateNotice {
     drivenBy: wire.driven_by,
     apps: wire.apps,
     programs: wire.programs,
-    needsServicesRestart: wire.needs_services_restart,
+    needsWorkspaceRestart: wire.needs_workspace_restart,
     progress: wire.progress,
     outcome: wire.outcome,
   };

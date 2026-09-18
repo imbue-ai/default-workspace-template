@@ -7005,7 +7005,7 @@ def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> 
     )  # the fixture's HEAD answers the same sha before and after
     assert record.apps == ["system_interface"]
     assert record.programs == ["system_interface"]
-    assert record.needs_services_restart is False
+    assert record.needs_workspace_restart is False
     assert {snapshot.name for snapshot in record.snapshots} == {"bundle", "chat_bundle"}
     assert _snapshot_copy(apply_repo, "bundle").exists()
     assert not _marker_exists(apply_repo)
@@ -7076,7 +7076,7 @@ def test_a_diff_that_reaches_the_workspaces_own_setup_needs_the_services_agent_r
 
     record = _rollback_point(apply_repo)
     assert record is not None
-    assert record.needs_services_restart is needs_restart
+    assert record.needs_workspace_restart is needs_restart
 
 
 def _rollback_runner(repo_root: Path) -> _RecordingRunner:

@@ -93,7 +93,7 @@ export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> 
     driven_by: "mngr/update-widgets",
     apps,
     programs: apps,
-    needs_services_restart: false,
+    needs_workspace_restart: false,
     progress: null,
     outcome: null,
     ...overrides,
