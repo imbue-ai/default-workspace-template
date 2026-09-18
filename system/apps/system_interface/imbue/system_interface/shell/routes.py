@@ -327,6 +327,9 @@ def _relay_keyed(name: str, key: str, send: Callable[[AppInventoryEntry], RelayO
 
 def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
     """The one verb that takes an instance out of the tab sets and layouts: a list that merely lacks it never does."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     entry = _entry_or_raise(name)
     instance_key = _instance_key_or_raise(key)
     outcome = relay_delete(_shell().http_client, entry, key)
