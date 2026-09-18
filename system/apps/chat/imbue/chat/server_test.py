@@ -2318,7 +2318,10 @@ def test_create_chat_with_should_wait_answers_the_creates_own_failure(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     state = build_test_state(
-        config=config, agent_manager=AgentManager.build(WebSocketBroadcaster(), mngr_binary=false_binary)
+        config=config,
+        agent_manager=AgentManager.build(
+            WebSocketBroadcaster(), mngr_binary=false_binary, chat_files_root=tmp_path / "chats"
+        ),
     )
     state.agent_manager.note_agent_list_known()
     app = create_application(state)

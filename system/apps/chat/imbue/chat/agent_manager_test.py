@@ -987,7 +987,7 @@ def test_a_waited_create_reports_the_failure_the_record_holds(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary, chat_files_root=tmp_path / "chats")
     try:
         created = manager.create_chat("Doomed chat")
 
@@ -1016,7 +1016,7 @@ def test_a_waited_create_answers_once_the_agent_is_listed_with_the_callers_label
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_files_root=tmp_path / "chats")
     try:
         created = manager.create_chat("Assist chat", labels={"auto_open": "true", "assist": "true"})
 
