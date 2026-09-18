@@ -477,12 +477,18 @@ def _write_dropin_workspace(root: Path) -> Path:
     dropins = root / "system" / "supervisord.conf.d"
     dropins.mkdir(parents=True)
     for program in ("alpha", "beta"):
-        (dropins / f"{program}.conf").write_text(f"[program:{program}]\ncommand={program}-app\n")
+        (dropins / f"{program}.conf").write_text(
+            f"[program:{program}]\ncommand={program}-app\n"
+        )
     (dropins / "archive.conf").mkdir()
     (root / "system" / "programs.d").mkdir()
-    (root / "system" / "programs.d" / "ghost.conf").write_text("[program:ghost]\ncommand=ghost-app\n")
+    (root / "system" / "programs.d" / "ghost.conf").write_text(
+        "[program:ghost]\ncommand=ghost-app\n"
+    )
     conf = root / "system" / "supervisord.conf"
-    conf.write_text("[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n")
+    conf.write_text(
+        "[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n"
+    )
     return conf
 
 
@@ -492,7 +498,9 @@ def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
     Run from the filesystem root, which is neither the workspace nor the config's directory: the
     login shell this really runs in is not ours to choose.
     """
-    command = migrate_workspace._supervisord_dropin_listing_command(str(supervisord_conf))
+    command = migrate_workspace._supervisord_dropin_listing_command(
+        str(supervisord_conf)
+    )
     listing = subprocess.run(
         ["bash", "-c", command],
         capture_output=True,
@@ -522,10 +530,14 @@ def test_remote_dropin_listing_names_every_regular_file_in_the_dropin_directory(
     ]
 
 
-def test_remote_dropin_listing_is_empty_for_a_source_predating_the_split(tmp_path: Path) -> None:
+def test_remote_dropin_listing_is_empty_for_a_source_predating_the_split(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "system").mkdir()
     conf = tmp_path / "system" / "supervisord.conf"
-    conf.write_text("[supervisord]\nnodaemon=true\n\n[program:todo]\ncommand=todo-app\n")
+    conf.write_text(
+        "[supervisord]\nnodaemon=true\n\n[program:todo]\ncommand=todo-app\n"
+    )
 
     assert _run_dropin_listing(conf) == []
 

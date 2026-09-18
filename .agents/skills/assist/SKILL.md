@@ -71,7 +71,7 @@ You are editing in the **same work directory the user's live workspace is served
 
 ## 5. Fix what you can: quick live fix, then defer the hardening
 
-If the issue is **not fixable from here** (per B -- it lives in the installed outer app), do not fake a fix. Explain that it needs a new version of the desktop app, and go report it (step 6).
+If the issue is **not fixable from here** (per B), do not fake a fix: explain what it needs -- a change in mngr, which lands as its own PR there and reaches this workspace when the template moves its pin, or a new version of the desktop app -- and go report it (step 6).
 
 If it **is fixable from here**, unblock the user fast, then harden in the background. *How* you apply the fix depends on the creation:
 
@@ -92,7 +92,7 @@ DESCRIPTION="$(cat <<'EOF'
 <one-paragraph summary of the problem>
 
 Root cause: <file:line and what is wrong>
-Classification: built-in (<vendor / template / update-self>), <fixable here | needs a new desktop-app version>
+Classification: built-in (<mngr / template / update-self>), <fixable here | needs a change in mngr | needs a new desktop-app version>
 Fix: <what you changed, or why it cannot be fixed from here>
 EOF
 )"
@@ -127,5 +127,5 @@ Always confirm the diagnosis and plan with the user (step 4) before applying any
 | Template built-in: `system/apps/system_interface`    | Route through `update-system-interface` (never edit the served tree directly) | Yes              |
 | Template built-in: a skill or app             | Quick live fix, then defer hardening to `heal-creation` (`update-app` for service config) | Yes |
 | Other template built-in (scripts, etc.)       | Fix live, verify it works                                                     | Yes              |
-| mngr (installed from the pinned commit)       | Cannot -- report it; a mngr change is a mngr PR                                | Yes              |
+| mngr (installed from the pinned commit)       | Cannot -- report it; a change there is its own PR in mngr                      | Yes              |
 | Outer app (`apps/minds`, `mngr_forward`, `mngr_latchkey`) | Cannot -- needs a new app build                                    | Yes |

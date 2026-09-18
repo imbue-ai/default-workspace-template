@@ -14,12 +14,15 @@ holds every ``imbue.*`` import in the tree to that.
 
 from __future__ import annotations
 
+import ast
+import importlib
 import importlib.util
 import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -63,7 +66,7 @@ def test_mngr_is_pinned_to_a_commit_of_the_public_repo() -> None:
 
 
 def test_every_locked_mngr_package_is_at_the_pinned_commit() -> None:
-    """One resolution, one commit: uv rejects two revs of a repo, and the tools must match the venv."""
+    """One resolution, one commit: the tools and the venv resolve from the same lock."""
     rev = _pin()["rev"]
     lock = tomllib.loads((_REPO_ROOT / "uv.lock").read_text())
     from_mngr = {
@@ -97,7 +100,7 @@ def test_every_manifest_plugin_names_a_package_and_its_subdirectory() -> None:
 
 
 def test_no_copy_of_mngr_is_tracked() -> None:
-    """The private monorepo copy that used to be committed at system/vendor/mngr must not come back."""
+    """No copy of mngr's source is tracked under system/vendor/mngr."""
     tracked = subprocess.run(
         ["git", "ls-files", "system/vendor/mngr"],
         cwd=_REPO_ROOT,
@@ -151,9 +154,6 @@ def test_no_source_points_into_the_tree() -> None:
     assert "system/vendor/mngr/" not in (_REPO_ROOT / "pyproject.toml").read_text()
 
 
-_IMPORT = re.compile(r"^\s*(?:from|import)\s+(imbue\.[A-Za-z0-9_.]+)", re.MULTILINE)
-
-
 def _own_imbue_namespaces() -> set[str]:
     """The ``imbue.<name>`` packages this tree provides itself (``system/**/imbue/<name>/``)."""
     return {
@@ -161,6 +161,52 @@ def _own_imbue_namespaces() -> set[str]:
         for path in (_REPO_ROOT / "system").glob("*/*/imbue/*")
         if path.is_dir()
     }
+
+
+def _imported_names(source: str) -> set[str]:
+    """Every dotted ``imbue.*`` name an import statement in ``source`` names.
+
+    ``from imbue.mngr.utils import testing`` names ``imbue.mngr.utils.testing`` as well as
+    its package: a name imported from a package may be a module the wheel excludes, and
+    that is exactly what this file holds the tree to. A name that turns out to be an
+    attribute rather than a module has no spec and is dropped by :func:`_module_names`.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return {name for name in names if name == "imbue" or name.startswith("imbue.")}
+
+
+def _module_names(names: set[str], own: set[str]) -> list[str]:
+    """``names`` that are modules this tree does not provide itself.
+
+    A name that no finder resolves at all is a module the installed packages lack, which is
+    the failure this file reports; one that resolves to an attribute of its package (no
+    spec, but the package has it) is not a module and is dropped.
+    """
+    resolved: set[str] = set()
+    for name in names:
+        if any(name == package or name.startswith(f"{package}.") for package in own):
+            continue
+        parent, _, attribute = name.rpartition(".")
+        if parent and attribute and _is_attribute_of(parent, attribute):
+            continue
+        resolved.add(name)
+    return sorted(resolved)
+
+
+def _is_attribute_of(parent: str, attribute: str) -> bool:
+    """Whether ``attribute`` is a non-module member of the importable package ``parent``."""
+    try:
+        module = importlib.import_module(parent)
+    except Exception:
+        return False
+    member = getattr(module, attribute, None)
+    return member is not None and not isinstance(member, ModuleType)
 
 
 def _imported_mngr_modules() -> list[str]:
@@ -173,13 +219,10 @@ def _imported_mngr_modules() -> list[str]:
         capture_output=True,
         text=True,
     ).stdout.split()
-    modules = {
-        match
-        for path in tracked
-        for match in _IMPORT.findall((_REPO_ROOT / path).read_text(errors="replace"))
-        if not any(match == name or match.startswith(f"{name}.") for name in own)
-    }
-    return sorted(modules)
+    names: set[str] = set()
+    for path in tracked:
+        names |= _imported_names((_REPO_ROOT / path).read_text(errors="replace"))
+    return _module_names(names, own)
 
 
 @pytest.mark.parametrize("module", _imported_mngr_modules())

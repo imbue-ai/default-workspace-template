@@ -19,6 +19,7 @@ from update_layout import (
     NPM_MANIFEST_PATHS,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_SCRIPT,
+    PYPROJECT_PATH,
     SYSTEM_INTERFACE_DIR,
 )
 
@@ -486,6 +487,11 @@ def plan_apply(
     for path in paths:
         if path in provisioner_inputs:
             provisioner = True
+        if path == PYPROJECT_PATH:
+            # The mngr pin here decides which commit ``system/vendor/mngr-assets`` is
+            # fetched from, and every bundle compiles its embed contract and service
+            # icons in, so a pin move re-emits them like a frontend source change.
+            frontend_src = True
         if path in NPM_MANIFEST_PATHS:
             frontend_manifest = True
         elif path in FRONTEND_TOOLING_PATHS or any(

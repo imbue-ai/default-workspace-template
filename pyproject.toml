@@ -98,7 +98,6 @@ share-gateway = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
-browser = { workspace = true }
 app-manifest = { workspace = true }
 app-instances = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).

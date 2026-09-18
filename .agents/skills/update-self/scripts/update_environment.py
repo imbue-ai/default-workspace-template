@@ -22,6 +22,7 @@ from update_banding import ExpendWrapper
 from update_classification import ApplyPlan, AppTool
 from update_layout import (
     FRONTEND_BUNDLES,
+    MNGR_ASSETS_SCRIPT,
     MNGR_EXECUTABLE,
     MNGR_PLUGIN_KEY,
     MNGR_TOOL_NAME,
@@ -475,10 +476,11 @@ def _tool_extras(
             continue  # the base package, which we re-pin to the commit pyproject.toml gives it
         editable = requirement.get("editable") or requirement.get("directory")
         if editable:
-            # A workspace that vendored mngr was installed with editable paths into that
-            # tree; the merge that moves it onto the pin deletes the tree, and the manifest
-            # supplies those plugins from the pin instead.
-            if Path(editable).is_dir():
+            # uv installs an editable from its ``pyproject.toml``; a receipt naming a path
+            # the merged tree no longer has one at is dropped, and the manifest supplies
+            # that package instead. A directory alone is not enough: a deleted project
+            # leaves its gitignored ``__pycache__`` behind, so the path still resolves.
+            if (Path(editable) / PYPROJECT_PATH).is_file():
                 extras.extend(["--with-editable", editable])
         elif requirement.get("git"):
             extras.extend(
@@ -655,26 +657,65 @@ def refresh_backend_dependencies(
     runner: Runner,
     expend: ExpendWrapper,
     timeout: float | None = None,
+    is_mngr_source_required: bool = True,
 ) -> None:
     """Re-resolve the two shared backend environments from the current tree,
     mirroring ``build_workspace.sh``: the ``mngr`` tool from the source
-    pyproject.toml gives it, and the workspace venv (``uv sync``). ``timeout``
-    bounds each (the forward apply's budget; recovery passes none)."""
-    _reinstall_tool(
-        MNGR_TOOL_NAME,
-        MNGR_EXECUTABLE,
-        _mngr_base_arguments(repo_root),
-        MNGR_PLUGIN_KEY,
-        repo_root,
-        runner,
-        expend,
-        timeout,
-    )
+    pyproject.toml gives it, the assets that pin carries, and the workspace venv
+    (``uv sync``). ``timeout`` bounds each (the forward apply's budget; recovery
+    passes none).
+
+    ``is_mngr_source_required`` is the recovery path's opt-out: a tree restored from
+    before the pin gives ``imbue-mngr`` a source this cannot re-resolve, and the
+    snapshot that tree was running is still installed, so warn and keep it rather than
+    abandoning the recovery."""
+    if is_mngr_source_required or _mngr_source(repo_root) is not None:
+        _reinstall_tool(
+            MNGR_TOOL_NAME,
+            MNGR_EXECUTABLE,
+            _mngr_base_arguments(repo_root),
+            MNGR_PLUGIN_KEY,
+            repo_root,
+            runner,
+            expend,
+            timeout,
+        )
+    else:
+        sys.stderr.write(
+            f"refresh: {PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source this can "
+            "re-resolve; keeping the mngr tool the restored tree was running.\n"
+        )
     run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
         repo_root,
         "uv sync --all-packages --frozen",
+        timeout=timeout,
+    )
+    _fetch_mngr_assets(repo_root, runner, expend, timeout)
+
+
+def _fetch_mngr_assets(
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
+) -> None:
+    """Fetch the files the pin carries that no package does, into ``system/vendor/mngr-assets``.
+
+    The frontends' ``prebuild`` runs this too, but an apply that installs a worker's
+    bundle builds no frontend, and ``docs/system/style_guide.md`` is a symlink into the
+    fetched tree. A no-op when the marker already names this pin. Absent in a tree that
+    predates the script, which a rollback can restore.
+    """
+    script = repo_root / MNGR_ASSETS_SCRIPT
+    if not script.is_file():
+        return
+    run_checked(
+        runner,
+        expend(["bash", str(script)]),
+        repo_root,
+        f"bash {MNGR_ASSETS_SCRIPT}",
         timeout=timeout,
     )
 
