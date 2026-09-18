@@ -38,7 +38,7 @@ _WORKSPACE_ROOT = _SCRIPTS_DIR.parents[3]
 _MODULE_PATH = _SCRIPTS_DIR / "update_self.py"
 
 
-# --- pick_latest_stable_tag / resolve_target -------------------------------
+# pick_latest_stable_tag / resolve_target
 
 
 def test_pick_latest_stable_tag_ignores_prereleases() -> None:
@@ -97,7 +97,7 @@ def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
         raise AssertionError("expected ValueError when no stable tag and no override")
 
 
-# --- the app-version ceiling -----------------------------------------------
+# the app-version ceiling
 
 
 def test_ceiling_caps_selection_at_the_app_version() -> None:
@@ -212,7 +212,7 @@ def test_overrides_are_never_flagged_without_a_ceiling() -> None:
     )
 
 
-# --- fetch_app_template_ref ------------------------------------------------
+# fetch_app_template_ref
 
 
 def _install_fake_latchkey(
@@ -400,11 +400,9 @@ def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
 ) -> None:
     """A workspace at the ceiling hears the same refusal whether or not a newer release exists.
 
-    Created from 0.3.9, app on 0.3.9. Tag selection resolves 0.3.9 -- the release
-    the workspace *is* -- so without the refusal a whole backup, worker and
-    validation pass merges nothing. A 0.4.0 upstream is above the ceiling, so it
-    is treated as absent: the refusal neither names it nor offers a way past the
-    app.
+    Created from 0.3.9, app on 0.3.9: the default target is the release the
+    workspace is already on. A 0.4.0 upstream is above the ceiling, so it is
+    treated as absent.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -490,7 +488,7 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
     assert "Traceback" not in captured.err
 
 
-# --- classify_path ---------------------------------------------------------
+# classify_path
 
 
 def test_classify_path_reveal_classes() -> None:
@@ -573,7 +571,7 @@ def test_classify_path_manifest_flag() -> None:
     ).is_manifest
 
 
-# --- classify_merge --------------------------------------------------------
+# classify_merge
 
 
 def test_classify_merge_splits_merged_and_pulled_in() -> None:
@@ -739,7 +737,7 @@ def test_classify_merge_cli_reads_the_local_footprint_from_git(
     assert result["has_local_footprint"] is True
 
 
-# --- CLI wiring --------------------------------------------------------------
+# CLI wiring
 
 
 def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -> None:
@@ -935,7 +933,7 @@ def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     assert [entry["path"] for entry in result["pulled_in"]] == ["upstream.txt"]
 
 
-# --- bootstrap-skill --------------------------------------------------------
+# bootstrap-skill
 
 
 def _init_repo_with_skill(root: Path, skill_body: str) -> None:
@@ -1100,7 +1098,7 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
 
 
-# --- a prerelease ceiling ---------------------------------------------------
+# a prerelease ceiling
 
 
 def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
@@ -1154,7 +1152,7 @@ def test_parse_version_orders_prereleases_semver_style() -> None:
     assert update_target.parse_version("abc1234") is None
 
 
-# --- SKILL.md task-file template cross-version contract --------------------
+# SKILL.md task-file template cross-version contract
 
 
 def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
@@ -1256,7 +1254,7 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     assert strays == []
 
 
-# ==== The atomic apply =========================================================
+# The atomic apply
 #
 # The orchestration tests inject a recording ``Runner`` (so no real
 # ``git``/``npm``/``uv``/``mngr`` runs), a programmable ``HttpClient``, a fake
@@ -1748,7 +1746,7 @@ _FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json
 _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
 
-# --- plan_apply ---------------------------------------------------------------
+# plan_apply
 
 # The real tree's provisioner inputs: the entry point, the apt snapshot
 # timestamp, and whatever setup_system.sh chains today.
@@ -1999,7 +1997,7 @@ def test_plan_apply_ignores_backend_test_files(path: str) -> None:
     assert not _plan([path]).backend_src
 
 
-# --- apply: happy paths per change class ---------------------------------------
+# apply: happy paths per change class
 
 
 def test_apply_frontend_only_builds_refreshes_and_restarts(
@@ -2425,7 +2423,7 @@ def test_apply_unresolvable_merge_ref_leaves_no_marker_behind(
     assert not _marker_exists(apply_repo)
 
 
-# --- apply: worker bundle -------------------------------------------------------
+# apply: worker bundle
 
 
 def test_apply_installs_the_workers_bundles_instead_of_building(
@@ -2695,7 +2693,7 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
     assert "cannot be verified" in capsys.readouterr().err
 
 
-# --- apply: failure -> rollback --------------------------------------------------
+# apply: failure -> rollback
 
 
 def test_a_step_that_cannot_be_spawned_rolls_back_and_names_the_step(
@@ -3787,7 +3785,7 @@ def test_a_backend_only_emergency_is_not_pointed_at_the_bundle_copy(
     assert "bundle was kept" not in capsys.readouterr().err
 
 
-# --- apply: the already-broken-frontend baseline ------------------------------------
+# apply: the already-broken-frontend baseline
 #
 # The apply is answerable for *regressions*: a workspace that was not serving a
 # working frontend before it started does not get its update rolled back for
@@ -3868,7 +3866,7 @@ def test_a_blip_on_the_baseline_probe_does_not_disarm_the_regression_check(
     assert unanswered  # the blip really did happen
 
 
-# --- the frontend probe ------------------------------------------------------------
+# the frontend probe
 #
 # The probe asks the two questions a browser would -- is this the real app
 # shell, and does its module script load as JavaScript -- because the backend's
@@ -4005,7 +4003,7 @@ def test_a_service_that_never_answers_spends_the_budget_and_still_names_a_failur
     assert len(silent.page_urls) == update_probes._FRONTEND_PROBE_ATTEMPTS
 
 
-# --- the view refresh ---------------------------------------------------------------
+# the view refresh
 #
 # The refresh runs last, after the apply has already landed and the live
 # workspace is confirmed healthy. It is the one step that must never fail the
@@ -4036,7 +4034,7 @@ def test_a_refresh_that_cannot_run_does_not_fail_an_apply_that_landed(
     assert "an open view may still be showing" in capsys.readouterr().err
 
 
-# --- tree restoration ----------------------------------------------------------------
+# tree restoration
 
 
 def test_restore_tree_removes_adds_and_checks_out_the_rest(tmp_path: Path) -> None:
@@ -4071,7 +4069,7 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest(tmp_path: Path) -> No
     ]
 
 
-# --- apply: marker lifecycle ------------------------------------------------------
+# apply: marker lifecycle
 
 
 def test_marker_is_written_before_the_merge_lands(apply_repo: Path) -> None:
@@ -4287,7 +4285,7 @@ def test_a_dead_marker_for_a_different_merge_refuses_and_points_at_recover(
     assert _marker_exists(apply_repo)  # left for recover to consume
 
 
-# --- apply: memory bands ----------------------------------------------------------
+# apply: memory bands
 
 
 def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
@@ -4571,7 +4569,7 @@ def test_only_apply_and_recover_band_themselves(
         assert target == (Path.cwd() if expected == "cwd" else Path(expected))
 
 
-# --- apply: the uv tool environments ------------------------------------------------
+# apply: the uv tool environments
 #
 # The refresh rebuilds the uv tool environments the workspace runs from (the
 # mngr tool and one per Python app).
@@ -5060,7 +5058,7 @@ def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
     )
 
 
-# --- snapshots (real directories) --------------------------------------------------
+# snapshots (real directories)
 
 
 def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
@@ -5512,7 +5510,7 @@ def test_the_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> No
     assert "on stderr" in captured
 
 
-# --- the version-history ledger (real git) ------------------------------------
+# the version-history ledger (real git)
 
 
 def _make_real_repo(tmp_path: Path) -> Path:
@@ -5825,7 +5823,7 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     assert "uv: not found" in err
 
 
-# --- recover -------------------------------------------------------------------
+# recover
 
 
 def _recover(
@@ -6235,7 +6233,7 @@ def test_a_hung_provisioner_does_not_wedge_recovery(
     assert provisioner_timeouts == [update_environment._PROVISIONER_TIMEOUT_SECONDS]
 
 
-# --- recover: an apply killed inside `git merge` (real git) ---------------------
+# recover: an apply killed inside `git merge` (real git)
 
 
 def _git_in(repo: Path, *args: str) -> str:
@@ -6380,7 +6378,7 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     assert (repo / "stray-notes.txt").exists()
 
 
-# --- surface-chat-tab ------------------------------------------------------
+# surface-chat-tab
 
 
 def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
@@ -6433,7 +6431,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# --- run-status (the Mind app's status contract) --------------------------
+# run-status (the Mind app's status contract)
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
@@ -6729,7 +6727,7 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     assert _bundle_exists(apply_repo)
 
 
-# --- the workspace layout migration -------------------------------------------
+# the workspace layout migration
 
 
 def test_apply_runs_the_layout_migration_from_the_merged_tree_before_the_restart(
@@ -6779,7 +6777,7 @@ def test_a_layout_migration_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     assert "could not be run" in capsys.readouterr().err
 
 
-# --- apply: the worker-bundle flag ------------------------------------------------
+# apply: the worker-bundle flag
 
 
 def test_worker_bundle_flags_are_read_per_app() -> None:

@@ -214,7 +214,6 @@ def _no_target_message(ceiling: str | None) -> str:
 
 
 def already_current_message(ref: str) -> str:
-    """Explain that the default target is already merged."""
     return f"this workspace is already on {ref}; nothing to update"
 
 
