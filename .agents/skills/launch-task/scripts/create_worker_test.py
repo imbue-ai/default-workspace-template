@@ -3133,6 +3133,7 @@ def test_launch_sync_reports_a_destroy_that_left_something_behind(
     report.parent.mkdir(parents=True)
     _write_launch_sync_task(task, report)
     runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
     runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
     out = io.StringIO()
 
@@ -3945,6 +3946,7 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
     sleeps: list[float] = []
     milestone_path = report.parent / "milestones" / "abc1234-skill-runs.md"
 
@@ -3994,7 +3996,7 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
         task_file=task,
         timeout_seconds=1800,
         poll_interval_seconds=5,
-        runner=_RecordingRunner(),
+        runner=runner,
         sleeper=_write_report_on_sleep(
             report, "---\ntype: status\nname: done\n---\n\nagain\n"
         ),
