@@ -57,10 +57,12 @@ new as `$REF`, so 3a's check runs no matter how stale the initiator was. Keep
 arriving from an older template.
 
 3a resolves nothing: it either clears the target Step 2 chose or hands the pass
-back to 2a with the ceiling's answer. If the user takes the capped ref, `$REF`
-changes, and §2a must be re-run for it before dispatching: §2a staged the
-skill at the *old* `$REF`, and the staged copy supplies the worker guide, the
-`update_self.py` both agents run, and the prose the lead is reading -- leaving
+back to 2a with the ceiling's answer. When `$REF` becomes the capped ref --
+silently, because the user never named the release Step 2 chose, or by the
+user's choice over their own override -- §2a must be re-run for it before
+dispatching: §2a staged the skill at the *old* `$REF`, and the staged copy
+supplies the worker guide, the `update_self.py` both agents run, and the prose
+the lead is reading -- leaving
 it in place would run the too-new release's flow against a target that is not
 it. `bootstrap-skill` re-stages destructively, so re-running it is safe, and
 2a's `differs` branch then decides which document to follow, as on the first
