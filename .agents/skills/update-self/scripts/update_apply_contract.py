@@ -73,6 +73,8 @@ PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 # updated" notice, and only a person closes it -- confirming discards the copies,
 # rolling back restores them. Any later apply replaces it.
 LAST_GOOD_FILENAME = "last-good.json"
+# Held by a running ``rollback-last`` for its whole run, so a second one refuses.
+ROLLBACK_LOCK_FILENAME = "rollback-last.lock"
 
 # The apply's phases, recorded in the marker as each completes so an
 # interrupted apply can be read (by recovery, and by the system interface's
@@ -292,6 +294,10 @@ class LastGoodRecord:
 
 def last_good_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / LAST_GOOD_FILENAME
+
+
+def rollback_lock_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / ROLLBACK_LOCK_FILENAME
 
 
 def read_last_good(repo_root: Path) -> LastGoodRecord | None:
