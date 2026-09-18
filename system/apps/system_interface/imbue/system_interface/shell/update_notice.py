@@ -66,7 +66,7 @@ class UpdateNotice(FrozenModel):
     driven_by: str = Field(description="The agent (or person) that ran the apply, as it named itself")
     apps: tuple[str, ...] = Field(description="The critical apps whose program or bundle the apply changed")
     programs: tuple[str, ...] = Field(description="The supervisord programs a rollback restarts")
-    needs_services_restart: bool = Field(
+    needs_workspace_restart: bool = Field(
         description="Whether the diff reached the workspace's own setup, so a rollback restores the files but "
         "leaves the restart to an agent"
     )
@@ -88,7 +88,7 @@ class UpdateNotice(FrozenModel):
             "driven_by": self.driven_by,
             "apps": list(self.apps),
             "programs": list(self.programs),
-            "needs_services_restart": self.needs_services_restart,
+            "needs_workspace_restart": self.needs_workspace_restart,
             "progress": self.progress,
             "outcome": self.outcome,
         }
@@ -105,7 +105,7 @@ def _notice_from_record(raw: Any) -> UpdateNotice:
         driven_by=str(raw.get("driven_by", "")),
         apps=tuple(str(name) for name in raw.get("apps", [])),
         programs=tuple(str(program) for program in raw.get("programs", [])),
-        needs_services_restart=bool(raw.get("needs_services_restart", False)),
+        needs_workspace_restart=bool(raw.get("needs_workspace_restart", False)),
         progress=str(progress) if progress is not None else None,
         outcome=str(outcome) if outcome is not None else None,
     )

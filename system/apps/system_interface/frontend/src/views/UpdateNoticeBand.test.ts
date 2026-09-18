@@ -13,7 +13,7 @@ import {
   OPEN_NOTICE_TEXT,
   OPEN_SHELL_NOTICE_TEXT,
   OPEN_WORKSPACE_NOTICE_TEXT,
-  SERVICES_RESTART_DETAILS,
+  WORKSPACE_RESTART_DETAILS,
   UpdateNoticeBand,
 } from "./UpdateNoticeBand";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
@@ -129,7 +129,7 @@ describe("UpdateNoticeBand", () => {
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("Chat and system_interface");
     expect(dialog?.textContent).toContain("chat and system_interface will restart");
-    expect(root.textContent).not.toContain(SERVICES_RESTART_DETAILS);
+    expect(root.textContent).not.toContain(WORKSPACE_RESTART_DETAILS);
     expect(requestedPaths(fetchMock)).toEqual([]);
 
     click(root, ".destroy-dialog-btn-cancel");
@@ -148,11 +148,11 @@ describe("UpdateNoticeBand", () => {
   });
 
   it("warns in the dialog when the rollback leaves the restart to an agent", () => {
-    applyUpdateNotice(noticeWire(["chat"], { needs_services_restart: true }));
+    applyUpdateNotice(noticeWire(["chat"], { needs_workspace_restart: true }));
     const { root, redraw } = mountBand("chat");
     click(root, ".update-notice-rollback");
     redraw();
-    expect(root.textContent).toContain(SERVICES_RESTART_DETAILS);
+    expect(root.textContent).toContain(WORKSPACE_RESTART_DETAILS);
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {
@@ -188,7 +188,7 @@ describe("UpdateNoticeBanner", () => {
   it("carries a notice that touched no app, and its dialog names the workspace", () => {
     const root = document.createElement("div");
     document.body.appendChild(root);
-    applyUpdateNotice(noticeWire([], { needs_services_restart: true }));
+    applyUpdateNotice(noticeWire([], { needs_workspace_restart: true }));
     const render = (): void => {
       m.render(root, m(UpdateNoticeBanner));
     };
@@ -201,7 +201,7 @@ describe("UpdateNoticeBanner", () => {
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("the workspace");
     expect(dialog?.textContent).toContain("no app restarts on its own");
-    expect(root.textContent).toContain(SERVICES_RESTART_DETAILS);
+    expect(root.textContent).toContain(WORKSPACE_RESTART_DETAILS);
   });
 });
 
