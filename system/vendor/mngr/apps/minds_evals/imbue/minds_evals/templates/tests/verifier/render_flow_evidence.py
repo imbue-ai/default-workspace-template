@@ -50,7 +50,9 @@ MAX_SCREENSHOT_BYTES = 1024 * 1024
 MAX_SCREENSHOTS_PER_FLOW = 4
 # The safety valve on a case with many flows. Every shot is inlined as a base64 vision block and
 # rewardkit imposes no total-size limit of its own, so something has to bound the request; this is
-# high enough that the per-flow guarantee is what normally decides the selection.
+# high enough that the per-flow guarantee is what normally decides the selection. A case whose flows
+# ask for more sets its own bound as `expectations.max_judge_screenshots`, which the generator
+# validates and writes into case.json.
 MAX_SCREENSHOTS_TOTAL = 24
 # The digest is inlined as text, and rewardkit drops a file over 1 MiB outright -- which would lose
 # the whole flow record rather than part of it. Cut well below the line.
@@ -118,6 +120,17 @@ def _declared_flows(case_path: Path) -> dict[str, dict[str, Any]]:
         for check in checks
         if isinstance(check, dict) and check.get("check_id")
     }
+
+
+def max_screenshots_total(case_path: Path) -> int:
+    """The case's own bound on the screenshots attached in all, or MAX_SCREENSHOTS_TOTAL when it sets
+    none. A dataset generated before cases could set one carries no such key, and a regrade of it keeps
+    the default."""
+    expectations = _load_json(case_path).get("expectations")
+    case_max = expectations.get("max_judge_screenshots") if isinstance(expectations, dict) else None
+    if isinstance(case_max, int) and not isinstance(case_max, bool) and case_max > 0:
+        return case_max
+    return MAX_SCREENSHOTS_TOTAL
 
 
 def _declared_actions(check: dict[str, Any]) -> str:
@@ -384,7 +397,7 @@ def collect_flow_evidence(
     selected, chosen_count = select_screenshots(
         [_screenshots(flow_dir) for flow_dir in flow_dirs],
         MAX_SCREENSHOTS_PER_FLOW,
-        MAX_SCREENSHOTS_TOTAL,
+        max_screenshots_total(case_path),
         MAX_SCREENSHOT_BYTES,
     )
 

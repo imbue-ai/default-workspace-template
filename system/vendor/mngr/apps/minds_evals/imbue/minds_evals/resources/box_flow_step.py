@@ -14,6 +14,7 @@ Every outcome -- including failure -- is reported as a StepResult on stdout, bec
 classifies by the reported reason and a traceback on stderr would read as a bridge failure instead.
 """
 
+import os
 import sys
 from typing import Any
 from typing import assert_never
@@ -87,6 +88,8 @@ _NAVIGATION_COMMIT_TIMEOUT_MS = 2_000
 # How much of an error's text travels back: enough to diagnose, bounded so one exception cannot
 # crowd the page state out of the flow log.
 _MAX_DETAIL_CHARS = 2000
+# The eight bytes every PNG file opens with, which is what the frame Playwright wrote should be.
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 # The reaction watch runs in an isolated world of its own on the page's main frame, the way
 # Playwright's own instrumentation does: it shares the document, so it sees every mutation, but not
@@ -434,6 +437,8 @@ def run_step(request: StepRequest) -> StepResult:
                 title=capture.title,
                 snapshot=capture.snapshot,
                 screenshot_path=capture.screenshot_path,
+                screenshot_byte_count=capture.screenshot_byte_count,
+                is_screenshot_png=capture.is_screenshot_png,
                 reaction=reaction,
             )
         finally:
@@ -505,6 +510,7 @@ def _capture(page: Any, screenshot_path: str) -> StepResult:
         except PlaywrightError:
             # A missing frame costs the judge one image; it must never cost the step its verdict.
             written_path = ""
+    byte_count, is_png = _read_frame_facts(written_path) if written_path else (0, False)
     return StepResult(
         is_ok=not reason,
         reason=reason,
@@ -513,7 +519,21 @@ def _capture(page: Any, screenshot_path: str) -> StepResult:
         title=title,
         snapshot=snapshot,
         screenshot_path=written_path,
+        screenshot_byte_count=byte_count,
+        is_screenshot_png=is_png,
     )
+
+
+def _read_frame_facts(frame_path: str) -> tuple[int, bool]:
+    """The written frame's size and whether it starts with the PNG signature, read back from the file
+    itself; (0, False) when it cannot be read, which is a frame nobody can look at either."""
+    try:
+        with open(frame_path, "rb") as frame:
+            head = frame.read(len(_PNG_SIGNATURE))
+            byte_count = frame.seek(0, os.SEEK_END)
+    except OSError:
+        return 0, False
+    return byte_count, head == _PNG_SIGNATURE
 
 
 def _result_for(argv: list[str]) -> StepResult:

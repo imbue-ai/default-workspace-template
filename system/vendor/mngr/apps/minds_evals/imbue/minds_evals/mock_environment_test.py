@@ -6,6 +6,7 @@ bring-up and turn loop can be exercised end to end."""
 
 import asyncio
 import json
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -360,6 +361,8 @@ class MockBoxEnvironment(BaseEnvironment):
         # Every upload in order. The mapping above keeps only the latest write to each path, which
         # cannot say whether a later step wrote its own copy of a file an earlier one already had.
         self.uploaded_targets: list[str] = []
+        # What each of those uploads carried, in the same order.
+        self.uploaded_contents: list[str] = []
         # What a `download_file` of a box path yields; a path not listed here is a missing file.
         self.downloadable_content_by_source: dict[str, str] = {}
         # An upload whose content contains this fails the way a transport hiccup does; empty means
@@ -385,6 +388,7 @@ class MockBoxEnvironment(BaseEnvironment):
             raise RuntimeError("upload of {} failed".format(target_path))
         self.uploaded_content_by_target[target_path] = content
         self.uploaded_targets.append(target_path)
+        self.uploaded_contents.append(content)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         pass
@@ -432,3 +436,72 @@ class MockBoxEnvironment(BaseEnvironment):
             if rule.substring in command:
                 return rule.next_result()
         return ok_result()
+
+
+# The version-control configuration a local shell command runs with: none of the developer's own, so a
+# global commit-signing setting or hooks path cannot change what a box command does to a test repository.
+_ISOLATED_VCS_ENV: Final[Mapping[str, str]] = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+class LocalShellEnvironment(BaseEnvironment):
+    """A box environment whose exec runs each command in a local bash, for tests that need a box
+    command's real effect on a local repository rather than a canned answer."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        trial_dir = tmp_path / "local-shell-trial"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        environment_dir = tmp_path / "local-shell-environment"
+        environment_dir.mkdir(parents=True, exist_ok=True)
+        super().__init__(
+            environment_dir=environment_dir,
+            environment_name="local-shell",
+            session_id="local-shell__test__env",
+            trial_paths=TrialPaths(trial_dir=trial_dir),
+            task_env_config=EnvironmentConfig(),
+        )
+
+    @staticmethod
+    def type() -> str:
+        return "local-shell"
+
+    def _validate_definition(self) -> None:
+        pass
+
+    async def start(self, force_build: bool) -> None:
+        pass
+
+    async def stop(self, delete: bool) -> None:
+        pass
+
+    async def upload_file(self, source_path: Path | str, target_path: str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def download_file(self, source_path: str, target_path: Path | str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
+            command,
+            cwd=cwd,
+            env={**os.environ, **_ISOLATED_VCS_ENV, **(env or {})},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
+        assert process.returncode is not None, "a process that has been communicated with has exited"
+        return ExecResult(stdout=stdout.decode(), stderr=stderr.decode(), return_code=process.returncode)

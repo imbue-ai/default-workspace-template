@@ -35,12 +35,14 @@ from modal.exception import Error as ModalError
 from pydantic import Field
 from pydantic import SecretStr
 
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
+from imbue.minds_evals import diagnostic_probe
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
@@ -62,8 +64,12 @@ from imbue.minds_evals.data_types import HarnessConfig
 from imbue.minds_evals.data_types import HarnessConfigRecord
 from imbue.minds_evals.data_types import HarnessLane
 from imbue.minds_evals.data_types import ObservedHarnessModels
+from imbue.minds_evals.data_types import PreparationStage
 from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import SeedBuildRecord
+from imbue.minds_evals.data_types import SeedBuildStatus
 from imbue.minds_evals.data_types import StepBoundary
+from imbue.minds_evals.data_types import StepBoxSeedApp
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
 from imbue.minds_evals.data_types import Transcript
@@ -80,8 +86,11 @@ from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.data_types import is_final_step
 from imbue.minds_evals.data_types import lane_id
 from imbue.minds_evals.errors import AgentKwargError
+from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import InstructionParseError
+from imbue.minds_evals.errors import SeedBuildError
 from imbue.minds_evals.errors import TrajectoryDocumentError
+from imbue.minds_evals.errors import WorkspaceCreateError
 
 # The ATIF trajectory the verifier grades and `harbor view` renders: the driver's hand-built turn
 # summary after every turn, so a trial that dies mid-way still leaves a gradeable record, replaced
@@ -110,6 +119,8 @@ TIMEOUT_DIAGNOSTICS_FILENAME: Final[str] = "timeout_diagnostics.json"
 # against an unresponsive workspace every one of them runs to its own transport timeout, so the
 # ceiling -- not the sum of the parts -- is what keeps a timed-out trial from stalling its teardown.
 TIMEOUT_DIAGNOSTICS_BUDGET_SECONDS: Final[float] = 120.0
+# How much of a raised preparation error's message a state file's reason quotes.
+_RAISE_DETAIL_CHARS: Final[int] = 500
 # What the diagnostics record in place of a workspace-side capture that could not be taken. Every
 # key is always written, because an absent key cannot be told apart from a capture never attempted,
 # and which of these three the reader sees is itself the first half of the diagnosis.
@@ -156,6 +167,23 @@ PROXY_USAGE_FILENAME: Final[str] = "usage_proxy.jsonl"
 # and never mirrored into the box: nothing grades it, and it exists to explain a trial that went
 # wrong -- an eval/workspace-template mismatch above all -- from the harness's side of the wire.
 DRIVER_EVENTS_FILENAME: Final[str] = "driver_events.jsonl"
+
+
+class DriverEventType(LowerCaseStrEnum):
+    """What one record of driver_events.jsonl is, under its `type` key. Every record carries one, so
+    a reader separates the kinds by name rather than by which keys happen to be present.
+
+    A feed event keeps its own shape under `event`: the workspace's events carry a `type` of their
+    own (`assistant_message`, `step`, ...), which is the very field a reader of the feed wants, so
+    the record's kind cannot be flattened into it. An event detail keeps the chat app's payload the
+    same way, under `detail`, beside the `event_id` it belongs to.
+    """
+
+    FEED_EVENT = auto()
+    EVENT_DETAIL = auto()
+    DECIDER_MESSAGE = auto()
+
+
 # The instruction this run was handed, kept beside the results it produced. Host-side only, like
 # the driver's view above.
 INSTRUCTION_FILENAME: Final[str] = "instruction.md"
@@ -1069,18 +1097,284 @@ EVAL_CASE_COMMIT_NAME: Final[str] = "minds-eval"
 
 
 @pure
-def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
-    """The eval-case commit, made reproducibly: fixed identity and fixed author/committer dates."""
+def _fixed_identity_git(git_arguments: str) -> str:
+    """A git invocation made with the eval-case commit's fixed identity and dates, so any commit it makes
+    is a function of its tree and parents alone. The arguments are shell text, quoted by the caller."""
     return (
-        "cd {clone} && git add -A && "
-        "GIT_AUTHOR_DATE={date} GIT_COMMITTER_DATE={date} "
-        "git -c user.email={email} -c user.name={name} commit -q -m {message}"
+        "GIT_AUTHOR_DATE={date} GIT_COMMITTER_DATE={date} git -c user.email={email} -c user.name={name} {arguments}"
     ).format(
-        clone=shlex.quote(clone_dir),
         date=shlex.quote(EVAL_CASE_COMMIT_DATE),
         email=shlex.quote(EVAL_CASE_COMMIT_EMAIL),
         name=shlex.quote(EVAL_CASE_COMMIT_NAME),
-        message=shlex.quote(commit_message),
+        arguments=git_arguments,
+    )
+
+
+@pure
+def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
+    """The eval-case commit, made reproducibly: fixed identity and fixed author/committer dates."""
+    return "cd {clone} && git add -A && {commit}".format(
+        clone=shlex.quote(clone_dir),
+        commit=_fixed_identity_git("commit -q -m {}".format(shlex.quote(commit_message))),
+    )
+
+
+# Where a case's throwaway seed worktree lives in the box: outside the case clone, whose working tree
+# is what the workspace is created from.
+_SEED_WORKTREES_DIR: Final[str] = "/work/seed-worktrees"
+# Where the seed commit puts a seeded app inside the template. Not under `system/apps/`: the template's
+# root pyproject.toml makes every directory there a uv workspace member, and uv refuses a member with
+# no pyproject.toml of its own.
+SEED_FIXTURES_DIR: Final[str] = "system/fixtures"
+# How many times supervisord restarts a seeded program that exits too quickly before giving up on it.
+SEED_PROGRAM_START_RETRIES: Final[int] = 3
+# What each seed-build command in the box gets; every one is local to the box.
+_SEED_COMMAND_TIMEOUT_SECONDS: Final[int] = 300
+# The supervisord state of a program that is up, one it has given up on, and one between restarts.
+_SUPERVISOR_RUNNING_STATE: Final[str] = "RUNNING"
+_SUPERVISOR_FATAL_STATE: Final[str] = "FATAL"
+_SUPERVISOR_BACKOFF_STATE: Final[str] = "BACKOFF"
+
+
+@pure
+def _seed_worktree_dir(case_id: str) -> str:
+    return "{}/{}".format(_SEED_WORKTREES_DIR, case_id)
+
+
+@pure
+def seed_fixture_repo_path(seed_app_name: str) -> str:
+    """The seeded app's directory inside the template, relative to the repo root."""
+    return "{}/{}".format(SEED_FIXTURES_DIR, seed_app_name)
+
+
+@pure
+def render_seed_program_block(seed_app: StepBoxSeedApp) -> str:
+    """The supervisord program the seed commit appends: register the app from its manifest, then serve
+    its directory on loopback, the way the build-app skill wraps an existing server."""
+    fixture_path = seed_fixture_repo_path(seed_app.name)
+    served_command = (
+        "python3 system/scripts/forward_port.py --manifest {fixture}/app.toml --url http://localhost:{port} && "
+        "exec python3 -m http.server {port} --bind 127.0.0.1 --directory {fixture}"
+    ).format(fixture=fixture_path, port=seed_app.port)
+    return (
+        "\n[program:{name}]\n"
+        'command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "{served}"\n'
+        "directory={workspace}\n"
+        "autostart=true\n"
+        "autorestart=true\n"
+        "startretries={retries}\n"
+    ).format(
+        name=seed_app.name,
+        served=served_command,
+        workspace=evidence_collection.DEFAULT_WORKSPACE_REPO_ROOT,
+        retries=SEED_PROGRAM_START_RETRIES,
+    )
+
+
+@pure
+def build_seed_commit_command(
+    clone_dir: str, worktree_dir: str, dwt_sha: str, seed_app: StepBoxSeedApp, commit_message: str
+) -> str:
+    """The seed as a commit on the pinned template alone: a detached worktree of the case clone at the
+    template's SHA, the app copied in and its program appended, committed with the fixed identity.
+    Prints the commit's SHA under its own section."""
+    fixture_path = seed_fixture_repo_path(seed_app.name)
+    return (
+        "rm -rf {worktree} && git -C {clone} worktree prune && "
+        "git -C {clone} worktree add --detach {worktree} {dwt_sha} && cd {worktree} && "
+        "rm -rf {fixture} && mkdir -p {fixtures_dir} && cp -R {source} {fixture} && "
+        "printf '%s' {block} >> {conf} && git add -A && {commit} && "
+        "printf '{marker}\\n' && git rev-parse HEAD"
+    ).format(
+        worktree=shlex.quote(worktree_dir),
+        clone=shlex.quote(clone_dir),
+        dwt_sha=shlex.quote(dwt_sha),
+        fixture=shlex.quote(fixture_path),
+        fixtures_dir=shlex.quote(SEED_FIXTURES_DIR),
+        source=shlex.quote(seed_app.box_path),
+        block=shlex.quote(render_seed_program_block(seed_app)),
+        conf=shlex.quote(evidence_collection.SUPERVISORD_CONF_RELATIVE_PATH),
+        commit=_fixed_identity_git("commit -q -m {}".format(shlex.quote(commit_message))),
+        marker=evidence_collection.section_marker("seed_commit_sha"),
+    )
+
+
+@pure
+def build_seed_merge_command(clone_dir: str, worktree_dir: str, seed_commit_sha: str) -> str:
+    """Merge the seed commit onto the case clone's checked-out branch with the fixed identity, and report
+    the outcome: the merge's exit code, the paths it left unmerged (before aborting a conflicted merge),
+    the branch head, and the merged supervisord config. Removes the seed worktree whatever happened.
+
+    A working tree rather than `git merge-tree --write-tree`, which prints a tree id for a conflicted
+    merge too; and the clone's own branch, because the workspace is cloned from the case clone's HEAD.
+    """
+    return (
+        "cd {clone} || exit 97; "
+        "merge_output=$({merge} 2>&1); merge_exit=$?; "
+        "printf '{exit_marker}\\n%s\\n' \"$merge_exit\"; "
+        "printf '{unmerged_marker}\\n'; git diff --name-only --diff-filter=U; "
+        "if git rev-parse -q --verify MERGE_HEAD > /dev/null; then git merge --abort; fi; "
+        "printf '{head_marker}\\n'; git rev-parse HEAD; "
+        "printf '{conf_marker}\\n'; cat {conf} 2>/dev/null; "
+        "git worktree remove --force {worktree} > /dev/null 2>&1; git worktree prune; "
+        # Last, since it is free text git wrote.
+        "printf '\\n{output_marker}\\n%s\\n' \"$merge_output\""
+    ).format(
+        clone=shlex.quote(clone_dir),
+        merge=_fixed_identity_git("merge --no-ff --no-edit {}".format(shlex.quote(seed_commit_sha))),
+        conf=shlex.quote(evidence_collection.SUPERVISORD_CONF_RELATIVE_PATH),
+        worktree=shlex.quote(worktree_dir),
+        exit_marker=evidence_collection.section_marker("seed_merge_exit"),
+        unmerged_marker=evidence_collection.section_marker("seed_unmerged"),
+        head_marker=evidence_collection.section_marker("seed_head"),
+        conf_marker=evidence_collection.section_marker("seed_supervisord"),
+        output_marker=evidence_collection.section_marker("seed_merge_output"),
+    )
+
+
+@pure
+def build_seed_reset_command(clone_dir: str, case_base_sha: str) -> str:
+    """Put the case clone's branch back on the case base, discarding a seed merge that collided."""
+    return "git -C {clone} reset -q --hard {base}".format(
+        clone=shlex.quote(clone_dir), base=shlex.quote(case_base_sha)
+    )
+
+
+class SeedMergeReading(FrozenModel):
+    """What one `build_seed_merge_command` run reported."""
+
+    exit_code: int | None = Field(description="The merge's exit code; None when the command never reported one")
+    unmerged_paths: tuple[str, ...] = Field(description="The paths the merge left unmerged, before it was aborted")
+    head_sha: str = Field(description="The branch head once the merge finished or was aborted")
+    supervisord_conf: str = Field(description="The supervisord config at that head")
+    merge_output: str = Field(description="What git printed while merging")
+
+
+@pure
+def read_seed_merge_output(output: str) -> SeedMergeReading:
+    sections = evidence_collection.split_sections(output)
+    exit_text = sections.get("seed_merge_exit", "").strip()
+    return SeedMergeReading(
+        exit_code=int(exit_text) if exit_text.isdigit() else None,
+        unmerged_paths=tuple(line.strip() for line in sections.get("seed_unmerged", "").splitlines() if line.strip()),
+        head_sha=sections.get("seed_head", "").strip(),
+        supervisord_conf=sections.get("seed_supervisord", ""),
+        merge_output=sections.get("seed_merge_output", "").strip(),
+    )
+
+
+async def build_seeded_sha(
+    environment: BaseEnvironment,
+    box_env: dict[str, str],
+    clone_dir: str,
+    worktree_dir: str,
+    dwt_sha: str,
+    case_base_sha: str,
+    seed_app: StepBoxSeedApp,
+    commit_message: str,
+) -> SeedBuildRecord:
+    """Build a seed onto a prepared case clone whose branch is at `case_base_sha`: commit it on the
+    pinned template, merge that commit onto the branch, and check the merged config for collisions.
+
+    On a clean build the branch is left at the merge commit, the seeded SHA. A conflict or a collision
+    leaves it at the case base and says why in the record. A command that fails for any other reason
+    raises `BoxCommandError`, like the rest of clone preparation.
+    """
+    commit_result = await minds_bridge.check_run_in_box(
+        environment,
+        build_seed_commit_command(clone_dir, worktree_dir, dwt_sha, seed_app, commit_message),
+        box_env,
+        _SEED_COMMAND_TIMEOUT_SECONDS,
+    )
+    seed_commit_sha = evidence_collection.split_sections(commit_result.stdout or "").get("seed_commit_sha", "").strip()
+    if not seed_commit_sha:
+        raise BoxCommandError("the seed commit for {} reported no SHA".format(seed_app.name))
+    merge_result = await minds_bridge.check_run_in_box(
+        environment,
+        build_seed_merge_command(clone_dir, worktree_dir, seed_commit_sha),
+        box_env,
+        _SEED_COMMAND_TIMEOUT_SECONDS,
+    )
+    merge = read_seed_merge_output(merge_result.stdout or "")
+    if merge.exit_code is None or (merge.exit_code != 0 and not merge.unmerged_paths):
+        raise BoxCommandError(
+            "merging the seed {} failed without a conflict: {}".format(seed_app.name, merge.merge_output[:500])
+        )
+    if merge.exit_code != 0:
+        return SeedBuildRecord(
+            app_name=seed_app.name,
+            build_status=SeedBuildStatus.CONFLICT,
+            seed_commit_sha=seed_commit_sha,
+            seeded_sha="",
+            conflicted_paths=merge.unmerged_paths,
+            collisions=(),
+            impossible_reason="the seed {} conflicts with the case base in {}".format(
+                seed_app.name, ", ".join(merge.unmerged_paths)
+            ),
+        )
+    collisions = evidence_collection.find_seed_collisions(merge.supervisord_conf, seed_app.name, seed_app.port)
+    if collisions:
+        await minds_bridge.check_run_in_box(
+            environment, build_seed_reset_command(clone_dir, case_base_sha), box_env, _SEED_COMMAND_TIMEOUT_SECONDS
+        )
+        return SeedBuildRecord(
+            app_name=seed_app.name,
+            build_status=SeedBuildStatus.COLLISION,
+            seed_commit_sha=seed_commit_sha,
+            seeded_sha="",
+            conflicted_paths=(),
+            collisions=collisions,
+            impossible_reason="the seed {} collides with the case base's supervisord config: {}".format(
+                seed_app.name, "; ".join(collisions)
+            ),
+        )
+    return SeedBuildRecord(
+        app_name=seed_app.name,
+        build_status=SeedBuildStatus.CLEAN,
+        seed_commit_sha=seed_commit_sha,
+        seeded_sha=merge.head_sha,
+        conflicted_paths=(),
+        collisions=(),
+        impossible_reason="",
+    )
+
+
+@pure
+def seed_status_command(seed_app_name: str) -> str:
+    """One in-workspace probe answering whether a seeded app is up: supervisord's state for its program,
+    and the app registry its manifest registration writes to."""
+    return (
+        "{root_discovery}"
+        "printf '{services_marker}\\n'; supervisorctl status {name} 2>&1; "
+        "printf '{registry_marker}\\n'; "
+        'if [ -n "$root" ]; then cat "$root/{registry_path}" 2>/dev/null; fi; '
+        "exit 0"
+    ).format(
+        root_discovery=evidence_collection.repo_root_discovery_shell(),
+        name=shlex.quote(seed_app_name),
+        registry_path=minds_bridge.WORKSPACE_APPS_REGISTRY,
+        services_marker=evidence_collection.section_marker("seed_services"),
+        registry_marker=evidence_collection.section_marker("seed_registry"),
+    )
+
+
+class SeedStatusReading(FrozenModel):
+    """What one `seed_status_command` run says about a seeded app."""
+
+    program_state: str = Field(description="supervisord's state for the app's program; empty when it named none")
+    is_registered: bool = Field(description="Whether the app registry holds a row under the app's name")
+
+
+@pure
+def read_seed_status(output: str, seed_app_name: str) -> SeedStatusReading:
+    sections = evidence_collection.split_sections(output)
+    service_state_by_name = evidence_collection.parse_service_states(sections.get("seed_services", ""))
+    registered_apps = evidence_collection.parse_apps_registry(
+        sections.get("seed_registry", ""), frozenset(), frozenset()
+    )
+    return SeedStatusReading(
+        program_state=service_state_by_name.get(seed_app_name, ""),
+        is_registered=registered_apps is not None and any(app.name == seed_app_name for app in registered_apps),
     )
 
 
@@ -1464,16 +1758,34 @@ class MindsPersonaDriver(BaseAgent):
         self._test_state: str = "ongoing"
         # HEAD of the per-case dwt clone the workspace was created from: the base of the
         # incremental git bundle the evidence phase captures, so the recorded deliverable is only
-        # the agent's own commits.
+        # what was committed in the workspace: its bootstrap commit and the agent's own.
         self._clone_base_sha: str = ""
         # The dwt tip the base clone was made from, recorded so a replay can regenerate that base
-        # and check it reproduces _clone_base_sha before unbundling the agent's commits onto it.
+        # and check it reproduces _clone_base_sha before unbundling the workspace's commits onto it.
         self._dwt_tip_sha: str = ""
         # What the workspace already served before the agent ran, so the evidence phase can tell the
         # delivered apps from the ones that booted with the workspace.
         self._preexisting_registrations: frozenset[str] | None = None
+        # What the seed build did, on a trial whose case declares a seed; None otherwise, and on a
+        # seeded trial whose clone preparation failed before the build.
+        self._seed_build: SeedBuildRecord | None = None
+        # The registry names the case seeded the workspace with, declared by the config rather than
+        # measured: nothing observes the workspace before the seed is in it.
+        self._seeded_registrations: frozenset[str] = frozenset()
         self._verification_metadata: dict[str, Any] = {}
         self._verifier_usage: ui_flows.VerifierUsage | None = None
+        # What this step's collector read and produced, held whole for the computations that run over
+        # a step's collection; None until a step has collected, and again for a step that could not.
+        self._step_evidence: evidence_collection.CollectedEvidence | None = None
+        # The detail payloads of every tool call the feed has shown so far, by event id, read on a step
+        # that runs the diagnostic probe; None on any other step and when the read did not answer.
+        self._feed_detail_by_event_id: dict[str, dict[str, Any] | None] | None = None
+        # The last preparation stage the trial completed, carried in every state.json; None before the
+        # first one completes.
+        self._preparation_stage: PreparationStage | None = None
+        # The byte count of the last workspace snapshot the driver pulled: 0 when that pull failed,
+        # and None while the trial has pulled none, which is every trial the snapshot mode turns off.
+        self._last_snapshot_byte_count: int | None = None
         # Why the trial gave up, or empty while it has not. Carried in state.json and the trial
         # metadata: "timed_out: true" on its own says nothing about which wait ran out.
         self._timed_out_reason: str = ""
@@ -1603,6 +1915,7 @@ class MindsPersonaDriver(BaseAgent):
                 # workspace and the app inside it are still alive, since the verifier runs long
                 # after they are gone.
                 await self._collect_verification_evidence(environment)
+                await self._read_feed_tool_inputs(environment)
                 if self._is_proxy_enabled:
                     await self._collect_proxy_usage(environment)
                 # Each step publishes the whole conversation so far, since both trajectory shapes
@@ -1630,13 +1943,43 @@ class MindsPersonaDriver(BaseAgent):
                 if is_final or not is_conversation_returned or self._test_state == "timed_out":
                     await self._teardown(environment)
 
+    async def _read_feed_tool_inputs(self, environment: BaseEnvironment) -> None:
+        """On a step that runs the diagnostic probe, read every tool call's full input from the chat app's
+        per-event detail endpoint: the feed's own record of what the agent ran, which the polled events
+        carry only as labels and lengths.
+
+        Guarded like the state publish: the read describes the trial and grades nothing, so a box that
+        has gone costs the step these inputs and never its remaining records.
+        """
+        self._feed_detail_by_event_id = None
+        step = self._case.step if self._case is not None else None
+        if step is None or not step.is_diagnostic_probe_run:
+            return
+        if self._box_env is None or not self._workspace_agent_id or not self._chat_agent_id:
+            return
+        if self._is_workspace_destroyed:
+            return
+        try:
+            # The step's last events can land after the reply that ended its conversation was read.
+            await self._refresh_events(environment)
+            event_ids = list(
+                dict.fromkeys(event_id for event_id, _ in diagnostic_probe.feed_tool_calls(self._latest_events))
+            )
+            self._feed_detail_by_event_id = await minds_bridge.fetch_event_details(
+                environment, self._box_env, self._workspace_agent_id, self._chat_agent_id, event_ids
+            )
+        except (OSError, RuntimeError, ModalError) as exc:
+            logger.warning("Could not read the feed's tool inputs: {}", exc)
+
     def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
         """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
         rather than the trial's proxy key: this is the harness reasoning about the workspace, not
         the workspace's own traffic, so it must not be metered as the agent under test's spend."""
         api_key = self._get_env("ANTHROPIC_API_KEY") or ""
         if not api_key:
-            logger.warning("No ANTHROPIC_API_KEY for the UI-flow verification agent; flows cannot be measured")
+            logger.warning(
+                "No ANTHROPIC_API_KEY for the UI-flow verification agent; model-driven flows cannot be measured"
+            )
             return None
         return ui_flows.AnthropicVerificationAgent(
             model=self._verifier_model,
@@ -1669,6 +2012,7 @@ class MindsPersonaDriver(BaseAgent):
         self._verification_metadata = {}
         self._transcript_capture = evidence_collection.not_attempted_transcript_capture()
         self._verifier_usage = None
+        self._step_evidence = None
         # A destroyed workspace has nothing left to capture, and every probe against it would run to
         # its own transport timeout before saying so.
         if self._box_env is None or self._case is None or not self._workspace_agent_id:
@@ -1688,6 +2032,9 @@ class MindsPersonaDriver(BaseAgent):
             clone_base_sha=self._clone_base_sha,
             dwt_tip_sha=self._dwt_tip_sha,
             preexisting_registrations=self._preexisting_registrations,
+            seeded_registrations=self._seeded_registrations,
+            seed_commit_sha=self._seed_build.seed_commit_sha if self._seed_build is not None else "",
+            seeded_sha=self._seed_build.seeded_sha if self._seed_build is not None else "",
             host_logs_dir=self.logs_dir,
             # Monotonic, unlike the conversation's own deadline: a clock step during a ten-minute
             # collection phase would otherwise truncate or extend it.
@@ -1708,6 +2055,7 @@ class MindsPersonaDriver(BaseAgent):
             manifest = None
         # Whatever the flow agent spent before a failure is still spent, so keep the account, and
         # whatever the transcript capture brought out before it is still worth having.
+        self._step_evidence = collector.collected_evidence(is_collection_complete=manifest is not None)
         self._verifier_usage = collector.verifier_usage()
         self._transcript_capture = collector.transcript_capture
         self._worker_captures = list(collector.worker_captures)
@@ -1822,20 +2170,30 @@ class MindsPersonaDriver(BaseAgent):
             return True
 
         readiness_deadline = workspace_readiness_deadline(deadline, time.time())
-        # Prepare the per-case dwt clone inside the box and create the workspace
-        # through the production Minds API path.
-        await self._prepare_workspace_clone(case, environment)
         workspace_host_name = derive_workspace_host_name(self._trial_name, self._salt)
-        payload = minds_bridge.build_create_payload(
-            dwt_repo=_case_clone_dir(case.case_id),
-            dwt_branch="",
-            host_name=workspace_host_name,
-        )
-        logger.info("Creating the workspace for case {}", case.case_id)
-        self._workspace_agent_id = await minds_bridge.create_workspace_and_wait(
-            environment, self._box_env, self._api_port, payload, readiness_deadline, self._poll_seconds
-        )
+        try:
+            self._workspace_agent_id = await self._create_workspace(
+                case, environment, workspace_host_name, readiness_deadline
+            )
+        except SeedBuildError as exc:
+            self._record_impossible_seed(exc)
+            raise
+        except (BoxCommandError, WorkspaceCreateError) as exc:
+            await self._record_preparation_raise(environment, exc)
+            raise
+        self._preparation_stage = PreparationStage.CREATED
         logger.info("Workspace is up (agent {})", self._workspace_agent_id)
+
+        # Before anything else touches the workspace: a seed that never came up is not a workspace the
+        # trial can measure, however the later stages go.
+        seed_app = case.step.seed_app if case.step is not None else None
+        if seed_app is not None:
+            seed_failure = await self._wait_for_seed_running(environment, seed_app, readiness_deadline)
+            if seed_failure:
+                await self._mark_timed_out(environment, seed_failure)
+                return False
+            self._preparation_stage = PreparationStage.SEED_RUNNING
+            logger.info("The seeded app {} is running and registered", seed_app.name)
 
         if self._is_proxy_probe_enabled:
             await self._probe_reverse_tunnel(environment)
@@ -1844,6 +2202,7 @@ class MindsPersonaDriver(BaseAgent):
             if not is_proxy_up:
                 await self._mark_timed_out(environment, "the in-box LLM proxy did not come up")
                 return False
+            self._preparation_stage = PreparationStage.PROXIED
 
         authentication = await self._authenticate_workspace(environment, readiness_deadline)
         if authentication.failure:
@@ -1854,6 +2213,7 @@ class MindsPersonaDriver(BaseAgent):
             )
             await self._mark_timed_out(environment, reason)
             return False
+        self._preparation_stage = PreparationStage.SIGNED_IN
         self._account_id = authentication.account_id
         if self._account_id:
             await self._record_account_harness(environment, self._account_id)
@@ -1875,6 +2235,7 @@ class MindsPersonaDriver(BaseAgent):
             )
             return False
         self._chat_agent_id = chat_agent_id
+        self._preparation_stage = PreparationStage.CHAT_CREATED
 
         is_chat_ready = await minds_bridge.wait_for_chat_state(
             environment,
@@ -1911,14 +2272,109 @@ class MindsPersonaDriver(BaseAgent):
                 environment, self._readiness_reason("the workspace chat never answered its welcome")
             )
             return False
+        self._preparation_stage = PreparationStage.WELCOMED
 
         is_harness_config_applied = await self._apply_harness_config(environment, readiness_deadline)
         if not is_harness_config_applied:
             return False
+        if self._model_choice_switch == MODEL_SWITCH_APPLIED:
+            self._preparation_stage = PreparationStage.SWITCHED
 
         await self._capture_preexisting_registrations(environment)
         self._is_workspace_prepared = True
         return True
+
+    async def _create_workspace(
+        self, case: CaseConfig, environment: BaseEnvironment, workspace_host_name: str, readiness_deadline: float
+    ) -> str:
+        """Prepare the per-case template clone in the box and create the workspace from it through the
+        production Minds API path; returns the new workspace's agent id."""
+        assert self._box_env is not None
+        await self._prepare_workspace_clone(case, environment)
+        payload = minds_bridge.build_create_payload(
+            dwt_repo=_case_clone_dir(case.case_id),
+            dwt_branch="",
+            host_name=workspace_host_name,
+        )
+        logger.info("Creating the workspace for case {}", case.case_id)
+        return await minds_bridge.create_workspace_and_wait(
+            environment, self._box_env, self._api_port, payload, readiness_deadline, self._poll_seconds
+        )
+
+    async def _record_preparation_raise(self, environment: BaseEnvironment, exc: Exception) -> None:
+        """Mark the trial given up on a preparation step that raised, before the raise propagates.
+
+        Written host-side only: the step's closing state write mirrors it into the box, and a box
+        that has become unreachable must not turn this record into a second failure that masks the
+        first.
+        """
+        reason = "workspace preparation raised {}: {}".format(type(exc).__name__, str(exc)[:_RAISE_DETAIL_CHARS])
+        logger.opt(exception=exc).error("Workspace preparation raised; marking the trial timed_out")
+        self._test_state = "timed_out"
+        self._timed_out_reason = reason
+        self._write_trial_files()
+        await self._capture_timeout_diagnostics(environment, reason)
+
+    def _record_impossible_seed(self, exc: SeedBuildError) -> None:
+        """Mark the trial given up on a seed that cannot be built, before the raise propagates.
+
+        No workspace exists yet, so there is nothing to diagnose beyond what the seed record already
+        names. Written host-side only, as for any other preparation raise.
+        """
+        reason = "the seed could not be built: {}".format(str(exc)[:_RAISE_DETAIL_CHARS])
+        logger.warning("Marking the trial timed_out: {}", reason)
+        self._test_state = "timed_out"
+        self._timed_out_reason = reason
+        self._write_trial_files()
+
+    async def _wait_for_seed_running(
+        self, environment: BaseEnvironment, seed_app: StepBoxSeedApp, deadline: float
+    ) -> str:
+        """Poll until the seeded app's program is RUNNING and its registry row exists; why it never got
+        there, or empty once it has.
+
+        The row is polled rather than taken on the registration command's word, because the registry
+        reader skips a row it cannot read without saying so. A program supervisord has given up on
+        fails at once, and so does one still restarting after more polls than it has start retries.
+        """
+        assert self._box_env is not None
+        backoff_poll_count = 0
+        last_seen = "no answer yet"
+        while time.time() < deadline:
+            is_success, output = await minds_bridge.run_in_workspace(
+                environment,
+                self._box_env,
+                self._workspace_agent_id,
+                seed_status_command(seed_app.name),
+                evidence_collection.PROBE_TIMEOUT_SECONDS,
+            )
+            reading = read_seed_status(output, seed_app.name) if is_success else None
+            if reading is None:
+                last_seen = "the status probe failed: {}".format(output.strip()[:300] or "no output")
+            elif reading.program_state == _SUPERVISOR_RUNNING_STATE and reading.is_registered:
+                return ""
+            elif reading.program_state == _SUPERVISOR_FATAL_STATE:
+                return "the seeded app {} never came up: supervisord gave up on its program (FATAL)".format(
+                    seed_app.name
+                )
+            elif (
+                reading.program_state == _SUPERVISOR_BACKOFF_STATE and backoff_poll_count >= SEED_PROGRAM_START_RETRIES
+            ):
+                return "the seeded app {} never came up: its program was still restarting (BACKOFF) after {} polls".format(
+                    seed_app.name, backoff_poll_count + 1
+                )
+            else:
+                if reading.program_state == _SUPERVISOR_BACKOFF_STATE:
+                    backoff_poll_count += 1
+                last_seen = "program {}, {}".format(
+                    reading.program_state or "not listed", "registered" if reading.is_registered else "no registry row"
+                )
+            await asyncio.sleep(self._poll_seconds)
+        return self._readiness_reason(
+            "the seeded app {} was never running with its registry row (last seen: {})".format(
+                seed_app.name, last_seen
+            )
+        )
 
     async def _place_step_files(self, case: CaseConfig, environment: BaseEnvironment) -> bool:
         """Copy this step's uploads into the running workspace; False means the trial gave up.
@@ -2052,7 +2508,7 @@ class MindsPersonaDriver(BaseAgent):
         # capturing. Only a conversation that never said anything has nothing to snapshot.
         is_snapshot_point = is_final_entry and self._waits_done > 0
         if is_snapshot_point and is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_FINAL_ENTRY):
-            await minds_bridge.snapshot_workspace(
+            self._last_snapshot_byte_count = await minds_bridge.snapshot_workspace(
                 environment, self._box_env, self._workspace_agent_id, "post_message_{}".format(self._waits_done)
             )
         return True
@@ -2164,6 +2620,7 @@ class MindsPersonaDriver(BaseAgent):
         sent_at = datetime.now(timezone.utc)
         self._conversation.append({"role": "user", "text": text})
         self._waits_done = message_index
+        self._preparation_stage = PreparationStage.CONVERSATION
         await self._sync_trial_files(environment)
 
         is_replied = await self._wait_for_reply(
@@ -2196,7 +2653,7 @@ class MindsPersonaDriver(BaseAgent):
         await self._sync_trial_files(environment)
 
         if is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_EXCHANGE):
-            await minds_bridge.snapshot_workspace(
+            self._last_snapshot_byte_count = await minds_bridge.snapshot_workspace(
                 environment, self._box_env, self._workspace_agent_id, "post_message_{}".format(message_index)
             )
         return None
@@ -2286,15 +2743,23 @@ class MindsPersonaDriver(BaseAgent):
         """Every decider-model call as one audit record: the turn the trajectory's provenance already
         carries, plus the message text it produced, which that provenance deliberately leaves out."""
         return [
-            {"type": "decider_message", "text": result.message, **turn.model_dump(mode="json")}
+            {"type": DriverEventType.DECIDER_MESSAGE.value, "text": result.message, **turn.model_dump(mode="json")}
             for result, turn in zip(self._decider_results, self._decider_turns, strict=True)
         ]
 
     def _write_driver_events(self) -> None:
-        """Write the driver's own view of the trial: the workspace feed it polled, then the decider
-        calls it made. Host-side only, and read by nothing in the grading path."""
+        """Write the driver's own view of the trial: the workspace feed it polled, the detail payloads it
+        read of the feed's tool calls, then the decider calls it made, each record naming its
+        `DriverEventType`. Host-side only, and read by nothing in the grading path."""
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        records = [*self._latest_events, *self._decider_call_events()]
+        records = [
+            *({"type": DriverEventType.FEED_EVENT.value, "event": event} for event in self._latest_events),
+            *(
+                {"type": DriverEventType.EVENT_DETAIL.value, "event_id": event_id, "detail": detail}
+                for event_id, detail in (self._feed_detail_by_event_id or {}).items()
+            ),
+            *self._decider_call_events(),
+        ]
         contents = "".join("{}\n".format(json.dumps(record)) for record in records)
         (self.logs_dir / DRIVER_EVENTS_FILENAME).write_text(contents)
 
@@ -2754,9 +3219,9 @@ class MindsPersonaDriver(BaseAgent):
             self._box_env,
             300,
         )
-        # Record where the agent's own history starts, and what the base was built from. The
-        # evidence phase bundles only <base>..HEAD, so the captured deliverable is the agent's
-        # commits rather than the whole template. The base commit is deterministic (fixed identity
+        # Record where the workspace's own history starts, and what the base was built from. The
+        # evidence phase bundles only <base>..HEAD, so the captured deliverable is what was
+        # committed in the workspace rather than the whole template. The base commit is deterministic (fixed identity
         # and dates over a tree that is a function of the dwt tip and the mngr SHA), so recording
         # both shas is what keeps that bundle reproducible: preparing the clone again from the same
         # inputs yields this exact base sha, and the bundle unbundles only onto it.
@@ -2770,6 +3235,29 @@ class MindsPersonaDriver(BaseAgent):
         self._dwt_tip_sha = sections.get("dwt_tip_sha", "").strip()
         base_output = sections.get("base_sha", "").strip()
         self._clone_base_sha = base_output.splitlines()[-1].strip() if base_output else ""
+
+        seed_app = case.step.seed_app if case.step is not None else None
+        if seed_app is None:
+            return
+        self._seeded_registrations = frozenset({seed_app.name})
+        logger.info("Building the seed {} onto the case base {}", seed_app.name, self._clone_base_sha[:12])
+        self._seed_build = await build_seeded_sha(
+            environment,
+            self._box_env,
+            clone_dir=clone_dir,
+            worktree_dir=_seed_worktree_dir(case.case_id),
+            dwt_sha=case.dwt_sha,
+            case_base_sha=self._clone_base_sha,
+            seed_app=seed_app,
+            # Fixed, like everything else the seed commit is a function of.
+            commit_message="seed {}".format(seed_app.name),
+        )
+        if self._seed_build.build_status is not SeedBuildStatus.CLEAN:
+            raise SeedBuildError(self._seed_build.impossible_reason)
+        # The workspace is created from the seeded commit, so the deliverable bundle is cut from it and
+        # holds none of the seed: only what was committed in the workspace.
+        self._clone_base_sha = self._seed_build.seeded_sha
+        self._preparation_stage = PreparationStage.SEED_BUILT
 
     async def _capture_preexisting_registrations(self, environment: BaseEnvironment) -> None:
         """Snapshot what the workspace already serves, before the first turn can change it.
@@ -2942,6 +3430,15 @@ class MindsPersonaDriver(BaseAgent):
             # stepped case the count accumulates, so the final step's file describes the whole case.
             "num_turns": self._configured_entry_count,
             "entries": [record.model_dump(mode="json") for record in self._entry_records],
+            # The byte count of the last snapshot pulled, None on a trial that pulled none: an
+            # absent tarball and one the pull lost are different readings.
+            "snapshot_byte_count": self._last_snapshot_byte_count,
+            # How many calls the driver made to the decider model, which a goal entry can push past
+            # the message count: the entry records account for messages, this for model calls.
+            "decider_call_count": len(self._decider_results),
+            # Every message the driver sent as the client, in order, which is what the conversation
+            # under test was actually driven with.
+            "client_messages": self._client_messages(),
             # One record per answered client message. A turn that was never answered leaves none, so
             # these end at the message a timed-out trial died on.
             "turns": [record.model_dump(mode="json") for record in self._turn_records],
@@ -2951,6 +3448,12 @@ class MindsPersonaDriver(BaseAgent):
             # its own cannot distinguish a workspace that never came up from an agent that stopped
             # replying halfway through.
             "timed_out_reason": self._timed_out_reason,
+            # The last workspace-preparation stage the trial completed, then `conversation` once turn 1
+            # has been sent; empty before the first stage completes.
+            "preparation_stage": self._preparation_stage.value if self._preparation_stage is not None else "",
+            # What the seed build did, including why a seed that cannot be built was refused; null on a
+            # trial with no seed build.
+            "seed": self._seed_build.model_dump(mode="json") if self._seed_build is not None else None,
             "started_at": datetime.fromtimestamp(self._started_at, tz=timezone.utc).isoformat(),
             # The whole trial's, which across a stepped case spans every step so far.
             "elapsed_seconds": round(time.time() - self._started_at, 1),
@@ -3198,10 +3701,15 @@ class MindsPersonaDriver(BaseAgent):
             logger.warning("The captured trajectory document is unusable; writing the hand-built one: {}", exc)
             return None
 
+    def _client_messages(self) -> list[str]:
+        """Every message the driver sent as the client, in order. A message with no text is left out:
+        the workspace never saw it, so it is no part of the conversation the harness answered."""
+        return [entry["text"] for entry in self._conversation if entry["role"] == "user" and entry["text"].strip()]
+
     def _first_client_message(self) -> str:
         """The text of the first turn the driver sent, which is where the greeting ends and the
         conversation the harness answered begins. Empty until a turn has been sent."""
-        return next((entry["text"] for entry in self._conversation if entry["role"] == "user"), "")
+        return next(iter(self._client_messages()), "")
 
     def _read_observed_harness_models(self) -> ObservedHarnessModels:
         """Which models the captured document shows answering, or nothing when there is no document.

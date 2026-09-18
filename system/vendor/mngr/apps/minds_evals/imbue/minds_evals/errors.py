@@ -29,6 +29,14 @@ class WorkspaceCreateError(MindsEvalsError, RuntimeError):
     ...
 
 
+class SeedBuildError(MindsEvalsError, RuntimeError):
+    """Raised when a case's seed cannot be built onto the case base: its merge conflicts, or the merged
+    tree registers it on top of something the template already runs. Raised before any workspace is
+    created, so the trial ends as impossible rather than running against a half-seeded tree."""
+
+    ...
+
+
 class InstructionParseError(MindsEvalsError, ValueError):
     """Raised when the task instruction does not carry a parseable case config block."""
 
@@ -96,5 +104,19 @@ class CiMatrixError(MindsEvalsError, ValueError):
 
 class FlowBrowserError(MindsEvalsError, RuntimeError):
     """The flow lab's local Chromium never came to serve CDP, or exited before it did."""
+
+    ...
+
+
+class ScriptedFlowActionError(MindsEvalsError, ValueError):
+    """Raised when a scripted UI-flow action lacks a field its kind needs, or sets one it does not take."""
+
+    ...
+
+
+class ExpectedFactsTableError(MindsEvalsError, ValueError):
+    """Raised when a self-diagnostic expected-facts table cannot be read, or states an expectation that
+    cannot be checked: an unknown key, a matcher count other than one, or a reference to a fact it
+    cannot name."""
 
     ...

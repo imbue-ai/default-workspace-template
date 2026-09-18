@@ -1,0 +1,14 @@
+{
+  "requires": ["prep.stage_reached"],
+  "facts": {
+    "prep.stage_reached": {"expected": "conversation"},
+    "case.readable": {"expected": true},
+    "tools.every_call_has_one_result": {"expected": true},
+    "steps.boundary_markers_match_case": {"expected": true},
+    "transcript.source": {"expected": "workspace"},
+    "harness.detected_is_lane_harness": {"expected": true},
+    "manifest.readable": {"expected": true},
+    "listing.complete": {"expected": true, "health": true},
+    "workers.no_phantoms": {"expected": true, "requires": ["listing.complete"]}
+  }
+}

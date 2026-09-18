@@ -15,29 +15,45 @@ from imbue.minds_evals.check_run import check_job_directory
 from imbue.minds_evals.check_run import write_run_check_reports
 from imbue.minds_evals.ci_matrix import config_slug
 from imbue.minds_evals.ci_report import DETAIL_BUDGET
+from imbue.minds_evals.ci_report import DIAGNOSE_BEHAVIOUR_SUMMARY_STEM
+from imbue.minds_evals.ci_report import DIAGNOSE_FIXTURE_SUMMARY_STEM
 from imbue.minds_evals.ci_report import GREEN_ICON_EMOJI
 from imbue.minds_evals.ci_report import SLACK_USERNAME
 from imbue.minds_evals.ci_report import SUMMARY_ARTIFACT_PREFIX
 from imbue.minds_evals.ci_report import SlackMessage
 from imbue.minds_evals.ci_report import UNGREEN_ICON_EMOJI
 from imbue.minds_evals.ci_report import as_slack_payload
+from imbue.minds_evals.ci_report import diagnose_behaviour_summary_path
+from imbue.minds_evals.ci_report import diagnose_fixture_summary_path
 from imbue.minds_evals.ci_report import format_budgeted_block
 from imbue.minds_evals.ci_report import format_duration
 from imbue.minds_evals.ci_report import format_ref_label
+from imbue.minds_evals.ci_report import live_invariants_summary_path
 from imbue.minds_evals.ci_report import live_summary_path
 from imbue.minds_evals.ci_report import oracle_summary_path
 from imbue.minds_evals.ci_report import parse_run_check
 from imbue.minds_evals.ci_report import render_slack_report
 from imbue.minds_evals.cli import main
+from imbue.minds_evals.data_types import BehaviourDiagnosticCell
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import CiReportContext
 from imbue.minds_evals.data_types import DecidedPair
+from imbue.minds_evals.data_types import DiagnosticRunCheck
+from imbue.minds_evals.data_types import DiagnosticTrialCheck
+from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import FactMatcher
+from imbue.minds_evals.data_types import FactMatcherKind
+from imbue.minds_evals.data_types import FactOutcome
+from imbue.minds_evals.data_types import FactStatus
+from imbue.minds_evals.data_types import FixtureDiagnosticCell
 from imbue.minds_evals.data_types import JudgeScore
+from imbue.minds_evals.data_types import KnownFailure
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
+from imbue.minds_evals.data_types import UnsupportedDiagnosticCell
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import read_scheduled_workflow_text
 from imbue.minds_evals.testing import write_trial_dir
@@ -104,14 +120,49 @@ def make_cell(pair_name: str, harness_config: str, decision: CellDecision, confi
     )
 
 
-def write_matrix(matrix_path: Path, pairs: Sequence[DecidedPair], cells: Sequence[MatrixCell]) -> None:
+def make_fixture_diagnostic(pair_name: str) -> FixtureDiagnosticCell:
+    return FixtureDiagnosticCell(
+        pair=pair_name,
+        mngr_ref="main",
+        mngr_sha=FROZEN_SHA,
+        dwt_ref="main",
+        dwt_sha=FROZEN_SHA,
+        lane_key_env="ANTHROPIC_API_KEY",
+        harbor_args="[]",
+    )
+
+
+def make_behaviour_diagnostic(pair_name: str, harness: str) -> BehaviourDiagnosticCell:
+    return BehaviourDiagnosticCell(**make_fixture_diagnostic(pair_name).model_dump(), harness=harness)
+
+
+def write_matrix(
+    matrix_path: Path,
+    pairs: Sequence[DecidedPair],
+    cells: Sequence[MatrixCell],
+    *,
+    diagnosed_pairs: Sequence[str] = (),
+    diagnosed_harnesses: Sequence[str] = (),
+    unsupported: Sequence[UnsupportedDiagnosticCell] = (),
+) -> None:
     """The decided matrix exactly as `ci-matrix` writes it, computed fields and all.
 
     Its configs are the ones its cells name, in cell order, which is what a run's suite list leaves
     behind. A matrix with no cell at all still names the suite the run was asked to evaluate.
     """
     configs = tuple(dict.fromkeys(cell.config for cell in cells)) or (EVAL_CONFIG,)
-    matrix = CiMatrix(configs=configs, pairs=tuple(pairs), cells=tuple(cells))
+    matrix = CiMatrix(
+        configs=configs,
+        pairs=tuple(pairs),
+        cells=tuple(cells),
+        fixture_diagnostics=tuple(make_fixture_diagnostic(pair_name) for pair_name in diagnosed_pairs),
+        behaviour_diagnostics=tuple(
+            make_behaviour_diagnostic(pair_name, harness)
+            for pair_name in diagnosed_pairs
+            for harness in diagnosed_harnesses
+        ),
+        unsupported_diagnostics=tuple(unsupported),
+    )
     matrix_path.parent.mkdir(parents=True, exist_ok=True)
     matrix_path.write_text(matrix.model_dump_json())
 
@@ -157,6 +208,8 @@ def make_context(
     resolve_result: str = "success",
     oracle_result: str = "success",
     evaluate_result: str = "success",
+    diagnose_fixture_result: str = "success",
+    diagnose_behaviour_result: str = "success",
 ) -> CiReportContext:
     return CiReportContext(
         run_url=RUN_URL,
@@ -166,6 +219,8 @@ def make_context(
         resolve_result=resolve_result,
         oracle_result=oracle_result,
         evaluate_result=evaluate_result,
+        diagnose_fixture_result=diagnose_fixture_result,
+        diagnose_behaviour_result=diagnose_behaviour_result,
     )
 
 
@@ -305,6 +360,66 @@ def write_model_summary(summary_path: Path, trials: Sequence[TrialCheck]) -> Non
     """A pass's summary written straight from the model `check-run` dumps."""
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(RunCheck(job_name=summary_path.stem, trials=tuple(trials)).model_dump_json())
+
+
+def make_fact_outcome(
+    fact_name: str,
+    status: FactStatus,
+    *,
+    step_name: str = "",
+    recorded: Any = False,
+    expected: Any = True,
+    is_compliance: bool = False,
+    is_health: bool = False,
+    known_failure: KnownFailure | None = None,
+    unmet_requirements: Sequence[str] = (),
+) -> FactOutcome:
+    return FactOutcome(
+        fact_name=fact_name,
+        step_name=step_name,
+        status=status,
+        is_compliance=is_compliance,
+        is_health=is_health,
+        recorded=recorded,
+        expected=FactMatcher(kind=FactMatcherKind.EXPECTED, value=expected),
+        known_failure=known_failure,
+        unmet_requirements=tuple(unmet_requirements),
+    )
+
+
+def make_diagnostic_trial(
+    verdict: DiagnosticVerdict,
+    *,
+    case_id: str = "behaviour",
+    trial_name: str = "behaviour__aaaaaaa",
+    harness: str = "codex",
+    not_measured_reason: str = "",
+    failed_facts: Sequence[FactOutcome] = (),
+    not_recorded_facts: Sequence[FactOutcome] = (),
+    known_facts: Sequence[FactOutcome] = (),
+    not_followed_facts: Sequence[FactOutcome] = (),
+    unmet_preconditions: Sequence[FactOutcome] = (),
+    unexpectedly_passing_facts: Sequence[FactOutcome] = (),
+) -> DiagnosticTrialCheck:
+    return DiagnosticTrialCheck(
+        trial_name=trial_name,
+        case_id=case_id,
+        harness=harness,
+        verdict=verdict,
+        not_measured_reason=not_measured_reason,
+        failed_facts=tuple(failed_facts),
+        not_recorded_facts=tuple(not_recorded_facts),
+        known_facts=tuple(known_facts),
+        not_followed_facts=tuple(not_followed_facts),
+        unmet_preconditions=tuple(unmet_preconditions),
+        unexpectedly_passing_facts=tuple(unexpectedly_passing_facts),
+    )
+
+
+def write_diagnostic_summary(summary_path: Path, trials: Sequence[DiagnosticTrialCheck]) -> None:
+    """A diagnostic check's summary written straight from the model `check-diagnostics` dumps."""
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(DiagnosticRunCheck(job_name=summary_path.stem, trials=tuple(trials)).model_dump_json())
 
 
 # What Slack accepts in the blocks this report builds. A block over its limit is not rendered
@@ -1693,8 +1808,15 @@ def test_the_summary_file_names_the_report_composes_are_the_ones_the_workflow_wr
     oracle_name = oracle_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG").name
     live_name = live_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG", "$HARNESS_CONFIG").name
 
+    invariants_name = live_invariants_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG", "$HARNESS_CONFIG").name
+
     assert '--summary-json "$SUMMARY_DIR/{}"'.format(oracle_name) in workflow_text
     assert '--summary-json "$SUMMARY_DIR/{}"'.format(live_name) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}"'.format(invariants_name) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}-$PAIR.json"'.format(DIAGNOSE_FIXTURE_SUMMARY_STEM) in workflow_text
+    assert (
+        '--summary-json "$SUMMARY_DIR/{}-$PAIR-$HARNESS.json"'.format(DIAGNOSE_BEHAVIOUR_SUMMARY_STEM) in workflow_text
+    )
     assert "pattern: {}*\n".format(SUMMARY_ARTIFACT_PREFIX) in workflow_text
 
 
@@ -1734,3 +1856,391 @@ def test_the_notify_job_falls_back_to_a_rejected_messages_own_text() -> None:
 
     assert "jq '{username, icon_emoji, text}' /tmp/slack-payload.json > /tmp/slack-fallback.json" in workflow_text
     assert "::warning::Slack rejected the report's blocks" in workflow_text
+
+
+def write_green_pair_with_diagnostics(
+    tmp_path: Path,
+    summaries_dir: Path,
+    *,
+    fixture_trials: Sequence[DiagnosticTrialCheck] = (),
+    behaviour_trials: Sequence[DiagnosticTrialCheck] | None = None,
+    unsupported: Sequence[UnsupportedDiagnosticCell] = (),
+) -> Path:
+    """A pair whose one cell passed, with both of its diagnose jobs' summaries in place.
+
+    The cells are green throughout, so whatever the message says beyond the grid is the diagnostics'
+    doing and nothing else's.
+    """
+    matrix_path = tmp_path / "matrix.json"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [make_cell("main", "default", CellDecision.RUN)],
+        diagnosed_pairs=["main"],
+        diagnosed_harnesses=["codex"],
+        unsupported=unsupported,
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(diagnose_fixture_summary_path(summaries_dir, "main"), fixture_trials)
+    if behaviour_trials is not None:
+        write_diagnostic_summary(diagnose_behaviour_summary_path(summaries_dir, "main", "codex"), behaviour_trials)
+    return matrix_path
+
+
+def test_render_slack_report_carries_the_worst_diagnostics_verdict_on_the_pairs_opening_line(
+    tmp_path: Path,
+) -> None:
+    """The families and harnesses are named at the top, so a night without a measurement is never read
+    as a clean one from the opening line alone."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(DiagnosticVerdict.NOT_MEASURED, not_measured_reason="the workspace never came up")
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_sections(message)[0].startswith(
+        ":white_check_mark: {} -- oracle passed; diagnostics not measured: behaviour codex".format(PAIR_LABEL)
+    )
+    assert "*diagnose behaviour codex* `behaviour`: not measured: the workspace never came up" in read_details(message)
+
+
+def test_render_slack_report_says_diagnostics_passed_without_naming_a_job(tmp_path: Path) -> None:
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED)],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert "-- oracle passed; diagnostics passed\n" in read_sections(message)[0]
+    assert read_details(message) == ""
+
+
+def test_render_slack_report_fails_a_pair_whose_diagnostic_failed_and_rows_every_failing_fact(
+    tmp_path: Path,
+) -> None:
+    """A failed diagnostic is the instrument's own fault, so it fails the pair even with every cell
+    green; each failing fact is a row of its own, because the fact names the reader that regressed.
+
+    The count on the opening line is of the facts that missed, never of the ones a table held back:
+    a trial stopped early holds back everything it asserts, and counting those would turn one defect
+    into a number the size of the table."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[
+                    make_fact_outcome("tools.every_call_has_one_result", FactStatus.FAILED, step_name="work")
+                ],
+                not_recorded_facts=[make_fact_outcome("probe.parsed", FactStatus.NOT_RECORDED, recorded=None)],
+                unmet_preconditions=[
+                    make_fact_outcome("progress.step_ids_agree", FactStatus.PRECONDITION_NOT_MET, recorded=None)
+                ],
+                unexpectedly_passing_facts=[
+                    make_fact_outcome(
+                        "transcript.agent_steps_with_model_name",
+                        FactStatus.UNEXPECTEDLY_PASSING,
+                        recorded="all",
+                        expected="none",
+                        known_failure=KnownFailure(issue=898),
+                    )
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
+    assert message.icon_emoji == UNGREEN_ICON_EMOJI
+    assert "diagnostics failed: behaviour codex (3 facts)" in read_sections(message)[0]
+    rows = read_failed_trials(message)
+    assert rows[0] == ("config", "case", "note")
+    assert [row[0] for row in rows[1:]] == ["diagnose behaviour codex"] * 3
+    assert rows[1][2] == "tools.every_call_has_one_result [work]: false vs expected true"
+    assert rows[3][2].startswith("unexpectedly passing: transcript.agent_steps_with_model_name")
+
+
+def test_render_slack_report_leaves_the_pairs_verdict_alone_for_a_known_or_unfollowed_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """Only a failed diagnostic moves the pair. A known failure is expected every night it is declared,
+    and an agent that did not follow the prompt says nothing about the instrument."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.KNOWN,
+                case_id="fixture",
+                harness="claude",
+                known_facts=[
+                    make_fact_outcome("workers.captured", FactStatus.KNOWN, known_failure=KnownFailure(issue=873))
+                ],
+            )
+        ],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.NOT_FOLLOWED,
+                not_followed_facts=[
+                    make_fact_outcome("agent.worker_launched", FactStatus.NOT_FOLLOWED, step_name="work")
+                ],
+                unmet_preconditions=[
+                    make_fact_outcome("workers.discovered_equals_listed", FactStatus.PRECONDITION_NOT_MET)
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert message.icon_emoji == GREEN_ICON_EMOJI
+    assert "diagnostics not followed: behaviour codex" in read_sections(message)[0]
+    details = read_details(message)
+    assert (
+        "*diagnose behaviour codex* `behaviour`: not followed: agent.worker_launched [work] "
+        "(1 dependent fact(s) not asserted)"
+    ) in details
+    assert "*diagnose fixture* `fixture`: known: workers.captured (#873)" in details
+
+
+def test_render_slack_report_reads_a_diagnose_job_that_left_no_summary_as_broken(tmp_path: Path) -> None:
+    """The job gates nothing, so the details block is the only place its absence is said out loud."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=None,
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context(diagnose_behaviour_result="failure"))
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert "diagnostics broken: behaviour codex" in read_sections(message)[0]
+    assert "*diagnose behaviour codex* -- broken (no diagnostics summary" in read_details(message)
+    # The job's own red result is already explained by the line above, so it raises no second warning.
+    assert "diagnose-behaviour=failure" not in "\n".join(read_sections(message))
+
+
+def test_render_slack_report_names_a_behaviour_cell_the_pair_cannot_run(tmp_path: Path) -> None:
+    """No box is spent to produce a dark cell, so the report is where the missing measurement shows."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED)],
+        unsupported=[UnsupportedDiagnosticCell(pair="main", harness="pi-coding", reason="no pasted-key sign-in")],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert "diagnostics passed (pi-coding unsupported)" in read_sections(message)[0]
+    assert "*diagnose behaviour* not run on this pair: pi-coding" in read_details(message)
+
+
+def test_render_slack_report_reports_the_diagnostics_of_a_pair_whose_every_cell_was_skipped(
+    tmp_path: Path,
+) -> None:
+    """An all-green night moves no SHA, which is exactly when the diagnostics are the only measurement
+    the run took."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("released", PairDecision.SKIP)],
+        [make_cell("released", "default", CellDecision.SKIP)],
+        diagnosed_pairs=["released"],
+        diagnosed_harnesses=["codex"],
+    )
+    write_diagnostic_summary(
+        diagnose_fixture_summary_path(summaries_dir, "released"),
+        [make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+    )
+    write_diagnostic_summary(
+        diagnose_behaviour_summary_path(summaries_dir, "released", "codex"),
+        [
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[make_fact_outcome("manifest.readable", FactStatus.FAILED)],
+            )
+        ],
+    )
+
+    (message,) = render_slack_report(
+        matrix_path, summaries_dir, make_context(oracle_result="skipped", evaluate_result="skipped")
+    )
+
+    assert read_header(message) == "minds-evals: released -- failed"
+    assert "diagnostics failed: behaviour codex (1 fact)" in read_sections(message)[0]
+
+
+def test_render_slack_report_reports_no_diagnostics_on_a_run_that_stopped_after_the_oracle(
+    tmp_path: Path,
+) -> None:
+    """The diagnose jobs are skipped with the rest of the live pass, so nothing about them is claimed."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [make_cell("main", "default", CellDecision.RUN)],
+        diagnosed_pairs=["main"],
+        diagnosed_harnesses=["codex"],
+        unsupported=[UnsupportedDiagnosticCell(pair="main", harness="pi-coding", reason="no pasted-key sign-in")],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+
+    (message,) = render_slack_report(
+        matrix_path,
+        summaries_dir,
+        make_context(
+            is_live_pass_skipped=True,
+            evaluate_result="skipped",
+            diagnose_fixture_result="skipped",
+            diagnose_behaviour_result="skipped",
+        ),
+    )
+
+    assert "diagnostics" not in read_sections(message)[0]
+    assert read_details(message) == ""
+
+
+def test_render_slack_report_names_the_live_invariants_a_cells_own_trials_missed(tmp_path: Path) -> None:
+    """The reading turns "the readers are checked once a night on a fixture" into "on every real
+    trial", and it gates nothing: the cell and the pair stay exactly as their own pass made them."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        tmp_path / "main-haiku-live",
+        harness_config=HAIKU_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(
+        live_invariants_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        [
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                case_id="todo-app",
+                trial_name="todo-app__{}".format(index),
+                harness="claude",
+                failed_facts=[
+                    make_fact_outcome("prep.stage_reached", FactStatus.FAILED),
+                    *(
+                        [make_fact_outcome("steps.boundary_markers_match_case", FactStatus.FAILED)]
+                        if index == 0
+                        else []
+                    ),
+                ],
+            )
+            for index in range(3)
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_details(message) == (
+        "*haiku* live invariants missed: prep.stage_reached (3 of 3 trials);"
+        " steps.boundary_markers_match_case (1 of 3 trials)"
+    )
+    assert read_failed_trials(message) == ()
+
+
+def test_render_slack_report_says_nothing_of_a_cell_whose_trials_held_every_invariant(tmp_path: Path) -> None:
+    """The line exists to name a miss, so a cell that missed none reads as clean rather than as one
+    more line to skip past."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        tmp_path / "main-haiku-live",
+        harness_config=HAIKU_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(
+        live_invariants_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        [make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="todo-app", harness="claude")],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_details(message) == ""
+
+
+def test_render_slack_report_keeps_the_failures_table_within_slacks_row_cap(tmp_path: Path) -> None:
+    """A diagnostic lists every failing fact as a row of its own, so a broken reader can fail more facts
+    than a Slack table holds; the rows Slack refuses would take the whole message with them."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[
+                    make_fact_outcome("fact.number_{}".format(index), FactStatus.FAILED) for index in range(150)
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert_within_slack_limits(message)
+    rows = read_failed_trials(message)
+    assert len(rows) == SLACK_TABLE_ROW_LIMIT
+    assert "showing 99 of 150 failing rows" in "\n".join(
+        element["text"] for block in read_blocks(message, "context") for element in block["elements"]
+    )
+
+
+def test_the_notify_job_waits_for_the_diagnose_jobs_and_passes_their_results() -> None:
+    """The report reads every diagnose summary of a pair, so a notify that did not wait for them would
+    report a pair whose diagnostics had not finished as one whose diagnostics left no summary."""
+    workflow_text = read_scheduled_workflow_text()
+
+    assert "needs: [resolve, oracle, evaluate, diagnose-fixture, diagnose-behaviour]" in workflow_text
+    assert '--diagnose-fixture-result "$DIAGNOSE_FIXTURE_RESULT"' in workflow_text
+    assert '--diagnose-behaviour-result "$DIAGNOSE_BEHAVIOUR_RESULT"' in workflow_text
+
+
+def test_the_live_invariants_never_decide_a_cells_own_verdict() -> None:
+    """The reading is what turns "the readers are checked once a night on a fixture" into "on every
+    real trial". A miss belongs in the report's details; letting its exit code reach the step would
+    make an invariant gate the product's own pass, which nothing in the spec asks for."""
+    workflow_text = read_scheduled_workflow_text()
+
+    check_step = workflow_text.partition("      - name: Check the live pass\n")[2].partition("\n      - ")[0]
+
+    assert check_step, "no live-pass check step in {}".format(SCHEDULED_WORKFLOW_PATH)
+    invariants_call = check_step.partition("minds-evals check-diagnostics")[2]
+    assert invariants_call, "the live pass is not read against the invariants"
+    assert "check_status" not in invariants_call.partition("\n          {")[0]
+    assert 'exit "$check_status"' in check_step

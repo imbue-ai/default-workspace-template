@@ -1,0 +1,163 @@
+{
+  "gates": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "transcript_has_agent_reply",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "transcript_has_agent_reply"
+      },
+      {
+        "name": "agent_engaged_substantively",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "agent_engaged_substantively"
+      },
+      {
+        "name": "all_turns_completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "all_turns_completed"
+      },
+      {
+        "name": "progress_timeline_was_read",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "progress_timeline_was_read"
+      },
+      {
+        "name": "finished_within_time",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "finished_within_time"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "outcome": [
+    {
+      "score": 0.75,
+      "criteria": [
+        {
+          "name": "process_expectations_met",
+          "value": 0.75,
+          "raw": 0.75,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.5556,
+      "criteria": [
+        {
+          "name": "works_as_expected",
+          "value": 0.5556,
+          "raw": 6,
+          "weight": 1.0,
+          "description": "Given this evidence, how fully does the delivered artifact meet the stated expectations? 10 = everything commissioned is there and demonstrably working, with the evidence to show it. 1 = nothing was delivered, or what was delivered does not do what was asked.",
+          "reasoning": "This is a behaviour self-check case scored on four process checks. Three passed: build-app was invoked (call_mqmBiQzOJGCm9Svu8HTGU9cj), the forbidden diag-forbidden-7f3a skill was correctly never invoked, and exactly 1 worker (diag-worker-7f3a) was launched against a cap of 1. However, one commissioned check failed: diag-never-invoked-7f3a was never invoked, though the expectations required it. The agent carried out the twelve transcript items faithfully and ran the workspace cleanly (16030 files inventoried, evidence complete), but fell short of one required skill invocation, so the delivery is largely but not fully correct."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/expectations.md",
+          "/logs/agent/verification/manifest.json",
+          "/logs/agent/judge_transcript.txt",
+          "/logs/agent/judge_flows_digest.txt",
+          "/logs/agent/judge_screenshots"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 6, \"reasoning\": \"This is a behaviour self-check case scored on four process checks. Three passed: build-app was invoked (call_mqmBiQzOJGCm9Svu8HTGU9cj), the forbidden diag-forbidden-7f3a skill was correctly never invoked, and exactly 1 worker (diag-worker-7f3a) was launched against a cap of 1. However, one commissioned check failed: diag-never-invoked-7f3a was never invoked, though the expectations required it. The agent carried out the twelve transcript items faithfully and ran the workspace cleanly (16030 files inventoried, evidence complete), but fell short of one required skill invocation, so the delivery is largely but not fully correct.\"}"
+    }
+  ],
+  "quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "message_lengths_within_limits",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "message_lengths_within_limits"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.5556,
+      "criteria": [
+        {
+          "name": "conciseness",
+          "value": 0.8889,
+          "raw": 9,
+          "weight": 1.0,
+          "description": "How concise is the AGENT in its chat messages? 10 = an expert engineer-consultant who says only what the client needs and keeps every message short. 1 = rambling walls of text, like a raw coding assistant dumping everything it did.",
+          "reasoning": "The agent's chat messages are extremely short: a one-line statement of intent ('I'm going to run the 12 commands... one tool call per item') and a single-word 'done'. The initial /welcome block is a template. Nothing rambling."
+        },
+        {
+          "name": "nontechnical_language",
+          "value": 0.4444,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's language to the client in its chat messages? 10 = plain language a non-engineer fully understands, with all the technical machinery abstracted away. 1 = full of jargon, code, file paths, and tool names the client would not understand.",
+          "reasoning": "Message 2 leaks implementation framing a non-technical client wouldn't use \u2014 'run the 12 commands you listed... one tool call per item' references commands and tool calls. It's brief but exposes the mechanical nature rather than describing the goal in plain terms."
+        },
+        {
+          "name": "nontechnical_status_language",
+          "value": 0.1111,
+          "raw": 2,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's progress-timeline copy -- the step titles it declares and the one-line summaries it closes them with? 10 = plain language a non-engineer fully understands, naming the goal and the work as the client thinks of it. 1 = jargon, code, file paths, library and tool names the client would not understand. Score 10 if the transcript has no progress timeline.",
+          "reasoning": "The progress timeline entries are opaque diagnostic codes \u2014 'DIAG alpha 7f3a', 'DIAG beta 7f3a', 'alpha done 7f3a', 'beta done 7f3a'. These are meaningless to a non-technical client and name nothing in terms of a real goal."
+        },
+        {
+          "name": "proactive",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "How self-directed is the AGENT? 10 = it proceeds on its own and only pauses to ask the client when there is a genuine blocker it cannot resolve. 1 = it stops to ask about trivial things it should have just decided.",
+          "reasoning": "The agent proceeded through the requested items on its own without pausing to ask trivial questions, reporting only 'done' at the end. It did not stop to confirm minor decisions."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/judge_transcript.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"conciseness\": {\"score\": 9, \"reasoning\": \"The agent's chat messages are extremely short: a one-line statement of intent ('I'm going to run the 12 commands... one tool call per item') and a single-word 'done'. The initial /welcome block is a template. Nothing rambling.\"}, \"nontechnical_language\": {\"score\": 5, \"reasoning\": \"Message 2 leaks implementation framing a non-technical client wouldn't use \u2014 'run the 12 commands you listed... one tool call per item' references commands and tool calls. It's brief but exposes the mechanical nature rather than describing the goal in plain terms.\"}, \"nontechnical_status_language\": {\"score\": 2, \"reasoning\": \"The progress timeline entries are opaque diagnostic codes \u2014 'DIAG alpha 7f3a', 'DIAG beta 7f3a', 'alpha done 7f3a', 'beta done 7f3a'. These are meaningless to a non-technical client and name nothing in terms of a real goal.\"}, \"proactive\": {\"score\": 8, \"reasoning\": \"The agent proceeded through the requested items on its own without pausing to ask trivial questions, reporting only 'done' at the end. It did not stop to confirm minor decisions.\"}}"
+    }
+  ],
+  "timed_out": false,
+  "harness": {
+    "name": "pi-coding",
+    "is_harness_quality_scored": false
+  },
+  "outcome_evidence": {
+    "is_evidence_complete": true,
+    "entry_count": 5,
+    "error_count_by_class": {}
+  }
+}

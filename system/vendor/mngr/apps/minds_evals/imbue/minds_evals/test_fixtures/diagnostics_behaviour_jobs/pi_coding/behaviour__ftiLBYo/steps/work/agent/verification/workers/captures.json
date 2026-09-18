@@ -1,0 +1,15 @@
+[
+  {
+    "name": "diag-worker-7f3a",
+    "agent_id": "agent-1431298cfd7548f7b3e5aae27b9408b2",
+    "agent_type": "pi-coding",
+    "state": "stopped",
+    "depth": 0,
+    "lead_name": "",
+    "directory": "workers/diag-worker-7f3a",
+    "is_document_captured": true,
+    "is_stream_captured": true,
+    "is_report_captured": true,
+    "is_overflow": false
+  }
+]

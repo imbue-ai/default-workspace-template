@@ -1,8 +1,12 @@
 import asyncio
 import json
 import subprocess
+import threading
 import time
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 import pytest
@@ -23,8 +27,11 @@ from imbue.minds_evals.minds_bridge import AUTH_MODE_API_KEY
 from imbue.minds_evals.minds_bridge import AccountRecord
 from imbue.minds_evals.minds_bridge import AccountSignIn
 from imbue.minds_evals.minds_bridge import CHAT_APP_FALLBACK_URL
+from imbue.minds_evals.minds_bridge import CHAT_APP_NAME
 from imbue.minds_evals.minds_bridge import CLAUDE_AUTH_STATUS_PATH
 from imbue.minds_evals.minds_bridge import CREATE_CHAT_PATH
+from imbue.minds_evals.minds_bridge import EVENT_DETAILS_COMMAND_LABEL
+from imbue.minds_evals.minds_bridge import MAX_EVENT_DETAIL_COUNT
 from imbue.minds_evals.minds_bridge import MODEL_CHOICE_PATH_TEMPLATE
 from imbue.minds_evals.minds_bridge import ModelSwitchOutcome
 from imbue.minds_evals.minds_bridge import WORKSPACE_APPS_REGISTRY
@@ -41,7 +48,9 @@ from imbue.minds_evals.minds_bridge import create_workspace_and_wait
 from imbue.minds_evals.minds_bridge import derive_modal_environment_name
 from imbue.minds_evals.minds_bridge import describe_agents_listing
 from imbue.minds_evals.minds_bridge import destroy_workspaces
+from imbue.minds_evals.minds_bridge import event_details_command
 from imbue.minds_evals.minds_bridge import fetch_account
+from imbue.minds_evals.minds_bridge import fetch_event_details
 from imbue.minds_evals.minds_bridge import fetch_event_total
 from imbue.minds_evals.minds_bridge import fetch_events_window
 from imbue.minds_evals.minds_bridge import fetch_minds_activation_env
@@ -49,6 +58,7 @@ from imbue.minds_evals.minds_bridge import load_modal_token_env
 from imbue.minds_evals.minds_bridge import parse_activation_exports
 from imbue.minds_evals.minds_bridge import parse_agent_ssh_info
 from imbue.minds_evals.minds_bridge import parse_curl_response
+from imbue.minds_evals.minds_bridge import parse_event_details
 from imbue.minds_evals.minds_bridge import read_box_file_tail
 from imbue.minds_evals.minds_bridge import redact_secret
 from imbue.minds_evals.minds_bridge import resolve_chat_agent_id
@@ -272,6 +282,117 @@ def test_chat_url_shell_snippet_reads_the_registry_row_and_otherwise_falls_back(
         '[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:8017"\n'
     )
     assert _resolved_chat_url(tmp_path) == "http://127.0.0.1:8017"
+
+
+# A claude chat's detail payload for one assistant event: each tool call's full input, as the harness's
+# own JSON text.
+_CLAUDE_EVENT_DETAIL: Final[dict[str, Any]] = {
+    "inputs_by_tool_call_id": {"toolu_1": '{\n  "command": "echo DIAG-7f3a-one"\n}'},
+    "output": None,
+    "thinking": None,
+}
+# An event id holding a space and a slash, served only at its URL-quoted path.
+_QUOTED_EVENT_ID: Final[str] = "evt 7f3a/assistant"
+_SERVED_DETAIL_BY_PATH: Final[dict[str, dict[str, Any]]] = {
+    "/api/chats/chat-1/events/evt%207f3a%2Fassistant/detail": _CLAUDE_EVENT_DETAIL
+}
+
+
+class _EventDetailHandler(BaseHTTPRequestHandler):
+    """The chat app's per-event detail endpoint: a known event's payload, and 404 for any other path."""
+
+    def do_GET(self) -> None:
+        detail = _SERVED_DETAIL_BY_PATH.get(self.path)
+        body = json.dumps(detail if detail is not None else {"detail": "Not Found"}).encode()
+        self.send_response(200 if detail is not None else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Keeps request lines out of the test's stderr."""
+
+
+def test_parse_event_details_reads_each_events_payload_and_passes_over_lines_that_are_not_records(
+    captured_log_messages: list[str],
+) -> None:
+    output = "\n".join(
+        [
+            json.dumps({"event_id": "evt-1-assistant", "detail": _CLAUDE_EVENT_DETAIL}),
+            json.dumps({"event_id": "evt-2-assistant", "detail": None}),
+            "Traceback (most recent call last):",
+            "",
+            json.dumps({"event_id": "evt-3-assistant", "detail": ["not", "a", "payload"]}),
+            json.dumps(["no", "event", "id"]),
+        ]
+    )
+
+    assert parse_event_details(output) == {
+        "evt-1-assistant": _CLAUDE_EVENT_DETAIL,
+        "evt-2-assistant": None,
+        "evt-3-assistant": None,
+    }
+    # Only the line that is not JSON is worth a warning; a blank line is nothing at all.
+    assert sum(1 for message in captured_log_messages if "event-detail line that is not JSON" in message) == 1
+
+
+def test_event_details_command_reads_each_events_payload_from_the_chat_app_the_registry_names(tmp_path: Path) -> None:
+    """Run for real against a stand-in chat app on a port only the registry names, so the answers prove the
+    program read the registry row, quoted the event id into the path, and printed one record per event."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _EventDetailHandler)
+    serving_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serving_thread.start()
+    try:
+        registry = tmp_path / WORKSPACE_APPS_REGISTRY
+        registry.parent.mkdir(parents=True)
+        registry.write_text(
+            '[[apps]]\nname = "{}"\nurl = "http://127.0.0.1:{}"\n'.format(CHAT_APP_NAME, server.server_port)
+        )
+        completed = subprocess.run(
+            ["sh", "-c", event_details_command("chat-1", [_QUOTED_EVENT_ID, "evt-unknown"])],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        serving_thread.join()
+
+    assert parse_event_details(completed.stdout) == {_QUOTED_EVENT_ID: _CLAUDE_EVENT_DETAIL, "evt-unknown": None}
+
+
+def test_fetch_event_details_asks_nothing_for_no_events_and_reads_nothing_from_a_bridge_that_did_not_answer(
+    tmp_path: Path,
+) -> None:
+    environment = MockBoxEnvironment(
+        tmp_path, [ScriptedExecRule(EVENT_DETAILS_COMMAND_LABEL, [failed_result("mngr exec: agent not reachable")])]
+    )
+
+    assert asyncio.run(fetch_event_details(environment, {}, "ws-1", "chat-1", [])) == {}
+    assert environment.exec_commands == []
+    assert asyncio.run(fetch_event_details(environment, {}, "ws-1", "chat-1", ["evt-1-assistant"])) is None
+
+
+def test_fetch_event_details_asks_for_the_newest_capped_number_of_events_in_one_exec(tmp_path: Path) -> None:
+    """The newest events are the current step's, so a trial past the cap loses its oldest calls first."""
+    event_ids = ["evt-{:04d}".format(index) for index in range(MAX_EVENT_DETAIL_COUNT + 1)]
+    newest_id = event_ids[-1]
+    answer = json.dumps({"event_id": newest_id, "detail": _CLAUDE_EVENT_DETAIL})
+    environment = MockBoxEnvironment(
+        tmp_path, [ScriptedExecRule(EVENT_DETAILS_COMMAND_LABEL, [ok_result(mngr_exec_json(answer + "\n"))])]
+    )
+
+    details = asyncio.run(fetch_event_details(environment, {}, "ws-1", "chat-1", event_ids))
+
+    assert details == {newest_id: _CLAUDE_EVENT_DETAIL}
+    (command,) = environment.exec_commands
+    assert newest_id in command
+    assert event_ids[1] in command
+    assert event_ids[0] not in command
 
 
 def test_workspace_curl_keeps_only_a_failure_that_said_something(tmp_path: Path) -> None:
@@ -1163,14 +1284,50 @@ def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
         tmp_path,
         [
             ScriptedExecRule("tar czf /tmp/post_message_1", [ok_result(mngr_exec_json(""))]),
-            ScriptedExecRule("mngr rsync", [ok_result()]),
+            ScriptedExecRule("mngr rsync", [ok_result("91834\n")]),
         ],
     )
 
-    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1"))
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1")) == 91834
 
     pull_command = environment.exec_commands[-1]
     assert "{}/snapshots/".format(minds_bridge.BOX_LOGS_DIR) in pull_command
+    # The size is measured on the tarball the pull landed, not on the workspace's copy.
+    assert pull_command.endswith("wc -c < {}/snapshots/post_message_1.tar.gz".format(minds_bridge.BOX_LOGS_DIR))
+
+
+def test_a_snapshot_whose_pull_failed_reports_no_bytes(tmp_path: Path) -> None:
+    environment = MockBoxEnvironment(
+        tmp_path,
+        [
+            ScriptedExecRule("tar czf /tmp/post_message_2", [ok_result(mngr_exec_json(""))]),
+            ScriptedExecRule("mngr rsync", [failed_result("rsync: connection unexpectedly closed")]),
+        ],
+    )
+
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_2")) == 0
+
+
+def test_a_snapshot_whose_tar_failed_is_never_pulled_and_reports_no_bytes(tmp_path: Path) -> None:
+    environment = MockBoxEnvironment(
+        tmp_path, [ScriptedExecRule("tar czf /tmp/post_message_3", [failed_result("mngr exec: unreachable")])]
+    )
+
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_3")) == 0
+    assert not any("mngr rsync" in command for command in environment.exec_commands)
+
+
+@pytest.mark.parametrize(
+    ("output", "expected_byte_count"),
+    [
+        pytest.param("91834\n", 91834, id="bare-count"),
+        pytest.param("Syncing files...\n  91834 \n", 91834, id="count-after-rsync-chatter"),
+        pytest.param("", 0, id="nothing-printed"),
+        pytest.param("wc: no such file\n", 0, id="not-a-count"),
+    ],
+)
+def test_parse_trailing_byte_count_reads_only_a_count_on_the_last_line(output: str, expected_byte_count: int) -> None:
+    assert minds_bridge.parse_trailing_byte_count(output) == expected_byte_count
 
 
 def test_a_snapshot_carries_the_transcripts_of_agents_the_run_destroyed(tmp_path: Path) -> None:
@@ -1180,11 +1337,11 @@ def test_a_snapshot_carries_the_transcripts_of_agents_the_run_destroyed(tmp_path
         tmp_path,
         [
             ScriptedExecRule("tar czf /tmp/post_message_1", [ok_result(mngr_exec_json(""))]),
-            ScriptedExecRule("mngr rsync", [ok_result()]),
+            ScriptedExecRule("mngr rsync", [ok_result("512\n")]),
         ],
     )
 
-    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1"))
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1")) == 512
 
     tar_command = environment.exec_commands[0]
     assert minds_bridge.PRESERVED_AGENT_STATE_DIR in tar_command

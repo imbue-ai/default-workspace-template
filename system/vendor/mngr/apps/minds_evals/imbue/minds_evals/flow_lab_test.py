@@ -20,7 +20,14 @@ from imbue.mngr.utils.polling import wait_for
 
 def test_the_opening_record_renders_as_the_url_it_opened() -> None:
     record = ui_flows.flow_init_record(
-        "Add a task.", "the task is listed", "http://127.0.0.1:8000/?latency=300", "page ...", "step_000.png", "now"
+        "Add a task.",
+        "the task is listed",
+        "http://127.0.0.1:8000/?latency=300",
+        "page ...",
+        "step_000.png",
+        2048,
+        True,
+        "now",
     )
 
     assert flow_lab.describe_record(record) == "opened http://127.0.0.1:8000/?latency=300"
@@ -37,6 +44,8 @@ def test_an_action_record_renders_as_its_step_in_the_agents_history() -> None:
         StepReaction.SETTLED,
         "page ...",
         "step_003.png",
+        2048,
+        True,
         "",
         "now",
     )
@@ -57,6 +66,8 @@ def test_a_step_that_did_not_run_renders_with_its_error() -> None:
         StepReaction.UNOBSERVED,
         "page ...",
         "",
+        0,
+        False,
         "no such element",
         "now",
     )

@@ -1,0 +1,265 @@
+{
+  "gates": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "transcript_has_agent_reply",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "transcript_has_agent_reply"
+      },
+      {
+        "name": "agent_engaged_substantively",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "agent_engaged_substantively"
+      },
+      {
+        "name": "all_turns_completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "all_turns_completed"
+      },
+      {
+        "name": "progress_timeline_was_read",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "progress_timeline_was_read"
+      },
+      {
+        "name": "finished_within_time",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "finished_within_time"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "harness_quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "main_harness_soundness",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "How soundly the lead agent's own skills, plugins and tooling held up"
+        },
+        {
+          "name": "worker_harness_soundness",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "How soundly the launched workers' skills, plugins and tooling held up"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "main_harness_success",
+          "value": 1.0,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How well did the harness hold for the LEAD agent? 5 = every skill and tool it reached for resolved and worked. 3 = something failed but the agent routed around it and the work still happened. 1 = the tooling it depended on did not load and the work it was for did not happen.",
+          "reasoning": "The processed trajectory shows 5 steps with 0 kept as harness-relevant: no skill invocations, no tool errors, and no failure signatures. A run with no failure signatures and no errored steps is a clean harness by definition, so this scores a 5."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/harness_main.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 5, \"reasoning\": \"The processed trajectory shows 5 steps with 0 kept as harness-relevant: no skill invocations, no tool errors, and no failure signatures. A run with no failure signatures and no errored steps is a clean harness by definition, so this scores a 5.\"}"
+    },
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "worker_harness_success",
+          "value": 1.0,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How well did the harness hold for the agent's LAUNCHED WORKERS? 5 = every skill and tool they reached for resolved and worked, or the trial launched no worker. 3 = something failed but the worker routed around it and the hardening still happened. 1 = the tooling the worker depended on did not load, so the pass it was launched for did not really run.",
+          "reasoning": "This trial launched no worker, so there is no worker harness to grade. Per the criteria, a trial with no launched worker receives a 5 by default since there was no worker tooling that could have failed."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/harness_workers.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 5, \"reasoning\": \"This trial launched no worker, so there is no worker harness to grade. Per the criteria, a trial with no launched worker receives a 5 by default since there was no worker tooling that could have failed.\"}"
+    }
+  ],
+  "outcome": [
+    {
+      "score": 0.6333,
+      "criteria": [
+        {
+          "name": "files_expectations_met",
+          "value": 0.5,
+          "raw": 0.5,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        },
+        {
+          "name": "app_registered",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        },
+        {
+          "name": "http_expectations_met",
+          "value": 0.6667,
+          "raw": 0.6666666666666666,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        },
+        {
+          "name": "ui_flows_completed",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        },
+        {
+          "name": "time_to_goal_within_expectations",
+          "value": 0.0,
+          "raw": 0.0,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.7778,
+      "criteria": [
+        {
+          "name": "works_as_expected",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "Given this evidence, how fully does the delivered artifact meet the stated expectations? 10 = everything commissioned is there and demonstrably working, with the evidence to show it. 1 = nothing was delivered, or what was delivered does not do what was asked.",
+          "reasoning": "The commissioned outcome was that the workspace serves the seeded to-do fixture unchanged, and the client explicitly reinforced this by instructing the agent to reply only 'acknowledged' and do nothing else \u2014 which the agent did. The evidence confirms the fixture is intact and working: the todo-fixture answers HTTP 200 with the correct <title>Todo</title>, index.html is present, and all seven UI flows completed with the correct behavior (add/complete/delete of 'walk dog', armed double-click delete of 'Buy milk', pending/saving latency, ticker showing only the clock changing, start-over reloading root, and the nameless-checkbox flow). The screenshots corroborate correct seed state (2 tasks, 1 completed) and correct transient states. The failing checks \u2014 the missing absent-7f3a.html file and the absent DIAG-absent-7f3a body marker \u2014 are negative-control probes describing content that is deliberately absent from an unchanged fixture; their failure is by design and consistent with 'serve the fixture unchanged' rather than a shortfall in the delivery. The app-registration check passed trivially ('at least 0'). The timing entry's 'failed' status only reflects that an http-class control probe did not match, not slowness. Overall the delivered artifact does what was asked and is demonstrably working, with the only non-passing entries being intentional absent-markers."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/expectations.md",
+          "/logs/agent/verification/manifest.json",
+          "/logs/agent/judge_transcript.txt",
+          "/logs/agent/judge_flows_digest.txt",
+          "/logs/agent/judge_screenshots"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 8, \"reasoning\": \"The commissioned outcome was that the workspace serves the seeded to-do fixture unchanged, and the client explicitly reinforced this by instructing the agent to reply only 'acknowledged' and do nothing else \u2014 which the agent did. The evidence confirms the fixture is intact and working: the todo-fixture answers HTTP 200 with the correct <title>Todo</title>, index.html is present, and all seven UI flows completed with the correct behavior (add/complete/delete of 'walk dog', armed double-click delete of 'Buy milk', pending/saving latency, ticker showing only the clock changing, start-over reloading root, and the nameless-checkbox flow). The screenshots corroborate correct seed state (2 tasks, 1 completed) and correct transient states. The failing checks \u2014 the missing absent-7f3a.html file and the absent DIAG-absent-7f3a body marker \u2014 are negative-control probes describing content that is deliberately absent from an unchanged fixture; their failure is by design and consistent with 'serve the fixture unchanged' rather than a shortfall in the delivery. The app-registration check passed trivially ('at least 0'). The timing entry's 'failed' status only reflects that an http-class control probe did not match, not slowness. Overall the delivered artifact does what was asked and is demonstrably working, with the only non-passing entries being intentional absent-markers.\"}"
+    }
+  ],
+  "quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "message_lengths_within_limits",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "message_lengths_within_limits"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.75,
+      "criteria": [
+        {
+          "name": "conciseness",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "How concise is the AGENT in its chat messages? 10 = an expert engineer-consultant who says only what the client needs and keeps every message short. 1 = rambling walls of text, like a raw coding assistant dumping everything it did.",
+          "reasoning": "Message 2 is a single word, perfectly concise. Message 1 is a standard welcome blurb that's a bit long but reasonable for an intro. Very little to fault."
+        },
+        {
+          "name": "nontechnical_language",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's language to the client in its chat messages? 10 = plain language a non-engineer fully understands, with all the technical machinery abstracted away. 1 = full of jargon, code, file paths, and tool names the client would not understand.",
+          "reasoning": "Plain, friendly language overall. Minor mild jargon like 'AI operating system' and 'skills', but nothing a non-technical client couldn't follow."
+        },
+        {
+          "name": "nontechnical_status_language",
+          "value": 1.0,
+          "raw": 10,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's progress-timeline copy -- the step titles it declares and the one-line summaries it closes them with? 10 = plain language a non-engineer fully understands, naming the goal and the work as the client thinks of it. 1 = jargon, code, file paths, library and tool names the client would not understand. Score 10 if the transcript has no progress timeline.",
+          "reasoning": "No progress timeline blocks appear in the transcript, so this scores 10 by default."
+        },
+        {
+          "name": "proactive",
+          "value": 0.4444,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How self-directed is the AGENT? 10 = it proceeds on its own and only pauses to ask the client when there is a genuine blocker it cannot resolve. 1 = it stops to ask about trivial things it should have just decided.",
+          "reasoning": "The agent simply followed the client's explicit one-word instruction. There is essentially no real task work here to demonstrate self-direction, so this is a neutral middle score for lack of evidence."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/judge_transcript.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"conciseness\": {\"score\": 8, \"reasoning\": \"Message 2 is a single word, perfectly concise. Message 1 is a standard welcome blurb that's a bit long but reasonable for an intro. Very little to fault.\"}, \"nontechnical_language\": {\"score\": 8, \"reasoning\": \"Plain, friendly language overall. Minor mild jargon like 'AI operating system' and 'skills', but nothing a non-technical client couldn't follow.\"}, \"nontechnical_status_language\": {\"score\": 10, \"reasoning\": \"No progress timeline blocks appear in the transcript, so this scores 10 by default.\"}, \"proactive\": {\"score\": 5, \"reasoning\": \"The agent simply followed the client's explicit one-word instruction. There is essentially no real task work here to demonstrate self-direction, so this is a neutral middle score for lack of evidence.\"}}"
+    }
+  ],
+  "timed_out": false,
+  "harness": {
+    "name": "claude",
+    "is_harness_quality_scored": true
+  },
+  "outcome_evidence": {
+    "is_evidence_complete": true,
+    "entry_count": 18,
+    "error_count_by_class": {}
+  }
+}

@@ -37,11 +37,13 @@ def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
-# Every hit is inside `templates/`, which runs as standalone scripts in the verifier container:
-# stdout and stderr are the only channel a grading failure has to a harbor log, and loguru is not
-# installed there.
+# Every hit is code that runs somewhere loguru is not: the standalone scripts under `templates/` (the
+# verifier container and the box probe), the box-side scripts under `resources/` that answer their
+# caller on stdout, and the python programs `evidence_collection.py`, `diagnostic_probe.py` and
+# `minds_bridge.py` ship into the workspace as strings, whose printed output is the exec's reply. Any
+# hit in code the host process runs is new.
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(7))
+    rc.check_bare_print(_DIR, snapshot(14))
 
 
 # --- Exception handling ---
@@ -140,14 +142,14 @@ def test_prevent_exit_stack() -> None:
 # `test_flow_lab.py` implement and drive that loop's executor interface, so all of them are
 # excluded: their hits track how many trials the tests exercise rather than how much async the
 # project chooses. Within those files, keep new async to what harbor's interfaces force.
-# What remains counted is the async that is optional. Today that is two LiteLLM proxy callbacks in
+# What remains counted is the async that is optional. Today that is three LiteLLM proxy callbacks in
 # `resources/box_proxy_hooks.py`, whose signatures the proxy fixes, plus three test strings naming
 # the `create_worker.py await` subcommand, which the regex reads as the keyword. Any increase is
 # new optional async, which belongs in blocking code instead.
 def test_prevent_async_await() -> None:
     rc.check_async_await(
         _DIR,
-        snapshot(5),
+        snapshot(6),
         (
             "driver.py",
             "driver_test.py",

@@ -212,8 +212,9 @@ against a dataset shares its one image build and one generation.
 The harness follows the **provider lane** the workspace is signed in on, because that is how the
 product itself decides it; the model, effort and speed tier are then set through the product's own
 model endpoint before turn 1. The lanes that can be signed in without a human are `anthropic` (the
-claude harness), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
-Each of them offers a pasted-key sign-in, which is the only kind a run can drive; the workspace's
+claude harness), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding);
+`harness_for_lane` in `data_types.py` is that mapping. Each of them offers a pasted-key sign-in,
+which is the only kind a run can drive; the workspace's
 one other lane, `google` (antigravity), offers only browser flows on a PTY and so needs a person at
 it.
 
@@ -479,10 +480,15 @@ Five artifacts answer "what happened", in the order worth reading:
   agents listing, the chat agent's state, or that the bridge is answering nothing at all), so a wait
   that never finishes says why.
 - `agent/driver_events.jsonl` -- what the harness saw, as distinct from what the workspace
-  recorded: the workspace UI feed the driver polled, followed by one record per decider-model call
-  with the message it produced (the trajectory's `extra.minds_evals.decider_turns` carries the same
-  calls without their text). Written host-side after every turn and again once the evidence phase is
-  done, never mirrored into the box, and touched by no grade-time reader. Reach for it when the
+  recorded: the workspace UI feed the driver polled, then the detail payloads it read of that feed's
+  tool calls, followed by one record per decider-model call with the message it produced (the
+  trajectory's `extra.minds_evals.decider_turns` carries the same calls without their text). Every
+  record names its own kind under `type`: a polled event is `feed_event` and keeps the workspace's
+  event verbatim under `event` -- which has a `type` of its own (`assistant_message`,
+  `user_message`, ...) and is why the kinds are not flattened together -- a detail payload is
+  `event_detail` and carries the `event_id` it belongs to beside the chat app's payload under
+  `detail`, and a decider call is `decider_message`. Written host-side after every turn and again once the
+  evidence phase is done, never mirrored into the box, and touched by no grade-time reader. Reach for it when the
   conversation went wrong on the harness's side of the wire: replies the driver could not make out, a
   decider that answered with something other than the message that reached the workspace, or an eval
   that has drifted from the workspace template it drives.
@@ -580,7 +586,9 @@ transcript contributes. The marker is cosmetic: `system` is the source every gra
 or word count sees it, and `final_metrics.total_steps` stays the conversation's own count. In the
 workspace's own document the marker is placed at the step's opening client message, or by timestamp
 when that message is not in the document; a boundary that resolves to neither is dropped rather than
-guessed at. A task without steps has nothing to divide and gets no marker.
+guessed at. That message rides in the marker's own `extra.minds_evals.opening_message` (empty when
+the step ended before the client said anything), so the placement is checkable against the
+conversation from the document alone. A task without steps has nothing to divide and gets no marker.
 
 A workspace whose mngr predates ATIF cannot answer `mngr transcript --format atif`, and any other
 capture failure (bridge, pull, download) is recorded the same way: grading proceeds on the hand-built
@@ -609,7 +617,8 @@ graded is legible against the ones before it. The marker is cosmetic: `system` i
 no judge, gate, or word count sees it, and `final_metrics.total_steps` stays the conversation's own
 count. In the workspace's own document the marker is placed at the step's opening client message, or
 by timestamp when that message is not in the document; a boundary that resolves to neither is dropped
-rather than placed on a guess. A case without steps has nothing to divide and gets no marker.
+rather than placed on a guess. Each marker carries that opening message in its own
+`extra.minds_evals.opening_message`. A case without steps has nothing to divide and gets no marker.
 
 ## Eval config
 
@@ -688,6 +697,18 @@ not until the box clones it inside every trial.
 - `state.json` also carries `timed_out_reason`: empty while the trial is going, and otherwise prose
   naming which wait ran out. `timed_out: true` on its own cannot tell a workspace that never came up
   from an agent that stopped replying halfway through.
+- `state.json` carries `preparation_stage` as well: the last stage of workspace preparation the trial
+  completed, one of `created`, `proxied`, `signed_in`, `chat_created`, `welcomed` and `switched`, then
+  `conversation` once turn 1 has been sent. It is empty before the workspace exists. A trial with no
+  proxy never records `proxied`, and one whose harness config names no model never records `switched`.
+  A clone preparation or workspace create that raises still writes the state: the trial is marked
+  `timed_out`, with `timed_out_reason` naming the error, before the error propagates to harbor.
+- `state.json` carries three more readings of the run beside `entries`: `snapshot_byte_count`, the
+  size of the last workspace snapshot pulled (0 when that pull failed, and `null` on a trial that
+  pulled none, which is every trial with snapshots turned off); `decider_call_count`, how many calls
+  the driver made to the decider model, which a goal entry pushes past the message count because the
+  call that decides to stop is one too; and `client_messages`, every message the driver sent as the
+  client, in order, blank ones left out.
 - `elapsed_seconds` is the whole trial's, and `step_elapsed_seconds` is this step's -- the span
   `timeout_seconds` bounds, since for a stepped case that key is only the step's share of the
   conversation budget. On a flat case the two agree.
@@ -865,6 +886,87 @@ from an agent that does not look.
 - Keep the datasets small. A source is copied into every task directory that uses it and travels
   into the box once per step.
 
+### Seeding a case
+
+A case's first step can boot its workspace with a known app already in it, the way the workspace
+boots with the template's own apps. The self-diagnostic fixture case
+(`specs/minds-evals-self-diagnostics/spec.md`) uses this to measure the instrument against an app
+whose every answer is fixed.
+
+```json
+"steps": [{
+  "name": "instrument",
+  "seed": {"app": {"source": "flow_lab_apps/todo", "name": "todo-fixture", "port": 8090}},
+  "prompts": ["Reply with the single word: acknowledged. Do not do anything else."]
+}]
+```
+
+- `seed` is a key of a stepped case's **first step** only. Harbor carries per-task files into the
+  box through a step's `workdir/` alone, so a case that wants a seed and nothing else is a stepped
+  case one step long. Generation rejects `seed` on a later step, on a flat case and at case level.
+- `source` is a directory relative to the **minds_evals project root** (`apps/minds_evals/`), not to
+  the eval config's directory as `files` sources are: a config under `configs/` could otherwise never
+  reach `flow_lab_apps/`, and the flow lab and a trial must drive one copy of a fixture. The directory
+  must hold an `app.toml` whose `name` is the seed's and whose `icon` names a file beside it; the
+  template refuses to register a new app without an icon.
+- `name` is the app's registry name and supervisord program name, and must pass the template's
+  app-name rule (lowercase letters, digits and underscores in hyphen-separated runs, at most 32
+  characters, no `host-` or `agent-` prefix, not `localhost` or `auth`).
+- `port` is the loopback port the app binds, and may not be one the template's own services take
+  (`7681`, `7682`, `8000`, `8010`, `8081`, `8300`, `8301`).
+
+**How it travels.** Generation copies `source` into the step's `workdir/seed_app/`, and the step's
+`setup.sh` moves it to `/work/step_seeds/<name>/`, beside the uploads and for the same reason. Nothing
+goes into `environment/`, so the image cache is untouched.
+
+**The build**, in the box, before the workspace exists, right after the eval-case commit:
+
+1. **The seed commit.** A throwaway detached worktree of the case clone at `dwt_sha` gets the app at
+   `system/fixtures/<name>/` and a `[program:<name>]` block appended to `system/supervisord.conf`,
+   which registers the app from its manifest and serves the directory with
+   `python3 -m http.server <port> --bind 127.0.0.1` (`autostart`, `autorestart`, `startretries=3`).
+   It is committed with the eval-case commit's fixed identity and dates: `seed_commit_sha`, the seed as
+   a change to the pinned template alone. Not under `system/apps/`, where the template's root
+   `pyproject.toml` makes every directory a uv workspace member that needs a `pyproject.toml` of its own.
+2. **The merge.** On the case clone's checked-out branch, `git merge --no-ff --no-edit
+   <seed_commit_sha>` with the same identity and dates. A merge that leaves unmerged paths is a
+   **conflict**: the paths are recorded and the merge aborted.
+3. **The collision check.** The merged `system/supervisord.conf` is refused if it holds a second
+   `[program:<name>]`, another program already registers the seed's name, or another program's
+   `forward_port.py --url` claims the seed's port. Any of those is a **collision**, and the branch is
+   reset to the case base.
+4. **The seeded SHA.** On a clean build the branch head is the merge commit, `seeded_sha`, and the
+   worktree is removed. The workspace is created from it, and `dwt_sha` still names the template the
+   pair pins. Both commits have fixed dates, so rebuilding the seed on the same case base yields the
+   same `seeded_sha`.
+5. **The seed comes up.** Right after the workspace is created, before the proxy or sign-in, the
+   driver polls `supervisorctl status <name>` and the app registry until the program is `RUNNING` and
+   its row exists. A program supervisord has given up on (`FATAL`), or one still restarting
+   (`BACKOFF`) after more polls than its start retries, ends the trial as timed out naming the seed,
+   and so does a seed that is not up within the preparation budget.
+
+**An impossible seed.** A conflict or a collision ends the trial before the workspace is created, so
+nothing beyond the box is paid for. `state.json` records the trial timed out with a reason naming the
+conflicted paths or the collisions, and its `seed` record carries `build_status` (`conflict` or
+`collision`) and an `impossible_reason`; then the step raises `SeedBuildError`. Harbor records the
+exception and aborts any later steps. A seeded trial must be judged from that record, never from its
+reward.
+
+**What gets recorded.** `state.json`'s `seed` holds the app name, `build_status` (`clean`, `conflict`,
+`collision`), `seed_commit_sha`, `seeded_sha`, the conflicted paths, the collisions and the
+`impossible_reason`; it is `null` on a trial with no seed build. `preparation_stage` gains
+`seed_built` (reached before the workspace exists) and `seed_running`.
+
+**What the bundle holds.** The deliverable bundle is cut from `seeded_sha`, so it is `seeded_sha..HEAD`:
+the workspace's bootstrap commit and what the agent changed, and none of the seed. `repo_state.json`
+records `seed_commit_sha` and `seeded_sha` beside `base_sha` (which on a seeded trial is
+`seeded_sha`), and a replay rebuilds the seed onto the regenerated clone, checks it reproduces
+`seeded_sha`, and unbundles onto it. An agent that commits nothing still leaves the bootstrap commit
+in the range, so a bundle is written and `repo_state.json`'s `agent_commit_count` is `0`.
+
+The seeded app's registry row is a class of its own, neither pre-existing nor delivered; see
+[What counts as a delivered app](#what-counts-as-a-delivered-app).
+
 ### Per-step verification
 
 The evidence phase runs at the end of **every** step, against that step's expectations and within
@@ -892,8 +994,9 @@ task.toml              [[steps]] with name, min_reward and split timeouts; multi
 environment/           byte-identical across the dataset, as for a flat case
 steps/<name>/
   instruction.md       the step's prose plus the fenced JSON config for THIS step
-  workdir/             only for a step with files
+  workdir/             only for a step with files or a seed
     step_files/<upload_id>/...
+    seed_app/...       the seeded app, on a seeded case's first step
     setup.sh
   tests/               a complete copy of the standard verifier whose case.json holds this step's
                        expanded expectations
@@ -973,16 +1076,15 @@ nothing would outscore one that ships a working app in terse messages. A case th
   either way, which is how a later step probes what an earlier one delivered.
 - `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
   *delivered* app registered in the workspace's `data/.state/apps.toml`, its supervisord service
-  running, an HTTP 200 from each delivered app's root path, and the delivered repo captured as a git
+  running, an HTTP 200 from each delivered or seeded app's root path, and the delivered repo captured as a git
   bundle. "Delivered" is narrower than "not pre-existing" -- see below. Optional
   `min_registered_apps`, `http`, and `files` entries *refine* that set rather than replacing it.
   Unknown kinds and unknown keys are rejected at generation time.
 - `test_commands` are run in the delivered repo and recorded for the judge, but never gated: gating
   them would punish cases whose prompts never mentioned tests.
 - `ui_flows` are natural-language flows through the delivered UI, each with a verifiable end
-  condition -- see [UI flows](#ui-flows). A flow's reserved `script` field is *rejected* at
-  generation time: scripted execution has no semantics yet, and accepting it would report a
-  completed trial for verification that never ran.
+  condition -- see [UI flows](#ui-flows). A flow may instead carry a `script` of exact actions that
+  runs with no model call -- see [Scripted flows](#scripted-flows).
 - `process` grades **how** the agent worked rather than what it delivered, for cases whose ask is
   about the route as much as the destination ("show me a mockup, and do not start
   hardening"). It takes `required_skills`, `forbidden_skills` and `max_worker_launches`, each
@@ -1067,6 +1169,10 @@ nothing would outscore one that ships a working app in terse messages. A case th
   could ever declare itself satisfied.
 - `fresh_env` is reserved and must be left unset. `fresh_env: true` is rejected at generation time,
   for the same reason: no fresh workspace is booted, so it would verify nothing.
+- `max_judge_screenshots` bounds how many flow screenshots the outcome judge is shown in all, in place
+  of the default 24; see [What the judges read](#what-the-judges-read).
+- A `ui_flows` entry may carry notes for its reader under keys starting with `_comment`, since JSON has
+  no comments. Generation ignores them there, and nowhere else accepts them.
 
 The kind is expanded into its explicit check list **once**, in the generator (`expectations.py`), and
 the expanded form is written identically into `instruction.md` and `tests/case.json` -- which is what
@@ -1085,17 +1191,63 @@ verification/
   file_inventory.jsonl   # {path, size_bytes, mtime} per file (snapshot excludes + .git, 20k cap)
   apps.toml              # verbatim registry capture
   services.txt           # supervisorctl status output
-  repo_state.json        # HEAD sha, the base and dwt-tip shas, commit count, git status --porcelain
-  deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the agent's own commits
+  supervisord.conf       # verbatim capture of the merged supervisord config the rows are joined through
+  isolated_instance_services.txt  # verbatim capture of the isolated-instance state the preview rows are read from
+  repo_state.json        # HEAD sha, the base and dwt-tip shas, commit counts (all, bootstrap, agent), git status --porcelain
+  deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the workspace's bootstrap commit, then the agent's own
   common_transcript.jsonl    # the workspace agent's common transcript, as `mngr transcript --format jsonl` wrote it
   workspace_trajectory.json  # the unmodified ATIF document `mngr transcript --format atif` built from it
-  workers/agents.json        # `mngr list --format json` at collection time
+  tickets.jsonl          # one {id, type, status, is_step, agent, title, summary, created, closed} per data/.tickets/*.md
+  workers/agents.json        # `mngr list --format json` at collection time, on every trial, labels and errors included
+  workers/listing.json       # how that listing itself went: {exit_code, errors, is_complete}
+  workers/captures.json      # one record per worker the capture handled, overflowed launches included
   workers/<name>/            # per launched worker: trajectory.json, common_transcript.jsonl, reports/
   http/<check>_<n>_<app>.json  # per probe: status, headers, timing, body head (256 KB cap)
-  flows/<slug>/log.jsonl # per UI-flow step: the verbatim page state, the action, the reasoning
+  flows/<slug>/log.jsonl # per UI-flow step: the verbatim page state, the action, the reasoning, the frame's size
+  flows/<slug>/run.json  # how that flow ended: {status, reason, verifier_call_count}
   flows/<slug>/step_NNN.png  # a screenshot per step
   trace.jsonl            # every bridge command the collector ran, failures included
 ```
+
+Three manifest entry kinds carry a structured reading beside their prose. An HTTP probe's entry
+carries `status_code`, the status it observed (`0` for a refused connection, null when the bridge
+never delivered the probe). A `test_command` entry
+carries `exit_code`, and each declared files check has an entry of its own (`files_<n>`) carrying
+`matched_count`: how many inventory paths its glob matched. The count is taken inside the workspace
+during the inventory walk, over exactly the entries the inventory records and with the same
+`fnmatchcase` matching the verifier applies. The entry is `failed` below the check's `min_count`, and
+`error` when the inventory itself was not captured. The verifier still scores `files_expectations_met`
+from the inventory file, so a corrected glob is picked up on a regrade.
+
+`tickets.jsonl` holds the workspace's `tk` records: every ticket file under the repo's `data/.tickets/`
+except its README, read in one exec and bounded in size. `is_step` is the ticket's `step: true`, and
+`summary` is the `## Summary` section tk writes when a ticket is closed. Like the transcript, it is the
+trial's record rather than outcome evidence, so it adds no manifest entry. A capture that fails writes
+the file with one `{"failure_reason": "<why>"}` record and nothing else, which is how an unread
+directory is told apart from one holding no tickets. A ticket file with no frontmatter is left out.
+
+The agent listing is taken on every trial with a workspace, not only when the chat agent's commands
+show a worker launch. `workers/agents.json` is written from the listing itself, so it is there even
+when no worker was captured. It keeps each agent's mngr `labels` (`agent_created` marks a worker
+another agent created) and the listing's `errors`, which say whether the listing reached every
+provider. `workers/listing.json` beside it records how the listing command itself went -- its
+`exit_code` (`null` when the bridge never ran it), those same `errors`, and `is_complete`, true only
+for a listing that ran, exited 0 and reported no errors. Only a complete listing can call a worker
+it does not name destroyed, so an unread listing and an empty one must not read alike.
+
+`workers/captures.json` records every worker the capture handled: one object per capture with the
+worker's `name`, `agent_id`, `agent_type`, `state`, `depth`, `lead_name`, its `directory` under the
+bundle and whether each of its three parts came out, then one per launch the caps left uncaptured,
+carrying `is_overflow: true` and nulls for everything a capture would have answered. It is written
+on every trial with a workspace, the empty list included.
+
+Each `init` and `action` record in a flow's `log.jsonl` carries `screenshot_byte_count` and
+`is_screenshot_png`. The step script reads both back from the frame it wrote, so a frame that exists
+but is empty, or is not an image, shows as such without being opened. Each finished flow also writes
+`flows/<slug>/run.json`: the flow's `status`, the `reason` it did not complete (empty when it did),
+and `verifier_call_count`, the calls that flow alone made to its verification agent (zero for a
+scripted flow, which makes none). It is a file of its own rather than a last line of the log because
+the judge's renderer reads every log record as one flow step.
 
 Every manifest entry carries a status where **`failed` means the workspace fell short and `error`
 means the harness could not find out** (the bridge died, a probe timed out). That distinction is
@@ -1108,6 +1260,9 @@ the harness could not gather.
 
 The registry, service, and inventory capture runs for *every* trial that got as far as a workspace,
 including cases with no expectations, which is what makes a ships-nothing trial diagnosable. The
+manifest's `is_registry_present` says whether `data/.state/apps.toml` could be read at all, since the
+verbatim `apps.toml` capture is empty both for a registry that could not be read and for a workspace
+that registered nothing. The
 expectation-driven probes are skipped on trials that never finished, whose structural gates already
 zero the reward.
 
@@ -1120,6 +1275,17 @@ clone with `system/vendor/mngr` overwritten), which is made with fixed author an
 that an identical tree always yields the same sha and the bundle can be unbundled onto a regenerated
 clone. `repo_state.json` records that base sha and the template tip it was built from, so a replay
 can regenerate and verify the base.
+
+The bundle is never only the agent's work. The workspace template's first boot commits the tree the
+workspace was created with, as `Initial workspace commit` authored `minds-bootstrap
+<bootstrap@minds.local>`, dated at boot and made with `--allow-empty`, so it sits on the base before
+any agent runs. The bundle keeps it, because the agent's commits sit on top of it and a replay
+unbundles onto the regenerated base. `repo_state.json` counts it apart: `bootstrap_commit_count` is
+`1` when the first commit on HEAD's first-parent history beyond the workspace's starting commit (the
+seeded commit on a seeded trial, the base otherwise) has that commit as its parent and the
+bootstrap's author and subject, and `agent_commit_count` is every commit beyond the starting commit
+but that one. The author alone does not identify it: the bootstrap also sets that identity as the
+repo's own when it has none, so a commit made without an exported author carries it too.
 
 The evidence directory is created at setup, before anything can fail, and is always declared as an
 artifact even when empty: harbor records a missing declared artifact path as a failed entry and
@@ -1149,11 +1315,22 @@ kinds of row:
   instance runner's own state under `data/.state/isolated-instances/`, not by matching name
   patterns: instance names are chosen by whoever starts them.
 
+A **seeded row** is a third class beside pre-existing and delivered: the app a case's `seed` put in
+the workspace (see [Seeding a case](#seeding-a-case)). It is in the registry and in
+`system/supervisord.conf` from boot, so the pre-turn-1 measurement names it too; the case declares
+it, and a name that is both is seeded, never pre-existing. The HTTP probes (the `registered-apps`
+fan-out and a probe naming the app) and the UI flows are aimed at delivered and seeded rows alike,
+while `min_registered_apps` and the service checks count delivered rows only. A seeded trial where
+the agent built nothing therefore delivered nothing, and a case that expects exactly that declares
+`min_registered_apps: 0`. The manifest records the seeded names as `seeded_registrations`, empty on
+an unseeded trial.
+
 If the registry cannot be read the pre-existing set is **unknown**, not empty -- otherwise every app
 the workspace booted with would count as delivered. The app, HTTP, and UI-flow entries are then
 recorded `error` with reason `preexisting_unknown`, so the trial is unmeasured rather than scored
 wrong, and `preexisting_registrations` is `null` (a different claim from a workspace that served
-nothing). The registry and service capture still happens either way.
+nothing). A seeded trial is no exception: its seeded row is not probed on a registry nobody could
+read. The registry and service capture still happens either way.
 
 A registry name is not a supervisord program name -- a multi-port app registers extra origin rows
 (`<name>-admin`) that no program owns. The service-health check joins a row to its program through
@@ -1204,11 +1381,20 @@ also carry a `surface`. `origin` is the default and the only implemented one; th
 `minds-ui`, which would drive the Minds chrome and reach the app as an embedded iframe, is rejected
 at generation time rather than silently falling back.
 
+A flow may carry a `start_path`, where on the app's origin it opens: empty (the default) opens the
+root, `?latency=300` opens the root with that query, and `/tasks` opens that path. Each flow carries
+its own, so one case can drive an app under several of its query-string behaviours. It must be empty
+or begin with `/` or `?` but not `//`, and hold only printable ASCII with no spaces or backslashes;
+anything else is rejected at generation time, and again when the driver reads the case back. The
+rule is what keeps a flow on the app it grades: `//host` and `http:...` name another origin outright,
+and a browser reads a backslash as a slash and drops tabs and newlines inside a URL, so either can
+turn an innocent-looking path into `//host`.
+
 **The executor drives the app's forwarded origin from inside the box.** Flows run at the end of the
 collection phase, inside its budget, in a headless Chromium the box launches for the flow -- its own
-profile and its own CDP port, so no flow inherits another's cookies or storage -- navigating
-`https://<label>.agent-<hex>.localhost:8431/` -- the app's own label on the workspace's agent-keyed
-origin -- served by a `mngr forward` instance the driver owns. A host-side verification agent (the
+profile and its own CDP port, so no flow inherits another's cookies or storage -- navigating to the
+flow's start path on `https://<label>.agent-<hex>.localhost:8431/` -- the app's own label on the
+workspace's agent-keyed origin -- served by a `mngr forward` instance the driver owns. A host-side verification agent (the
 decider's sibling) reads the page, decides one action, and a box-side step script performs it,
 screenshots the result and reads the page back, all in a single box-local exec.
 The reasoning stays host-side, so the loop is budgeted, logged, and attributable to harness spend.
@@ -1287,6 +1473,72 @@ drift. It diverges deliberately in two ways: it adds a chosen `--port` (`forward
 and it drops `--embedder-origin` and `--reverse`, which shape only how minds *embeds* the app
 (`forward_instance_test.py`).
 
+### Scripted flows
+
+A flow can instead carry a `script`: the actions to perform, in order, in the executor's own
+vocabulary. A scripted flow has a `script` and an `expect`, and never `actions`:
+
+```json
+{
+  "name": "add",
+  "script": [
+    {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+    {"kind": "click", "role": "button", "target": "Add"},
+    {"kind": "reload"}
+  ],
+  "expect": "'walk dog' is still listed after the reload."
+}
+```
+
+Each action is a `kind` plus the fields that kind needs, and no others; every other field is left
+out (or empty, or zero):
+
+| kind | needs | does |
+|---|---|---|
+| `click` | `role`, and `target` or `beside` | clicks the element with that ARIA role and accessible name, or the nameless one `beside` locates |
+| `input` | `role`, `target` or `beside`, and `text` | types `text` into that element |
+| `keys` | `text` | presses a key combination, e.g. `Enter` |
+| `scroll` | `amount` | scrolls by that many pixels; negative scrolls up |
+| `open` | `text` | navigates to `text`, a start path on the app's origin under the `start_path` rule |
+| `reload` | nothing | reloads the page, keeping the session |
+| `wait` | nothing | performs nothing and gives the page up to 10 s to change |
+
+`done` is not written: every script ends with one. Because that `done` takes a step of the flow's
+15-step budget too, a script holds at most 14 actions. An unknown kind or key, a missing or unused
+field, and an `open` that could leave the app's origin are all rejected at generation time, and
+again when the driver reads the case back.
+
+An element the page gives no accessible name -- a checkbox with no label, say -- has no name to
+write, and its snapshot ref cannot be written either, because refs are numbered when the page is
+read. A script locates such an element instead. `beside` names text, and the action addresses the
+element of its `role` that has no name and whose parent element holds a line containing that text.
+The text is looked for with the recorder's `[ref=...]`, `[active]` and `[cursor=...]` suffixes
+dropped, and the element's own line never counts:
+
+```json
+{"kind": "click", "role": "checkbox", "beside": "walk dog"}
+```
+
+The locator is resolved against the page state the step is decided on, and the step is performed
+by the ref it picks out, so it is checked against a fresh snapshot and recorded with `target_ref`
+like any step addressed by ref. A locator that picks out no element, or more than one, is a decision
+that cannot be acted on: the flow ends as `verifier_agent_failed`, and its `(no usable action)` step
+and its manifest entry say what the locator found. Such a miss is always an eval error, never the
+app's failure; no per-action setting makes a script count it against the app. `beside` together with
+`target`, or on an action that addresses no element, is rejected with the other rules.
+
+A scripted flow makes no model call. Its actions are handed to the executor exactly as written,
+each recorded with the reasoning `scripted`, followed by the closing `done` and the fixed reading
+`scripted flow; no reading`. The same defect therefore shows as the same reading on the same step
+every run, and the flow lab can confirm it locally before a trial runs it. An action naming an
+element the page does not have is recorded on its step and the flow carries on, as for any flow.
+
+Generation renders the script into the flow's `actions` as numbered prose ("Step 1: type 'walk dog'
+into the textbox named 'New task'. Step 2: ..."), whose numbers are the log's step indices, so the
+judge reads a scripted flow the way it reads any other. The verification agent drives only the
+flows without a script: a trial with no key for it records those as `verifier_agent_failed` and
+still runs its scripted ones, which add nothing to `verifier_agent_usage` either.
+
 ### The flow lab
 
 A flow can be driven against a **local app, with no box, no workspace and no proxy**: the same
@@ -1313,8 +1565,8 @@ the ref is the only handle the page offers.
 Its "Start over" link is a real navigation, for the step that has to survive one -- immediately, or,
 under `?pending=<ms>`, only after the click has been acknowledged, which is the redirect that lands
 while the step is still watching the page it is about to lose. `test_flow_lab.py` pins what the
-step script, the flow loop and the state summariser report for each of those against a scripted
-agent; a test that documents a defect the executor still has is an expected failure naming the
+step script, the flow loop and the state summariser report for each of those, driven by scripted
+flows; a test that documents a defect the executor still has is an expected failure naming the
 issue, and stays one until the executor catches up. An app taken out of a trial -- the
 deliverable bundle under `verification/`, checked out into a directory -- is driven the same way,
 which is how a flow that went wrong in a trial becomes a fixture.
@@ -1323,16 +1575,29 @@ The real verification agent is run against a local app with:
 
 ```bash
 uv run --project apps/minds_evals minds-evals flow-lab \
-  --app apps/minds_evals/flow_lab_apps/todo --page '?latency=300' \
+  --app apps/minds_evals/flow_lab_apps/todo --start-path '?latency=300' \
   --actions "Add a task named 'walk dog'. Mark it complete. Delete 'walk dog'." \
   --expect "'walk dog' is gone" --output /tmp/flow-lab/todo
 ```
 
 It prints each step as the agent's history would carry it, reports the agent's spend, and leaves
-`log.jsonl` and the step frames in `--output`, shaped as a trial's flow directory. `--model`
+`log.jsonl` and the step frames in `--output`, shaped as a trial's flow directory. `--start-path`
+takes a case flow's `start_path` under the same rule and joins the served origin the same way, so a
+flow from a case is reproduced here with the value it declares. `--model`
 selects the agent's model (the decider's default otherwise), and `ANTHROPIC_API_KEY` is required.
 The exit code says whether the flow completed its declared actions; whether the `expect` holds is not
 decided here, exactly as at trial time.
+
+A scripted flow is run the same way with `--script` in place of `--actions`, naming a JSON file
+that holds the flow's `script` list as a case would declare it, under the same rules. It needs no
+key and makes no model call:
+
+```bash
+uv run --project apps/minds_evals minds-evals flow-lab \
+  --app apps/minds_evals/flow_lab_apps/todo --start-path '?arm_delete=1' \
+  --script /tmp/flow-lab/arm-delete.json \
+  --expect "'Buy milk' is gone" --output /tmp/flow-lab/arm-delete
+```
 
 ## Scoring
 
@@ -1471,16 +1736,28 @@ re-run:
   digest carries, per flow: the declared actions, the `expect` the judge is to rule on, the completion
   status, the agent's own description of the final page (evidence, not a verdict), then every step's
   action, reasoning and page state. `judge_screenshots/` holds each flow's last four frames, up to
-  24 in all, each under rewardkit's 1 MiB judge limit. Both are written unconditionally: rewardkit
-  renders a listed path it cannot find as a visible `[not found]` block, while an empty listed
-  directory renders *nothing at all*, which is why the digest states the screenshot count instead of
-  leaving the judge to infer it.
+  24 in all, each under rewardkit's 1 MiB judge limit. Over that bound the earliest flows' frames are
+  dropped first, so a case whose flows ask for more sets its own bound as
+  `expectations.max_judge_screenshots`, an integer from 1 to 100: the screenshots are the judge
+  request's only images, and the Anthropic API refuses a request with more than 100. Both are written
+  unconditionally: rewardkit renders a listed path it cannot find as a visible `[not found]` block,
+  while an empty listed directory renders *nothing at all*, which is why the digest states the
+  screenshot count instead of leaving the judge to infer it.
 - `harness_main.txt`, `harness_workers.txt` and `harness_failures.json` (from `trajectory.json` and
   each `verification/workers/<name>/trajectory.json`): the processed harness reports the
   `harness_quality` judges read, and the per-scope signature counts its programmatic criteria score.
   A raw trajectory runs to hundreds of KB and is mostly ordinary work, so each report keeps only the
   steps that bear on whether the harness held. `render_harness_report.py` holds the signature list
   and the rules for what is kept and what is counted.
+
+These inputs are derived inside the verifier container, under `/logs/agent`, which the trial's job
+directory never receives. So on its way out, whatever happened before, `test.sh` copies
+`judge_transcript.txt`, `progress_summary.json`, `harness_failures.json` and
+`judge_flows_digest.txt` into
+`/logs/verifier/derived/`, which harbor collects into the trial's `verifier/derived/`. It adds
+`judge_screenshots.txt` there too, naming the screenshots the judge was given. An input a failed
+pre-step never wrote is skipped, and a copy that fails never changes the grade
+(`keep_derived_outputs.py`).
 
 ### Error versus zero
 
@@ -1560,6 +1837,14 @@ runs inside the box, signed in with a per-trial key rather than the upstream cre
 workspace's claude agents share one credential, so every call crosses that boundary, delegated ones
 included: `agent/usage_proxy.jsonl` is the complete account and becomes the source for harbor's
 fields, with the transcript's own figures kept in `metadata.transcript_usage`.
+
+The log also records every request the proxy failed, as a record with `"outcome": "failed"`, the
+model, `status_code` (null when litellm reported none) and `error_class`, and zero in every token
+bucket. A successful request's record carries `"outcome": "succeeded"`, and a record with no `outcome`
+at all is read as a success. Failures add no tokens, no cost and no per-model row to the account;
+they are counted as `failed_request_count` beside it, in `usage.json` and in `workspace_usage`. A
+stream that breaks after billing some tokens is recorded as a failure with zero tokens, so that
+partial spend is not in the total.
 
 **The proxy meters the `anthropic` lane only.** Its address reaches the workspace through the
 `ANTHROPIC_BASE_URL` line of the claude sign-in and nowhere else, and its model list is
@@ -1702,6 +1987,399 @@ cleanup below acts on), and the harness half as its own fields (`lane`, `request
 (`harbor run -a oracle`) is checkable the same way: it writes a `state.json` and a reward, and its
 fabricated evidence carries no `error` entries.
 
+### Checking a diagnostic run
+
+`minds-evals check-diagnostics <job_dir> (--expected <table> | --record-only) [--summary-md <path>]
+[--summary-json <path>]` reads a self-diagnostic job (see
+`specs/minds-evals-self-diagnostics/spec.md`) and gives each of its trials one verdict. Exactly one
+of `--expected` and `--record-only` is given: the first grades the job against a family's
+expected-facts table, the second computes the same facts and asserts nothing.
+
+**The facts are computed at check time**, by `evidence_facts.py`, from the records the job directory
+holds -- the same files the graders read. Nothing in the driver computes or stores one, no
+`state.json` carries a fact block, and no verifier reads one, so a fact can only be as right as the
+record under it. Every step of every trial, flat or stepped (`steps/<name>/`), yields one block: a
+flat mapping from a dotted fact name to a value.
+
+A fact reports one of three things, and a table tells them apart:
+
+- **omitted** -- the record was never due on that step: the case declared no such check, the trial
+  pulled no snapshot, the step is the first so there is no earlier one to be step-local against. The
+  case config in the step's `instruction.md` is what decides what was due, and an omitted fact is
+  absent from the block rather than carrying a value.
+- **not recorded** -- the record was due on a step that ran and is absent or unreadable. That is the
+  instrument failing to write its record, so it fails any fact a table asserts on it, whatever the
+  table expected. `case.readable` and `manifest.readable` are the two facts that are never "not
+  recorded": they exist to say whether the step's own case declaration and its evidence manifest --
+  the records that say what every other fact was due -- were there and well-formed.
+- **null** -- the record is there and cannot answer: a registry the collector could not resolve, a
+  ticket capture that reports a failure, a listing too incomplete to speak for an absent worker. A
+  recorded null matches only `expected: null`.
+
+**The table** is JSON, and a key it does not know is refused:
+
+```json
+{
+  "case_id": "fixture",
+  "requires": ["prep.stage_reached"],
+  "facts": {
+    "prep.stage_reached": {"expected": "conversation"},
+    "manifest.readable": {"expected": true},
+    "listing.complete": {"expected": true, "health": true},
+    "workers.no_phantoms": {"expected": true, "requires": ["listing.complete"]},
+    "gates.held@work": {"expected": true},
+    "snapshot.bytes": {"at_least": 1000000},
+    "transcript.agent_steps_with_model_name": {
+      "expected": "all",
+      "by_harness": {"codex": {"expected": "none", "known_failure": {"issue": 898}}}
+    }
+  }
+}
+```
+
+- **Fact references.** A key names the fact and the step it is read from: `<fact>` reads the last
+  step that ran, and `<fact>@<step>` pins one (`gates.held@work`), so the same fact can be asserted
+  on several steps. A step that never ran has no block, so every fact pinned to it is not recorded.
+- **`case_id`** names the case the table grades: `check-diagnostics` refuses a job whose trials ran
+  another case, with an error naming both, instead of grading them. A table that names none applies
+  to any case, which is what the live-invariants table below does.
+- **Matchers**: every entry gives exactly one of `expected` (JSON equality, where a boolean never
+  equals a number, and `null` matches only a recorded `null`), `at_least` and `at_most` (a recorded
+  number within the bound), and `contains` (a member of a recorded list, or a substring of a
+  recorded string).
+- **`by_harness`** overrides a fact for the harness the trial's `arm.harness_config` records. An
+  override states a matcher, a `known_failure`, or both; what it leaves out stays the fact's own.
+- **`known_failure`** (`{"issue": N}`, or `{"reason": "..."}` for a defect no issue tracks) says the
+  value the fact's matcher states is the defect's rather than the healthy one, the way the codex
+  override above states the `none` codex records until #898 is fixed. A trial that records it is
+  `known`. Every known failure is strict, so a trial that records anything else is a **failure**
+  saying the defect changed or was fixed and the mark must come off. An entry whose matcher is
+  `expected: null` must carry a mark: a fact declared unobservable is a defect with a name, never a
+  permanent exemption.
+- **`compliance: true`** marks a fact that says whether the agent did what the prompt asked;
+  **`health: true`** marks one that says whether a compliance source could be read at all. A fact is
+  one or the other, never both, and neither may declare a known failure. A compliance fact that
+  reads false is *not followed* and a health fact that misses is a failure; either that reads null
+  or was not recorded is a **failure**, since the instrument could not read it, which is never the
+  agent's doing.
+- **`requires`** on a fact names compliance and health facts of the same table only: when one of
+  them misses, the fact is reported as a *precondition not met* rather than asserted. The table's
+  own top-level `requires` may name any fact the table asserts and applies to every fact at once, so
+  a trial that never got through preparation reads as that one miss rather than as every fact
+  failing. A requirement is met only when its fact passed.
+- Validation refuses an unknown key, more than one matcher, a bound of `null`, a reference that is
+  neither `<fact>` nor `<fact>@<step>`, a requirement that is not a compliance or health fact, a
+  requirement cycle, a table-level requirement the table does not assert, a fact that is both
+  compliance and health, and a compliance or health fact that declares a known failure.
+
+**Verdicts**, in precedence order:
+
+- **not measured**: no step's `state.json` records a `preparation_stage` from `created` on and no
+  seed-build failure is recorded, which includes a trial harbor stopped (an environment exception,
+  say) before the driver wrote any state. Nothing is asserted.
+- **failed**: an instrument fact missed, a known failure's defect was not recorded, a health fact
+  missed, a compliance or health fact could not be read, or a fact the table asserts was not
+  recorded.
+- **not followed**: a compliance fact read false, or a fact whose requirement missed. The agent did
+  not do what the prompt asked, so the facts that depend on it say nothing.
+- **known**: every remaining deviation is a known failure whose defect was recorded.
+- **passed**: every asserted fact matched.
+
+The command exits 1 only when some trial **failed**; `known`, `not followed` and `not measured` are
+reported and exit 0.
+
+`--summary-md` writes one row per trial with its case, harness, verdict (and why it was not
+measured) and every fact that decided it, as `<fact> [<step>]: <recorded> vs expected <matcher>`.
+`--summary-json` writes `job_name`, `is_failed` and, per trial, the `verdict`, `case_id`, `harness`,
+`not_measured_reason`, and `failed_facts`, `not_recorded_facts`, `known_facts`,
+`not_followed_facts`, `unmet_preconditions` and `unexpectedly_passing_facts` -- each fact with its
+`fact_name`, `step_name`, `status`, `is_compliance`, `is_health`, `recorded` value, the `expected`
+matcher after the trial's overrides, its `known_failure` and its `unmet_requirements`. A fact's
+status is one of `passed`, `failed`, `not_followed`, `precondition_not_met`, `not_recorded`, `known`
+and `unexpectedly_passing`.
+
+**The computed blocks** are written as `<summary stem>-facts.json` beside whichever summary path
+was given, on every run and not only under `--record-only`: a table asserts a handful of facts, and the
+rest is the reading a report aggregates later. Each trial holds its `case_id`, `harness` and
+`not_measured_reason`, and one entry per step with that step's `facts` and the names of its
+`not_recorded_facts`. `--record-only` is how a live job is read, and how a past job directory is
+read after the fact.
+
+**Live invariants.** `configs/diagnostics/live_invariants.json` names no case and so applies to any
+trial: every live cell is read against it after `check-run`. It asserts a `prep.stage_reached` of
+`conversation`, `case.readable` (the step's `instruction.md` parses, which is what decides which
+records were due), `tools.every_call_has_one_result`, `steps.boundary_markers_match_case`, a
+`transcript.source` of `workspace`, `harness.detected_is_lane_harness` (which compares which harness
+ran rather than how the two records spell a compound name), `manifest.readable`, the health fact
+`listing.complete`, and `workers.no_phantoms`, which requires that health fact, since a listing that
+did not reach every provider cannot speak for a worker it does not name. `prep.stage_reached` is the
+table's own top-level requirement, so a trial that never got to its conversation reads as that one
+miss rather than as every invariant missing on a workspace that was never there. A miss is named in
+the report's details for the cell and gates nothing.
+
+**The fact families** the checker computes today, one block per step:
+
+- **state, arm and seed**: `case.readable`, `prep.stage_reached`,
+  `arm.harness_config.{harness,model_choice_switch,is_model_confirmed}`, `entries.count`,
+  `decider.call_count`, `seed.build_status`, `seed.in_head`, `snapshot.bytes`, `snapshot.readable`.
+- **transcript and tools**: `transcript.{source,user_step_count,agent_steps_with_model_name}`,
+  `tools.every_call_has_one_result`.
+- **steps**: `steps.boundary_markers`, `steps.boundary_markers_match_case`,
+  `steps.boundary_markers_followed_by_opening`, and the ones that only mean something where they
+  attach -- `steps.entries_before` on a stepped case, `steps.trajectory_cumulative`,
+  `steps.driver_log_step_local` and `steps.spend_deltas_sum` from the second step on.
+- **usage**: `usage.tokens_present`, `usage.is_cost_complete`.
+- **manifest and the declared checks**: `manifest.readable`, `evidence.errored_entries`,
+  `evidence.statuses`, `http.<check>.status` and `.reason`, `files.<check>.matched`,
+  `test_commands.exit_codes`.
+- **timing**, on a case that declares a [`timing`](#outcome-verification) block:
+  `timing.turn_index` (the client message whose reply satisfied the goal-holding client),
+  `timing.seconds_within_elapsed` (the measured span is positive and sits inside the trial's
+  `elapsed_seconds`), and `timing.agrees_with_feed` (the workspace's own event feed shows the
+  exchange the span was measured over). The span itself is re-derived at check time with the
+  collector's own reader, over the `entries` and `turns` records in `state.json`, so the first two
+  facts say what the manifest's `time_to_goal` entry was measured from; the third is the independent
+  reading. The two records do **not** time the same thing and their lengths are not comparable: the
+  feed stamps the last agent message, while the driver's span closes when the agent is next seen
+  idle, which is everything the harness still does after that message plus up to a poll interval --
+  67 seconds against the feed's 1.5 on the measured fixture trial. What they do agree on is which
+  exchange was measured, so `agrees_with_feed` asks that the span opens on the client message the
+  feed stamps and closes at or after the reply it stamps, with a bridge round trip of slack at each
+  end. A span anchored on the welcome turn or on the trial's start is minutes out and fails it.
+- **apps**: `apps.delivered`, `apps.seeded`, `apps.service_state.<name>`,
+  `apps.registered_all_running`.
+- **repo and bundle**: `repo.agent_commit_count`, `repo.bootstrap_commit_count`, `bundle.bytes`,
+  `bundle.verified`.
+- **tickets**: `tickets.step_titles`, `tickets.closed_step_titles`, `tickets.regular_titles`.
+- **workers and listing**: `listing.complete`, `workers.launch_count`, `workers.captured_count`,
+  `workers.embedded`, `workers.discovered`, `workers.captured`, `workers.listed_agent_created`,
+  `workers.no_phantoms`, `workers.{discovered,captured,embedded}_equals_listed`,
+  `workers.harness_is_lead_harness`.
+- **flows**, one set per declared flow: `flow.<slug>.{status,record_kinds,png_count,
+  verifier_call_count,reaction_counts,no_reaction_share,ref_step_count}`,
+  `flow.<slug>.step.<k>.{reaction,observed_kind,addressed_by_ref}` per performed action, and
+  `flow.<slug>.after.<k>.{checkboxes,checked,url_query}` for the page each action left behind.
+- **what the verifier made of the step**: `trial.completed`, `gates.held`, `gates.results`,
+  `harness.detected`, `harness.detected_is_lane_harness`, `judge.digest_flow_count`,
+  `judge.screenshot_count`, `judge.unnamed_control_note`, `judge.addressed_by_ref_step_count`.
+
+`check-run`'s four criteria are facts here (`trial.completed`, `gates.held`,
+`evidence.errored_entries` and `arm.harness_config.is_model_confirmed`), so a table can declare any
+of them known or override one per harness. `check-run`'s own verdict is never consulted, and
+`check-run` itself stays absolute and unchanged.
+
+The behaviour family adds its own block on a step whose case asks for the diagnostic probe, described
+under [the self-diagnostic behaviour family](#the-self-diagnostic-behaviour-family) below.
+
+### The fixture family
+
+`configs/eval-config-diagnostics-fixture.json` is the one diagnostic case whose every answer is
+fixed in the repo: it seeds the flow lab's to-do fixture (see [Seeding a case](#seeding-a-case)),
+asks the agent for one literal word, and drives seven scripted flows at the seeded app. Because the
+app is the repo's and the flows carry no model, the trial's records have exactly one right value,
+and `configs/diagnostics/fixture_expected_facts.json` states it.
+
+- **The case runs on the nightly claude lane**, whose `--ak` kwargs
+  `configs/diagnostics/fixture_harness_config.json` spells out one per key, the way
+  [the diagnose jobs](#the-diagnose-jobs) read every diagnostic harness config. It requests no proxy
+  and declares no model-driven flow, so the paths under test are the ones a nightly live cell takes.
+- **The agent's single turn** is a literal "reply with one word", followed by a goal entry that reply
+  already satisfies. That exercises the turn loop, the welcome, the model switch, the transcript
+  capture and the goal-holding client for the price of one cheap reply.
+- **`min_registered_apps: 0`** is the truth about a case where the agent delivers nothing: the seeded
+  row is probed and driven but never counted as delivered, so the registration criterion says so.
+- **Three checks are meant to fail.** The second HTTP check, the second file glob and the second test
+  command each name a nonce (`absent-7f3a`, `DIAG-absent-7f3a`) that nothing in the workspace
+  carries. The table expects `failed` for them, so a reader that passes everything is red and the
+  reader that decides pass from fail is exercised in both directions. Reward is a non-goal here;
+  `gates.results` pins whatever the structural gates make of them.
+- **The `timing` block** names the `http` class in its `requires_no_failures`, so the case's
+  `time_to_goal` entry records `failed` by construction and the prerequisite path is exercised
+  alongside the plain one. Its anchors are the trial's own preparation budget and timeout, and no
+  fact reads them: the family asserts that the span was recorded and that the driver's record of it
+  agrees with the workspace's feed, never that a turn was fast or slow.
+
+**The table** is an ordinary expected-facts table with `case_id: "instrument"` and no known failure
+declared: a fixture trial that is anything but `passed` is a defect. `prep.stage_reached` is its
+top-level requirement, so a trial that never reached its conversation reads as that one miss rather
+than as a failure per record a workspace that never existed could not write. It asserts the trial
+reached the conversation and completed, the structural gates by name, the manifest's entry statuses, the seed
+build and its presence in HEAD, the commit counts and the verified bundle, the seeded and delivered
+registry sets and their service states, each declared check's structured answer, every flow's status,
+record shape and frame count plus the one reading only that flow's knob can produce, what the outcome
+judge was handed, the arm the transcript came through, and the timing record: the turn the goal was
+met on, that its span sits inside the trial, and that the feed shows the exchange it was measured
+over.
+
+**Rerunning the live measurement.** The table states what a trial records, so it is measured, never
+guessed. From a detached worktree of the branch head -- never the worktree being edited, since a
+trial staged from a tree that moves under it fails later steps -- generate and run one trial:
+
+```bash
+uv run --project apps/minds_evals minds-evals generate \
+  --config apps/minds_evals/configs/eval-config-diagnostics-fixture.json --output /tmp/minds-evals/datasets/fixture
+just minds-evals-run /tmp/minds-evals/datasets/fixture my-fixture-run 1 \
+  "--ak lane=anthropic --ak key_env=ANTHROPIC_API_KEY --ak model=haiku --ak effort=medium --ak fast=false"
+uv run --project apps/minds_evals minds-evals check-diagnostics apps/minds_evals/jobs/my-fixture-run \
+  --expected apps/minds_evals/configs/diagnostics/fixture_expected_facts.json
+just minds-evals-cleanup-environments apps/minds_evals/jobs/my-fixture-run
+```
+
+The `--ak` flags are the fixture harness config read through `ci_matrix.diagnostic_harness_config_kwargs`
+and spelled out by `ci_matrix.harbor_args_for_harness_config`, which is what the scheduled cell passes. A trial costs about a dollar and twenty minutes, and leaves one Modal
+environment behind, which the last line removes.
+
+`imbue/minds_evals/test_fixtures/diagnostics_fixture_job/` is one such job directory, trimmed to the
+records the facts read, and `check_diagnostics_test.py` runs the checker over it: a table value that
+no trial produces fails in PR CI rather than on the night it ships. A fact whose producer is newer
+than that directory reads as not recorded there, so a row added on the back of a new record is
+measured by rerunning the trial and replacing the directory -- it is a recording of one run, never a
+file to hand-edit into agreement. When the directory is replaced, the copied `result.json`'s
+`trial_uri` is rewritten to `file:///job/<job name>/<trial>` so that no host path is checked in, and
+`git status --ignored` is checked after the copy, because the root `.gitignore` drops the `*.log`
+files a trial writes.
+
+### The self-diagnostic behaviour family
+
+**The behaviour cells.** The behaviour family runs one trial per harness of the nightly set: the
+distinct harnesses of the `is_nightly` entries of `configs/harness_configs.json`, each read off its
+entry's lane through `harness_for_lane`, in the order the file first names each
+(`ci_matrix.select_nightly_harnesses`). Today that is claude, pi-coding and codex. Each harness's cell
+runs on the cheap config `configs/diagnostics/behaviour_harness_configs.json` names under that
+harness, as the `--ak` kwargs to append to the run line:
+
+| harness | `lane` | `model` | `effort` | `fast` |
+|---|---|---|---|---|
+| claude | `anthropic` | `haiku` | `medium` | `false` |
+| pi-coding | `openrouter` | `openrouter/openai/gpt-5-mini` | `medium` | `false` |
+| codex | `openai` | `gpt-5.6-luna` | `low` | `false` |
+
+A cell needs its lane's key (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`) besides `ANTHROPIC_API_KEY`. An
+entry may also carry `unsupported_pairs`, the pair names whose workspace template offers its lane no
+pasted-key sign-in and so has nothing for the cell to measure; the codex entry names `released`, and
+[`ci-matrix`](#the-diagnose-jobs) leaves such a cell out of the matrix. The file is read and
+validated through the driver's own kwarg parsing on the free `resolve` job, and a nightly harness
+with no entry there fails it.
+
+**The behaviour case.** `configs/eval-config-diagnostics-behaviour.json` is one case, `behaviour`, of
+two steps. `work` asks for twelve exact items, one tool call each: two step tickets and a regular
+ticket through `tk`, a nonce echo, a command that does not exist, a worker launched with
+`create_worker.py` from a task file the prompt spells out, and a reach for the `build-app` skill --
+claude's own `Skill` tool where there is one, and otherwise a read of the skill's file, which is the
+other harnesses' way of loading one and what their reader looks for. `work` is also the one step of
+either family that declares a `process` block, so the collector's process checks run on a step whose
+only expectation is that block: it requires `build-app` beside a nonce skill nothing invokes, forbids
+a nonce skill nothing reads, and caps worker launches at the one item 10 makes, so the four process
+entries record `passed`, `failed`, `passed` and `passed` by construction. `check` introduces an upload,
+`configs/datasets/diag-upload` as `diagupload7f3a`, and asks the agent to read it back, echo a second
+nonce and read the worker's report. Every literal carries the nonce `7f3a`, so no template text can
+match one by accident. `work` declares no `min_reward`, and generation warns about that; it is
+deliberate, since a floor there would abort `check` exactly when the progress reader regressed. The
+case's `timeout_seconds` of 4800 splits by exchange count into 2400 s per step. Both steps set
+`"diagnostic_probe": true`. To run one cell by hand (codex shown; another cell takes its own row's
+flags and lane key):
+
+```bash
+just minds-evals-generate apps/minds_evals/configs/eval-config-diagnostics-behaviour.json /tmp/minds-evals/datasets/diagnostics-behaviour
+OPENAI_API_KEY=... just minds-evals-run /tmp/minds-evals/datasets/diagnostics-behaviour diagnose-behaviour-codex-local 1 \
+  --ak lane=openai --ak model=gpt-5.6-luna --ak effort=low --ak fast=false
+```
+
+**The diagnostic probe.** A step whose config sets `"diagnostic_probe": true` (a boolean; generation
+refuses anything else) runs two extra reads, both records of the agent's own behaviour that share
+nothing with the readers they are there to check. At collection, one exec prints the workspace's
+`data/.tickets/*.md` files raw, the name, type and labels of every agent its own `mngr list` names,
+every `data/.tasks/launch-task/*/reports/report.md` that exists, and every file under `data/uploads/`,
+as sections ending in an end marker; the output is kept as `verification/diagnostic_probe.txt`, and
+`diagnostic_probe.py` parses it with a parser of its own. A probe that did not answer still writes
+that file, holding `failure_reason: <why>` on its first line and whatever the exec printed after it,
+so an unrun probe never reads as a workspace that holds nothing. After collection the driver reads
+the full input of every tool call the feed has shown from the chat app's per-event detail endpoint
+(`/api/chats/<chat_id>/events/<event_id>/detail`), in one exec, and records each payload in
+`driver_events.jsonl` as an `event_detail` record.
+
+**The behaviour facts.** `behaviour_facts.py` computes them at check time, from the step's own
+records, and folds them into the fact block of any step whose case config asks for the probe. Every
+other step omits them, so a fixture trial carries none. The table that asserts them is
+`configs/diagnostics/behaviour_expected_facts.json`, which grades the case `behaviour` and requires
+`prep.stage_reached@work` throughout, so a cell that never got through preparation reads as that one
+miss rather than as every fact failing.
+
+They come in three kinds, and the table marks which is which:
+
+- **Compliance** (`compliance: true`) says whether the agent did what the prompt asked:
+  `agent.step_tickets`, `agent.regular_ticket`, `agent.ran_nonce_echo`, `agent.ran_missing_command`,
+  `agent.worker_launched`, `agent.worker_finished`, `agent.read_upload_marker` and
+  `agent.invoked_skill`. Each is read only from the probe (**D**) or the event feed (**E**), whose
+  parsers share nothing with the readers
+  under test, so a regression in the tickets capture, the agent listing, the captured trajectory or
+  the verifier's renderers can never read as "the agent did not comply". A compliance fact that
+  reads false makes the cell *not followed*, and the instrument facts that depend on it are left
+  unasserted.
+- **Health** (`health: true`) says whether those sources answered at all: `probe.read` (the file is
+  there, carries no `failure_reason` line, and parses), `feed.inputs_read` (every tool call the feed
+  shows had its input read, which `feed.tool_calls_without_input` counts) and `listing.complete`. A
+  health miss is *failed*, never *not followed*: a source the instrument could not read is never the
+  agent's doing.
+- **Instrument** facts are agreements between records written independently of one another, and each
+  requires the compliance and health facts its reading depends on.
+
+Which record each fact is read from:
+
+| record | what it is | facts |
+|---|---|---|
+| **D** the probe | `verification/diagnostic_probe.txt`, parsed by `diagnostic_probe.py` | `probe.read`, `agent.step_tickets`, `agent.regular_ticket`, `agent.worker_launched`, `agent.worker_finished`, `steps.upload_marker_present` |
+| **E** the event feed | the `feed_event` and `event_detail` records of `driver_events.jsonl` | `feed.*`, `agent.ran_nonce_echo`, `agent.ran_missing_command`, `agent.read_upload_marker`, `agent.invoked_skill` |
+| **T** the tickets | `verification/tickets.jsonl` | the ticket half of `progress.*` |
+| **A** the trajectory | `agent/trajectory.json` | `tools.nonce_in_one_executing_result`, `failures.missing_command_is_error`, `steps.upload_marker_read`, `workers.model_is_lead_model`, `process.invoked_skills`, `process.worker_launch_count`, and the trajectory half of `progress.step_ids_agree` |
+| **R** the derived outputs | `verifier/derived/{judge_transcript.txt,progress_summary.json,harness_failures.json}` | `progress.declared_titles_agree`, `progress.done_summaries_agree`, `progress.nonce_block_count`, `progress.rendered_block_count`, `progress.regular_ticket_rendered`, `failures.missing_command_count` |
+| **W** the worker captures | `verification/workers/captures.json` | `workers.report_captured` |
+
+The `process.*` pair runs the readers the collector's process checks run -- `scan_skill_invocations`
+and `scan_worker_launches` -- over the captured document, while the manifest's process entries hold
+what those same readers made of the captured *stream*, so the two are a second record of each other:
+`evidence.statuses@work` pins the four process entry ids and their statuses -- beside `file_inventory`,
+which the always-on capture records on every step whatever the case declares -- and a reader that
+stopped seeing the skill in one of the two records reds the cell.
+
+`tools.nonce_in_one_executing_result` reads a tool result the way the verifier's renderers do, by the
+tool that produced it, and so does the trajectory half of `progress.step_ids_agree`. Both are about a
+command's output, so only an executing tool's result can carry it. `steps.upload_marker_read` instead
+reads the marker in any tool result of step 2: the prompt asks the agent to read the upload, not to
+run a command, and a harness whose file-reading tool answers that item (pi's `read`) puts the text in
+a result no executing tool produced. `behaviour_facts.EXECUTING_TOOLS` is the checker's own copy of
+the set both renderers filter on, so computing a fact never executes a verifier template;
+`behaviour_facts_test.py` pins it against each renderer's, because a tool name added to one and not
+the other would silently drop that harness's command output from every fact read through it.
+
+**How a cell is graded.** `check-diagnostics <job_dir> --expected
+configs/diagnostics/behaviour_expected_facts.json` gives the cell one verdict, by the rules under
+[Checking a diagnostic run](#checking-a-diagnostic-run). The table spells the healthy value at each
+entry and the defect, with its mark, in a `by_harness` override, so the known failures are readable
+as a list of what is broken and where:
+
+| fact | harness | recorded | why |
+|---|---|---|---|
+| `failures.missing_command_is_error` | codex | `false` | mngr's codex converter marks no result errored, so a failing codex command reaches the failure scan only through its text |
+| `transcript.agent_steps_with_model_name` | codex | `"none"` | [#898](https://github.com/imbue-ai/mngr-internal/issues/898) |
+| `arm.harness_config.is_model_confirmed` | codex | `null` | [#898](https://github.com/imbue-ai/mngr-internal/issues/898): no model on a codex step, so nothing can confirm the switch |
+| `usage.tokens_present@check` | codex | `false` | the feed carries no usage for a codex turn |
+| `steps.spend_deltas_sum@check` | codex | `null` | [#898](https://github.com/imbue-ai/mngr-internal/issues/898): harbor records no per-step input tokens for a codex step, so the deltas cannot be summed at all |
+| `workers.model_is_lead_model@check` | claude, pi-coding | `false` | [#1008](https://github.com/imbue-ai/mngr-internal/issues/1008): the worker runs the template's pinned model whatever the lead was switched to |
+| `workers.model_is_lead_model@check` | codex | `null` | [#898](https://github.com/imbue-ai/mngr-internal/issues/898): the worker's steps name no model either |
+
+Every known failure is strict, so a cell that stops recording the defect is *failed* and the mark has
+to come off. While any of them is declared, the best verdict a cell can have is *known*, which is
+what all three record today.
+
+`behaviour_facts_test.py` grades each harness's own live cell, whose job directory is checked in
+under `test_fixtures/diagnostics_behaviour_jobs/`, trimmed to the records the facts read. The table
+and those cells are one measurement, so a wrong table entry and a fact that reads the wrong record
+both fail in CI rather than on the night. When a cell is replaced, the copied `result.json`'s
+`trial_uri` is rewritten to `file:///job/<job name>/<trial>` so that no host path is checked in, and
+`git status --ignored` is checked after the copy, because the root `.gitignore` drops the `*.log`
+files a trial writes.
+
 ## Cleaning up a scheduled run
 
 `minds-evals cleanup-environments` deletes environments in two scopes, both honouring `--dry-run`:
@@ -1843,13 +2521,15 @@ Reading a red codex column on the released pair as a regression is the mistake t
 tag carries [the template the lane needs](#harness-and-model-arms).
 
 A name matches `^[a-z0-9][a-z0-9.-]*$` (dots are in, because a model version is part of what names
-an arm), is at most 30 characters, is unique in the file and is never `oracle`: it labels a harbor
-job, a concurrency group, an artifact and a line of the Slack report, beside the oracle's own. A
-cell's whole label, `<pair>-<config slug>-<arm>`, is capped at 64 characters, so that two cells of
-one suite stay legible where a job title is elided. Every entry is validated through the driver's
-own kwarg parsing on the free `resolve` job, selected or not, so a config the driver would refuse at
-construction fails before any paid runner starts, and a unit test validates the checked-in file on
-every test run.
+an arm), is at most 30 characters, is unique in the file, is never `oracle`, and is never
+`diagnose` nor starts with `diagnose-`: it labels a harbor job, a concurrency group, an artifact and
+a line of the Slack report, beside the oracle's and the diagnose jobs' own. The same words are
+refused as an eval config's slug, which reaches the same names from the other side. A cell's whole
+label, `<pair>-<config slug>-<arm>`, is capped at 64 characters, so that two cells of one suite stay
+legible where a job title is elided. Every entry is validated through the driver's own kwarg parsing
+on the free `resolve` job, selected or not, so a config the driver would refuse at construction
+fails before any paid runner starts, and a unit test validates the checked-in file on every test
+run.
 
 ### The jobs
 
@@ -1868,13 +2548,17 @@ every test run.
 - **`evaluate`**, one entry per running cell, is the real eval, at a concurrency equal to the
   config's case count times the arm's attempts, so every trial runs in one wave. A cell fetches only
   its own secrets, downloads the oracle summary of its own (pair, eval config) and refuses to start
-  unless that oracle passed,
-  regenerates the same dataset at the same SHAs (so the image build is a Modal cache hit for the
-  other cells of its suite), runs `just minds-evals-run` with its harness config's `--ak` flags
-  appended and `-k` where its suite asked for more than one attempt, writes its green marker as soon
-  as the live pass has been checked green, and only then deletes the environments it recorded and
-  uploads its artifacts, so a cleanup the Modal API refused turns the job red without costing the
-  arm a re-run.
+  unless that oracle passed, regenerates the same dataset at the same SHAs (so the image build is a
+  Modal cache hit for the other cells of its suite), runs `just minds-evals-run` with its harness
+  config's `--ak` flags appended and `-k` where its suite asked for more than one attempt, writes
+  its green marker as soon as the live pass has been checked green, and only then deletes the
+  environments it recorded and uploads its artifacts, so a cleanup the Modal API refused turns the
+  job red without costing the arm a re-run.
+- **`diagnose-fixture`**, one entry per resolved pair, and **`diagnose-behaviour`**, one entry per
+  resolved pair and harness of the nightly set, run the two
+  [self-diagnostic families](#checking-a-diagnostic-run) beside `evaluate`. They check the eval
+  itself -- its readers, collectors and verifier -- rather than the product. They belong to the pair
+  rather than to one of its eval configs, so they ride on the pair's first message. See below.
 - **`notify`** posts one Slack message per pair and eval config through `minds-evals ci-report`, and
   writes the same reports to the run summary.
 
@@ -1888,6 +2572,65 @@ The oracle job's concurrency group is `minds-evals-oracle-<pair>-<config slug>` 
 `minds-evals-<pair>-<config slug>-<harness config>`, so two runs never evaluate the same arm at
 once. The harbor job names are `<pair>-<config slug>-oracle-<run_id>` and
 `<pair>-<config slug>-<harness config>-live-<run_id>`.
+
+### The diagnose jobs
+
+`ci-matrix` decides the diagnose jobs of every resolved pair, **whatever its cells decided**: the
+diagnostics write no green marker and read none. A night with no commits moves neither pair's SHA,
+and the `released` pair's SHA does not move when `apps/minds_evals` does, so those are exactly the
+nights on which the diagnostics are the only measurement taken. Each entry carries the pair's refs
+and SHAs, the lane key variable, and the `--ak` flags built from its family's harness config --
+`configs/diagnostics/fixture_harness_config.json`, or the entry for its harness in
+`configs/diagnostics/behaviour_harness_configs.json` -- through the driver's own kwarg parsing. Both
+files are validated on the free `resolve` job, and a nightly harness with no behaviour config fails
+it. The behaviour harnesses are those of the nightly set whatever a dispatch's `harness_configs`
+selects.
+
+A behaviour entry may also name `unsupported_pairs`: the pairs whose workspace template offers its
+lane no pasted-key sign-in, so the cell has nothing to measure there. `ci-matrix` leaves that cell
+out of the matrix and lists it under `diagnose_unsupported` instead, and the Slack report names it.
+No box is spent to produce a dark cell, and no expected table carries a per-pair exception. The
+`codex` entry names `released` today.
+
+Both jobs need `resolve` alone and run unless the run stops after the oracle (`skip_live`, or a push
+without `[live]`) or no pair resolved. They are **not gated on the oracle**: the oracle validates a
+different dataset and runs only when some cell does, so on an all-green night it is skipped, and
+anything behind it would be too. They **gate nothing** either, and a red one cancels no other.
+
+Each job mirrors a cell: it fetches `ANTHROPIC_API_KEY`, the Modal token pair and its lane's key,
+writes the throwaway Modal profile, mints its `ci-` user-id prefix, generates its family's case
+(`configs/eval-config-diagnostics-fixture.json` or `-behaviour.json`) at the pair's frozen SHAs, runs
+it with `just minds-evals-run` at a concurrency of one, and checks it with `minds-evals
+check-diagnostics` against `configs/diagnostics/fixture_expected_facts.json` or
+`behaviour_expected_facts.json`. **The job fails only when some trial is `failed`**; `known`,
+`not followed` and `not measured` are reported and leave it green (as for a cell, a harbor run that
+crashes, or a Modal deletion that was refused, turns it red too). It then deletes the environments
+its job directory records -- the stepped layout included -- and uploads its summary and job
+directory. `diagnose-fixture` also runs the age-based backstop sweep, once per pair, because it runs
+on all-green nights when the oracle does not. Both are budgeted at 200 minutes like the cells: the
+behaviour case's worst case is about 140 minutes (two steps of 2400 s conversation, 900 s
+verification, 300 s grace and a 600 s verifier).
+
+| | fixture | behaviour |
+|---|---|---|
+| job title | `diagnose fixture (<pair>)` | `diagnose behaviour (<pair> x <harness>)` |
+| concurrency group | `minds-evals-diagnose-fixture-<pair>` | `minds-evals-diagnose-behaviour-<pair>-<harness>` |
+| harbor job name | `<pair>-diagnose-fixture-<run_id>` | `<pair>-diagnose-behaviour-<harness>-<run_id>` |
+| summary artifact | `minds-evals-summary-<pair>-diagnose-fixture` | `minds-evals-summary-<pair>-diagnose-behaviour-<harness>` |
+| summary files | `diagnose-fixture-summary-<pair>.{md,json}` | `diagnose-behaviour-summary-<pair>-<harness>.{md,json}` |
+| job artifact | `minds-evals-jobs-<pair>-diagnose-fixture-<run_id>` | `minds-evals-jobs-<pair>-diagnose-behaviour-<harness>-<run_id>` |
+
+The job artifacts exclude `agent/snapshots/`, as a cell's do.
+
+**Live invariants.** A handful of facts are true of every trial whatever its case, and
+`configs/diagnostics/live_invariants.json` declares them. Every live cell is read against that table
+in the same step as `check-run`, off the same job directory, and writes
+`live-invariants-<pair>-<config>.{md,json}` beside its own summary. The read **gates nothing**: its
+exit code is discarded, and a miss is named in the cell's details in the Slack report. The cell's
+trials run one case against one table, so the line names each missed invariant once with the trials
+that missed it (`live invariants missed: prep.stage_reached (3 of 3 trials)`) rather than repeating
+a trial's whole list per trial; a cell that missed none has no line. That is what turns "the readers
+are checked once a night on a fixture" into "the readers are checked on every real trial".
 
 ### Green markers, and what they promise
 
@@ -2020,6 +2763,25 @@ oracle on a pair whose cells ran), and one per passing trial whose requested mod
 It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a line boundary
 when it overruns. Links to the run's logs and artifacts close the message.
 
+**Diagnostics** are reported for every pair the run decided them for, a pair whose every cell was
+skipped included, and not at all on a run that stopped after the oracle. The pair's opening line
+gains the worst verdict over its diagnose jobs -- failed, then a job that left no summary (broken),
+not measured, not followed, known, passed -- naming every job at that verdict:
+`oracle passed; diagnostics failed: behaviour codex (3 facts)`, or `diagnostics passed` when every
+one passed, with any unsupported cell in brackets after it. A **`failed`** diagnostic makes the pair
+`failed` and the message `:brainless:`, since it is the instrument's own fault. **`passed`, `known`,
+`not followed` and `not measured`**, and a broken diagnose job, leave the pair's verdict as its cells
+made it. Each failing fact is a row of the failed-trials table, with `diagnose fixture` or
+`diagnose behaviour <harness>` in the config column and `<fact> [<step>]: <recorded> vs expected
+<matcher>` as the note (prefixed `unexpectedly passing:` for a strict known failure whose defect was
+not recorded). The details block names a diagnose job that left no summary, then each not-measured
+trial's reason and each not-followed trial's missed compliance facts, the behaviour cells the pair
+cannot run at all, the **live invariants** each cell's own trials missed, and, last, every known
+failure with the issue or reason it gives. A diagnostic fails every fact of a broken reader, so the
+failures table keeps to Slack's 100-row cap and the table character budget, whole rows first-come,
+and says how many rows it dropped. A red diagnose job whose summary explains it -- a failed or a
+broken diagnostic -- does not raise the warning for a job that went red with every arm green.
+
 Only the blocks an incoming webhook accepts are used, which is what `table` and `container` are
 doing the work of. A webhook refuses `data_table` outright -- a minimal one is answered with
 `400 invalid_blocks` -- so the sorting and paging a data table would bring are unavailable until the
@@ -2060,13 +2822,16 @@ is attributable to one run and one wall-clock time. Teardown is three-layered:
 
 1. The driver destroys its own nested workspace sandboxes in a `finally` block.
 2. `minds-evals cleanup-environments --job-dir <job dir>` deletes exactly the environments that job
-   recorded, and runs even when the pass failed. This layer runs in **every** job, oracle and cell
-   alike, and collects the pass it is part of.
+   recorded, and runs even when the pass failed. This layer runs in **every** job -- oracle, cell and
+   diagnose alike -- and collects the pass it is part of. It reads the state of a stepped trial's
+   archived steps as well as the trial root's, so the behaviour diagnostic's two-step trials are
+   collected like any other.
 3. `minds-evals cleanup-environments --sweep-prefix <ci prefix> --older-than-hours 8` is the backstop
    for a job that died before recording anything. It runs in the **oracle** job, so once per (pair,
-   eval config), and deletes only names carrying a scheduled run's `ci-<timestamp>` stamp. Two of
-   those passes overlapping is harmless: a name one has already taken reads as gone rather than as
-   a failed deletion. **The cutoff is `now - 8 h`
+   eval config), and in **`diagnose-fixture`**, once per pair (which is what runs it on the
+   all-green nights the oracle skips), and deletes only names carrying a scheduled run's
+   `ci-<timestamp>` stamp. Two of those passes overlapping is harmless: a name one has already taken
+   reads as gone rather than as a failed deletion. **The cutoff is `now - 8 h`
    and the budget of every job that creates an environment is 3 h 20 m, so the sweep never collects
    the run it runs inside, nor the cells that run after it** -- an earlier run's leak is collected
    by a later run, usually the next night's. That is the point of the 8 h: it puts every

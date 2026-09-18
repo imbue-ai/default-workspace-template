@@ -167,7 +167,11 @@ def test_the_viewer_reads_the_extra_namespace_the_harness_writes() -> None:
 
     assert built is not None
     marker = built.to_json_dict()["steps"][0]
-    assert marker["extra"] == {namespace: {"kind": boundary_kind, "step_name": "adjust-requirements"}}
+    # The two keys the viewer reads, under the namespace it reads them from; the harness is free to
+    # record more beside them.
+    assert list(marker["extra"]) == [namespace]
+    assert marker["extra"][namespace]["kind"] == boundary_kind
+    assert marker["extra"][namespace]["step_name"] == "adjust-requirements"
     assert boundary_kind == STEP_BOUNDARY_KIND
     # The divider's label comes from this field, so the viewer's read of it must stay valid.
     assert "namespace.step_name" in source

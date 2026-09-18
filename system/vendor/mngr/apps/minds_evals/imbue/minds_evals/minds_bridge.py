@@ -7,12 +7,14 @@ harbor's environment API is async; this module and driver.py are the only async 
 """
 
 import asyncio
+import base64
 import json
 import re
 import shlex
 import time
 import tomllib
 from collections.abc import Mapping
+from collections.abc import Sequence
 from http import HTTPStatus
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -627,6 +629,78 @@ async def workspace_curl_json(
     pollers read, which treat any answer alike."""
     response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
     return response.body
+
+
+# Reads each named event's detail payload from the chat app and prints one JSON line per event, so one
+# bridged exec serves every tool call of a step. An event whose payload cannot be had prints a null detail.
+_EVENT_DETAILS_PROGRAM: Final[str] = """
+import json, sys, urllib.parse, urllib.request
+base_url, chat_id = sys.argv[1].rstrip("/"), urllib.parse.quote(sys.argv[2], safe="")
+for event_id in sys.argv[3:]:
+    url = base_url + "/api/chats/" + chat_id + "/events/" + urllib.parse.quote(event_id, safe="") + "/detail"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            detail = json.loads(response.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        detail = None
+    print(json.dumps({"event_id": event_id, "detail": detail}))
+"""
+EVENT_DETAILS_COMMAND_LABEL: Final[str] = ": minds_evals_event_details;"
+# More than a diagnostic step makes by an order of magnitude; the cap keeps one exec's argument list
+# and output bounded on a trial that ran away.
+MAX_EVENT_DETAIL_COUNT: Final[int] = 400
+_EVENT_DETAILS_TIMEOUT_SECONDS: Final[int] = 300
+
+
+@pure
+def event_details_command(chat_agent_id: str, event_ids: Sequence[str]) -> str:
+    """The shell command that reads the chat app's detail payload of every given event, in one exec."""
+    encoded = base64.b64encode(_EVENT_DETAILS_PROGRAM.encode()).decode("ascii")
+    return '{label} {snippet}; printf %s {program} | base64 -d | python3 - "$chat_url" {agent} {event_ids}'.format(
+        label=EVENT_DETAILS_COMMAND_LABEL,
+        snippet=chat_url_shell_snippet(),
+        program=shlex.quote(encoded),
+        agent=shlex.quote(chat_agent_id),
+        event_ids=" ".join(shlex.quote(event_id) for event_id in event_ids),
+    )
+
+
+@pure
+def parse_event_details(output: str) -> dict[str, dict[str, Any] | None]:
+    """Each event's detail payload by event id, as `event_details_command` printed them; None for an event
+    whose payload the chat app did not serve."""
+    detail_by_event_id: dict[str, dict[str, Any] | None] = {}
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as exc:
+            logger.warning("Skipping an event-detail line that is not JSON: {}", exc)
+            continue
+        event_id = record.get("event_id") if isinstance(record, dict) else None
+        if isinstance(event_id, str):
+            detail = record.get("detail")
+            detail_by_event_id[event_id] = detail if isinstance(detail, dict) else None
+    return detail_by_event_id
+
+
+async def fetch_event_details(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    chat_agent_id: str,
+    event_ids: Sequence[str],
+) -> dict[str, dict[str, Any] | None] | None:
+    """Each event's detail payload by event id, the last MAX_EVENT_DETAIL_COUNT of them, which are the current
+    step's; None when the bridged exec did not answer."""
+    if not event_ids:
+        return {}
+    command = event_details_command(chat_agent_id, event_ids[-MAX_EVENT_DETAIL_COUNT:])
+    is_success, stdout = await run_in_workspace(
+        environment, env, workspace_agent_id, command, _EVENT_DETAILS_TIMEOUT_SECONDS
+    )
+    return parse_event_details(stdout) if is_success else None
 
 
 # A chat wears two names: the display name it was created under ("Chat 2") and the canonical true
@@ -1456,9 +1530,10 @@ async def snapshot_workspace(
     env: dict[str, str],
     workspace_agent_id: str,
     tag: str,
-) -> bool:
+) -> int:
     """Tar the workspace home tree (minus SNAPSHOT_EXCLUDES) and pull it into the box's
-    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts.
+    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts. Returns the
+    pulled tarball's byte count as the box measures it, or 0 when the snapshot was skipped.
 
     Snapshots stay under the agent logs dir rather than joining the service logs: harbor downloads
     that dir once per step and then empties it, so each tarball travels exactly once and lands under
@@ -1491,20 +1566,34 @@ async def snapshot_workspace(
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:
         logger.warning("Skipped snapshot {}: tar failed in the workspace", tag)
-        return False
+        return 0
+    # The size is read in the box once the pull has landed, as the pull's last line of output, so the
+    # figure is the tarball the trial actually keeps rather than the one the workspace wrote.
     pull_command = (
-        "mkdir -p {logs}/snapshots && cd {mngr} && uv run mngr rsync {agent}:{src} {logs}/snapshots/".format(
+        "mkdir -p {logs}/snapshots && cd {mngr} && uv run mngr rsync {agent}:{src} {logs}/snapshots/ "
+        "&& wc -c < {logs}/snapshots/{tarball}".format(
             logs=BOX_LOGS_DIR,
             mngr=BOX_MNGR_DIR,
             agent=shlex.quote(workspace_agent_id),
             src=workspace_tar,
+            tarball=shlex.quote("{}.tar.gz".format(tag)),
         )
     )
     result = await run_in_box(environment, pull_command, env, _SLOW_EXEC_TIMEOUT_SECONDS)
     if result.return_code != 0:
         logger.warning("Skipped snapshot {}: rsync pull failed: {}", tag, (result.stderr or "").strip()[:200])
-        return False
-    return True
+        return 0
+    byte_count = parse_trailing_byte_count(result.stdout or "")
+    if byte_count == 0:
+        logger.warning("Pulled snapshot {}, but the box reported no size for it", tag)
+    return byte_count
+
+
+@pure
+def parse_trailing_byte_count(output: str) -> int:
+    """The byte count `wc -c` printed as a command's last line of output, or 0 when there is none."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return int(lines[-1]) if lines and lines[-1].isdigit() else 0
 
 
 @pure

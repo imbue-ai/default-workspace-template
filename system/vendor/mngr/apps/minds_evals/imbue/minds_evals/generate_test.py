@@ -2,6 +2,7 @@ import hashlib
 import json
 import shutil
 import tomllib
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -13,6 +14,7 @@ from inline_snapshot import snapshot
 from pydantic import ValidationError
 from rewardkit.runner import discover
 
+from imbue.minds_evals.data_types import CaseSeed
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -27,6 +29,8 @@ from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import RewardDimension
 from imbue.minds_evals.data_types import RewardFloor
 from imbue.minds_evals.data_types import RewardStrategy
+from imbue.minds_evals.data_types import SeedApp
+from imbue.minds_evals.data_types import StepBoxSeedApp
 from imbue.minds_evals.data_types import StepFile
 from imbue.minds_evals.data_types import StepMinReward
 from imbue.minds_evals.data_types import is_final_step
@@ -34,7 +38,10 @@ from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
 from imbue.minds_evals.expectations import expand_expectations
+from imbue.minds_evals.expectations import slugify
 from imbue.minds_evals.generate import AGENT_TIMEOUT_GRACE_SECONDS
+from imbue.minds_evals.generate import MINDS_EVALS_PROJECT_ROOT
+from imbue.minds_evals.generate import SEED_APP_DIRNAME
 from imbue.minds_evals.generate import STEP_FILES_DIRNAME
 from imbue.minds_evals.generate import TYPICAL_EXCHANGE_SECONDS
 from imbue.minds_evals.generate import VERIFIER_CRITERIA_DIRNAME
@@ -49,6 +56,7 @@ from imbue.minds_evals.generate import render_oracle_trajectory_json
 from imbue.minds_evals.generate import render_prompt_entry_prose
 from imbue.minds_evals.generate import resolve_remote_ref
 from imbue.minds_evals.generate import step_files_box_dir
+from imbue.minds_evals.generate import step_seed_app_box_dir
 from imbue.minds_evals.generate import worst_case_exchange_count
 from imbue.minds_evals.minds_bridge import EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
 from imbue.minds_evals.template_loading import load_template_module
@@ -989,6 +997,41 @@ def test_generate_dataset_tells_each_step_how_many_entries_precede_it(tmp_path: 
     assert [config.step.entries_before for config in configs if config.step is not None] == [0, 2, 4]
 
 
+def test_generate_dataset_carries_a_steps_diagnostic_probe_flag_into_that_steps_config_alone(tmp_path: Path) -> None:
+    config = _stepped_config()
+    config["personas"][0]["steps"][0]["diagnostic_probe"] = False
+    config["personas"][0]["steps"][1]["diagnostic_probe"] = True
+    task_dir = _generate_stepped_task(tmp_path, config)
+
+    step_configs = [
+        parse_case_config((task_dir / "steps" / name / "instruction.md").read_text())
+        for name in ("build-from-data", "adjust-requirements", "updated-dataset")
+    ]
+
+    # The last step leaves the key out, which runs no probe, the same as the first step's explicit false.
+    assert [
+        step_config.step.is_diagnostic_probe_run for step_config in step_configs if step_config.step is not None
+    ] == [
+        False,
+        True,
+        False,
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw_flag",
+    [pytest.param("yes", id="string"), pytest.param(1, id="integer"), pytest.param(None, id="null")],
+)
+def test_load_eval_config_rejects_a_diagnostic_probe_flag_that_is_not_a_boolean(
+    tmp_path: Path, raw_flag: object
+) -> None:
+    config = _stepped_config()
+    config["personas"][0]["steps"][1]["diagnostic_probe"] = raw_flag
+
+    with pytest.raises(EvalConfigError, match="step 'adjust-requirements': 'diagnostic_probe' must be true or false"):
+        _load_stepped_config(tmp_path, config)
+
+
 def test_generate_dataset_ships_every_step_the_whole_verifier(tmp_path: Path) -> None:
     """In separate mode harbor REPLACES the verifier build context with a step's tests rather than
     overlaying it, so every step has to carry the complete verifier -- with its own case.json."""
@@ -1276,6 +1319,216 @@ def test_the_shipped_stepped_eval_config_fits_the_workspace_its_steps_share(tmp_
     # And the conversation budget is still plausible for the messages the case can send, which is
     # the warning that pulling the budget down far enough would trip instead.
     assert not is_exchange_budget_implausible(case.prompts, config.timeout_seconds)
+
+
+def test_the_diagnostic_fixture_config_declares_exactly_the_checks_its_table_asserts(tmp_path: Path) -> None:
+    """The fixture case and `fixture_expected_facts.json` are two halves of one measurement: a check
+    added to the case with no entry in the table goes unasserted, and a table entry naming a check
+    the case dropped can only ever read as not recorded."""
+    config_dir = Path(__file__).parents[2] / "configs"
+    config = json.loads((config_dir / "eval-config-diagnostics-fixture.json").read_text())
+    table = json.loads((config_dir / "diagnostics" / "fixture_expected_facts.json").read_text())
+
+    task_dir = _generate_one_task(tmp_path, config)
+
+    case = parse_case_config((task_dir / "steps" / "instrument" / "instruction.md").read_text())
+    expectations = case.expectations
+    assert expectations is not None
+    asserted = set(table["facts"])
+    assert table["case_id"] == case.case_id
+    # An HTTP fact is keyed by the manifest entry's id, which for a check that fans out over the
+    # probeable apps carries the app as well, so the check id is read back off the fact's key.
+    http_check_ids = {check.check_id for check in expectations.http_checks}
+    asserted_http_check_ids = {
+        next(check_id for check_id in http_check_ids if name.startswith("http.{}.".format(check_id)))
+        for name in asserted
+        if name.startswith("http.")
+    }
+    assert asserted_http_check_ids == http_check_ids
+    assert {name for name in asserted if name.startswith("files.")} == {
+        "files.{}.matched".format(check.check_id) for check in expectations.files_checks
+    }
+    assert ("test_commands.exit_codes" in asserted) == bool(expectations.test_commands)
+    assert {name.split(".")[1] for name in asserted if name.startswith("flow.")} == {
+        slugify(check.name) for check in expectations.ui_flow_checks
+    }
+    # Every flow is asserted on the three facts the table pins for all of them, whatever else it
+    # says about the one reading only that flow's knob produces.
+    for check in expectations.ui_flow_checks:
+        slug = slugify(check.name)
+        assert {"flow.{}.{}".format(slug, suffix) for suffix in ("status", "record_kinds", "png_count")} <= asserted
+
+
+# --- seeded cases ---
+
+_TODO_FIXTURE_SOURCE = "flow_lab_apps/todo"
+
+
+def _seed_block() -> dict[str, Any]:
+    return {"app": {"source": _TODO_FIXTURE_SOURCE, "name": "todo-fixture", "port": 8090}}
+
+
+def _seeded_config(seed: object) -> dict[str, Any]:
+    """A one-step case seeded with the flow lab's to-do fixture, shaped as the diagnostic fixture case is."""
+    return {
+        "mngr_branch": "main",
+        "timeout_seconds": 1800,
+        "personas": [
+            {
+                "id": "instrument",
+                "persona": "A client who only wants an acknowledgement.",
+                "steps": [
+                    {
+                        "name": "instrument",
+                        "seed": seed,
+                        "prompts": ["Reply with the single word: acknowledged. Do not do anything else."],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_load_eval_config_parses_a_first_steps_seed(tmp_path: Path) -> None:
+    case = load_eval_config(_write_config(tmp_path, _seeded_config(_seed_block()))).cases[0]
+
+    assert case.steps is not None
+    assert case.steps[0].seed == CaseSeed(app=SeedApp(source=_TODO_FIXTURE_SOURCE, name="todo-fixture", port=8090))
+
+
+@pytest.mark.parametrize(
+    ("app_override", "expected_message"),
+    [
+        pytest.param({"icon": "icon.svg"}, "'seed.app' has unknown key", id="unknown-key"),
+        pytest.param(
+            {"source": "/work/todo"}, "must be a relative path inside the minds_evals project", id="absolute"
+        ),
+        pytest.param(
+            {"source": "../minds_evals/flow_lab_apps/todo"},
+            "must be a relative path inside the minds_evals project",
+            id="climbs-out",
+        ),
+        pytest.param({"source": "flow_lab_apps/missing"}, "has no source directory", id="missing-source"),
+        pytest.param({"source": "flow_lab_apps"}, "has no app.toml", id="no-manifest"),
+        pytest.param({"name": "Todo-Fixture"}, "must be lowercase", id="uppercase-name"),
+        pytest.param({"name": "todo--fixture"}, "must be lowercase", id="doubled-hyphen"),
+        pytest.param({"name": "host-todo"}, "must not start with", id="reserved-prefix"),
+        pytest.param({"name": "auth"}, "is reserved by the workspace template", id="reserved-name"),
+        pytest.param({"name": "a" * 33}, "must be at most 32 characters", id="long-name"),
+        pytest.param({"name": "other-fixture"}, "names the app 'todo-fixture'", id="manifest-name-mismatch"),
+        pytest.param({"port": 8010}, "own services bind", id="reserved-port"),
+        pytest.param({"port": True}, "must be a port number", id="bool-port"),
+        pytest.param({"port": "8090"}, "must be a port number", id="string-port"),
+        pytest.param({"port": 70_000}, "must be a port number", id="out-of-range-port"),
+    ],
+)
+def test_load_eval_config_rejects_a_seed_app_that_cannot_be_seeded(
+    tmp_path: Path, app_override: dict[str, object], expected_message: str
+) -> None:
+    seed = _seed_block()
+    seed["app"].update(app_override)
+
+    with pytest.raises(EvalConfigError, match=expected_message):
+        load_eval_config(_write_config(tmp_path, _seeded_config(seed)))
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected_message"),
+    [
+        pytest.param(_TODO_FIXTURE_SOURCE, "'seed' must be an object", id="not-an-object"),
+        pytest.param({}, "'seed' needs an 'app'", id="no-app"),
+        pytest.param({**_seed_block(), "bundle": "trial.bundle"}, "'seed' has unknown key", id="unknown-key"),
+        pytest.param({"app": _TODO_FIXTURE_SOURCE}, "'seed.app' must be an object", id="app-not-an-object"),
+    ],
+)
+def test_load_eval_config_rejects_a_malformed_seed(tmp_path: Path, seed: object, expected_message: str) -> None:
+    with pytest.raises(EvalConfigError, match=expected_message):
+        load_eval_config(_write_config(tmp_path, _seeded_config(seed)))
+
+
+def test_load_eval_config_rejects_a_seed_on_a_later_step(tmp_path: Path) -> None:
+    """The workspace is created, and so seeded, on the first step."""
+    config = _seeded_config(None)
+    config["personas"][0]["steps"].append({"name": "later", "seed": _seed_block(), "prompts": ["And now?"]})
+
+    with pytest.raises(EvalConfigError, match="only a case's first step may declare a 'seed'"):
+        load_eval_config(_write_config(tmp_path, config))
+
+
+def test_load_eval_config_rejects_a_seed_on_a_flat_case(tmp_path: Path) -> None:
+    config = _valid_config(personas=[{"id": "flat", "prompts": ["Build it"], "seed": _seed_block()}])
+
+    with pytest.raises(EvalConfigError, match="case-level 'seed'"):
+        load_eval_config(_write_config(tmp_path, config))
+
+
+def test_generate_dataset_stages_a_seeded_app_for_harbor_to_upload(tmp_path: Path) -> None:
+    """A seed travels the way a step's uploads do: into the step's workdir, then out of the box's
+    working directory by the step's setup script, even on a step that uploads nothing."""
+    task_dir = _generate_one_task(tmp_path, _seeded_config(_seed_block()))
+
+    fixture_dir = MINDS_EVALS_PROJECT_ROOT / _TODO_FIXTURE_SOURCE
+    workdir = task_dir / "steps" / "instrument" / "workdir"
+    staged_dir = workdir / SEED_APP_DIRNAME
+    assert sorted(path.name for path in staged_dir.iterdir()) == sorted(path.name for path in fixture_dir.iterdir())
+    assert (staged_dir / "index.html").read_bytes() == (fixture_dir / "index.html").read_bytes()
+    setup_text = (workdir / "setup.sh").read_text()
+    assert "mv {} {}".format(SEED_APP_DIRNAME, step_seed_app_box_dir("instrument")) in setup_text
+    assert STEP_FILES_DIRNAME not in setup_text
+    assert "rm -f setup.sh" in setup_text
+
+    instruction = (task_dir / "steps" / "instrument" / "instruction.md").read_text()
+    step_config = parse_case_config(instruction)
+    assert step_config.step is not None
+    assert step_config.step.seed_app == StepBoxSeedApp(
+        name="todo-fixture", port=8090, box_path=step_seed_app_box_dir("instrument")
+    )
+    assert "with the app `todo-fixture` seeded in" in instruction
+    # Nothing of the seed reaches environment/, whose bytes key the image every case shares.
+    assert not list((task_dir / "environment").rglob("icon.svg"))
+
+
+def test_generate_dataset_relocates_both_the_uploads_and_the_seed_of_a_first_step_with_both(tmp_path: Path) -> None:
+    _write_upload_sources(tmp_path)
+    config = _seeded_config(_seed_block())
+    config["personas"][0]["steps"][0]["files"] = [{"source": "uploads/v1", "upload_id": "pull-one"}]
+
+    task_dir = _generate_one_task(tmp_path, config)
+
+    setup_text = (task_dir / "steps" / "instrument" / "workdir" / "setup.sh").read_text()
+    assert "mv {} {}".format(STEP_FILES_DIRNAME, step_files_box_dir("instrument")) in setup_text
+    assert "mv {} {}".format(SEED_APP_DIRNAME, step_seed_app_box_dir("instrument")) in setup_text
+
+
+def test_an_unseeded_steps_config_carries_no_seed_app(tmp_path: Path) -> None:
+    task_dir = _generate_stepped_task(tmp_path)
+
+    instruction = (task_dir / "steps" / "build-from-data" / "instruction.md").read_text()
+    step_config = parse_case_config(instruction)
+
+    assert step_config.step is not None
+    assert step_config.step.seed_app is None
+    assert "This step seeds no app into the workspace." in instruction
+
+
+def test_the_todo_fixture_carries_a_manifest_and_icon_the_workspace_template_registers() -> None:
+    """The template refuses to register a new app with no icon, and stores only an icon that is one
+    `<svg>` element with no script, style, embedded HTML or outside reference."""
+    fixture_dir = MINDS_EVALS_PROJECT_ROOT / _TODO_FIXTURE_SOURCE
+    manifest = tomllib.loads((fixture_dir / "app.toml").read_text())
+    icon = ElementTree.fromstring((fixture_dir / manifest["icon"]).read_text())
+
+    assert (manifest["name"], manifest["program"], manifest["instances"], manifest["priority"]) == (
+        "todo-fixture",
+        "todo-fixture",
+        False,
+        "user",
+    )
+    assert icon.tag == "{http://www.w3.org/2000/svg}svg"
+    element_names = {element.tag.rpartition("}")[2].lower() for element in icon.iter()}
+    assert not element_names & {"script", "style", "foreignobject"}
+    attribute_names = {name.rpartition("}")[2].lower() for element in icon.iter() for name in element.attrib}
+    assert not {name for name in attribute_names if name.startswith("on") or name in ("href", "src")}
 
 
 def test_the_shipped_time_to_mock_eval_config_stays_generatable(tmp_path: Path) -> None:

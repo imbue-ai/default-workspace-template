@@ -1,0 +1,118 @@
+{
+  "gates": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "transcript_has_agent_reply",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "transcript_has_agent_reply"
+      },
+      {
+        "name": "agent_engaged_substantively",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "agent_engaged_substantively"
+      },
+      {
+        "name": "all_turns_completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "all_turns_completed"
+      },
+      {
+        "name": "progress_timeline_was_read",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "progress_timeline_was_read"
+      },
+      {
+        "name": "finished_within_time",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "finished_within_time"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "message_lengths_within_limits",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "message_lengths_within_limits"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.6111,
+      "criteria": [
+        {
+          "name": "conciseness",
+          "value": 0.8889,
+          "raw": 9,
+          "weight": 1.0,
+          "description": "How concise is the AGENT in its chat messages? 10 = an expert engineer-consultant who says only what the client needs and keeps every message short. 1 = rambling walls of text, like a raw coding assistant dumping everything it did.",
+          "reasoning": "The agent's chat messages are extremely short -- a one-line statement of intent, 'done', and a single-sentence answer. No rambling or dumping of everything it did."
+        },
+        {
+          "name": "nontechnical_language",
+          "value": 0.6667,
+          "raw": 7,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's language to the client in its chat messages? 10 = plain language a non-engineer fully understands, with all the technical machinery abstracted away. 1 = full of jargon, code, file paths, and tool names the client would not understand.",
+          "reasoning": "Mostly plain ('done', 'The report says ok.'), but message 2 mentions running '12 commands' and 'one tool call per item', which leans slightly technical for a non-engineer. Overall still fairly accessible."
+        },
+        {
+          "name": "nontechnical_status_language",
+          "value": 0.1111,
+          "raw": 2,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's progress-timeline copy -- the step titles it declares and the one-line summaries it closes them with? 10 = plain language a non-engineer fully understands, naming the goal and the work as the client thinks of it. 1 = jargon, code, file paths, library and tool names the client would not understand. Score 10 if the transcript has no progress timeline.",
+          "reasoning": "The progress timeline shows cryptic diagnostic labels like 'DIAG alpha 7f3a' and 'alpha done 7f3a' -- opaque codes that name no real goal a non-technical client would recognize."
+        },
+        {
+          "name": "proactive",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "How self-directed is the AGENT? 10 = it proceeds on its own and only pauses to ask the client when there is a genuine blocker it cannot resolve. 1 = it stops to ask about trivial things it should have just decided.",
+          "reasoning": "The agent proceeded through the requested items on its own without pausing to ask trivial questions, only reporting the final results."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/judge_transcript.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"conciseness\":{\"score\":9,\"reasoning\":\"The agent's chat messages are extremely short -- a one-line statement of intent, 'done', and a single-sentence answer. No rambling or dumping of everything it did.\"},\"nontechnical_language\":{\"score\":7,\"reasoning\":\"Mostly plain ('done', 'The report says ok.'), but message 2 mentions running '12 commands' and 'one tool call per item', which leans slightly technical for a non-engineer. Overall still fairly accessible.\"},\"nontechnical_status_language\":{\"score\":2,\"reasoning\":\"The progress timeline shows cryptic diagnostic labels like 'DIAG alpha 7f3a' and 'alpha done 7f3a' -- opaque codes that name no real goal a non-technical client would recognize.\"},\"proactive\":{\"score\":8,\"reasoning\":\"The agent proceeded through the requested items on its own without pausing to ask trivial questions, only reporting the final results.\"}}"
+    }
+  ],
+  "timed_out": false,
+  "harness": {
+    "name": "pi-coding",
+    "is_harness_quality_scored": false
+  },
+  "outcome_evidence": {
+    "is_evidence_complete": true,
+    "entry_count": 1,
+    "error_count_by_class": {}
+  }
+}

@@ -1,0 +1,3 @@
+File every CI flake ticket under the `CI Flake Reconciliation` Linear project, and keep the project congruent with the `flaky-cluster` label.
+
+The flake sweep indexes its tickets by the `flaky-cluster` label, while people read the Linear project -- and nothing kept the two sets equal, so the project silently stopped tracking the backlog. `scripts/flake_reconcile.py` now files every ticket it creates under the project, each `FlakeTicket` reports the project it is filed under, and a new `sync-project` command re-files any labelled ticket whose project was cleared in the Linear UI (idempotent; a congruent backlog changes nothing). The `manage-flakes` skill runs `sync-project` after applying its reconciliation plan and reports any tickets it moved.

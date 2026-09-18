@@ -11,6 +11,12 @@ name: minds evals (scheduled)
 # then runs the real eval on its harness config, and a green cell is remembered so
 # the next night skips it when nothing moved.
 #
+# Beside the cells, each resolved pair runs the two self-diagnostic families
+# (specs/minds-evals-self-diagnostics/spec.md): one fixture trial, and one
+# behaviour trial per harness the nightly configs run on. They check the
+# instrument rather than the product, are never skipped by a green marker, and
+# gate nothing.
+#
 # This is a regression job, not a gate: a trial boots a full Minds computer on
 # Modal per case per cell, so it is far too slow and expensive for a PR check.
 
@@ -106,6 +112,17 @@ env:
   # The named harness configs a cell can run on. Read by `minds-evals ci-matrix`, which validates
   # every entry through the driver's own kwarg parsing before any paid runner starts.
   HARNESS_CONFIGS: apps/minds_evals/configs/harness_configs.json
+  # Each self-diagnostic family's case, expected-facts table and harness config(s). `ci-matrix`
+  # validates the harness configs through the same driver kwarg parsing as HARNESS_CONFIGS.
+  DIAGNOSE_FIXTURE_CONFIG: apps/minds_evals/configs/eval-config-diagnostics-fixture.json
+  DIAGNOSE_FIXTURE_TABLE: apps/minds_evals/configs/diagnostics/fixture_expected_facts.json
+  DIAGNOSE_FIXTURE_HARNESS_CONFIG: apps/minds_evals/configs/diagnostics/fixture_harness_config.json
+  DIAGNOSE_BEHAVIOUR_CONFIG: apps/minds_evals/configs/eval-config-diagnostics-behaviour.json
+  DIAGNOSE_BEHAVIOUR_TABLE: apps/minds_evals/configs/diagnostics/behaviour_expected_facts.json
+  DIAGNOSE_BEHAVIOUR_HARNESS_CONFIGS: apps/minds_evals/configs/diagnostics/behaviour_harness_configs.json
+  # The facts every trial is held to whatever its case. Each live cell is read against them beside its
+  # own check, and a miss is reported and gates nothing.
+  LIVE_INVARIANTS_TABLE: apps/minds_evals/configs/diagnostics/live_invariants.json
   # Every `uv sync` and `uv run` below installs the lock or fails, never a fresh resolution.
   # This run's whole premise is that the only thing moving between two nights is the pair of
   # SHAs it froze; a harbor or modal release picked up mid-run would be an eval regression with
@@ -128,6 +145,12 @@ jobs:
       # Matrix of the cells that should actually be evaluated: the `evaluate` job.
       matrix: ${{ steps.decide.outputs.matrix }}
       any: ${{ steps.decide.outputs.any }}
+      # Matrices of the diagnose jobs: one fixture entry per resolved pair, and one behaviour entry per
+      # resolved pair and supported nightly harness. Empty only when no pair resolved, which is what
+      # `is_any_pair_diagnosed` says: GitHub refuses a matrix with no entries.
+      diagnose_fixture_matrix: ${{ steps.decide.outputs.diagnose_fixture_matrix }}
+      diagnose_behaviour_matrix: ${{ steps.decide.outputs.diagnose_behaviour_matrix }}
+      is_any_pair_diagnosed: ${{ steps.decide.outputs.is_any_pair_diagnosed }}
       # The whole decision (every pair and cell considered, skipped and unresolved
       # ones included), so `notify` can tell a cell that was skipped from a cell
       # whose job died.
@@ -367,6 +390,8 @@ jobs:
           uv run --project apps/minds_evals minds-evals ci-matrix \
             --pairs "$PAIRS_PATH" \
             --harness-configs "$HARNESS_CONFIGS" \
+            --fixture-harness-config "$DIAGNOSE_FIXTURE_HARNESS_CONFIG" \
+            --behaviour-harness-configs "$DIAGNOSE_BEHAVIOUR_HARNESS_CONFIGS" \
             --nightly-suites "$NIGHTLY_SUITES" \
             --select "$HARNESS_CONFIGS_INPUT" \
             --config "$CONFIG" \
@@ -385,11 +410,17 @@ jobs:
           oracle_matrix=$(jq -c .oracle_matrix "$DECISION_PATH")
           matrix=$(jq -c .matrix "$DECISION_PATH")
           any=$(jq -r .is_any_cell_running "$DECISION_PATH")
+          diagnose_fixture_matrix=$(jq -c .diagnose_fixture_matrix "$DECISION_PATH")
+          diagnose_behaviour_matrix=$(jq -c .diagnose_behaviour_matrix "$DECISION_PATH")
+          is_any_pair_diagnosed=$(jq -r .is_any_pair_diagnosed "$DECISION_PATH")
           decision=$(jq -c . "$DECISION_PATH")
           {
             echo "oracle_matrix=$oracle_matrix"
             echo "matrix=$matrix"
             echo "any=$any"
+            echo "diagnose_fixture_matrix=$diagnose_fixture_matrix"
+            echo "diagnose_behaviour_matrix=$diagnose_behaviour_matrix"
+            echo "is_any_pair_diagnosed=$is_any_pair_diagnosed"
             echo "decision=$decision"
             echo "is_live_pass_skipped=$IS_LIVE_PASS_SKIPPED"
           } >> "$GITHUB_OUTPUT"
@@ -871,6 +902,11 @@ jobs:
         # single run's number is not a regression signal. What gates is structural
         # -- every trial completed, no harness error statuses, gates passed, and no
         # trial that asked for a model answered on another.
+        #
+        # The live invariants are read here too, off the same job directory: the facts every trial is
+        # held to whatever its case. Its exit code is deliberately discarded -- the reading is what
+        # turns "the readers are checked once a night on a fixture" into "on every real trial", and a
+        # miss belongs in the Slack report's details, never in this cell's verdict.
         run: |
           set -euo pipefail
           mkdir -p "$SUMMARY_DIR"
@@ -880,6 +916,12 @@ jobs:
             --summary-md "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md" \
             --summary-json "$SUMMARY_DIR/live-summary-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.json" \
             || check_status=$?
+          uv run --project apps/minds_evals minds-evals check-diagnostics \
+            "apps/minds_evals/jobs/$JOB_NAME" \
+            --expected "$LIVE_INVARIANTS_TABLE" \
+            --summary-md "$SUMMARY_DIR/live-invariants-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md" \
+            --summary-json "$SUMMARY_DIR/live-invariants-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.json" \
+            || echo "::warning::a live invariant missed on this cell, or they could not be read; see the report"
           {
             echo "## Live pass (\`$PAIR\` x \`$CONFIG_SLUG\` x \`$HARNESS_CONFIG\`)"
             echo ""
@@ -889,6 +931,10 @@ jobs:
               echo "check-run wrote no summary -- it could not read the job directory."
             fi
             echo ""
+            if [[ -f "$SUMMARY_DIR/live-invariants-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md" ]]; then
+              cat "$SUMMARY_DIR/live-invariants-$PAIR-$CONFIG_SLUG-$HARNESS_CONFIG.md"
+              echo ""
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$check_status"
 
@@ -969,13 +1015,417 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+  # The fixture self-diagnostic, once per resolved pair: a trial on a seeded to-do app whose facts
+  # are checked against an expected table, so a regression in the eval's own readers, collectors or
+  # verifier turns red here rather than passing as a product result.
+  #
+  # Neither diagnose job is gated on the oracle, and neither reads or writes a green marker: the
+  # oracle validates a different dataset and runs only when some cell does, so on an all-green
+  # night -- exactly the night the diagnostics are the only measurement -- it is skipped, and a job
+  # behind it would be too. Nothing is gated on them either. A run that stops after the oracle
+  # skips them with the rest of the live pass.
+  diagnose-fixture:
+    # See the oracle job: without a name the title carries every field of the entry.
+    name: diagnose fixture (${{ matrix.pair }})
+    needs: [resolve]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.is_live_pass_skipped != 'true' && needs.resolve.outputs.is_any_pair_diagnosed == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      # A red pair must not cancel the other, for the reason the oracle job gives.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.diagnose_fixture_matrix) }}
+    # Per pair. `ci-matrix` refuses a harness config named `diagnose` or starting with `diagnose-`,
+    # so no cell's `minds-evals-<pair>-<config>` group or artifact name can be one of these.
+    concurrency:
+      group: minds-evals-diagnose-fixture-${{ matrix.pair }}
+      cancel-in-progress: false
+    # Budgeted like `evaluate`, so the backstop sweep's argument (its cutoff is longer than any job's
+    # budget) holds for every job in this run.
+    timeout-minutes: 200
+    steps:
+      # See the evaluate job's steps of the same names for the secrets, the lane key, the Modal
+      # profile and the user-id scope.
+      - name: Fetch Anthropic key and Modal credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/ANTHROPIC_API_KEY
+            mngr/ci/MODAL_TOKEN_ID
+            mngr/ci/MODAL_TOKEN_SECRET
+      - name: Fetch the lane's key from Vault
+        if: matrix.lane_key_env != 'ANTHROPIC_API_KEY'
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/${{ matrix.lane_key_env }}
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Verify the Vault secrets reached the runner
+        env:
+          LANE_KEY_ENV: ${{ matrix.lane_key_env }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in ANTHROPIC_API_KEY MODAL_TOKEN_ID MODAL_TOKEN_SECRET "$LANE_KEY_ENV"; do
+            value="${!var:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error::$var is empty -- the Vault secret is not reaching the runner"
+              missing=1
+            else
+              echo "$var present, length=${#value}"
+            fi
+          done
+          if (( missing )); then
+            exit 1
+          fi
+
+      - name: Write throwaway Modal profile
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "$HOME/.modal.toml"
+          cat > "$HOME/.modal.toml" <<EOF
+          [imbue]
+          token_id = "${MODAL_TOKEN_ID}"
+          token_secret = "${MODAL_TOKEN_SECRET}"
+          active = true
+          EOF
+
+      - name: Install minds_evals
+        run: uv sync --locked --project apps/minds_evals
+
+      - name: Name this run's Modal user-id scope
+        id: scope
+        env:
+          PREFIX_PATH: ${{ runner.temp }}/user-id-prefix.txt
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals ci-user-id-prefix --output "$PREFIX_PATH"
+          prefix=$(cat "$PREFIX_PATH")
+          echo "user_id_prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Generate the dataset at the frozen SHAs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          MNGR_SHA: ${{ matrix.mngr_sha }}
+          DWT_SHA: ${{ matrix.dwt_sha }}
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals generate \
+            --config "$DIAGNOSE_FIXTURE_CONFIG" \
+            --output "$DATASET_DIR" \
+            --mngr-repo "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            --mngr-ref "$MNGR_SHA" \
+            --dwt-ref "$DWT_SHA"
+
+      - name: Diagnostic pass
+        id: diagnostic_pass
+        env:
+          JOB_NAME: ${{ matrix.pair }}-diagnose-fixture-${{ github.run_id }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          USER_ID_PREFIX: ${{ steps.scope.outputs.user_id_prefix }}
+          # The `--ak` flags ci-matrix composed from the fixture harness config, as a JSON list.
+          HARBOR_ARGS_JSON: ${{ matrix.harbor_args }}
+        run: |
+          set -euo pipefail
+          # Decoded through a variable for the reason the evaluate job's live pass gives: a decode
+          # that lost its flags would run the default arm, whose facts the table does not describe.
+          harbor_args_text=$(jq -r '.[]' <<<"$HARBOR_ARGS_JSON")
+          mapfile -t harbor_args <<<"$harbor_args_text"
+          if (( ${#harbor_args[@]} < 4 )); then
+            echo "::error::the fixture harness config decoded to too few harbor arguments from $HARBOR_ARGS_JSON"
+            exit 1
+          fi
+          # One case, so a concurrency of one.
+          just minds-evals-run "$DATASET_DIR" "$JOB_NAME" 1 \
+            --ak "user_id_prefix=$USER_ID_PREFIX" \
+            "${harbor_args[@]}"
+
+      - name: Check the diagnostic pass
+        # Run whichever way the pass went, and skipped only when it never ran; see the oracle job's
+        # check. Only a `failed` trial exits non-zero: `known`, `not followed` and `not measured` are
+        # reported and leave the job green.
+        if: ${{ !cancelled() && steps.diagnostic_pass.conclusion != 'skipped' }}
+        env:
+          PAIR: ${{ matrix.pair }}
+          JOB_NAME: ${{ matrix.pair }}-diagnose-fixture-${{ github.run_id }}
+          SUMMARY_DIR: ${{ runner.temp }}/summaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$SUMMARY_DIR"
+          check_status=0
+          uv run --project apps/minds_evals minds-evals check-diagnostics \
+            "apps/minds_evals/jobs/$JOB_NAME" \
+            --expected "$DIAGNOSE_FIXTURE_TABLE" \
+            --summary-md "$SUMMARY_DIR/diagnose-fixture-summary-$PAIR.md" \
+            --summary-json "$SUMMARY_DIR/diagnose-fixture-summary-$PAIR.json" \
+            || check_status=$?
+          {
+            echo "## Fixture diagnostic (\`$PAIR\`)"
+            echo ""
+            if [[ -f "$SUMMARY_DIR/diagnose-fixture-summary-$PAIR.md" ]]; then
+              cat "$SUMMARY_DIR/diagnose-fixture-summary-$PAIR.md"
+            else
+              echo "check-diagnostics wrote no summary -- it could not read the job directory."
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$check_status"
+
+      - name: Delete the Modal environments this diagnostic created
+        if: always()
+        env:
+          DIAGNOSE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-diagnose-fixture-${{ github.run_id }}
+        # Named deletion first, then the age-based backstop sweep the oracle job also runs. The sweep
+        # runs here too because this job runs on every live night, all-green ones included, when the
+        # oracle does not; it runs once per pair here and not in the behaviour cells, which would only
+        # race each other for the same old names. See the oracle job's cleanup for why the sweep never
+        # reaches this run's own environments.
+        run: |
+          set -euo pipefail
+          cleanup_status=0
+          if [[ -d "$DIAGNOSE_JOB_DIR" ]]; then
+            uv run --project apps/minds_evals minds-evals cleanup-environments --job-dir "$DIAGNOSE_JOB_DIR" \
+              || cleanup_status=$?
+          else
+            echo "no job dir at $DIAGNOSE_JOB_DIR -- nothing named to clean up"
+          fi
+          uv run --project apps/minds_evals minds-evals cleanup-environments \
+            --sweep-prefix "$CI_ENVIRONMENT_PREFIX" \
+            --older-than-hours 8 \
+            || cleanup_status=$?
+          exit "$cleanup_status"
+
+      - name: Upload the summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-summary-${{ matrix.pair }}-diagnose-fixture
+          path: ${{ runner.temp }}/summaries
+          retention-days: 14
+          if-no-files-found: ignore
+          # See the oracle job's upload: run_id does not change on a re-run.
+          overwrite: true
+
+      - name: Upload the job directory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-jobs-${{ matrix.pair }}-diagnose-fixture-${{ github.run_id }}
+          path: |
+            apps/minds_evals/jobs
+            !apps/minds_evals/jobs/**/agent/snapshots/**
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
+  # The behaviour self-diagnostic, once per resolved pair and harness the nightly configs run on:
+  # a two-step trial on that harness's cheap model, whose facts are agreements between the tickets,
+  # the event feed, the trajectory, the worker captures and the verifier's derived outputs. Gated
+  # and budgeted like `diagnose-fixture`, for the same reasons. A pair whose workspace template
+  # offers a harness's lane no pasted-key sign-in has no entry here at all: `ci-matrix` leaves it
+  # out and the Slack report names it, so no box is spent to produce a dark cell.
+  diagnose-behaviour:
+    name: diagnose behaviour (${{ matrix.pair }} x ${{ matrix.harness }})
+    needs: [resolve]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.is_live_pass_skipped != 'true' && needs.resolve.outputs.is_any_pair_diagnosed == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      # A red harness must not cancel the others: each checks its own harness's readers.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.diagnose_behaviour_matrix) }}
+    concurrency:
+      group: minds-evals-diagnose-behaviour-${{ matrix.pair }}-${{ matrix.harness }}
+      cancel-in-progress: false
+    # The case's worst case is two steps of 2400 s conversation, 900 s verification, 300 s grace and
+    # a 600 s verifier each, about 140 minutes.
+    timeout-minutes: 200
+    steps:
+      - name: Fetch Anthropic key and Modal credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/ANTHROPIC_API_KEY
+            mngr/ci/MODAL_TOKEN_ID
+            mngr/ci/MODAL_TOKEN_SECRET
+      - name: Fetch the lane's key from Vault
+        if: matrix.lane_key_env != 'ANTHROPIC_API_KEY'
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/${{ matrix.lane_key_env }}
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Verify the Vault secrets reached the runner
+        env:
+          LANE_KEY_ENV: ${{ matrix.lane_key_env }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in ANTHROPIC_API_KEY MODAL_TOKEN_ID MODAL_TOKEN_SECRET "$LANE_KEY_ENV"; do
+            value="${!var:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error::$var is empty -- the Vault secret is not reaching the runner"
+              missing=1
+            else
+              echo "$var present, length=${#value}"
+            fi
+          done
+          if (( missing )); then
+            exit 1
+          fi
+
+      - name: Write throwaway Modal profile
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "$HOME/.modal.toml"
+          cat > "$HOME/.modal.toml" <<EOF
+          [imbue]
+          token_id = "${MODAL_TOKEN_ID}"
+          token_secret = "${MODAL_TOKEN_SECRET}"
+          active = true
+          EOF
+
+      - name: Install minds_evals
+        run: uv sync --locked --project apps/minds_evals
+
+      - name: Name this run's Modal user-id scope
+        id: scope
+        env:
+          PREFIX_PATH: ${{ runner.temp }}/user-id-prefix.txt
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals ci-user-id-prefix --output "$PREFIX_PATH"
+          prefix=$(cat "$PREFIX_PATH")
+          echo "user_id_prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Generate the dataset at the frozen SHAs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          MNGR_SHA: ${{ matrix.mngr_sha }}
+          DWT_SHA: ${{ matrix.dwt_sha }}
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals generate \
+            --config "$DIAGNOSE_BEHAVIOUR_CONFIG" \
+            --output "$DATASET_DIR" \
+            --mngr-repo "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            --mngr-ref "$MNGR_SHA" \
+            --dwt-ref "$DWT_SHA"
+
+      - name: Diagnostic pass
+        id: diagnostic_pass
+        env:
+          HARNESS: ${{ matrix.harness }}
+          JOB_NAME: ${{ matrix.pair }}-diagnose-behaviour-${{ matrix.harness }}-${{ github.run_id }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          USER_ID_PREFIX: ${{ steps.scope.outputs.user_id_prefix }}
+          # The `--ak` flags ci-matrix composed from this harness's behaviour config, as a JSON list.
+          HARBOR_ARGS_JSON: ${{ matrix.harbor_args }}
+        run: |
+          set -euo pipefail
+          harbor_args_text=$(jq -r '.[]' <<<"$HARBOR_ARGS_JSON")
+          mapfile -t harbor_args <<<"$harbor_args_text"
+          if (( ${#harbor_args[@]} < 4 )); then
+            echo "::error::the $HARNESS behaviour harness config decoded to too few harbor arguments from $HARBOR_ARGS_JSON"
+            exit 1
+          fi
+          just minds-evals-run "$DATASET_DIR" "$JOB_NAME" 1 \
+            --ak "user_id_prefix=$USER_ID_PREFIX" \
+            "${harbor_args[@]}"
+
+      - name: Check the diagnostic pass
+        if: ${{ !cancelled() && steps.diagnostic_pass.conclusion != 'skipped' }}
+        env:
+          PAIR: ${{ matrix.pair }}
+          HARNESS: ${{ matrix.harness }}
+          JOB_NAME: ${{ matrix.pair }}-diagnose-behaviour-${{ matrix.harness }}-${{ github.run_id }}
+          SUMMARY_DIR: ${{ runner.temp }}/summaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$SUMMARY_DIR"
+          check_status=0
+          uv run --project apps/minds_evals minds-evals check-diagnostics \
+            "apps/minds_evals/jobs/$JOB_NAME" \
+            --expected "$DIAGNOSE_BEHAVIOUR_TABLE" \
+            --summary-md "$SUMMARY_DIR/diagnose-behaviour-summary-$PAIR-$HARNESS.md" \
+            --summary-json "$SUMMARY_DIR/diagnose-behaviour-summary-$PAIR-$HARNESS.json" \
+            || check_status=$?
+          {
+            echo "## Behaviour diagnostic (\`$PAIR\` x \`$HARNESS\`)"
+            echo ""
+            if [[ -f "$SUMMARY_DIR/diagnose-behaviour-summary-$PAIR-$HARNESS.md" ]]; then
+              cat "$SUMMARY_DIR/diagnose-behaviour-summary-$PAIR-$HARNESS.md"
+            else
+              echo "check-diagnostics wrote no summary -- it could not read the job directory."
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$check_status"
+
+      - name: Delete the Modal environments this diagnostic created
+        if: always()
+        env:
+          DIAGNOSE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-diagnose-behaviour-${{ matrix.harness }}-${{ github.run_id }}
+        # Exactly the environments this job dir records; the backstop sweep runs in diagnose-fixture.
+        run: |
+          set -euo pipefail
+          if [[ -d "$DIAGNOSE_JOB_DIR" ]]; then
+            uv run --project apps/minds_evals minds-evals cleanup-environments --job-dir "$DIAGNOSE_JOB_DIR"
+          else
+            echo "no job dir at $DIAGNOSE_JOB_DIR -- nothing named to clean up"
+          fi
+
+      - name: Upload the summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-summary-${{ matrix.pair }}-diagnose-behaviour-${{ matrix.harness }}
+          path: ${{ runner.temp }}/summaries
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload the job directory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-jobs-${{ matrix.pair }}-diagnose-behaviour-${{ matrix.harness }}-${{ github.run_id }}
+          path: |
+            apps/minds_evals/jobs
+            !apps/minds_evals/jobs/**/agent/snapshots/**
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
   # One Slack message per pair and eval config, each a grid of that config's cases
   # by harness config -- or a single broken message when the run decided nothing to
   # evaluate at all.
   # Degrades to a warning when the webhook is missing, so a run is never red
   # because the notification is.
   notify:
-    needs: [resolve, oracle, evaluate]
+    needs: [resolve, oracle, evaluate, diagnose-fixture, diagnose-behaviour]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1032,6 +1482,8 @@ jobs:
           RESOLVE_RESULT: ${{ needs.resolve.result }}
           ORACLE_RESULT: ${{ needs.oracle.result }}
           EVALUATE_RESULT: ${{ needs.evaluate.result }}
+          DIAGNOSE_FIXTURE_RESULT: ${{ needs.diagnose-fixture.result }}
+          DIAGNOSE_BEHAVIOUR_RESULT: ${{ needs.diagnose-behaviour.result }}
           SKIP_LIVE: ${{ env.IS_LIVE_PASS_SKIPPED }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TRIGGER: ${{ github.event_name }}
@@ -1075,10 +1527,12 @@ jobs:
             --resolve-result "$RESOLVE_RESULT" \
             --oracle-result "$ORACLE_RESULT" \
             --evaluate-result "$EVALUATE_RESULT" \
+            --diagnose-fixture-result "$DIAGNOSE_FIXTURE_RESULT" \
+            --diagnose-behaviour-result "$DIAGNOSE_BEHAVIOUR_RESULT" \
             --output /tmp/slack-payloads.json; then
             echo "::warning::minds-evals ci-report failed; posting a one-line notice in place of the report"
             jq -n \
-              --arg text ":x: *minds-evals* -- the report could not be rendered (resolve=${RESOLVE_RESULT}, oracle=${ORACLE_RESULT}, evaluate=${EVALUATE_RESULT}); read the run instead: <${RUN_URL}|run logs>" \
+              --arg text ":x: *minds-evals* -- the report could not be rendered (resolve=${RESOLVE_RESULT}, oracle=${ORACLE_RESULT}, evaluate=${EVALUATE_RESULT}, diagnose-fixture=${DIAGNOSE_FIXTURE_RESULT}, diagnose-behaviour=${DIAGNOSE_BEHAVIOUR_RESULT}); read the run instead: <${RUN_URL}|run logs>" \
               '[{username: "Evals", icon_emoji: ":brainless:", text: $text}]' > /tmp/slack-payloads.json
           fi
           # One webhook payload per pair and eval config, one per line, so each is posted and
