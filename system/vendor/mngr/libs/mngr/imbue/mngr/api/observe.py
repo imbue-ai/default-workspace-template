@@ -421,13 +421,6 @@ def load_base_state_from_history(
     Returns a dict mapping agent instance key (``<agent_id>@<host_id>``) ->
     _TrackedState. A history line missing host details (which current writers
     always include) falls back to the bare agent id for that line only.
-
-    Deliberately does its own scan rather than reusing
-    :func:`find_last_full_state_offset`: this reader exists partly to *report* on
-    the file's health, warning about mid-file corruption via
-    ``MalformedJsonLineWarner``, whereas the follower's scan skips non-snapshot
-    lines without parsing them and treats a torn tail as routine. The two look
-    alike and want different things.
     """
     events_path = get_observe_events_path(events_base_dir)
     if not events_path.exists():
@@ -557,12 +550,7 @@ def is_observe_writer_running(events_base_dir: Path) -> bool:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        # Someone else holds it. This is the only failure that means "an observer is
-        # running"; catching OSError broadly here would turn ENOLCK (an NFS or CIFS
-        # mount, a filesystem without flock) into that same positive, and a stale
-        # lock file left by an older mngr is enough to make it stick. That is the
-        # direction this function must least afford to guess in: it would send a
-        # follower off to tail a dormant file, the exact failure it exists to prevent.
+        # Someone else holds it: the only failure that means an observer is running.
         return True
     except OSError as e:
         raise ObserveLockProbeError(lock_path, e) from e
