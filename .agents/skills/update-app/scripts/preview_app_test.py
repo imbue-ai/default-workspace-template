@@ -410,6 +410,33 @@ def test_a_failed_sibling_stops_the_boot_before_the_app_itself(tmp_path: Path) -
     assert runner.ups() == ["chat-preview"]
 
 
+def test_a_sibling_whose_instances_api_has_its_own_port_is_refused_before_anything_boots(
+    tmp_path: Path,
+) -> None:
+    """The registry copy can only point a sibling's instances API at its preview's main port,
+    which is wrong for an app that serves that API elsewhere (the terminal's sidecar)."""
+    worktree = _write_worktree(tmp_path)
+    terminal_dir = worktree / "system" / "apps" / "terminal"
+    terminal_dir.mkdir(parents=True)
+    (terminal_dir / "app.toml").write_text(
+        'name = "terminal"\ndisplay_name = "Terminal"\nicon = "icon.svg"\ninstances = true\n'
+        'instances_url = "http://127.0.0.1:7682"\n'
+    )
+    (terminal_dir / "icon.svg").write_text(_ICON)
+    runner = _RecordingRunner(tmp_path)
+
+    with pytest.raises(mod.PreviewError, match="terminal"):
+        mod.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["terminal"],
+            runner=runner,
+            dump_registry=_dump_registry,
+        )
+    assert runner.ups() == []
+
+
 def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

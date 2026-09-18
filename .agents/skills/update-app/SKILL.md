@@ -349,7 +349,9 @@ where the data dies. Encode these, cheapest first:
   ```
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
-  and, for a shell preview, points the shell's copied registry at it;
+  and, for a shell preview, points the shell's copied registry at it (a sibling
+  whose manifest serves its instances API on a port of its own, like the
+  terminal, is refused);
   `--instance-key <key>` names the instance the tab opens on, for an app whose
   `open_path` takes one (a chat opens on a conversation). The worktree is the
   app's code isolation when the change is one the user must see before it
