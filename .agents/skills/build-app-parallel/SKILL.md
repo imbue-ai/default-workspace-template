@@ -188,32 +188,25 @@ Repeat until every node is done.
        --work-folder "$BUILD" \
        --runtime-dir "$RUN/nodes/N/" \
        --task-file "$RUN/nodes/N/task.md" \
-       --create-message "Your task is in \`$RUN/nodes/N/task.md\`, relative to this folder. Read it and do what it says." \
-       --create-arg=--foreground \
        --create-arg=-S \
-       --create-arg=agent_types.headless_claude.settings_overrides.model=<model> \
-       --detach
+       --create-arg=agent_types.claude.settings_overrides.model=<model> \
+       --message-with-mngr
    ```
 
    Add N to `running` in `$RUN/progress.txt`, and launch every ready node before
    you wait for any of them -- that is what makes them run at once.
 
-   The last five options are what a shared-folder worker needs, and each one
-   fails in a different way if it is dropped:
+   The last three options are what a shared-folder worker needs:
 
-   - `--create-message` carries the task, because these workers are headless and
-     cannot be messaged once running. Point at the task file rather than passing
-     it: a create-time message reaches the agent as a command-line argument, and
-     a task file's opening `---` is read there as an unknown option.
-   - `--create-arg=--foreground` is required by mngr for a headless type, and
-     `--detach` goes with it: that create runs the worker rather than starting
-     it, so without `--detach` the launch would not return until the worker had
-     finished, and the nodes would run one at a time.
-   - The model override names `headless_claude`, the type these workers actually
-     resolve to. Naming `claude` instead is rejected, because a setting is its
-     own config layer and has to name the right type.
-   - Write each `--create-arg` joined with `=`, or an argument starting with `-`
-     is read as an option of `launch` itself.
+   - `--message-with-mngr` sends the task with `mngr message`, and you pass it to
+     `reply` too. These workers are not chats anyone opens, and the chat app's
+     send route knows an agent only once it has re-read mngr's agent list, so a
+     worker messaged seconds after its create can fall into the window where it
+     answers 404 -- and its success answer means "delivered or queued" either
+     way. That window is where a task went missing and left two workers idle.
+   - The `-S` pair sets the model for this one worker. Write each `--create-arg`
+     joined with `=`, or an argument starting with `-` is read as an option of
+     `launch` itself.
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
@@ -263,6 +256,7 @@ Repeat until every node is done.
      ```bash
      uv run .agents/skills/launch-task/scripts/create_worker.py reply \
          --task-file "$RUN/nodes/N/task.md" \
+         --name "$APP-node-N" --message-with-mngr \
          -m "Start your subtask now and report when it is done."
      ```
 
@@ -325,7 +319,8 @@ For a review:
 
       ```bash
       uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-          --task-file "$RUN/nodes/K/task.md" -m "<the change>"
+          --task-file "$RUN/nodes/K/task.md" \
+          --name "$APP-node-K" --message-with-mngr -m "<the change>"
       ```
 
       Then wait on it again (Step 4, item 4). The `await` that printed the
