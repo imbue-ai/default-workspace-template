@@ -190,12 +190,29 @@ dispatches syncing at once (a lead and one of its workers, or two hardening
 siblings) pop each other's entries into the wrong trees. See ``rsync_dir`` and
 ``rsync_dir_from`` for the full reasoning on each direction.
 
-``--work-folder`` runs the worker in place inside an existing folder instead of a
-fresh worktree of the lead's HEAD. It is meant for templates whose transfer mode
-is ``none`` (``shared_folder_worker``), where several workers share one folder.
-In that mode the lead's own uncommitted changes are irrelevant to the worker, so
-the clean-tree check is skipped. ``--model`` overrides the Claude model for this
-one worker through mngr's settings override.
+Four options exist for templates that do not fit the default shape above, and
+are off unless asked for:
+
+``--work-folder`` runs the worker in place inside a folder that already exists,
+instead of a fresh worktree of the lead's HEAD (mngr's ``--from :<path>``, for a
+template whose transfer mode is ``none``). The lead's own uncommitted changes
+cannot reach such a worker, so the clean-tree check is skipped, and the runtime
+dir is copied into the folder directly rather than rsynced through the agent --
+the folder is a directory on this machine, so no agent has to exist first.
+
+``--create-message`` makes the create carry the worker's first message instead
+of one being sent afterwards, for an agent type that cannot be messaged once it
+is running. It is the caller's text, not the task file: a create-time message can
+reach the agent as a command-line argument, where a task file's leading ``---``
+is read as an unknown option, so the caller passes a line pointing at the task.
+
+``--detach`` starts the create and returns as soon as it is running, for an agent
+type whose create does not return until the agent has finished its whole run.
+Everything the create prints goes to ``launch.log`` in the runtime dir.
+
+``--create-arg`` passes anything else through to ``mngr create`` verbatim,
+repeatably: the template's own flags, a settings override, whatever the caller's
+agent type needs. This script does not interpret them.
 
 Why the task message goes *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
@@ -262,6 +279,9 @@ _AWAIT_IDLE_RC = 76
 # absorb the race where the worker is mid-delivery: the report file is checked
 # first on every loop, so a delivered report always wins.
 _IDLE_POLLS_BEFORE_GIVING_UP = 3
+# Where a spawned create writes everything it prints, inside the worker's own
+# runtime dir so it sits beside that worker's task file and reports.
+_LAUNCH_LOG_NAME = "launch.log"
 
 
 def _normalize_dir(value: str) -> str:
@@ -537,6 +557,23 @@ class Runner:
     def run(self, argv: Sequence[str], **kwargs):
         return subprocess.run(list(argv), **kwargs)
 
+    def spawn(self, argv: Sequence[str], log_path: Path) -> int:
+        """Start ``argv`` in the background and return its pid, without waiting.
+
+        For a create that only returns when the agent has finished its whole run
+        (``mngr create --foreground``, which is how a headless agent runs): the
+        caller wants the worker started, not finished, so the process is left to
+        run on its own with everything it prints going to ``log_path``. Nothing
+        reaps it -- the worker's report is what says it is done, and the log is
+        where a launch that failed says so.
+        """
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(
+                list(argv), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL
+            )
+        return process.pid
+
 
 def _flush_common_transcript(state_dir: Path | None, runner: Runner) -> None:
     """Run the lead's common-transcript converter once, synchronously.
@@ -768,6 +805,11 @@ def copy_dir_into_work_folder(
     """
     rel = _repo_relative_path(source_dir, toplevel)
     destination = work_folder / rel
+    if destination.resolve() == source_dir.resolve():
+        # The worker was pointed at the folder the lead is already in, so the
+        # runtime dir is where it needs to be and copying it onto itself would
+        # only raise.
+        return
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_dir, destination, dirs_exist_ok=True)
 
@@ -883,7 +925,9 @@ def launch(
     state_dir: Path | None = None,
     runner: Runner | None = None,
     work_folder: Path | None = None,
-    model: str | None = None,
+    create_message: str | None = None,
+    create_args: Sequence[str] = (),
+    is_detached: bool = False,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -908,8 +952,11 @@ def launch(
     before the task message lands so the worker's first transcript read
     sees fresh events.
 
-    ``work_folder`` (must already exist) runs the worker in place in that folder,
-    and skips the clean-tree check; ``model`` overrides the worker's Claude model.
+    ``work_folder`` (must already exist) runs the worker in place in that folder
+    and skips the clean-tree check, ``create_message`` gives the create the
+    worker's first message, ``create_args`` go to ``mngr create`` verbatim, and
+    ``is_detached`` returns once the create is running rather than when it ends.
+    See the module docstring for when each applies.
     """
     runner = runner or Runner()
 
@@ -1073,23 +1120,31 @@ def launch(
     if work_folder is not None:
         # Absolute, so the worker lands in that folder whatever the lead's cwd.
         create_argv += ["--from", f":{work_folder.resolve()}"]
-        # The worker's folder is a directory on this machine that already
-        # exists, so its runtime dir is put there directly, before the agent is
-        # created -- which is what lets the task ride the create as a staged
-        # initial message (below) instead of being sent afterwards.
+        # The folder is a directory on this machine, so the runtime dir goes
+        # there directly. Doing it before the create is what lets the create
+        # carry the first message: whatever that message points at is in place
+        # by the time the agent reads it.
         copy_dir_into_work_folder(runtime_dir, work_folder, toplevel)
         if artifacts_dir is not None:
             copy_dir_into_work_folder(artifacts_dir, work_folder, toplevel)
         _flush_common_transcript(state_dir, runner)
-        # A shared-folder worker is headless: it has no chat and cannot be sent
-        # a message, so its task is staged on disk by the create and read by the
-        # agent's own command at startup. That removes the send that a chat
-        # worker needs after its create -- and with it the window where the chat
-        # app does not yet know the agent, which is where a task message went
-        # missing and left two workers idle with their reports never written.
-        create_argv += ["--message-file", str(task_file)]
-    if model is not None:
-        create_argv += ["-S", f"agent_types.claude.settings_overrides.model={model}"]
+    if create_message is not None:
+        create_argv += ["--message", create_message]
+    create_argv += list(create_args)
+
+    if is_detached:
+        # The create runs the agent rather than just starting it, so waiting on
+        # it here would mean one worker at a time. Its output goes to the
+        # runtime dir instead: the report says the worker finished, and this log
+        # is where a create that never got that far says why.
+        log_path = runtime_dir / _LAUNCH_LOG_NAME
+        pid = runner.spawn(create_argv, log_path)
+        print(
+            f"create_worker: worker {name} started (pid {pid}, "
+            f"launch output in {log_path})"
+        )
+        return 0
+
     try:
         created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as exc:
@@ -1115,22 +1170,28 @@ def launch(
         )
 
     if work_folder is None:
+        # A worker in a folder of its own gets the runtime dir through the
+        # agent; one running in a folder the lead has already had it copied in.
         rsync_dir(name, runtime_dir, runner, toplevel)
         if artifacts_dir is not None:
             rsync_dir(name, artifacts_dir, runner, toplevel)
 
         _flush_common_transcript(state_dir, runner)
 
-        if worker_agent_id is not None:
-            runner.run(
-                [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
-                check=True,
-            )
-        else:
-            runner.run(
-                ["mngr", "message", name, "--message-file", str(task_file)],
-                check=True,
-            )
+    if create_message is not None:
+        # The create already carried the first message.
+        return 0
+
+    if worker_agent_id is not None:
+        runner.run(
+            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+            check=True,
+        )
+    else:
+        runner.run(
+            ["mngr", "message", name, "--message-file", str(task_file)],
+            check=True,
+        )
 
     print(
         f"create_worker: worker {name} launched and runtime synced"
@@ -2261,7 +2322,9 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         state_dir=state_dir,
         runner=runner,
         work_folder=args.work_folder,
-        model=args.model,
+        create_message=args.create_message,
+        create_args=tuple(args.create_args),
+        is_detached=args.is_detached,
     )
 
 
@@ -2381,14 +2444,34 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Existing folder the worker runs in place (mngr --from :PATH), "
-        "instead of a new worktree of your HEAD. Use with a template whose "
-        "transfer is none, e.g. 'shared_folder_worker'. Skips the clean-tree check.",
+        "instead of a new worktree of your HEAD, for a template whose transfer "
+        "is none. Skips the clean-tree check.",
     )
     launch_parser.add_argument(
-        "--model",
+        "--create-message",
         default=None,
-        help="Claude model for this worker (e.g. 'opus', 'sonnet'), passed as a "
-        "per-agent settings override. Defaults to the template's model.",
+        help="Text the create delivers as the worker's first message, for an "
+        "agent type that cannot be messaged once running. Pass a line pointing "
+        "at the task file; the task file itself cannot be used (its leading "
+        "'---' reads as an option). Suppresses the usual post-create send.",
+    )
+    launch_parser.add_argument(
+        "--create-arg",
+        action="append",
+        default=[],
+        dest="create_args",
+        metavar="ARG",
+        help="Extra argument passed to `mngr create` verbatim [repeatable]. "
+        "Write it joined with '=' (--create-arg=--foreground, --create-arg=-S), "
+        "since an argument starting with '-' is otherwise read as an option here.",
+    )
+    launch_parser.add_argument(
+        "--detach",
+        action="store_true",
+        dest="is_detached",
+        help="Return once the create is running rather than when it ends, for "
+        "an agent type whose create runs the agent to completion. The create's "
+        "output goes to launch.log in the runtime dir.",
     )
 
     await_parser = subparsers.add_parser(

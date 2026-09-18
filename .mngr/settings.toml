@@ -1784,6 +1784,28 @@ extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_setti
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0", "MNGR_AGENT_ROLE=shared_folder_worker"]
 append_system_prompt__extend = ["You are one of several workers launched by an orchestrating agent. The other workers are working in this same folder at the same time. Only create or edit the files your task assigns to you, and never touch another worker's files. Do not run git commit, git add, git stash, git checkout or any other command that changes git state; the orchestrator commits. Verify only your own piece with a quick check (it runs, it serves, it renders). Do not run the full test suite, coverage, ratchets, /autofix or any review gate, even where CLAUDE.md asks for them: a single hardening pass runs all of those once the whole job is done. Report back exactly as your task file says, then stop."]
 
+# The shared-folder workers above run as `headless_claude`, which the claude
+# plugin registers as its own agent type: it does NOT inherit
+# [agent_types.claude], so the posture that lets an agent here work without a
+# human has to be repeated. Without it a worker's first file write stops for an
+# approval nobody can give -- a headless agent has no chat and no pane -- and it
+# exits having written nothing, which reads from the outside exactly like a
+# worker that ignored its task. The flags are the same ones [agent_types.claude]
+# sets, minus everything about dialogs and the TUI, which a headless agent has
+# none of.
+[agent_types.headless_claude]
+auto_allow_permissions = true
+# `--disallowed-tools` takes a list, and the headless command appends the prompt
+# last, so this flag must not be the final one: claude reads every word of the
+# prompt as another tool to deny and then exits with "Input must be provided
+# either through stdin or as a prompt argument". Keeping the boolean flag at the
+# end closes the list.
+# `--output-format stream-json` (which claude only accepts with `--verbose`)
+# is what this agent type reads: it decodes stream-json events, and treats a
+# run that emitted none as "claude exited without producing output" -- a
+# failure exit even when the worker did its job and wrote its report.
+cli_args = """--disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate --output-format stream-json --verbose --dangerously-skip-permissions"""
+
 # Shims for agents created before roles moved to create templates: their persisted
 # `type` is re-resolved from this file on every load, so dropping these sections
 # would fall them back to BaseAgent on upgrade. Delete once no live workspace has them.
