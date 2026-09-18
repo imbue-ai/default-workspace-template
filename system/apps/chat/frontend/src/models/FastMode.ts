@@ -99,10 +99,10 @@ export function fastModeLabel(state: ChatFastModeState): string {
 
 /** The line under a mode in the chooser; auto's names the limit it runs to. */
 export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
-  if (mode === "off") return "Standard speed always.";
-  if (mode === "on") return "Fast mode always.";
+  if (mode === "off") return "Standard speed always";
+  if (mode === "on") return "Fast mode always";
   const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
-  return `Fast for the first ${turns}, then standard.`;
+  return `Fast for the first ${turns}, then standard`;
 }
 
 /** The three modes, in the order the chooser offers them. */
