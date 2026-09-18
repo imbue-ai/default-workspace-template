@@ -290,5 +290,8 @@ def test_a_terminal_booted_without_registration_serves_but_registers_nothing(
         listed = httpx.get(f"{app.instances_url}/_instances", timeout=5.0)
         assert listed.status_code == 200
         assert not terminal_environment.registry_path.exists()
+        # The discovery event is a registration too: a preview's throwaway URL must not land in
+        # the servers stream of the agent whose shell booted it.
+        assert not (app.agent_state_dir / "events" / "servers" / "events.jsonl").exists()
     finally:
         _kill_if_running(process)

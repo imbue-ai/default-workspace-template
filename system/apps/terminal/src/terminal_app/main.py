@@ -68,7 +68,8 @@ class TerminalAppArguments(FrozenModel):
     )
     is_registered: bool = Field(
         default=True,
-        description="Whether the boot registers the app; a preview on free ports must not re-point the live row",
+        description="Whether the boot registers the app (the registry row and the discovery event); a preview on "
+        "free ports must not re-point the live row or name its throwaway URL as the workspace's terminal",
     )
     agent_state_dir: Path | None = Field(
         description="The mngr agent state directory the discovery event is written under; None writes none"
@@ -95,7 +96,7 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     is_client_installed = install_ttyd_web_client(
         arguments.ttyd_web_client_archive, paths.ttyd_index_path
     )
-    if arguments.agent_state_dir is not None:
+    if arguments.is_registered and arguments.agent_state_dir is not None:
         with log_span("Writing the discovery event for {}", arguments.app_url):
             write_server_registered_event(
                 arguments.agent_state_dir, APP_NAME, arguments.app_url
@@ -203,7 +204,8 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     "is_unregistered",
     is_flag=True,
     default=False,
-    help="Skip the registration (a throwaway boot, such as a preview, that must not re-point the live terminal row)",
+    help="Skip the registration, the registry row and the discovery event both (a throwaway boot, such as a "
+    "preview, that must not re-point the live terminal row)",
 )
 def main(
     manifest_path: Path,
