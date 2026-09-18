@@ -200,15 +200,14 @@ cannot reach such a worker, so the clean-tree check is skipped, and the runtime
 dir is copied into the folder directly rather than rsynced through the agent --
 the folder is a directory on this machine, so no agent has to exist first.
 
-``--create-message`` makes the create carry the worker's first message instead
-of one being sent afterwards, for an agent type that cannot be messaged once it
-is running. It is the caller's text, not the task file: a create-time message can
-reach the agent as a command-line argument, where a task file's leading ``---``
-is read as an unknown option, so the caller passes a line pointing at the task.
-
-``--detach`` starts the create and returns as soon as it is running, for an agent
-type whose create does not return until the agent has finished its whole run.
-Everything the create prints goes to ``launch.log`` in the runtime dir.
+``--message-with-mngr`` sends the task (and any later ``reply``) with ``mngr
+message <name>`` instead of through the chat app, for a worker nobody opens in
+the chat UI. The chat app is the right address for a chat, which can hand off
+between agents and so has only one component that knows which agent is currently
+taking its messages; a worker never hands off, and the route knows it only once
+it has re-read mngr's agent list -- answering 404 until then, which a worker
+messaged seconds after its create can run into. mngr talks to the agent it just
+created.
 
 ``--create-arg`` passes anything else through to ``mngr create`` verbatim,
 repeatably: the template's own flags, a settings override, whatever the caller's
@@ -279,9 +278,6 @@ _AWAIT_IDLE_RC = 76
 # absorb the race where the worker is mid-delivery: the report file is checked
 # first on every loop, so a delivered report always wins.
 _IDLE_POLLS_BEFORE_GIVING_UP = 3
-# Where a spawned create writes everything it prints, inside the worker's own
-# runtime dir so it sits beside that worker's task file and reports.
-_LAUNCH_LOG_NAME = "launch.log"
 
 
 def _normalize_dir(value: str) -> str:
@@ -556,23 +552,6 @@ class Runner:
 
     def run(self, argv: Sequence[str], **kwargs):
         return subprocess.run(list(argv), **kwargs)
-
-    def spawn(self, argv: Sequence[str], log_path: Path) -> int:
-        """Start ``argv`` in the background and return its pid, without waiting.
-
-        For a create that only returns when the agent has finished its whole run
-        (``mngr create --foreground``, which is how a headless agent runs): the
-        caller wants the worker started, not finished, so the process is left to
-        run on its own with everything it prints going to ``log_path``. Nothing
-        reaps it -- the worker's report is what says it is done, and the log is
-        where a launch that failed says so.
-        """
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("wb") as log:
-            process = subprocess.Popen(
-                list(argv), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL
-            )
-        return process.pid
 
 
 def _flush_common_transcript(state_dir: Path | None, runner: Runner) -> None:
@@ -925,9 +904,8 @@ def launch(
     state_dir: Path | None = None,
     runner: Runner | None = None,
     work_folder: Path | None = None,
-    create_message: str | None = None,
     create_args: Sequence[str] = (),
-    is_detached: bool = False,
+    is_messaged_with_mngr: bool = False,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -953,10 +931,10 @@ def launch(
     sees fresh events.
 
     ``work_folder`` (must already exist) runs the worker in place in that folder
-    and skips the clean-tree check, ``create_message`` gives the create the
-    worker's first message, ``create_args`` go to ``mngr create`` verbatim, and
-    ``is_detached`` returns once the create is running rather than when it ends.
-    See the module docstring for when each applies.
+    and skips the clean-tree check, ``create_args`` go to ``mngr create``
+    verbatim, and ``is_messaged_with_mngr`` addresses the worker with ``mngr
+    message`` rather than through the chat app. See the module docstring for when
+    each applies.
     """
     runner = runner or Runner()
 
@@ -1128,22 +1106,7 @@ def launch(
         if artifacts_dir is not None:
             copy_dir_into_work_folder(artifacts_dir, work_folder, toplevel)
         _flush_common_transcript(state_dir, runner)
-    if create_message is not None:
-        create_argv += ["--message", create_message]
     create_argv += list(create_args)
-
-    if is_detached:
-        # The create runs the agent rather than just starting it, so waiting on
-        # it here would mean one worker at a time. Its output goes to the
-        # runtime dir instead: the report says the worker finished, and this log
-        # is where a create that never got that far says why.
-        log_path = runtime_dir / _LAUNCH_LOG_NAME
-        pid = runner.spawn(create_argv, log_path)
-        print(
-            f"create_worker: worker {name} started (pid {pid}, "
-            f"launch output in {log_path})"
-        )
-        return 0
 
     try:
         created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
@@ -1178,18 +1141,14 @@ def launch(
 
         _flush_common_transcript(state_dir, runner)
 
-    if create_message is not None:
-        # The create already carried the first message.
-        return 0
-
-    if worker_agent_id is not None:
+    if is_messaged_with_mngr or worker_agent_id is None:
         runner.run(
-            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+            ["mngr", "message", name, "--message-file", str(task_file)],
             check=True,
         )
     else:
         runner.run(
-            ["mngr", "message", name, "--message-file", str(task_file)],
+            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
             check=True,
         )
 
@@ -1206,14 +1165,17 @@ def reply(
     message_file: Path | None,
     name: str | None,
     runner: Runner | None = None,
+    is_messaged_with_mngr: bool = False,
 ) -> int:
-    """Send the lead's reply to the worker's chat. Returns the process exit code.
+    """Send the lead's reply to the worker. Returns the process exit code.
 
     Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
     through the chat app; a task file without it (a worker launched before the
     stamp existed) is reached by ``mngr message`` with ``--name``, and is a usage
-    error without one. The messenger's exit status (``mngr message``'s codes) is
-    passed through.
+    error without one. ``is_messaged_with_mngr`` takes the same ``mngr message``
+    route by name, for a worker launched that way -- pass it whenever the launch
+    had it. The messenger's exit status (``mngr message``'s codes) is passed
+    through.
     """
     runner = runner or Runner()
     if (message is None) == (message_file is None):
@@ -1234,7 +1196,9 @@ def reply(
         else [f"--message={message}"]
     )
     worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
-    if worker_agent_id is not None:
+    if name and is_messaged_with_mngr:
+        argv = ["mngr", "message", name, *source]
+    elif worker_agent_id is not None:
         argv = [*_message_chat_argv(worker_agent_id), *source]
     elif name:
         # CLEANUP: drop this name-addressed fallback once no in-flight worker
@@ -2322,9 +2286,8 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         state_dir=state_dir,
         runner=runner,
         work_folder=args.work_folder,
-        create_message=args.create_message,
         create_args=tuple(args.create_args),
-        is_detached=args.is_detached,
+        is_messaged_with_mngr=args.is_messaged_with_mngr,
     )
 
 
@@ -2403,6 +2366,7 @@ def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
         message_file=args.message_file,
         name=args.name,
         runner=runner,
+        is_messaged_with_mngr=args.is_messaged_with_mngr,
     )
 
 
@@ -2448,12 +2412,12 @@ def build_parser() -> argparse.ArgumentParser:
         "is none. Skips the clean-tree check.",
     )
     launch_parser.add_argument(
-        "--create-message",
-        default=None,
-        help="Text the create delivers as the worker's first message, for an "
-        "agent type that cannot be messaged once running. Pass a line pointing "
-        "at the task file; the task file itself cannot be used (its leading "
-        "'---' reads as an option). Suppresses the usual post-create send.",
+        "--message-with-mngr",
+        action="store_true",
+        dest="is_messaged_with_mngr",
+        help="Send the task with `mngr message <name>` instead of through the "
+        "chat app, for a worker nobody opens in the chat UI. Pass the same flag "
+        "to `reply`.",
     )
     launch_parser.add_argument(
         "--create-arg",
@@ -2464,14 +2428,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extra argument passed to `mngr create` verbatim [repeatable]. "
         "Write it joined with '=' (--create-arg=--foreground, --create-arg=-S), "
         "since an argument starting with '-' is otherwise read as an option here.",
-    )
-    launch_parser.add_argument(
-        "--detach",
-        action="store_true",
-        dest="is_detached",
-        help="Return once the create is running rather than when it ends, for "
-        "an agent type whose create runs the agent to completion. The create's "
-        "output goes to launch.log in the runtime dir.",
     )
 
     await_parser = subparsers.add_parser(
@@ -2650,7 +2606,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reply_parser.add_argument(
         "--name",
-        help="Worker name, used only when the task file predates the `worker_agent_id` stamp.",
+        help="Worker name. Required with --message-with-mngr, and otherwise used "
+        "only when the task file predates the `worker_agent_id` stamp.",
+    )
+    reply_parser.add_argument(
+        "--message-with-mngr",
+        action="store_true",
+        dest="is_messaged_with_mngr",
+        help="Send with `mngr message <name>` instead of through the chat app. "
+        "Pass this when the worker was launched with it.",
     )
 
     return parser

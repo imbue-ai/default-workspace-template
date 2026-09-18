@@ -17,27 +17,28 @@ by the API's `reasoning_extraction` safeguard -- which the recorder's own prompt
 still is.
 
 `[create_templates.shared_folder_worker]` in `.mngr/settings.toml` is the agent
-those workers run as: headless (`type = "headless_claude"`), `transfer = "none"`
-(the orchestrator passes `--from :<folder>`), no per-worker provisioning, the
-stop hook off, and a prompt that keeps each worker inside its own subtask.
-Headless because a chat worker is sent its task after its create, through the
-chat app, which does not know the agent for a moment and whose sender retries
-that for five seconds -- a window a batch of workers outruns, leaving a worker
-that never receives its task. A headless worker's task rides the create instead.
-Nothing here needs a chat: nobody watches a build worker, and it reports by
-writing a file. The cost is that it cannot be messaged at all, so a change to
-what a worker built is a new node rather than a reply. `[agent_types.headless_claude]`
-repeats the permission posture and adds the stream-json output that type reads,
-neither of which it inherits from `[agent_types.claude]`.
+those workers run as: `transfer = "none"` (the orchestrator passes
+`--from :<folder>`), no per-worker provisioning, the stop hook off, and a prompt
+that keeps each worker inside its own subtask.
 
-`create_worker.py launch` gains four options for templates that do not fit its
+They are messaged with `mngr message` rather than through the chat app. A worker
+is nobody's chat -- no one opens one in the chat UI -- and the chat app's send
+route knows an agent only once it has re-read mngr's agent list, answering 404
+until then; a worker messaged seconds after its create runs into that window,
+and a success there means "delivered or queued" either way. That is where a task
+went missing and left two workers idle with reports that were never written.
+mngr talks to the agent it just created, and answers "Successfully sent message
+to 1 agent(s)". They stay ordinary long-lived agents otherwise: a transcript to
+read, and still messageable, which is what keeps a change the user asks for at a
+review a reply to the worker that built it.
+
+`create_worker.py launch` gains three options for templates that do not fit its
 default shape, all off unless asked for and none of them naming this flow:
-`--work-folder` (run in a folder that already exists), `--create-message` (the
-create carries the first message), `--detach` (return once the create is
-running, for a create that runs the agent to completion) and `--create-arg`
-(passed through to `mngr create` verbatim). The SessionStart `uv sync` in
-`.claude/settings.json` skips this role, since the orchestrator syncs the folder
-once.
+`--work-folder` (run in a folder that already exists, whose runtime dir is
+copied in rather than rsynced through the agent), `--message-with-mngr` (also on
+`reply`) and `--create-arg` (passed to `mngr create` verbatim, which is how the
+model override reaches it). The SessionStart `uv sync` in `.claude/settings.json`
+skips this role, since the orchestrator syncs the folder once.
 
 **Local patch to vendored mngr**, in `api/create.py`: a failed `mngr create`
 cleaned up by running `git worktree remove --force` on the agent's work dir --

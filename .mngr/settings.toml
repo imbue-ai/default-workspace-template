@@ -1766,45 +1766,17 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 #   commit: the orchestrator commits the folder when no worker is running.
 # - The appended prompt limits verification to a quick check of the worker's own piece.
 #   The single thorough test-and-review pass is the final hardening worker.
-# - Headless (`type = "headless_claude"`), so the worker is not a chat. A chat
-#   worker is sent its task after its create, through the chat app, which learns
-#   about a new agent from mngr's agent list a moment later and answers 404 until
-#   it does -- a five-second retry window that a batch of workers starting at once
-#   can outrun, leaving a worker that never receives its task and an orchestrator
-#   polling for a report that will never be written. A headless agent's task is
-#   staged on disk by the create and read by its own command at startup, so there
-#   is no send to lose. Nothing here needs the chat: nobody watches a build
-#   worker, and it reports back by writing a file the orchestrator collects. The
-#   cost is that a headless agent cannot be messaged at all, so a worker gets one
-#   task and one run -- a change to what it built is a new node, not a reply.
+# - Messaged with `mngr message` rather than through the chat app (the
+#   orchestrator passes `--message-with-mngr`). Nobody opens one of these in the
+#   chat UI, and the chat app's route knows an agent only once it has re-read
+#   mngr's agent list, answering 404 until then -- a window that a batch of
+#   workers created seconds apart runs into, and whose success answer means
+#   "delivered or queued" either way. mngr talks to the agent it just created.
 [create_templates.shared_folder_worker]
-type = "headless_claude"
 transfer = "none"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0", "MNGR_AGENT_ROLE=shared_folder_worker"]
 append_system_prompt__extend = ["You are one of several workers launched by an orchestrating agent. The other workers are working in this same folder at the same time. Only create or edit the files your task assigns to you, and never touch another worker's files. Do not run git commit, git add, git stash, git checkout or any other command that changes git state; the orchestrator commits. Verify only your own piece with a quick check (it runs, it serves, it renders). Do not run the full test suite, coverage, ratchets, /autofix or any review gate, even where CLAUDE.md asks for them: a single hardening pass runs all of those once the whole job is done. Report back exactly as your task file says, then stop."]
-
-# The shared-folder workers above run as `headless_claude`, which the claude
-# plugin registers as its own agent type: it does NOT inherit
-# [agent_types.claude], so the posture that lets an agent here work without a
-# human has to be repeated. Without it a worker's first file write stops for an
-# approval nobody can give -- a headless agent has no chat and no pane -- and it
-# exits having written nothing, which reads from the outside exactly like a
-# worker that ignored its task. The flags are the same ones [agent_types.claude]
-# sets, minus everything about dialogs and the TUI, which a headless agent has
-# none of.
-[agent_types.headless_claude]
-auto_allow_permissions = true
-# `--disallowed-tools` takes a list, and the headless command appends the prompt
-# last, so this flag must not be the final one: claude reads every word of the
-# prompt as another tool to deny and then exits with "Input must be provided
-# either through stdin or as a prompt argument". Keeping the boolean flag at the
-# end closes the list.
-# `--output-format stream-json` (which claude only accepts with `--verbose`)
-# is what this agent type reads: it decodes stream-json events, and treats a
-# run that emitted none as "claude exited without producing output" -- a
-# failure exit even when the worker did its job and wrote its report.
-cli_args = """--disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate --output-format stream-json --verbose --dangerously-skip-permissions"""
 
 # Shims for agents created before roles moved to create templates: their persisted
 # `type` is re-resolved from this file on every load, so dropping these sections
