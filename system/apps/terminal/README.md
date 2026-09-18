@@ -25,7 +25,8 @@ child (`app_instances.sidecar.run_sidecar_app`):
    `ttyd -I`, falling back to the stock client (with a warning) when the asset
    is missing or will not decompress.
 3. Appends the `server_registered` discovery event to
-   `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`).
+   `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`);
+   skipped under `--no-register`, like the registry row in step 4.
 4. Serves the instances API (`GET/POST /_instances`, ...) on `127.0.0.1:7682`,
    the manifest's `instances_url`, registers `app.toml` and the ttyd port 7681
    through `system/scripts/forward_port.py`, and runs
