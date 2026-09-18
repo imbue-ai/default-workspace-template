@@ -510,8 +510,9 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 @pytest.fixture
 def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A ``mngr`` on PATH that records its argv and the message file's contents, then exits with
-    the code in ``$FAKE_MNGR_EXIT`` (default 0). Returns the file the record is written to."""
+    """A ``mngr`` on PATH that records its argv and the message file's contents, prints
+    ``$FAKE_MNGR_STDOUT`` (default nothing), then exits with the code in ``$FAKE_MNGR_EXIT``
+    (default 0). Returns the file the record is written to."""
     bin_dir = tmp_path / "fake-bin"
     bin_dir.mkdir()
     record = tmp_path / "mngr-calls.json"
@@ -523,6 +524,7 @@ def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "text = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
         f"with open({str(record)!r}, 'a') as handle:\n"
         "    handle.write(json.dumps({'argv': argv, 'text': text}) + '\\n')\n"
+        "sys.stdout.write(os.environ.get('FAKE_MNGR_STDOUT', ''))\n"
         "raise SystemExit(int(os.environ.get('FAKE_MNGR_EXIT', '0')))\n"
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

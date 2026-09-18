@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from uuid import uuid4
 
 import pytest
@@ -329,6 +330,8 @@ class _LandingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        labels: Mapping[str, str] | None = None,
+        is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         landed_id = _agent_id()
@@ -347,6 +350,8 @@ class _VanishingAgentManager(AgentManager):
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        labels: Mapping[str, str] | None = None,
+        is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         return CreatedChat(chat_id=ChatId(_agent_id()), name="Chat-1", display_name="Chat 1")

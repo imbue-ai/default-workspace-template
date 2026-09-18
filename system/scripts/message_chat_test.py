@@ -1,4 +1,4 @@
-"""Tests for message_chat.py: the chat-app send, its retries, and the `mngr message` backoff.
+"""Tests for message_chat.py: the chat-app send and create, their retries, and the `mngr` backoffs.
 
 The script is driven through ``main`` with an injected clock and sleeper so the retry windows
 elapse without waiting; the chat app is the ``fake_chat_app`` fixture over loopback and
@@ -48,10 +48,31 @@ def _run(
     return rc, slept
 
 
+def _run_create(
+    *args: str,
+    stdin: str = "",
+    clock_step: float = 0.0,
+) -> tuple[int, list[float]]:
+    slept: list[float] = []
+    rc = message_chat.main(
+        ["--create", *args],
+        stdin=io.StringIO(stdin),
+        clock=_FakeClock(clock_step),
+        sleep=slept.append,
+    )
+    return rc, slept
+
+
 def _mngr_calls(record: Path) -> list[dict[str, Any]]:
     if not record.exists():
         return []
     return [json.loads(line) for line in record.read_text().splitlines()]
+
+
+_CREATED_ANSWER = (
+    201,
+    {"chat_id": _CHAT_ID, "name": "assist-1a2b3c", "display_name": "assist-1a2b3c"},
+)
 
 
 def test_a_delivered_send_posts_the_text_with_a_minted_id_and_no_client_fields(
@@ -188,7 +209,7 @@ def test_a_not_ready_answer_that_outlasts_the_window_is_a_failure_not_a_backoff(
     assert _mngr_calls(fake_mngr) == []
 
 
-def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_code_through(
+def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_keeps_its_blocked_status(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A registry row pointing at a port nothing listens on: the connection fails outright.
@@ -199,13 +220,32 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
 
     rc, slept = _run("--system", "-m", "wake up")
 
-    assert rc == 7
+    assert rc == message_chat.EXIT_DELIVERED_BUT_BLOCKED
     assert slept == []
     [call] = _mngr_calls(fake_mngr)
     assert call["argv"][:4] == ["message", _CHAT_ID, "--start", "--message-file"]
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
     # The argv is hand-built, so the live CLI, not the fake, is what says it is well-formed.
     assert_mngr_argv_valid(["mngr", *call["argv"]])
+
+
+@pytest.mark.parametrize("mode", ["send", "create"])
+def test_a_backoff_mngr_that_timed_out_is_a_failure_not_this_scripts_absence(
+    fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """mngr exits 2 on a timeout, and 2 out of this script means it never ran or never
+    understood the request -- what the Minds app reads as "this template has no such script"
+    before running its own `mngr`. Pass mngr's 2 through and a timed-out backoff create is
+    answered with a second create of the same chat."""
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    monkeypatch.setenv("FAKE_MNGR_EXIT", "2")
+
+    rc, _ = _run("-m", "x") if mode == "send" else _run_create("-m", "x")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert len(_mngr_calls(fake_mngr)) == 1
 
 
 def test_a_backoff_with_no_mngr_on_path_is_a_failure_not_a_traceback(
@@ -316,4 +356,258 @@ def test_no_message_on_a_terminal_is_a_usage_error(
     # argparse's usage code, distinct from EXIT_FAILED ("the send failed").
     assert raised.value.code == 2
     assert "no message given" in capsys.readouterr().err
+    assert fake_chat_app.posted == []
+
+
+def test_a_create_asks_the_chat_app_to_wait_and_prints_the_chat_it_made(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_chat_app.answers = [_CREATED_ANSWER]
+
+    rc, slept = _run_create(
+        "--name",
+        "assist-1a2b3c",
+        "--label",
+        "auto_open=true",
+        "--label",
+        "assist=true",
+        "--skip-installation-check",
+        "-m",
+        "/assist it broke",
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    assert slept == []
+    [(path, body)] = fake_chat_app.posted
+    assert path == message_chat.CREATE_CHAT_PATH
+    assert body == {
+        "name": "assist-1a2b3c",
+        "message": "/assist it broke",
+        "labels": {"auto_open": "true", "assist": "true"},
+        "is_installation_check_skipped": True,
+        "should_wait": True,
+    }
+    # The one stdout line is the chat's identity, for a caller that stamps it somewhere.
+    assert json.loads(capsys.readouterr().out) == _CREATED_ANSWER[1]
+    assert _mngr_calls(fake_mngr) == []
+
+
+def test_a_create_with_no_message_on_a_terminal_sends_an_empty_first_message(
+    fake_chat_app: Any,
+) -> None:
+    class _Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    fake_chat_app.answers = [_CREATED_ANSWER]
+
+    rc = message_chat.main(
+        ["--create"], stdin=_Tty(), clock=_FakeClock(0.0), sleep=lambda _: None
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [(_, body)] = fake_chat_app.posted
+    assert body["message"] == "" and body["name"] == "" and body["labels"] == {}
+    assert body["is_installation_check_skipped"] is False
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (
+            500,
+            {
+                "detail": "mngr create exited with code 1\nError: no provider account is signed in"
+            },
+        ),
+        (
+            409,
+            {
+                "detail": "A chat named 'assist-1a2b3c' already exists; pick another name"
+            },
+        ),
+        (
+            400,
+            {
+                "detail": "The chat app sets display_name itself; a create cannot restate them"
+            },
+        ),
+        (504, {"detail": "Chat 'assist-1a2b3c' is still being created"}),
+    ],
+)
+def test_a_create_the_chat_app_refused_or_failed_is_final_without_the_backoff(
+    fake_chat_app: Any,
+    fake_mngr: Path,
+    capsys: pytest.CaptureFixture[str],
+    status: int,
+    body: dict[str, str],
+) -> None:
+    fake_chat_app.answers = [(status, body)]
+
+    rc, _ = _run_create("--name", "assist-1a2b3c", "-m", "/assist it broke")
+
+    assert rc == message_chat.EXIT_FAILED
+    captured = capsys.readouterr()
+    assert body["detail"] in captured.err
+    assert captured.out == ""
+    assert _mngr_calls(fake_mngr) == []
+
+
+def test_a_not_ready_create_is_retried_until_the_chat_app_takes_it(
+    fake_chat_app: Any, fake_mngr: Path
+) -> None:
+    fake_chat_app.answers = [
+        (503, {"detail": "Agent list not known yet"}),
+        (503, {"detail": "Agent list not known yet"}),
+        _CREATED_ANSWER,
+    ]
+
+    rc, slept = _run_create("-m", "/assist", clock_step=1.0)
+
+    assert rc == message_chat.EXIT_DELIVERED
+    assert slept == [message_chat.NOT_READY_RETRY_INTERVAL_SECONDS] * 2
+    assert len(fake_chat_app.posted) == 3
+    assert _mngr_calls(fake_mngr) == []
+
+
+def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
+    fake_mngr: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    monkeypatch.setenv(
+        "FAKE_MNGR_STDOUT",
+        '{"event": "created", "agent_id": "%s", "host_id": "h", "host_name": "ws"}\n'
+        % _CHAT_ID,
+    )
+
+    rc, _ = _run_create(
+        "--name",
+        "update-self-1a2b3c",
+        "--label",
+        "auto_open=true",
+        "--skip-installation-check",
+        "-m",
+        "/update-self",
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [call] = _mngr_calls(fake_mngr)
+    assert call["argv"][:2] == ["create", "update-self-1a2b3c"]
+    assert call["argv"][call["argv"].index("--template") + 1] == "chat"
+    assert "--no-connect" in call["argv"]
+    labels = [
+        call["argv"][i + 1]
+        for i, token in enumerate(call["argv"])
+        if token == "--label"
+    ]
+    assert labels == ["user_created=true", "auto_open=true"]
+    assert (
+        call["argv"][call["argv"].index("-S") + 1]
+        == message_chat.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+    )
+    assert call["text"] == "/update-self"
+    assert call["argv"][-2:] == ["--format", "jsonl"]
+    assert_mngr_argv_valid(["mngr", *call["argv"]])
+    # The backoff keeps the stdout contract: the chat's id, read from mngr's created event.
+    assert json.loads(capsys.readouterr().out) == {
+        "chat_id": _CHAT_ID,
+        "name": "update-self-1a2b3c",
+        "display_name": "update-self-1a2b3c",
+    }
+
+
+def test_a_chat_app_from_before_the_create_fields_hands_the_create_to_mngr(
+    fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route existed before its `should_wait`, `labels`, and waiver fields, and refuses unknown
+    fields by name: the chat app running through an update is one from before them, so its 400 is
+    the backoff's case rather than a final refusal."""
+    fake_chat_app.answers = [
+        (
+            400,
+            {
+                "detail": "3 validation errors for CreateChatRequest\nlabels\n  Extra inputs are not permitted\n"
+                "should_wait\n  Extra inputs are not permitted\n"
+            },
+        )
+    ]
+    monkeypatch.setenv(
+        "FAKE_MNGR_STDOUT",
+        '{"event": "created", "agent_id": "%s", "host_id": "h", "host_name": "ws"}\n'
+        % _CHAT_ID,
+    )
+
+    rc, _ = _run_create("--name", "assist-1a2b3c", "-m", "/assist")
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [call] = _mngr_calls(fake_mngr)
+    assert call["argv"][:2] == ["create", "assist-1a2b3c"]
+
+
+def test_a_backoff_create_that_named_no_chat_says_so(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The JSON line is the caller's only handle on the chat, so an id mngr never named has
+    to be said out loud rather than shipped as an empty string."""
+    fake_chat_app.answers = [(404, {"detail": "not found"})]
+
+    rc, _ = _run_create(
+        "-m", "/assist", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS / 4
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["chat_id"] == ""
+    assert "named no chat" in captured.err
+
+
+def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
+    fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_chat_app.answers = [(404, {"detail": "not found"})]
+    monkeypatch.setenv("FAKE_MNGR_EXIT", "3")
+
+    rc, slept = _run_create(
+        "-m", "/assist", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS / 4
+    )
+
+    assert rc == message_chat.EXIT_FAILED
+    assert slept and all(
+        interval == message_chat.UNKNOWN_RETRY_INTERVAL_SECONDS for interval in slept
+    )
+    [call] = _mngr_calls(fake_mngr)
+    # No name: mngr mints one, as the chat app would have.
+    assert call["argv"][:3] == ["create", "--template", "chat"]
+    assert_mngr_argv_valid(["mngr", *call["argv"]])
+
+
+@pytest.mark.parametrize(
+    "argv, complaint",
+    [
+        (["--create", _CHAT_ID, "-m", "x"], "takes no chat id"),
+        (["--create", "--system", "-m", "x"], "does not apply to --create"),
+        ([_CHAT_ID, "--name", "n", "-m", "x"], "apply only with --create"),
+        ([_CHAT_ID, "--label", "a=b", "-m", "x"], "apply only with --create"),
+        (["--create", "--label", "novalue", "-m", "x"], "takes NAME=VALUE"),
+        (["-m", "x"], "a chat id is required"),
+    ],
+)
+def test_the_two_modes_refuse_each_others_arguments(
+    fake_chat_app: Any,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    complaint: str,
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        message_chat.main(
+            argv, stdin=io.StringIO(""), clock=_FakeClock(0.0), sleep=lambda _: None
+        )
+
+    assert raised.value.code == 2
+    assert complaint in capsys.readouterr().err
     assert fake_chat_app.posted == []

@@ -1,6 +1,7 @@
 """Tests for the Flask server."""
 
 import fcntl
+import importlib.util
 import io
 import json
 import os
@@ -25,6 +26,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.chat_records import ChatRecord
@@ -47,6 +49,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
@@ -2300,6 +2303,91 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
         and push["phase"] == ProvisionalChatPhase.CREATING.value
         for push in pushed
     )
+
+
+def test_create_chat_with_should_wait_answers_the_creates_own_failure(
+    config: Config,
+    signed_in_account: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    false_binary: str,
+) -> None:
+    """``should_wait`` holds the answer until ``mngr create`` has finished, so a caller outside
+    the workspace (``message_chat.py --create``) gets the create's own verdict rather than a
+    201 for a chat that then fails behind its back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    state = build_test_state(
+        config=config,
+        agent_manager=AgentManager.build(
+            WebSocketBroadcaster(), mngr_binary=false_binary, chat_files_root=tmp_path / "chats"
+        ),
+    )
+    state.agent_manager.note_agent_list_known()
+    app = create_application(state)
+    # The primary's work dir has to exist for ``false`` to run there and fail as ``mngr create`` would.
+    state.agent_manager._agents["agent-123"] = AgentStateItem(
+        id="agent-123", name="primary", state="RUNNING", labels={}, work_dir=str(tmp_path)
+    )
+
+    response = app.test_client().post(
+        "/api/chats/create",
+        json={
+            "name": "assist-1a2b3c",
+            "message": "/assist it broke",
+            "labels": {"auto_open": "true"},
+            "should_wait": True,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.get_json()["detail"].startswith("mngr create exited with code 1")
+    [record] = state.agent_manager.get_provisional_chats()
+    assert record.phase is ProvisionalChatPhase.FAILED and record.name == "assist-1a2b3c"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    response = client.post("/api/chats/create", json={"labels": {"account": "someone-else"}})
+
+    assert response.status_code == 400
+    assert "account" in response.get_json()["detail"]
+
+
+def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) -> None:
+    """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
+    package, so its copy of the route's path, its waiver setting, and the fields it posts are
+    pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
+    a chat app from before them: a rename on this side would send every Minds-app chat back to the
+    bare ``mngr create`` without a single failing test."""
+    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
+    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = module.create_request_body(
+        module.CreateRequest(
+            name="assist-1a2b3c",
+            message="/assist it broke",
+            labels={"auto_open": "true"},
+            is_installation_check_skipped=True,
+        )
+    )
+
+    parsed = CreateChatRequest.model_validate(body)
+    assert parsed.name == "assist-1a2b3c"
+    assert parsed.message == "/assist it broke"
+    assert parsed.labels == {"auto_open": "true"}
+    assert parsed.is_installation_check_skipped is True
+    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
 
 
 def test_create_chat_refuses_an_id_that_was_never_reserved(
