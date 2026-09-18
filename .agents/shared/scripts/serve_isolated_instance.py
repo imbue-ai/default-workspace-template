@@ -795,6 +795,11 @@ def up(
             "--preview-title together.\n"
         )
         return 1
+    if preview_requested and not inner_path.startswith("/"):
+        # The wrapper refuses such a path at once, and the health wait would
+        # spend its whole budget on the dead wrapper before saying so.
+        sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
+        return 1
 
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its

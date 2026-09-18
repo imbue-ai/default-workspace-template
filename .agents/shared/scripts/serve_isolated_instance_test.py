@@ -511,6 +511,26 @@ def test_up_preview_requires_service_name(tmp_path: Path) -> None:
     assert not spawner.detached_spawns  # bailed before booting anything
 
 
+def test_up_preview_refuses_an_inner_path_without_a_leading_slash(
+    tmp_path: Path,
+) -> None:
+    # The wrapper dies at once on such a path, so refusing it here spares the
+    # inner server's boot and the wrapper's whole health budget.
+    spawner = _FakeSpawner()
+
+    code = _up(
+        tmp_path,
+        spawner=spawner,
+        service_name="demo-app",
+        preview_service_name="demo-preview",
+        preview_title="my change",
+        inner_path="agent-1",
+    )
+
+    assert code == 1
+    assert not spawner.detached_spawns
+
+
 def test_up_preview_tears_down_both_when_the_wrapper_never_gets_healthy(
     tmp_path: Path,
 ) -> None:
