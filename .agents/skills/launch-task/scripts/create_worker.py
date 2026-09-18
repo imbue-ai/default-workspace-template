@@ -2627,8 +2627,9 @@ def build_parser() -> argparse.ArgumentParser:
     destroy_parser.add_argument(
         "--delete-branches",
         action="store_true",
-        help="Also delete the mngr/<name> branch of every destroyed agent "
-        "(for a superseded or abandoned pass whose work is not wanted).",
+        help="Also delete each destroyed agent's branch if mngr created it (a "
+        "pre-existing branch a worker was launched on is kept); for a superseded "
+        "or abandoned pass whose work is not wanted.",
     )
 
     stop_parser = subparsers.add_parser(
