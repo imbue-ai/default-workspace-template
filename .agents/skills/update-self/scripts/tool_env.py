@@ -102,14 +102,11 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     tool_dir = parents[2]
     if not (tool_dir / tool_name / RECEIPT).is_file():
         return None
-    # The bin directory is the one that pairs with ``tool_dir`` under the same home, not
-    # wherever this script was found: ``mngr`` also answers from ``/usr/local/bin`` (the build
-    # links it there for shells whose PATH lacks the uv bin directory), and an install aimed
-    # there would leave the entry points somewhere the build never writes. Nor is it the
-    # script's resolved target: uv writes each entry point as a symlink into the tool
-    # environment's own ``bin``, and an install aimed *there* refuses outright
-    # ("Executable already exists"). A tool directory in any other layout has no such pair,
-    # so the directory holding the script stands.
+    # uv installs entry points in the bin directory of the home that owns ``tool_dir``. Neither
+    # ``script`` nor its target names that one: ``mngr`` also answers from ``/usr/local/bin``
+    # (the build links it there for shells whose PATH lacks the uv bin directory), and each
+    # entry point is itself a symlink into the tool environment's own ``bin``. A tool directory
+    # in any other layout has no such home, so the directory holding the script stands.
     home = home_of_tools_dir(tool_dir)
     return tool_dir, bin_dir(home) if home is not None else script.parent
 
