@@ -26,9 +26,6 @@
   split vendored-mngr edits from workspace edits, and there is no vendored mngr to
   split. mngr changes are their own PR on the mngr repo.
 
-- CI's pytest steps no longer set `PYTEST_MAX_DURATION_SECONDS`: nothing in this repo reads
-  it now that the apps no longer register mngr-internal's conftest hooks.
-
 - `mngr` is symlinked into `/usr/local/bin` like `tk`, so non-login shells (`ssh <workspace> mngr ...`,
   `mngr exec`) find it without a `PATH` prefix.
 
