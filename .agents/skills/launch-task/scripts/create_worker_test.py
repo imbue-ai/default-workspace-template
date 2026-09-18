@@ -66,6 +66,13 @@ class _RecordingRunner(create_worker_mod.Runner):
     def respond(self, prefix: tuple[str, ...], result: Any) -> None:
         self._responses[prefix] = result
 
+    spawns: list[_RecordedCall] = field(default_factory=list)
+
+    def spawn(self, argv: Sequence[str], log_path: Path) -> int:
+        """Record the spawn instead of starting a process, and answer a pid."""
+        self.spawns.append(_RecordedCall(argv=list(argv), kwargs={"log_path": log_path}))
+        return 4242
+
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
@@ -523,12 +530,12 @@ def test_launch_refuses_dirty_worktree(
     assert "stash" in err
 
 
-def test_work_folder_and_model_reach_create_and_skip_clean_check(
+def test_work_folder_and_create_args_reach_create_and_skip_clean_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A work folder runs the worker in place (``--from :<absolute folder>``) and a
-    model becomes a per-agent settings override. The lead's dirty tree does not
-    block the launch, because the worker never starts from the lead's HEAD."""
+    """A work folder runs the worker in place (``--from :<absolute folder>``) and
+    every ``--create-arg`` reaches ``mngr create`` untouched. The lead's dirty tree
+    does not block the launch, because the worker never starts from the lead's HEAD."""
     runtime, task, _ = _make_layout(tmp_path)
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     work_folder = tmp_path / "build"
@@ -538,12 +545,12 @@ def test_work_folder_and_model_reach_create_and_skip_clean_check(
 
     rc = create_worker_mod.launch(
         name="demo-worker",
-        template="shared_folder_worker",
+        template="folder_worker",
         runtime_dir=runtime,
         task_file=task,
         runner=runner,
         work_folder=work_folder,
-        model="sonnet",
+        create_args=("--foreground", "-S", "agent_types.demo.model=sonnet"),
     )
 
     assert rc == 0
@@ -551,9 +558,7 @@ def test_work_folder_and_model_reach_create_and_skip_clean_check(
     assert ["git", "status", "--porcelain"] not in argvs
     create_calls = [argv for argv in argvs if argv[:2] == ["mngr", "create"]]
     expected = [
-        part.replace("worker", "shared_folder_worker")
-        if part == "worker"
-        else part
+        part.replace("worker", "folder_worker") if part == "worker" else part
         for part in _create_argv(runtime)
     ]
     assert create_calls == [
@@ -561,13 +566,108 @@ def test_work_folder_and_model_reach_create_and_skip_clean_check(
         + [
             "--from",
             f":{work_folder.resolve()}",
+            "--foreground",
             "-S",
-            "agent_types.claude.settings_overrides.model=sonnet",
+            "agent_types.demo.model=sonnet",
         ]
     ]
 
 
-def test_work_folder_and_model_argv_accepted_by_live_cli(
+def test_work_folder_gets_the_runtime_dir_copied_in_at_the_same_relative_path(
+    tmp_path: Path,
+) -> None:
+    """The folder is a directory on this machine, so the runtime dir is put there
+    directly -- at the path it has in the repo, which is the path the worker will
+    read it from."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, work_folder, tmp_path)
+
+    assert (work_folder / runtime.relative_to(tmp_path) / task.name).read_text() == (
+        task.read_text()
+    )
+
+
+def test_a_runtime_dir_already_in_the_work_folder_is_left_alone(tmp_path: Path) -> None:
+    """A worker pointed at the folder the lead is already in needs no copy, and
+    copying a directory onto itself would only raise."""
+    runtime, task, _ = _make_layout(tmp_path)
+
+    create_worker_mod.copy_dir_into_work_folder(runtime, tmp_path, tmp_path)
+
+    assert task.is_file()
+
+
+def test_work_folder_does_not_rsync_the_runtime_dir(tmp_path: Path) -> None:
+    """Nothing waits on the agent to hand it its runtime dir."""
+    runtime, task, _ = _make_layout(tmp_path)
+    work_folder = tmp_path / "build"
+    work_folder.mkdir()
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        work_folder=work_folder,
+    )
+
+    assert rc == 0
+    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
+
+
+def test_create_message_replaces_the_send_after_the_create(tmp_path: Path) -> None:
+    """An agent type that cannot be messaged once running takes its first message
+    from the create, so no message is sent afterwards."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        create_message="Your task is in `data/.tasks/launch-task/demo/task.md`.",
+    )
+
+    assert rc == 0
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    assert create_calls[0][-2:] == [
+        "--message",
+        "Your task is in `data/.tasks/launch-task/demo/task.md`.",
+    ]
+    assert not any("message_chat.py" in " ".join(c.argv) for c in runner.calls)
+    assert not any(c.argv[:2] == ["mngr", "message"] for c in runner.calls)
+
+
+def test_detach_spawns_the_create_and_returns(tmp_path: Path) -> None:
+    """A create that runs the agent to completion is started, not waited on, and
+    its output is kept in the runtime dir."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="folder_worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        create_args=("--foreground",),
+        is_detached=True,
+    )
+
+    assert rc == 0
+    assert [c.argv[:2] for c in runner.spawns] == [["mngr", "create"]]
+    assert runner.spawns[0].kwargs["log_path"] == runtime / "launch.log"
+    assert not any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
+
+
+def test_work_folder_and_create_arg_argv_accepted_by_live_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The in-place ``mngr create`` argv (with ``--from`` and ``-S``) is accepted
@@ -585,7 +685,7 @@ def test_work_folder_and_model_argv_accepted_by_live_cli(
         task_file=task,
         runner=runner,
         work_folder=work_folder,
-        model="sonnet",
+        create_args=("--foreground",),
     )
 
     assert rc == 0
@@ -608,7 +708,6 @@ def test_work_folder_missing_is_fatal(
         task_file=task,
         runner=runner,
         work_folder=tmp_path / "no-such-folder",
-        model=None,
     )
 
     assert rc == 2
@@ -1159,8 +1258,9 @@ def _launch_argv(runtime: Path, task: Path) -> list[str]:
     ]
 
 
-def test_main_launch_threads_work_folder_and_model(tmp_path: Path) -> None:
-    """The ``launch`` CLI passes ``--work-folder`` and ``--model`` through to create."""
+def test_main_launch_threads_the_create_options(tmp_path: Path) -> None:
+    """The ``launch`` CLI passes ``--work-folder``, every ``--create-arg``,
+    ``--create-message`` and ``--detach`` through to the create."""
     runtime, task, _ = _make_layout(tmp_path)
     work_folder = tmp_path / "build"
     work_folder.mkdir()
@@ -1168,18 +1268,27 @@ def test_main_launch_threads_work_folder_and_model(tmp_path: Path) -> None:
 
     rc = create_worker_mod.main(
         _launch_argv(runtime, task)
-        + ["--work-folder", str(work_folder), "--model", "opus"],
+        + [
+            "--work-folder",
+            str(work_folder),
+            "--create-message",
+            "read your task file",
+            "--create-arg=--foreground",
+            "--create-arg=-S",
+            "--create-arg=agent_types.demo.model=opus",
+            "--detach",
+        ],
         runner=runner,
     )
 
     assert rc == 0
-    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
-    assert len(create_calls) == 1
-    assert create_calls[0][-4:] == [
-        "--from",
-        f":{work_folder.resolve()}",
+    assert [c.argv[:2] for c in runner.spawns] == [["mngr", "create"]]
+    assert runner.spawns[0].argv[-5:] == [
+        "--message",
+        "read your task file",
+        "--foreground",
         "-S",
-        "agent_types.claude.settings_overrides.model=opus",
+        "agent_types.demo.model=opus",
     ]
 
 

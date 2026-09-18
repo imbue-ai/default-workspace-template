@@ -186,14 +186,34 @@ Repeat until every node is done.
        --name "$APP-node-N" \
        --template shared_folder_worker \
        --work-folder "$BUILD" \
-       --model <model> \
        --runtime-dir "$RUN/nodes/N/" \
-       --task-file "$RUN/nodes/N/task.md"
+       --task-file "$RUN/nodes/N/task.md" \
+       --create-message "Your task is in \`$RUN/nodes/N/task.md\`, relative to this folder. Read it and do what it says." \
+       --create-arg=--foreground \
+       --create-arg=-S \
+       --create-arg=agent_types.headless_claude.settings_overrides.model=<model> \
+       --detach
    ```
 
-   Add N to `running` in `$RUN/progress.txt`. `launch` returns as soon as the
-   worker is up, so launch every ready node before you wait for any of them --
-   that is what makes them run at once.
+   Add N to `running` in `$RUN/progress.txt`, and launch every ready node before
+   you wait for any of them -- that is what makes them run at once.
+
+   The last five options are what a shared-folder worker needs, and each one
+   fails in a different way if it is dropped:
+
+   - `--create-message` carries the task, because these workers are headless and
+     cannot be messaged once running. Point at the task file rather than passing
+     it: a create-time message reaches the agent as a command-line argument, and
+     a task file's opening `---` is read there as an unknown option.
+   - `--create-arg=--foreground` is required by mngr for a headless type, and
+     `--detach` goes with it: that create runs the worker rather than starting
+     it, so without `--detach` the launch would not return until the worker had
+     finished, and the nodes would run one at a time.
+   - The model override names `headless_claude`, the type these workers actually
+     resolve to. Naming `claude` instead is rejected, because a setting is its
+     own config layer and has to name the right type.
+   - Write each `--create-arg` joined with `=`, or an argument starting with `-`
+     is read as an option of `launch` itself.
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
