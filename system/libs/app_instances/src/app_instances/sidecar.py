@@ -23,7 +23,7 @@ from werkzeug.serving import LISTEN_QUEUE, BaseWSGIServer, make_server
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
 from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
-from app_instances.nudge import ShellNudger, shell_base_url
+from app_instances.nudge import ShellNudger, SilentNudger, shell_base_url
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
@@ -223,14 +223,16 @@ def run_sidecar_app(
     # Builds the Flask app served at instances_url from the loaded manifest and the nudger the
     # sidecar made for it; an app that serves routes of its own beside the blueprint mounts them here.
     build_app: Callable[[AppManifest, InstanceNudgerInterface], Flask],
-    # A throwaway boot (a preview on free ports) must not re-point the live app's registry row.
+    # A throwaway boot (a preview on free ports) must not re-point the live app's registry
+    # row, and has no shell to nudge: the live shell lists the live app's instances.
     is_registered: bool = True,
 ) -> int:
     """Serve an app's Flask app beside a wrapped server, and return the exit status to end the program with.
 
     In order: the app starts listening at ``instances_url`` (so the shell's first fetch after
     registration succeeds), the app is registered through ``forward_port.py --manifest`` with
-    ``app_url`` (unless ``is_registered`` is false), the child is spawned, SIGTERM and SIGINT are
+    ``app_url`` (unless ``is_registered`` is false, in which case the app nudges no shell either),
+    the child is spawned, SIGTERM and SIGINT are
     forwarded to it, and its exit code (128 plus the signal number for a signal death) is returned
     once it ends. Must run on the main thread, which is where signal handlers can be installed.
     """
@@ -241,7 +243,11 @@ def run_sidecar_app(
     if not child_argv:
         raise SidecarError("cannot start the wrapped server: no command given")
     manifest = _load_sidecar_manifest(manifest_path, instances_url, is_registered)
-    nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
+    nudger: InstanceNudgerInterface = (
+        ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
+        if is_registered
+        else SilentNudger()
+    )
     host, port = split_instances_url(instances_url)
     with serve_in_background(host, port, build_app(manifest, nudger)):
         if is_registered:

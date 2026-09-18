@@ -111,7 +111,10 @@ The shell is the only caller of the API, over loopback, at the registry row's
   app_url, instances_url, child_argv, build_app)` is the same with the Flask
   app built by `build_app(manifest, nudger)`, for an app that mounts routes of
   its own beside the blueprint (the terminal's hook route); `run_sidecar` wraps
-  it. `serve_in_background(host, port,
+  it. With `is_registered=False` (a preview on free ports) it registers nothing,
+  is not held to the manifest's `instances_url`, and hands `build_app` a
+  `SilentNudger`, since the live shell lists the live app's instances, not a
+  preview's. `serve_in_background(host, port,
   app)` is the context manager it serves through (bind, daemon thread, shut
   down on exit), which tests reuse for scratch servers.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
