@@ -1831,24 +1831,39 @@ def _describe_restored_frontend_failure(
 
 
 def confirm_last(repo_root: Path) -> int:
-    """Close the notice: discard the kept copies and the record. Idempotent.
+    """Close the notice: drop the record, and the kept copies with it while no rollback
+    has run on the point. Idempotent.
+
+    A record a rollback has touched loses only the record. A rollback that worked
+    discarded its copies itself; one that failed kept them on purpose, and its outcome
+    tells the user so and to ask an agent, with ``emergency.json`` naming where they
+    are -- the Close that dismisses that outcome must not take them away. The next
+    apply discards whatever is left.
 
     Refused (1) while a rollback holds the rollback point's lock: it restores from the
     copies this would discard.
     """
     try:
         with _holding_rollback_point_lock(repo_root):
-            if read_last_good(repo_root) is None:
+            record = read_last_good(repo_root)
+            if record is None:
                 sys.stderr.write("no kept rollback point; nothing to confirm.\n")
                 return 0
+            is_untouched = record.progress is None and record.outcome is None
             clear_last_good(repo_root)
-            discard_snapshots(repo_root)
+            if is_untouched:
+                discard_snapshots(repo_root)
     except RollbackPointBusyError:
         sys.stderr.write(
             "error: a rollback of this point is running; confirm once it has settled.\n"
         )
         return 1
-    sys.stderr.write("confirmed: the kept rollback point is discarded.\n")
+    if is_untouched:
+        sys.stderr.write("confirmed: the kept rollback point is discarded.\n")
+    else:
+        sys.stderr.write(
+            "closed: the rollback's outcome is dismissed; its copies are as it left them.\n"
+        )
     return 0
 
 

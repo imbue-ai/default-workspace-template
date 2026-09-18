@@ -7303,6 +7303,33 @@ def test_confirm_refuses_while_a_rollback_holds_the_lock(apply_repo: Path) -> No
     assert _rollback_point(apply_repo) is None
 
 
+def test_closing_the_notice_of_a_failed_rollback_keeps_the_copies_it_kept(
+    apply_repo: Path,
+) -> None:
+    """A rollback that could not restore health settles the notice with an outcome saying the
+    copies are still kept for an agent, and the emergency record names where. The one verb
+    the settled notice offers is Close, which runs confirm-last: it closes the record and
+    leaves the copies exactly where that outcome points."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    assert (
+        _rollback(_rollback_runner(apply_repo), apply_repo, _FakeHttp(lambda url: 503))
+        == 3
+    )
+
+    assert update_apply.confirm_last(apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+
+
 def test_an_apply_refuses_to_replace_a_point_a_rollback_is_restoring_from(
     apply_repo: Path,
 ) -> None:

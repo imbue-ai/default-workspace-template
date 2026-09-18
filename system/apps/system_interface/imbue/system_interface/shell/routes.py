@@ -561,7 +561,8 @@ def pending_update() -> ResponseReturnValue:
 
 
 def confirm_pending_update() -> ResponseReturnValue:
-    """ "Everything seems good": discard the kept copies and the record. Refused in a preview, which owns no live state."""
+    """ "Everything seems good", or Close on a settled notice: drop the record, and the kept copies with it when no
+    rollback ran (a failed rollback's copies stay for an agent). Refused in a preview, which owns no live state."""
     refusal = _refuse_if_preview()
     if refusal is not None:
         return refusal

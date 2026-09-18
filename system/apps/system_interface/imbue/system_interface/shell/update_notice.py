@@ -5,8 +5,9 @@ own) leaves ``data/.state/update-apply/last-good.json`` behind: what it landed, 
 kept, and the critical apps and supervisord programs it touched. The shell reads that record
 for ``GET /api/updates/pending``, watches the file so every window learns of a change (a
 rollback's progress, its outcome, the record cleared) as it lands, and runs the two verbs only a
-person closes the notice with: ``confirm-last`` (discard the copies and the record) and
-``rollback-last`` (revert the merge forward, restore the copies, restart the touched programs).
+person closes the notice with: ``confirm-last`` (drop the record, and the copies with it when no
+rollback ran; a failed rollback's copies stay for an agent) and ``rollback-last`` (revert the
+merge forward, restore the copies, restart the touched programs).
 Both are the update-self script's own subcommands, run rather than reimplemented, so the shell
 stays one reader of the apply's contract.
 
@@ -203,7 +204,8 @@ class UpdateNoticeWatch(MutableModel):
         self.broadcaster.broadcast_update_notice_changed(notice.wire_json() if notice is not None else None)
 
     def confirm(self) -> None:
-        """Close the notice: the script discards the kept copies and the record.
+        """Close the notice: the script drops the record, and the kept copies with it when no
+        rollback ran on the point (a failed rollback's copies stay for an agent).
 
         Raises ``UpdateNoticeRefusedError`` when there is nothing to confirm or a rollback is
         running, and ``UpdateNoticeCommandError`` when the script could not run or failed; the

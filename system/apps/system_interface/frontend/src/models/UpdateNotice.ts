@@ -87,7 +87,8 @@ export function isNoticeSettled(current: UpdateNotice): boolean {
   return current.outcome !== null;
 }
 
-/** "Everything seems good", or closing a settled notice: the shell discards the kept copies and the record. */
+/** "Everything seems good", or closing a settled notice: the shell drops the record, and the kept copies with
+ *  it when no rollback ran (a failed rollback's copies stay for an agent). */
 export async function confirmUpdate(): Promise<void> {
   await postJson<void>(apiUrl("/api/updates/pending/confirm"), {});
 }
