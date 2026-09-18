@@ -118,9 +118,20 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-Run the planner in the foreground, with the longest tool timeout you can give
-it; it takes a few minutes, and waiting it out inside your turn keeps the floor.
-Send the user nothing while it runs:
+The build folder does not depend on the plan, and its `uv sync` takes about as
+long as the planner does, so start it first and let the two run together --
+otherwise nothing at all happens for the first four minutes of a build. Commit
+any pending changes in the main checkout (commit, never stash; the workers start
+from your last commit), then:
+
+```bash
+git worktree add -b "build-app-parallel/$APP" "$BUILD" HEAD
+(cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
+```
+
+Then run the planner in the foreground, with the longest tool timeout you can
+give it; waiting it out inside your turn keeps the floor. Send the user nothing
+while it runs:
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" build-app-parallel
@@ -142,15 +153,20 @@ fall back to building the app yourself without asking.
 Read `plan.json` yourself before starting. You will need each node's subtask to
 know what its report should contain and which nodes build what the user reviews.
 
-## Step 3: Set up the build folder
+## Step 3: Finish the build folder
 
-The workers start from your last commit, so commit any pending changes in the
-main checkout first (commit, never stash). Then:
+The folder itself was made in Step 2, and its sync has been running since. Check
+it landed before any worker starts -- a worker that runs against a half-built
+`.venv` fails in ways that look like its own code:
 
 ```bash
-git worktree add -b "build-app-parallel/$APP" "$BUILD" HEAD
 (cd "$BUILD" && uv sync --all-packages)
 ```
+
+Running it again is how you wait for it: uv locks the environment, so this
+blocks until the background sync lets go and then returns at once, having
+nothing left to do. If it reports an error, `$RUN/sync.log` has what the first
+one printed.
 
 Copy anything under `data/` the build needs (such as a handed-off `sample.json`)
 into `$BUILD` at the same relative path; `data/` is not part of the checkout.
