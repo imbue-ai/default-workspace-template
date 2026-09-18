@@ -25,6 +25,7 @@ from pydantic import Field
 from pydantic import ValidationError
 from pydantic import model_validator
 
+from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
@@ -44,7 +45,7 @@ RECORD_VERSION: Final[int] = 2
 
 # The records' directory inside the chat app's data directory.
 CHAT_RECORDS_DIRNAME: Final[str] = "chats"
-DEFAULT_CHAT_RECORDS_ROOT: Final[Path] = Path("data/.apps/chat") / CHAT_RECORDS_DIRNAME
+DEFAULT_CHAT_RECORDS_ROOT: Final[Path] = DEFAULT_CHAT_DATA_DIR / CHAT_RECORDS_DIRNAME
 
 _RECORD_FILENAME: Final[str] = "record.json"
 _LOCK_FILENAME: Final[str] = "record.lock"
