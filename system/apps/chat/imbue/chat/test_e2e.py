@@ -348,7 +348,7 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file": "test.txt"}},
+                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file_path": "/tmp/project/test.txt"}},
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -376,7 +376,10 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
         expect(_chat(page).locator(".message-assistant").first).to_be_visible(timeout=15000)
         chip = _chat(page).locator(".tool-chip").first
         expect(chip).to_be_visible(timeout=10000)
-        expect(chip).to_contain_text("Read")
+        # The chip says what the call DID, not which tool ran it: a past-tense verb
+        # and the file it acted on, so a row of them can be told apart.
+        expect(chip.locator(".tool-chip-verb")).to_have_text("read")
+        expect(chip.locator(".tool-chip-target")).to_contain_text("test.txt")
 
         # Nothing is open until the reader picks a chip -- the row is a list to
         # scan, and the payload behind it is fetched on demand.
