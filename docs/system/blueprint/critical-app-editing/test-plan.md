@@ -297,7 +297,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
 - **E2 Chat-only apply keeps its point.** Apply with `--keep-rollback-point` and both
   `--worker-bundle` args pointing at the worktree (stand-in for the worker's work_dir).
   Pass: exit 0; `last-good.json` has `apps: ["chat"]`, `programs: ["chat"]`,
-  `needs_workspace_restart: false`, `snapshots` non-empty and every `copy` path present on
+  `needs_system_services_restart: false`, `snapshots` non-empty and every `copy` path present on
   disk; `marker.json` gone; the chat's pid changed and the shell's did not (only the
   services agent restart is expected to turn both over: record which actually happened,
   since the apply restarts the services agent). Every chat tab carries the band with the
@@ -333,7 +333,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   the terminal program only; the tmux sessions behind the tabs survive (ttyd restarted,
   tmux did not) and the tabs reconnect.
 - **E8 Services-restart case.** A change under `system/libs/bootstrap/` (a comment):
-  `needs_workspace_restart: true`; the dialog carries the extra details paragraph. Roll
+  `needs_system_services_restart: true`; the dialog carries the extra details paragraph. Roll
   back: files restored (the comment gone), no `supervisorctl restart` (pids unchanged),
   outcome names `mngr start --restart system-services`, exit 0 in the log.
 - **E9 supervisord table change.** A change to a drop-in under `system/supervisord.conf.d/`
@@ -535,7 +535,7 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   terminal running the updated code over the restored environment.
 - **E21 A startup-only change, through the banner.** E8 through the UI: a comment change
   under `system/libs/bootstrap/`, applied with the flag. Pass: `apps: []`, `programs: []`,
-  `needs_workspace_restart: true`; the shell's top banner reads "The workspace was
+  `needs_system_services_restart: true`; the shell's top banner reads "The workspace was
   updated..."; no tab carries a band; the dialog names "the workspace", says "no app
   restarts on its own", and carries the details paragraph. Press Roll back: this rollback
   settles within a second (nothing to restart, no probe), and the route must still answer
@@ -727,7 +727,7 @@ code-level tests only; the live scenarios were not re-run.
    Forward apply restarts all critical programs through the services agent.
 6. **E8 — a startup-only change has no visible rollback notice.** A comment in
    `system/libs/bootstrap/src/bootstrap/manager.py` correctly set
-   `needs_workspace_restart: true`, but `apps` and `programs` were empty. There was
+   `needs_system_services_restart: true`, but `apps` and `programs` were empty. There was
    no app band/banner from which to open the required explanatory dialog. CLI
    rollback restored the source without changing service pids and correctly
    requested `mngr start --restart system-services`.
