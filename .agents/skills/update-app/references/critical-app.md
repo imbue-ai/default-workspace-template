@@ -115,10 +115,10 @@ uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
 The manifest's `[preview]` table says what boots: the shell as a read-only
 preview over a seeded copy of the live state directory and a copied registry;
 the chat as a secondary chat following the real agents and reading the real
-accounts, opened on the conversation you pass as `--instance-key` (your own
-`$MNGR_AGENT_ID`, usually); the terminal on two free ports over a copy of its
+accounts, opened on the conversation you pass as `--instance-key` (a chat id;
+usually your own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`); the terminal on two free ports over a copy of its
 store. A `workspace_ui` change previews as the shell with the chat:
-`--app system_interface --with chat --instance-key $MNGR_AGENT_ID`, and the
+`--app system_interface --with chat --instance-key "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`, and the
 preview shell's copied registry points at that secondary chat. Exit 0 means it
 came up healthy; on a non-zero exit, fix the build and re-run, and do not open
 the tab on a broken boot. It refuses to boot if another pass's preview of the
@@ -239,8 +239,8 @@ frontmatter, launch, background-poll) with these specifics:
   approved the shape in your live loop. Name the app (`type-app.md`'s
   "Critical apps" section tells the worker to build both bundles at the npm root
   and report both paths). Include a `## Real scenario` section when a real
-  conversation motivated the change, naming the motivating agent (usually your
-  own `$MNGR_AGENT_ID`) and what looked wrong, so the worker opens *that*
+  conversation motivated the change, naming the motivating chat (usually your
+  own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`) and what looked wrong, so the worker opens *that*
   conversation rather than reconstructing it from prose.
 
 - **Terminal handling:** on `done`, go to step 4. On `stuck` or a dead-worker

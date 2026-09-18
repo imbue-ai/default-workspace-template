@@ -31,7 +31,7 @@ params = [
 
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the
-# conversation the user is in ({key} is an agent id) and nudges the preview shell
+# conversation the user is in ({key} is a chat id) and nudges the preview shell
 # when one is up ({shell_url}, else empty).
 [preview]
 command = ["chat-app", "--secondary", "--nudge-shell-url", "{shell_url}"]
