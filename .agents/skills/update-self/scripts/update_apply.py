@@ -1421,11 +1421,13 @@ def _touched_critical_apps(
     """The critical apps whose program or bundle this apply changed: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
-    under its directory, when the bundle it owns changed, or, for the shell, when
-    anything the shell's process runs changed. One build at the npm root rewrites
-    every bundle, so "rebuilt" is not "changed": a bundle is changed when its
-    source stamp differs from the pre-apply copy's, and, with no stamp to compare
-    (a build with no git repo), whenever the frontend was rebuilt at all.
+    under its directory, when the bundle it owns changed, when the apply reinstalled
+    its tool environment (a shared backend manifest moves every tool's closure, so
+    ``plan.app_tools`` then names every app), or, for the shell, when anything the
+    shell's process runs changed. One build at the npm root rewrites every bundle,
+    so "rebuilt" is not "changed": a bundle is changed when its source stamp differs
+    from the pre-apply copy's, and, with no stamp to compare (a build with no git
+    repo), whenever the frontend was rebuilt at all.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR
@@ -1436,6 +1438,7 @@ def _touched_critical_apps(
         for bundle in FRONTEND_BUNDLES
         if plan.frontend and _bundle_changed(repo_root, bundle, snapshots)
     }
+    reinstalled_tool_directories = {tool.directory for tool in plan.app_tools}
     touched: list[tuple[str, str]] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
@@ -1452,10 +1455,11 @@ def _touched_critical_apps(
             or manifest.get("critical") is not True
         ):
             continue
-        app_prefix = f"{APPS_DIR}/{directory.name}/"
+        app_directory = f"{APPS_DIR}/{directory.name}"
         is_touched = (
-            any(path.startswith(app_prefix) for path in paths)
+            any(path.startswith(f"{app_directory}/") for path in paths)
             or name in changed_bundle_owners
+            or app_directory in reinstalled_tool_directories
             or (name == SHELL_PROGRAM and plan.backend)
         )
         if not is_touched:
