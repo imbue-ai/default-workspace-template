@@ -443,9 +443,12 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             limit === 1 ? "turn" : "turns",
           ])
         : null,
-      // The switch only travels ONE way. Exactly one mode is what new chats start in, so there is
-      // no "off" to return to: turning this one off would leave the question unanswered. On, it
-      // states the setting and is inert; off, it is how the setting is moved here.
+      // The switch reads "is what new chats start in the mode I am looking at". It is live
+      // whenever they differ, and pressing it moves the setting here -- which is how the setting
+      // reaches all three modes, one row at a time. On the mode that already holds it there is
+      // nothing left to press (the setting names exactly one mode, so there is no "off" to
+      // return to), so it goes inert -- at full strength, because that is the setting standing
+      // where it was put, not a control that cannot be used.
       m("div", { class: css.FAST_DEFAULT_ROW }, [
         m("span", { class: css.ROW_LABEL }, `Use ${currentLabel} for new chats`),
         m(
@@ -456,11 +459,14 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             {
               type: "button",
               role: "switch",
-              class: `${css.switchClass("sm")} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
               "data-fast-mode-default": state.mode,
               "aria-label": `Use ${currentLabel} for new chats`,
               "aria-checked": isDefault ? "true" : "false",
-              disabled: isDefault || settings === null,
+              "aria-disabled": isDefault ? "true" : undefined,
+              // Only the not-yet-loaded case is natively disabled, and so faded: there the
+              // switch genuinely cannot be used, and its position is a guess at the defaults.
+              disabled: settings === null,
               onclick: () => {
                 const current = getChatSettings();
                 if (current === null || current.fast_mode_default === state.mode) return;

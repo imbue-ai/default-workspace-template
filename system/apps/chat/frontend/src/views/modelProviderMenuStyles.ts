@@ -113,11 +113,19 @@ const SWITCH_SIZES = {
 
 export type SwitchSize = keyof typeof SWITCH_SIZES;
 
-/** The track. Colour is the caller's -- `SWITCH_ON` / `SWITCH_OFF` below. */
-export function switchClass(size: SwitchSize): string {
+/** The track. Colour is the caller's -- `SWITCH_ON` / `SWITCH_OFF` below.
+ *
+ *  `isInert` is for a switch that is ALREADY at the only position it can hold, which is settled
+ *  rather than unavailable: it keeps its full colour and only loses the pointer. The `disabled:`
+ *  fade below is for the other thing -- a switch that cannot be used yet because what it toggles
+ *  has not loaded. A control taking the cursor as a parameter rather than a second class string
+ *  is deliberate: two `cursor-*` utilities on one element are settled by the order Tailwind
+ *  emits them in, not by the order the caller wrote them. */
+export function switchClass(size: SwitchSize, isInert = false): string {
   return (
     `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
-    "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
+    `${isInert ? "cursor-default" : "cursor-pointer"} ` +
+    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
     "disabled:cursor-not-allowed disabled:opacity-50"
   );
 }

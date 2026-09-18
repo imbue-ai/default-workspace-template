@@ -723,15 +723,17 @@ describe("the combo card", () => {
       { fast_mode_default: "on", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false },
     ]);
 
-    // Auto is the settings' default, so its toggle is on -- and stays on: exactly one mode is
-    // what new chats start in, and turning this one off would leave the question unanswered.
+    // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
+    // NOT natively disabled, which would fade the setting out at the moment it reads as set.
     fastModeState.state = { mode: "auto", is_switched: false };
     render();
     expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
     const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
     if (already === null) throw new Error("no default toggle");
     expect(already.getAttribute("aria-checked")).toBe("true");
-    expect(already.disabled).toBe(true);
+    expect(already.getAttribute("aria-disabled")).toBe("true");
+    expect(already.disabled).toBe(false);
+    expect(already.className).not.toContain("cursor-pointer");
     click("[data-fast-mode-default]");
     expect(settingsWrites).toHaveLength(1);
   });
