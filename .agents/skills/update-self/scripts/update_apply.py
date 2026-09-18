@@ -1245,7 +1245,7 @@ def apply_update(
                     snapshots=list(marker.snapshots),
                     programs=sorted({program for _, program in touched}),
                     apps=[name for name, _ in touched],
-                    needs_workspace_restart=_needs_workspace_restart(
+                    needs_system_services_restart=_needs_system_services_restart(
                         plan, [path for _, path in name_status]
                     ),
                 ),
@@ -1498,7 +1498,7 @@ def _bundle_changed(
 _SERVICES_SETUP_PREFIXES = ("system/scripts/bootstrap", "system/libs/bootstrap/")
 
 
-def _needs_workspace_restart(plan: ApplyPlan, paths: Sequence[str]) -> bool:
+def _needs_system_services_restart(plan: ApplyPlan, paths: Sequence[str]) -> bool:
     if plan.provisioner:
         return True
     for path in paths:
@@ -1734,7 +1734,7 @@ def _run_rollback(
                 argv, cwd=str(repo_root), capture_output=True, text=True, check=False
             )
 
-    if record.needs_workspace_restart:
+    if record.needs_system_services_restart:
         _finish_rollback(
             record,
             repo_root,

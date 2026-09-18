@@ -232,7 +232,7 @@ class LastGoodRecord:
     ``merge_sha`` is the merge the apply landed and ``rollback_to`` the tree it
     landed on; ``programs`` are the supervisord programs a rollback restarts (the
     touched critical apps', the shell's included) and ``apps`` the app names the
-    shell raises the notice on. ``needs_workspace_restart`` says the diff reached
+    shell raises the notice on. ``needs_system_services_restart`` says the diff reached
     the bootstrap or the services agent's own setup, which a program restart
     cannot undo. ``progress`` is what a running rollback is doing right now and
     ``outcome`` how it ended, both for the notice to show.
@@ -245,7 +245,7 @@ class LastGoodRecord:
     snapshots: list[SnapshotRecord]
     programs: list[str]
     apps: list[str]
-    needs_workspace_restart: bool
+    needs_system_services_restart: bool
     progress: str | None = None
     outcome: str | None = None
 
@@ -262,7 +262,7 @@ class LastGoodRecord:
                 ],
                 "programs": list(self.programs),
                 "apps": list(self.apps),
-                "needs_workspace_restart": self.needs_workspace_restart,
+                "needs_system_services_restart": self.needs_system_services_restart,
                 "progress": self.progress,
                 "outcome": self.outcome,
             },
@@ -289,7 +289,9 @@ class LastGoodRecord:
             ],
             programs=[str(p) for p in raw.get("programs", [])],
             apps=[str(a) for a in raw.get("apps", [])],
-            needs_workspace_restart=bool(raw.get("needs_workspace_restart", False)),
+            needs_system_services_restart=bool(
+                raw.get("needs_system_services_restart", False)
+            ),
             progress=str(progress) if progress is not None else None,
             outcome=str(outcome) if outcome is not None else None,
         )

@@ -282,7 +282,7 @@ def write_rollback_point(
     *,
     apps: Sequence[str] = ("terminal",),
     programs: Sequence[str] | None = None,
-    needs_workspace_restart: bool = False,
+    needs_system_services_restart: bool = False,
     progress: str | None = None,
     outcome: str | None = None,
 ) -> Path:
@@ -302,7 +302,7 @@ def write_rollback_point(
                 ],
                 "programs": list(programs) if programs is not None else list(apps),
                 "apps": list(apps),
-                "needs_workspace_restart": needs_workspace_restart,
+                "needs_system_services_restart": needs_system_services_restart,
                 "progress": progress,
                 "outcome": outcome,
             }

@@ -1084,10 +1084,10 @@ def _repo_root(app: Flask) -> Path:
 
 def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
     assert client.get("/api/updates/pending").get_json() is None
-    write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_workspace_restart=True)
+    write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_system_services_restart=True)
     notice = client.get("/api/updates/pending").get_json()
     assert notice["apps"] == ["terminal", "system_interface"]
-    assert notice["needs_workspace_restart"] is True
+    assert notice["needs_system_services_restart"] is True
     assert notice["progress"] is None and notice["outcome"] is None
 
 
