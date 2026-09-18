@@ -9,6 +9,9 @@
  *
  * So the assertions here are mostly "this renders at all". That is the bug class; anything
  * fancier would be testing the dialog's copy rather than the failure mode.
+ *
+ * The exception is picking a signed-in account, which hands the chosen account to the caller
+ * and closes the chooser; those tests assert that behavior against the real chooser state.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,7 +29,12 @@ const state: {
   flow: unknown;
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
-vi.mock("../models/Providers", () => ({
+const startFlow = vi.hoisted(() => vi.fn(async () => undefined));
+
+// The real module under the view's data sources, so the chooser's open/pick/close state is the
+// production code rather than a stand-in for it.
+vi.mock("../models/Providers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Providers")>()),
   getLanes: () => state.lanes,
   getAccounts: () => state.accounts,
   areLanesLoaded: () => state.loaded,
@@ -34,21 +42,16 @@ vi.mock("../models/Providers", () => ({
   loadLanes: async () => undefined,
   loadAccounts: async () => undefined,
   deleteAccount: async () => undefined,
-  startFlow: async () => undefined,
+  startFlow,
   submitCode: async () => undefined,
   submitKey: async () => undefined,
   abortFlow: () => undefined,
   clearFlow: () => undefined,
-  isProviderChooserOpen: () => true,
-  closeProviderChooser: () => undefined,
-  // The modal reads this in `oninit` to pick up an account a caller pre-selected. A factory
-  // mock replaces the module WHOLESALE, so a name missing here is not a stub returning
-  // undefined -- it is an import error thrown at mount.
-  takeChooserAccountId: () => null,
 }));
 
 import m from "mithril";
 
+import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import { ProviderChooserModal } from "./ProviderChooserModal";
 
 /** Render into a real element, not just call `view()`.
@@ -103,7 +106,13 @@ const PI_KEY_LANE = lane({
   ],
 });
 
+function account(id: string, laneId: string, label: string): ProviderAccount {
+  return { id, lane: laneId, harness: "claude", provider: label, harness_label: "", seq: 1, name: "", label };
+}
+
 beforeEach(() => {
+  closeProviderChooser();
+  startFlow.mockClear();
   state.lanes = [lane()];
   state.accounts = [];
   state.loaded = true;
@@ -229,5 +238,75 @@ describe("the provider chooser", () => {
       status: { state: "ok", detail: null, account_id: "a1" },
     };
     expect(() => render()).not.toThrow();
+  });
+});
+
+describe("picking a signed-in account", () => {
+  const ANTHROPIC = account("a1", "anthropic", "Anthropic (Claude Code)");
+  const OPENAI = account("a2", "openai", "OpenAI (Pi)");
+
+  function mount(): { root: HTMLElement; draw: () => void } {
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    return { root, draw };
+  }
+
+  function pickTarget(root: HTMLElement, accountId: string): HTMLButtonElement | null {
+    return root.querySelector(`[data-e2e="pick-account-${accountId}"]`);
+  }
+
+  beforeEach(() => {
+    state.accounts = [ANTHROPIC, OPENAI];
+  });
+
+  it("hands a working account to the caller and closes the chooser", () => {
+    const onSignedIn = vi.fn();
+    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    const { root } = mount();
+
+    pickTarget(root, ANTHROPIC.id)!.click();
+
+    expect(onSignedIn).toHaveBeenCalledExactlyOnceWith(ANTHROPIC.id);
+    expect(isProviderChooserOpen()).toBe(false);
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("lists the failing account without letting it be picked, keeping its actions", () => {
+    const onSignedIn = vi.fn();
+    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    const { root, draw } = mount();
+
+    const broken = pickTarget(root, OPENAI.id)!;
+    expect(broken.disabled).toBe(true);
+    expect(broken.closest("div")!.textContent).toContain("Not working");
+    broken.click();
+    expect(onSignedIn).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(true);
+
+    (root.querySelector('[aria-label="Remove OpenAI (Pi)"]') as HTMLElement).click();
+    draw();
+    expect(root.textContent).toContain("Remove account");
+  });
+
+  it("re-authenticates rather than picks when Sign in again is pressed on a pickable row", () => {
+    const onSignedIn = vi.fn();
+    openProviderChooser({ onSignedIn });
+    const { root } = mount();
+
+    const row = pickTarget(root, ANTHROPIC.id)!.parentElement!;
+    const signInAgain = [...row.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!;
+    signInAgain.click();
+
+    expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "subscription", ANTHROPIC.id);
+    expect(onSignedIn).not.toHaveBeenCalled();
+  });
+
+  it("keeps signed-in rows as plain listings when opened only to add a provider", () => {
+    openProviderChooser();
+    const { root } = mount();
+
+    expect(root.textContent).toContain("Anthropic (Claude Code)");
+    expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
   });
 });

@@ -7,6 +7,9 @@ from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_fast_mode import ChatFastModeState
+from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
@@ -133,10 +136,16 @@ class PoweredByResponse(FrozenModel):
     label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
-class FastModePromptAnsweredResponse(FrozenModel):
-    """Response from POST /api/chats/<id>/fast-mode-answered."""
+class ChatSettingsResponse(FrozenModel):
+    """Response from GET and PUT /api/settings: the workspace-wide chat settings as they stand."""
 
-    status: str = Field(description="'ok' when the answered label was recorded")
+    settings: ChatSettings = Field(description="The settings")
+
+
+class FastModeStateResponse(FrozenModel):
+    """Response from GET and PUT /api/chats/<chat_id>/fast-mode: the chat's fast mode."""
+
+    state: ChatFastModeState = Field(description="The chat's fast mode")
 
 
 class AttachmentUploadResponse(FrozenModel):
@@ -200,6 +209,10 @@ class AgentDestroyError(RuntimeError):
 class ModelApplyError(RuntimeError):
     """A model pick could not be applied to a running agent: the pick was not one of the agent's options, or
     the harness refused the switch. The message is what the user sees."""
+
+
+class ModelPickRejectedError(ModelApplyError):
+    """A model pick that is not one of the agent's options: trying it again cannot help."""
 
 
 class AgentStopError(RuntimeError):
@@ -295,14 +308,15 @@ class HandoffFailedStep(LowerCaseStrEnum):
 
     # The successor's ``mngr create`` (a handoff) or the agent's restart (a rebind).
     START = auto()
-    # The successor was created, but the model the user picked for it could not be applied.
+    # The agent the chat continues on is up (a handoff's successor, a rebind's restarted agent), but the model the
+    # user picked for it could not be applied.
     MODEL = auto()
 
 
 class ModelPick(FrozenModel):
     """A model, effort, and fast-mode selection made for an agent that does not run yet: the successor a
-    switch creates, or a new chat. Validated against the agent's option set once it exists, exactly as
-    the model bar's own pick is (``validate_model_pick``)."""
+    handoff creates, the agent a rebind restarts, or a new chat. Validated against the agent's option set once
+    it runs, exactly as the model bar's own pick is (``validate_model_pick``)."""
 
     model_id: str = Field(description="Model id to run on; must be one of the harness's option ids")
     effort: str | None = Field(default=None, description="Reasoning effort; None for a model with no effort axis")
@@ -395,6 +409,14 @@ class HandoffState(FrozenModel):
             "too) keeps showing them until they land in the transcript"
         ),
     )
+    model_pick: ModelPick | None = Field(
+        default=None,
+        description=(
+            "The model the chat runs on once the switch lands, applied on the far side of the restart or the "
+            "create; None when none was picked. Read by a page with no armed switch of its own to name it (one "
+            "reloaded mid-switch), since the pushed live choice cannot carry it until the harness has taken it"
+        ),
+    )
     error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
@@ -404,14 +426,14 @@ class HandoffState(FrozenModel):
 class SwitchChatRequest(SendMessageRequest):
     """Request body for POST /api/chats/{id}/handoff: a send (the first message the chat sends after the
     switch, with the sender's client fields; empty for a switch made with nothing to say yet) plus the
-    account the chat moves to, and for a handoff the model the successor should run on."""
+    account the chat moves to and the model it should run on there."""
 
     account_id: str = Field(description="The signed-in account the chat moves to")
     model: ModelPick | None = Field(
         default=None,
         description=(
-            "The model the successor runs on, applied before its first message; None for the harness's default. "
-            "Refused for a rebind, which keeps the agent's own settings"
+            "The model the chat runs on after the switch, applied before its first message; None for the harness's "
+            "default on a handoff, and for the agent's own model on a rebind"
         ),
     )
 
@@ -570,6 +592,9 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
 
     # Minted with nothing signed in: the page shows the provider chooser, and the launch waits.
     AWAITING_ACCOUNT = auto()
+    # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
+    # user's first send is what picks the account (the chooser opens then) and launches it.
+    AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()
     # Its ``mngr create`` failed; ``error`` says how, and the page can try again.
@@ -594,6 +619,17 @@ class ProvisionalChat(FrozenModel):
     )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
+    is_seeded: bool = Field(
+        default=False,
+        description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
+    )
+
+
+class SeedChatRequest(FrozenModel):
+    """Request body for POST /api/chats/seed: the conversation the Mind app had before the workspace existed."""
+
+    title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
+    turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
 
 
 class CreatedChat(FrozenModel):

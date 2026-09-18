@@ -75,7 +75,7 @@ Everything a tab shows is an instance: there are no page tabs outside the instan
 
 The shell never stores instances.
 Its inventory is the union of every app's list, refreshed when an app nudges it and on a slow reconciliation sweep.
-Layouts and project tab sets hold addresses only, and an address whose instance is no longer listed is dropped by observation.
+Layouts and project tab sets hold addresses only, and an address leaves them when its instance is deleted through the shell; one merely missing from its app's list stays, shown as unavailable.
 
 Each instance also says how long it lives, in its `lifetime` field.
 An `explicit` instance exists until something calls Delete; a closed chat or terminal keeps existing.

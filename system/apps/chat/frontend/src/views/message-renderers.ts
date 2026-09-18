@@ -445,7 +445,11 @@ function renderReauthAction(chatId: string): m.Children {
       {
         type: "button",
         class: REAUTH_ACTION_CLASS,
-        onclick: () => openProviderChooser({ onSignedIn: (chosen) => startChatOnAccount(chosen) }),
+        onclick: () =>
+          openProviderChooser({
+            onSignedIn: (chosen) => startChatOnAccount(chosen),
+            brokenAccountId: accountId || undefined,
+          }),
       },
       "switch to another provider",
     ),

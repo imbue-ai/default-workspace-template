@@ -252,7 +252,18 @@ class AutoOpenReactor(MutableModel):
 
         A successor agent of an existing chat never carries the label, so a handoff never re-pops a tab.
         """
-        if not is_auto_open_labeled(labels) or self.ledger.is_delivered(chat_id):
+        if not is_auto_open_labeled(labels):
+            return
+        self.request_open(chat_id)
+
+    def request_open(self, chat_id: ChatId) -> None:
+        """A chat this app opened on its own (a seeded chat) is owed its tab like a labeled one.
+
+        Held and retried the same way, so a chat seeded while nobody was connected (the Mind
+        app seeds the workspace's first chat before its window shows the workspace) gets its
+        tab when the first client connects.
+        """
+        if self.ledger.is_delivered(chat_id):
             return
         with self._lock:
             if chat_id in self._pending_chat_ids:

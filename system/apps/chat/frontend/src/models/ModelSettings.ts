@@ -34,6 +34,9 @@ interface PendingPick {
   identity: ModelIdentity;
   // The option the user clicked -- rendered directly, so no client-side matching.
   option: CatalogModelOption;
+  // The agent a switch handed this pick over for, so the move onto THAT agent does not forget it
+  // (see forgetPendingChoice); null for a pick made in the bar, which is the running agent's.
+  heldForAgentId: string | null;
 }
 
 // The optimistic overlay per chat, and the tail of each chat's apply chain.
@@ -127,7 +130,7 @@ export function setModelChoice(
   optimistic = true,
 ): void {
   if (optimistic) {
-    pendingByChat.set(chatId, { identity, option });
+    pendingByChat.set(chatId, { identity, option, heldForAgentId: null });
     m.redraw();
   }
 
@@ -161,12 +164,36 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
   }
 }
 
+/** Show the model a switch picked as the chat's own until the harness confirms it, without POSTing:
+ *  the switch applies the pick itself, on the far side of a restart or a create.
+ *
+ *  Held from the moment the armed switch stops covering the pick: from there to the harness writing
+ *  its model state, the pushed live choice is a sequence of values the user never asked for -- the
+ *  account the chat is leaving, then the model the new account last ran. Settles like any other
+ *  overlay, once the live choice matches. */
+export function showSwitchChoice(chatId: string, identity: ModelIdentity, option: CatalogModelOption): void {
+  // The chat already runs on the agent the switch landed it on: the pick is held for that agent, and
+  // no further move of the chat's.
+  const heldForAgentId = getChatById(chatId)?.active_agent.agent_id ?? null;
+  pendingByChat.set(chatId, { identity, option, heldForAgentId });
+  schedulePendingTimeout(chatId, identity);
+  m.redraw();
+}
+
 /** Drop the optimistic pick for a chat that now runs on another agent: the pick was the old agent's,
- *  and a live choice that could settle it will never come from the new one. */
+ *  and a live choice that could settle it will never come from the new one. A pick a switch handed
+ *  over is kept while the chat is still on the agent it was handed over for, which is about to take
+ *  it; a later move spends it like any other. */
 export function forgetPendingChoice(chatId: string): void {
-  if (pendingByChat.delete(chatId)) {
-    m.redraw();
+  const pending = pendingByChat.get(chatId);
+  if (pending === undefined) {
+    return;
   }
+  if (pending.heldForAgentId !== null && pending.heldForAgentId === getChatById(chatId)?.active_agent.agent_id) {
+    return;
+  }
+  pendingByChat.delete(chatId);
+  m.redraw();
 }
 
 function schedulePendingTimeout(chatId: string, identity: ModelIdentity): void {

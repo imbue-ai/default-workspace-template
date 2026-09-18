@@ -255,7 +255,11 @@ class ProjectStore(MutableModel):
         )
 
     def remove_addresses_everywhere(self, addresses: Sequence[Address]) -> list[ProjectId]:
-        """Drop addresses no app lists any more from every tab set; returns the projects that changed."""
+        """Drop deleted addresses from every tab set; returns the projects that changed.
+
+        Only a delete relayed through the shell reaches here: an address its app merely stopped
+        listing keeps its place in the tab set.
+        """
         doomed = set(addresses)
         changed: list[ProjectId] = []
         with STATE_FILES_LOCK:

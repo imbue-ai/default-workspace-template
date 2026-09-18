@@ -14,7 +14,6 @@ import pytest
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
-from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
@@ -22,6 +21,7 @@ from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 
@@ -381,7 +381,7 @@ def test_an_account_id_that_is_a_path_is_refused(service: AuthFlowService) -> No
             service.start("opencode-go", "api_key", account_id=hostile)
 
 
-# ----- a method whose credential is printed, not persisted by the CLI ---------------------
+# a method whose credential is printed, not persisted by the CLI
 
 _OAT = "sk-ant-oat01-" + "A" * 80
 
@@ -569,8 +569,9 @@ def _agy_account(tmp_path: Path, service: AuthFlowService) -> tuple[str, Path]:
     started = service.start("google", "oauth")
     service.submit_code(started.flow_id, "4/0Aexample")
     (account,) = read_index(tmp_path).accounts
-    token = account_credential_path(HarnessType.ANTIGRAVITY, tmp_path / ".minds" / "accounts" / account.id)
-    assert token is not None
+    (token,) = build_account_binding(HarnessType.ANTIGRAVITY).credential_paths(
+        tmp_path / ".minds" / "accounts" / account.id
+    )
     token.parent.mkdir(parents=True, exist_ok=True)
     token.write_text("live-token")
     return account.id, token

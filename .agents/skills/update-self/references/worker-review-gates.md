@@ -14,9 +14,15 @@ All three must hold:
 2. Your 4a impact analysis found no user-created code (apps, skills, local
    scripts) depending on anything the update changed, and no global-dep bump
    with a user-created dependent. Built-in impacts do not block the skip.
+   When the 4a rule skipped the analysis, `has_local_footprint` false is this
+   condition's evidence: there is no user-created code to depend on anything.
 3. You authored no in-branch edits of your own. A 4a mirror edit, or any
    other commit you added on top of the merge, is merge work even though
    `classify-merge` (which diffs `HEAD^1` against the base) cannot see it.
+   The one commit that is not is the rollback revert Step 1 mandates on a
+   retry: it puts the landed merge's own content back, so when `git diff
+   <merge-sha> HEAD` is empty it authored nothing. Name both shas in the
+   report as this condition's evidence.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would

@@ -1,21 +1,16 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type m from "mithril";
+import { installLocalStoragePolyfill } from "@imbue/workspace-ui/src/testing/localStorage";
+
+// The composer persists its draft in localStorage, which the node test env lacks.
+installLocalStoragePolyfill();
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
-// vi.hoisted. Mithril also captures requestAnimationFrame at import time, and the composer reads
-// localStorage, so both are polyfilled here too.
+// vi.hoisted. Mithril also captures requestAnimationFrame at import time, so it is polyfilled
+// here too.
 const mocks = vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-  const store = new Map<string, string>();
-  globalThis.localStorage ??= {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-    clear: () => store.clear(),
-    key: () => null,
-    length: 0,
-  } as Storage;
   // The node test env has no document; provide a minimal one for code that wires
   // document listeners when lifecycle hooks actually run (they don't in these
   // vnode-only tests, but imports must not explode).
@@ -67,12 +62,19 @@ const mocks = vi.hoisted(() => {
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
+    // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
+    isChatRegistered: true,
+    provisional: undefined as unknown,
+    launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
+    chooseFastMode: vi.fn(),
+    selectedAccount: null as { id: string } | null,
     listeners,
     agent,
   };
 });
 
 vi.mock("../models/Response", () => ({
+  getEventsForChat: () => [],
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
   interruptAgent: mocks.interruptAgent,
@@ -86,6 +88,10 @@ vi.mock("../models/PendingLane", () => ({
   switchKind: () => mocks.switching.kind,
 }));
 vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
+vi.mock("./fast-mode-limit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fast-mode-limit")>()),
+  chooseFastMode: mocks.chooseFastMode,
+}));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: mocks.clearComposerAttachments,
   getComposerAttachments: mocks.getComposerAttachments,
@@ -118,20 +124,21 @@ vi.mock("../models/ModelSettings", () => ({
 // so the mock ships a per-harness fixture mirroring the real declarations (the
 // matcher itself is reimplemented here minimally; the real one is covered by
 // HarnessCatalog.test.ts).
-vi.mock("../models/HarnessCatalog", () => {
+vi.mock("../models/HarnessCatalog", async () => {
+  const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
     { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
   > = {
     claude: {
-      label: "Claude Code",
+      label: harnessCatalogFixture("claude")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
       ],
     },
     codex: {
-      label: "Codex",
+      label: harnessCatalogFixture("codex")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
@@ -142,6 +149,8 @@ vi.mock("../models/HarnessCatalog", () => {
   return {
     ensureHarnessCatalogs: vi.fn(async () => {}),
     getHarnessCatalog,
+    // Both fixture harnesses have fast mode, so ``/fast on`` and ``/fast off`` pick the chat's mode.
+    hasFastModeLimit: (harness?: string) => harness === "claude" || harness === "codex",
     findComposerPopup: (harness: string | undefined, text: string) => {
       const firstToken = text.trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
       for (const popup of getHarnessCatalog(harness)?.popups ?? []) {
@@ -155,10 +164,16 @@ vi.mock("../models/HarnessCatalog", () => {
 });
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
-  getChatById: () => ({ active_agent: mocks.agent, handoff: mocks.switching.handoff }),
+  getChatById: () =>
+    mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
+  getProvisionalChat: () => mocks.provisional,
+  launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
-vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
+vi.mock("../models/Providers", () => ({
+  openProviderChooser: mocks.openProviderChooser,
+  getSelectedAccount: () => mocks.selectedAccount,
+}));
 
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { MessageInput, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
@@ -288,6 +303,22 @@ describe("MessageInput send guard", () => {
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
     localStorage.clear();
+  });
+
+  it("puts the chat in the mode /fast on or /fast off names instead of sending it", async () => {
+    mocks.agent.harness = "codex";
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "/fast on");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.chooseFastMode).toHaveBeenCalledWith("agent-1", "on", []);
+    expect(renderedText(after)).not.toContain("can't be sent from chat");
+    // The command was acted on, so the composer is empty again.
+    const textarea = findByTag(after, "textarea");
+    expect(textarea?.attrs?.value).toBe("");
+    // A bare /fast names no mode, so the harness's own notice still explains it.
+    const declined = await typeAndSend(MessageInput(), "agent-1", "/fast");
+    expect(renderedText(declined)).toContain("/fast can't be sent from chat");
+    expect(mocks.chooseFastMode).toHaveBeenCalledTimes(1);
   });
 
   it("does not send /status, and explains why", async () => {
@@ -501,6 +532,95 @@ describe("MessageInput send to a chat still being created", () => {
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("mngr create exited with code 3");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+  });
+});
+
+describe("MessageInput first send of a seeded chat", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.launchChat.mockClear();
+    mocks.openProviderChooser.mockReset();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    mocks.getComposerAttachments.mockReturnValue([]);
+    localStorage.clear();
+    // The seed is on the page and no agent exists yet: this send is what launches one.
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Getting started",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+    };
+    mocks.selectedAccount = { id: "acct-1" };
+  });
+
+  afterEach(() => {
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+    mocks.selectedAccount = null;
+    mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
+  });
+
+  it("launches the chat on the signed-in account with the message as its first, and sends nothing else", async () => {
+    await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    expect(mocks.launchChat).toHaveBeenCalledTimes(1);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "Let's build something");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+  });
+
+  it("asks the chooser for an account when none is signed in, and launches on the one it produces", async () => {
+    mocks.selectedAccount = null;
+
+    const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
+    await flushAsync();
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+    intent.onSignedIn("acct-2");
+    await sending;
+
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-2", "Let's build something");
+  });
+
+  it("puts the message back when the chooser is dismissed, launching nothing", async () => {
+    mocks.selectedAccount = null;
+
+    const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
+    await flushAsync();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onDismissed: () => void };
+    intent.onDismissed();
+    await sending;
+
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    expect(localStorage.getItem("message-text:agent-1")).toContain("Let's build something");
+  });
+
+  it("puts the message back when the launch itself is refused", async () => {
+    mocks.launchChat.mockRejectedValueOnce("Chat agent-1 is not waiting to be launched");
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    expect(renderedText(after)).toContain("Couldn't send your message");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("Let's build something");
+  });
+
+  it("leaves the composer empty when the create fails after the launch took the message", async () => {
+    // The chat keeps the message for the page's "Try again", which delivers it: a copy in the
+    // composer would be sent twice.
+    mocks.whenChatRegistered.mockRejectedValueOnce("mngr create exited with code 3");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    expect(mocks.launchChat).toHaveBeenCalledTimes(1);
+    expect(renderedText(after)).not.toContain("Couldn't send your message");
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("Let's build something");
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 });
 
@@ -790,15 +910,28 @@ describe("MessageInput switching harness", () => {
     expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
   });
 
-  it("offers no way back into a dialog for an armed rebind, which was armed without one", () => {
-    mocks.switching.target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+  it("offers the dialog for an armed rebind too, which was armed without one, and carries the pick made there", async () => {
+    const target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.target = target;
     mocks.switching.kind = "rebind";
-    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
-    const strip = findByClass(rendered, "message-input-switch-strip");
-    expect(renderedText(strip)).toContain("switches this chat to Anthropic 2 (Claude Code)");
-    expect(findByClass(rendered, "message-input-switch-change")).toBeUndefined();
-    press(findByClass(rendered, "message-input-switch-cancel"));
-    expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
+    const component = MessageInput();
+    const rendered = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(findByClass(rendered, "message-input-switch-strip"))).toContain(
+      "switches this chat to Anthropic 2 (Claude Code)",
+    );
+    press(findByClass(rendered, "message-input-switch-change"));
+    expect(mocks.openSwitchDialog).toHaveBeenCalledWith("agent-1", target);
+
+    mocks.switching.pick = { identity: { model_id: "haiku", effort: "low", fast: false }, label: "Haiku 4.5 · Low" };
+    const armed = typeDraft(component, "agent-1", "Carry on here");
+    expect(renderedText(findByClass(armed, "message-input-switch-strip"))).toContain(
+      "switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · Low",
+    );
+    press(findByAttr(armed, "aria-label", "Switch and send"));
+    await flushAsync();
+    const [, accountId, , , pick] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+    expect(accountId).toBe("acct-anthropic-2");
+    expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
   });
 
   it("shows no strip while the switch is already running", () => {

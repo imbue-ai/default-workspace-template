@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Final
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.account_binding import AccountBinding
+from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
+from imbue.chat.harnesses.antigravity.account_binding import AntigravityAccountBinding
 from imbue.chat.harnesses.antigravity.activity import AntigravityActivityTracker
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_STATE_RELATIVE_PATH
@@ -30,6 +33,7 @@ from imbue.chat.harnesses.antigravity.session import AntigravityHarnessSession
 from imbue.chat.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.chat.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
+from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -38,6 +42,7 @@ from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
+from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
@@ -51,8 +56,10 @@ from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
+from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
+from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -64,6 +71,8 @@ from imbue.chat.harnesses.pi_coding.watcher import PiTranscriptLoader
 from imbue.chat.harnesses.placeholder import EMPTY_CATALOG
 from imbue.chat.harnesses.placeholder import PlaceholderModelResolver
 from imbue.chat.harnesses.placeholder import PlaceholderSessionWatcher
+from imbue.chat.harnesses.seed.activity import SeedActivityTracker
+from imbue.chat.harnesses.seed.loader import SeedSessionWatcher
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import FileHarnessSession
@@ -78,7 +87,7 @@ class PopupTrigger(StrEnum):
 
     # Matches a typed message's first token against the popup's commands at send time.
     COMPOSER_COMMAND = "composer_command"
-    # Runs on every chat render -- the fast-mode grace-period check.
+    # Runs on every chat render -- the fast-mode turn-limit check.
     TURN_CHECK = "turn_check"
 
 
@@ -90,8 +99,9 @@ class PopupAction(StrEnum):
     # Open the provider chooser. Every harness signs in the same way now, so this needs
     # nothing per-harness beyond the commands that trigger it.
     OPEN_AUTH = "open_auth"
-    # The keep-fast-mode prompt flow.
-    FAST_MODE_PROMPT = "fast_mode_prompt"
+    # The harness can launch fast: the chat app turns fast mode off after the workspace's
+    # configured number of user turns.
+    FAST_MODE_LIMIT = "fast_mode_limit"
 
 
 class HarnessPopup(FrozenModel):
@@ -122,7 +132,7 @@ class HarnessPopup(FrozenModel):
 # and a future re-measure would find these three send fine and drop them.
 # Split by whether the harness HAS a fast mode. /model and /effort are universal, but
 # only claude and codex can launch fast (they are the harnesses declaring
-# ``_FAST_MODE_PROMPT_POPUP``), and their catalogs are the only ones carrying
+# ``_FAST_MODE_LIMIT_POPUP``), and their catalogs are the only ones carrying
 # ``supports_fast``. Declining /fast on a harness with no fast mode would point the user at
 # a picker control that is not rendered for it -- worse than letting the text through.
 _MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
@@ -135,7 +145,7 @@ _MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     action=PopupAction.NOTICE,
     notice_body=_MODEL_BAR_NOTICE,
 )
-# For the fast-capable harnesses; pairs with ``_FAST_MODE_PROMPT_POPUP`` on the same spec.
+# For the fast-capable harnesses.
 _MODEL_BAR_POPUP_WITH_FAST: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.COMPOSER_COMMAND,
     commands=_MODEL_BAR_COMMANDS_WITH_FAST,
@@ -239,9 +249,9 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 # the harness's agent-auth surface instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
 
-# The fast-mode grace-period prompt, declared by the harnesses that can launch fast.
-_FAST_MODE_PROMPT_POPUP: Final[HarnessPopup] = HarnessPopup(
-    trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_PROMPT
+# The fast-mode turn limit, declared by the harnesses that can launch fast.
+_FAST_MODE_LIMIT_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_LIMIT
 )
 
 
@@ -305,6 +315,10 @@ class HarnessSpec(FrozenModel):
     # to deliver blind. Declared here rather than imported from a harness module, so the
     # endpoints stay harness-neutral.
     cancel_chord: str = "M-q"
+    # How the harness's agents are bound to a signed-in account (the scope, the create's arguments,
+    # the rebind's edit, the sessions a rebind carries along). None for a harness no account can run:
+    # no lane signs in to it, so nothing binds one.
+    binding_class: type[AccountBinding] | None = None
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -314,6 +328,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
+        binding_class=ClaudeAccountBinding,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -331,7 +346,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
             _MODEL_BAR_POPUP_WITH_FAST,
-            _FAST_MODE_PROMPT_POPUP,
+            _FAST_MODE_LIMIT_POPUP,
         ),
     ),
     HarnessType.CODEX: HarnessSpec(
@@ -346,6 +361,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
         process_started_marker_filename=CodexActivityTracker.marker_filename,
+        binding_class=CodexAccountBinding,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -366,7 +382,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
             _MODEL_BAR_POPUP_WITH_FAST,
-            _FAST_MODE_PROMPT_POPUP,
+            _FAST_MODE_LIMIT_POPUP,
         ),
     ),
     HarnessType.PI_CODING: HarnessSpec(
@@ -378,6 +394,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
+        binding_class=PiAccountBinding,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
@@ -427,6 +444,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=AntigravitySessionWatcher,
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
+        binding_class=AntigravityAccountBinding,
         # Display-only model bar: agy's `/model` is an interactive TUI picker with no
         # scriptable one-shot form, so the bar reflects and never drives. The session subclass
         # exists only to absorb catalog staleness -- see its switch_options.
@@ -455,6 +473,21 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         popups=(_MODEL_BAR_POPUP,),
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
+    ),
+    # The seed segment of a chat the Mind app opened (``chat_seed.py``): turns the app wrote
+    # before the workspace had any agent, read like an archived segment. No agent ever runs
+    # on it, so every live part is inert: the watcher watches nothing, the tracker reads
+    # idle, the resolver switches nothing, and there is no catalog and no popup.
+    HarnessType.SEED: HarnessSpec(
+        name=HarnessType.SEED,
+        watcher_class=SeedSessionWatcher,
+        loader_class=SeedSessionWatcher,
+        tracker_class=SeedActivityTracker,
+        process_started_marker_filename=SeedActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
     ),
 }
 
@@ -486,9 +519,26 @@ def build_shoulder_tap(agent_info: AgentInfo) -> AtomicShoulderTap | None:
     return tap_class.build(agent_info) if tap_class is not None else None
 
 
+def build_account_binding(harness: HarnessType) -> AccountBinding:
+    """Build the account binding for ``harness``. Raises ``BindingError`` for a harness no account can be bound to."""
+    binding_class = get_harness_spec(harness).binding_class
+    if binding_class is None:
+        raise BindingError(f"{harness} has no account binding")
+    return binding_class()
+
+
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     """Build the model resolver for ``agent_info``'s harness."""
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def list_account_options(harness: HarnessType, account_dir: Path) -> tuple[ModelOption, ...] | None:
+    """The models the account at ``account_dir`` offers for ``harness``, or None to offer its whole catalog.
+
+    Asks the resolver CLASS, not an instance: the question is about an account, which has no agent
+    to build one from (and may never have had one).
+    """
+    return get_harness_spec(harness).resolver_class.list_account_options(account_dir)
 
 
 def build_interrupt_to_composer(agent_info: AgentInfo) -> InterruptToComposer:
