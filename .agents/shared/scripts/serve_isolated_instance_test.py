@@ -371,7 +371,7 @@ def test_body_excerpt_marks_truncation_by_bytes_not_characters() -> None:
     marker and pass off a partial body as the whole diagnosis.
     """
     # Two bytes per character: over the byte budget, under it in characters.
-    multibyte_body = ("é" * mod._HEALTH_BODY_EXCERPT_BYTES).encode("utf-8")
+    multibyte_body = ("é" * mod._HEALTH_BODY_READ_BYTES).encode("utf-8")
 
     excerpt = mod._read_body_excerpt(io.BytesIO(multibyte_body))
 
@@ -1073,3 +1073,29 @@ def test_wrapper_page_escapes_the_title() -> None:
     html = wrapper_mod.build_wrapper_html(inner_service="svc", title='<b>x</b> & "y"')
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;x&lt;/b&gt;" in html
+
+
+def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A shell or chat whose bundle is missing still answers its health route 200: the
+    process booted. A preview of it shows the 'not built' placeholder, which is nothing
+    the user could judge, so the probe reads the route's own verdict on that."""
+    runner = _RecordingRunner()
+    spawner = _FakeSpawner()
+    http = _FakeHttp(
+        lambda _url: 200, body='{"status": "ok", "is_frontend_built": false}'
+    )
+
+    code = _up(tmp_path, runner=runner, http=http, spawner=spawner)
+
+    assert code == 1
+    assert runner.killed_pgroup(spawner.detached_pid)
+    assert not _state_path(tmp_path).exists()
+    assert "is_frontend_built: false" in capsys.readouterr().err
+
+    built = mod.ProbeResult(200, '{"status": "ok", "is_frontend_built": true}')
+    assert built.is_healthy
+    # A health route that says nothing about a frontend (a bare service) is judged on its status alone.
+    assert mod.ProbeResult(200, '{"status": "ok"}').is_healthy
+    assert mod.ProbeResult(200, "not json").is_healthy

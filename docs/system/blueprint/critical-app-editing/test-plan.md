@@ -29,7 +29,8 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
 - **S0.2 Baseline health.** `supervisorctl status` shows `agent-observer`, `chat`,
   `system_interface`, `terminal` RUNNING. `curl -s localhost:8010/api/health` answers
   `agent_events.is_stream_healthy: true`. `curl -s localhost:8010/_instances` answers 200
-  JSON. `python3 system/scripts/layout.py context` shows at least one connected client.
+  JSON. `uv run python system/scripts/layout.py context` shows at least one connected client
+  (bare `python3` may lack `tomlkit`; every `layout.py` call below runs the same way).
 - **S0.3 Identity.** Note `$MINDS_CHAT_ID` (or `$MNGR_AGENT_ID`) of the driving chat; the
   chat previews open on it. Note the shell's, chat's, and terminal's supervisord pids.
 - **S0.4 Clean state.** No `data/.state/update-apply/last-good.json`, no `marker.json`,
@@ -136,8 +137,7 @@ stdlib `http.server` for the failure shapes. Run from the repo root.
   naming `main` twice are refused at parse time.
 - **B4 Preview shape with inner path.** Re-run B1 adding `--service-name tp-term-app
   --preview-service-name tp-term-preview --preview-title "tp" --inner-path /`. Pass:
-  stdout is `tp-term-preview`; the registry (`system/scripts/forward_port.py --list` or the
-  registry file) has both rows; `instance.json` has two pids, `wrapper_port`, `inner_path`;
+  stdout is `tp-term-preview`; the registry file has both rows; `instance.json` has two pids, `wrapper_port`, `inner_path`;
   the wrapper page (`curl localhost:<wrapper_port>/`) embeds the inner service name and
   path as JS literals. `python3 system/scripts/layout.py open tp-term-preview` puts the
   tab on the user's screen and the terminal renders inside it.
@@ -332,7 +332,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
 - **E7 Terminal change.** Apply a terminal edit: band on terminal tabs; rollback restarts
   the terminal program only; the tmux sessions behind the tabs survive (ttyd restarted,
   tmux did not) and the tabs reconnect.
-- **E8 Services-restart case.** A change under `system/scripts/bootstrap*` (a comment):
+- **E8 Services-restart case.** A change under `system/libs/bootstrap/` (a comment):
   `needs_services_restart: true`; the dialog carries the extra details paragraph. Roll
   back: files restored (the comment gone), no `supervisorctl restart` (pids unchanged),
   outcome names `mngr start --restart system-services`, exit 0 in the log.
@@ -386,9 +386,9 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   fallback trigger. Reconnect: the same open lands.
 - **F3 Kept snapshots' size.** `du -sh data/.state/update-apply/snapshots` after E2:
   record it (the open question about never-closed notices).
-- **F4 Registry readers under `MINDS_APPS_FILE`.** With C4 up, run `MINDS_APPS_FILE=<the
-  shell preview's registry copy> python3 system/scripts/layout.py list`: the chat's URL
-  reported is the preview's. `forward_port.py --list` the same way.
+- **F4 Registry readers under `MINDS_APPS_FILE`.** With C4 up, read the shell preview's
+  registry copy: the chat's row names the preview's URL and label, and the shell preview's
+  page frames the chat from that origin.
 - **F5 Scaffold.** Scaffold a new Flask app with `build-app`'s script: its `app.toml`
   carries the `[preview]` table with the package's env names; `load_manifest` accepts it;
   `preview_app.py up --app <new>` boots it over a copy of `data/.apps/<new>` with no
@@ -515,6 +515,36 @@ TMPDIR=/private/tmp uv run pytest libs/mngr/imbue/mngr/api/observe_test.py \
 # From system:
 npm test
 ```
+
+#### Fixes landed after this run (2026-09-18)
+
+Each numbered finding below maps to a change on the branch, verified by unit and
+code-level tests only; the live scenarios were not re-run.
+
+1. An unregistered sidecar boot (`terminal-app --no-register`) is no longer held to
+   the manifest's `instances_url`, so the terminal preview boots (B1, C6, X4 owed a re-run).
+2. The scaffolded runner imports `os`.
+3. `rollback-last` asks the shell's page and each restored app's health route whether
+   the restored bundle is served; a copy that restored no page is an emergency (exit 3,
+   `emergency.json`) and the copies are kept, which the outcome says.
+4. The shell's rollback launch is serialized and answers once the script has written its
+   first progress; a second press reads that progress and gets the 409, and a script
+   that refuses (dirty tree, apply in flight) is a 409 in its own words. The
+   `git commit` exit 128 the first experiment hit is still undiagnosed.
+5. A bundle rebuilt from unchanged source no longer makes its owner touched: the record
+   compares each bundle's source stamp with the kept copy's, so a chat-only change names
+   the chat alone (E2's criterion). A build with no stamp still names both.
+6. A notice whose `apps` is empty is carried by the shell's banner, with its own text and
+   a dialog naming the workspace.
+7. An unknown `/api/...` GET answers a JSON 404.
+8. A sibling re-upped or taken down on its own is written into the registry copy of every
+   live preview that frames it.
+9. The isolated-instance health probe reads `is_frontend_built` from a JSON health answer
+   and fails the boot on `false`.
+10. No fix: `launch-sync`'s timeout is the worker's own completion time; the branch
+    it reported was right.
+11. A rollback with no recorded program skips the restart; a merge that changed no files
+    keeps no rollback point.
 
 #### Findings requiring attention
 

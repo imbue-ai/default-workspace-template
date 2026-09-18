@@ -525,3 +525,85 @@ def test_main_routes_the_verbs(tmp_path: Path) -> None:
         )
         == 1
     )
+
+
+def _shell_registry_rows(tmp_path: Path) -> dict[str, dict[str, object]]:
+    registry_copy = (
+        tmp_path / mod.INSTANCES_ROOT / "system_interface-preview.registry.toml"
+    )
+    return {
+        row["name"]: row for row in tomllib.loads(registry_copy.read_text())["apps"]
+    }
+
+
+def _up_shell_with_chat(
+    tmp_path: Path, worktree: Path, runner: _RecordingRunner
+) -> None:
+    assert (
+        mod.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            runner=runner,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+
+def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_with_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell preview reads its siblings' URLs from a copy written when it booted and watches
+    that file, so a chat re-upped alone (new ports) has to be written into it, or the shell
+    keeps framing a port nothing listens on."""
+    worktree = _write_worktree(tmp_path)
+    live_registry = tmp_path / "apps.toml"
+    live_registry.write_text(
+        _dump_registry(
+            [
+                {"name": "chat", "url": "http://localhost:8010", "label": "chat-live"},
+                {
+                    "name": "chat-preview-app",
+                    "url": "http://localhost:1",
+                    "label": "chat-preview-x1y2",
+                },
+            ]
+        )
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
+    runner = _RecordingRunner(tmp_path)
+    _up_shell_with_chat(tmp_path, worktree, runner)
+    first_chat_url = mod.live_preview_url(tmp_path, "chat")
+    assert _shell_registry_rows(tmp_path)["chat"]["url"] == first_chat_url
+
+    assert (
+        mod.up(
+            "chat",
+            worktree,
+            tmp_path,
+            instance_key="agent-1",
+            runner=runner,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    second_chat_url = mod.live_preview_url(tmp_path, "chat")
+    assert second_chat_url != first_chat_url
+    rows = _shell_registry_rows(tmp_path)
+    assert rows["chat"]["url"] == second_chat_url
+    assert rows["chat"]["label"] == "chat-preview-x1y2"
+
+    # Taken down on its own, the chat's row goes back to the live chat.
+    assert mod.down("chat", tmp_path, runner=runner, dump_registry=_dump_registry) == 0
+    rows = _shell_registry_rows(tmp_path)
+    assert rows["chat"] == {
+        "name": "chat",
+        "url": "http://localhost:8010",
+        "label": "chat-live",
+    }
+    # The shell's own record still names the chat, so a later ``down`` of the shell is unchanged.
+    assert mod._recorded_siblings(tmp_path, "system_interface") == ["chat"]

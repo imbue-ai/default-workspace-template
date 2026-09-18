@@ -65,9 +65,17 @@ export function getUpdateNotice(): UpdateNotice | null {
   return notice;
 }
 
+/** Whether the apply touched no app's program or bundle: a change to how the workspace starts, say. The
+ *  shell's banner carries such a notice, since no tab would. */
+export function isWorkspaceOnlyNotice(current: UpdateNotice): boolean {
+  return current.apps.length === 0;
+}
+
 /** The notice for one app's tabs (or the shell's banner), or null when it is not among what the apply touched. */
 export function updateNoticeForApp(appName: string): UpdateNotice | null {
-  if (notice === null || !notice.apps.includes(appName)) return null;
+  if (notice === null) return null;
+  if (isWorkspaceOnlyNotice(notice)) return appName === SHELL_APP_NAME ? notice : null;
+  if (!notice.apps.includes(appName)) return null;
   return notice;
 }
 

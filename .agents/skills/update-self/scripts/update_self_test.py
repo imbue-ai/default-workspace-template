@@ -3173,7 +3173,10 @@ def test_an_unhealthy_critical_app_after_the_restart_rolls_back(
 
 
 def _settle_instances(
-    http: _FakeHttp, repo_root: Path, app: update_probes.CriticalInstanceApp, attempts: int
+    http: _FakeHttp,
+    repo_root: Path,
+    app: update_probes.CriticalInstanceApp,
+    attempts: int,
 ) -> str | None:
     """``wait_settled`` over one app's instances API alone: a healthy shell, no pid check."""
     return update_probes.wait_settled(
@@ -7180,7 +7183,10 @@ def test_a_rollback_whose_workspace_does_not_settle_records_an_emergency(
 
 @pytest.mark.parametrize(
     "supervisord_path",
-    [update_layout.SUPERVISORD_CONF, f"{update_layout.SUPERVISORD_DROPIN_DIR}chat.conf"],
+    [
+        update_layout.SUPERVISORD_CONF,
+        f"{update_layout.SUPERVISORD_DROPIN_DIR}chat.conf",
+    ],
 )
 def test_rolling_back_reloads_the_supervisord_table_when_the_update_changed_it(
     apply_repo: Path, supervisord_path: str
@@ -7431,3 +7437,124 @@ def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through(
 def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
     assert update_self.main(["confirm-last", "--repo-root", str(apply_repo)]) == 0
     assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
+
+
+# --- what the kept point names, and what a rollback checks -------------------
+
+
+def test_a_bundle_rebuilt_from_unchanged_source_does_not_make_its_owner_touched(
+    apply_repo: Path,
+) -> None:
+    """One build at the npm root rewrites both bundles, so a chat frontend change rebuilds
+    the shell's too; the record names the shell only when its bundle's source changed,
+    which the stamps say."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    # The pre-apply bundle carries the stamp the emulated build will write again.
+    _write_bundle(apply_repo, stamp="same-source")
+    runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
+    runner.build_stamp = "same-source"
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat"]
+    assert record.programs == ["chat"]
+
+    # A build whose stamps differ, or that has none to compare, touches every owner.
+    for build_stamp in ("other-source", None):
+        _write_bundle(apply_repo, stamp="same-source")
+        runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
+        runner.build_stamp = build_stamp
+        assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+        record = _rollback_point(apply_repo)
+        assert record is not None and record.apps == ["chat", "system_interface"]
+
+
+def test_a_merge_that_changed_nothing_keeps_no_rollback_point(apply_repo: Path) -> None:
+    """``rollback_to`` is HEAD for such a merge, so a kept point would offer to revert
+    whatever merge HEAD already was."""
+    runner = _apply_runner("", apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+
+
+def test_a_rollback_with_no_program_to_restart_skips_the_restart(
+    apply_repo: Path,
+) -> None:
+    """A supervisord drop-in alone touches no program's code or bundle; supervisorctl
+    refuses a bare ``restart``, and there is nothing to hold a pid steady for."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner("M\tsystem/supervisord.conf.d/chat.conf\n", apply_repo),
+            apply_repo,
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.programs == [] and record.apps == []
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout="system/supervisord.conf.d/chat.conf\n"),
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.ran("supervisorctl", "reread")
+    assert not runner.ran("supervisorctl", "restart")
+    settled = _rollback_point(apply_repo)
+    assert (
+        settled is not None
+        and settled.outcome == "Rolled back to the previous version."
+    )
+
+
+def _unbuilt_health_page(url: str) -> update_runtime.FetchedPage | None:
+    """The chat's health route as it answers over a missing bundle: 200, and its own word that it
+    serves the placeholder. Every other page is the built app's."""
+    if url.endswith(update_probes.APP_HEALTH_PATH) and url.startswith(_CHAT_ROW_URL):
+        return update_runtime.FetchedPage(
+            status=200,
+            body='{"status": "ok", "is_frontend_built": false}',
+            headers={"content-type": "application/json"},
+        )
+    return _built_app_page(url)
+
+
+def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """The instances API answers over a missing bundle, so a restored copy that restored no
+    page would otherwise read as a rollback that worked, and the copies would be discarded
+    on that word. The app's own health route says whether its page is there."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(
+        runner,
+        apply_repo,
+        _FakeHttp(_all_healthy, page_responder=_unbuilt_health_page),
+    )
+
+    assert code == 3
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.outcome is not None
+    assert "is_frontend_built: false" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert not _refreshed_the_view(runner, apply_repo)
