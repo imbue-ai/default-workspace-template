@@ -20,7 +20,7 @@ You orchestrate. You do not build the app yourself:
   dependencies finish, run the interactive nodes (every contact with the user), merge the
   result, and hand the app to hardening.
 
-`.agents/skills/build-app/SKILL.md` is the reference for how an app is built
+`.agents/shared/build-app/README.md` is the reference for how an app is built
 here. The planner and the workers read it; you open it to look something up, and
 never to follow. In particular its first step fires a plan recorder that is not
 yours -- Step 2 below runs the planner this build uses. An eval run opened that
@@ -366,7 +366,7 @@ After the working-site conversation is confirmed and every node is done:
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
-   `.agents/skills/build-app/references/verify.md`, and open the tab with
+   `.agents/shared/build-app/references/verify.md`, and open the tab with
    `python3 system/scripts/layout.py open "$APP"`.
 4. **Remove the build folder.** List it first (`git -C "$BUILD" status --porcelain`
    must be empty, since everything was committed and merged), then

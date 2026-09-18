@@ -1,11 +1,3 @@
----
-name: build-app
-description: "Reference for how an app is built in this workspace: the scaffolder, file-path conventions, the throwaway mock, verification, surfacing the tab, and wrapping a pre-existing third-party server. Read by build-app-parallel's planner and workers. To create a new app for the user, use build-app-parallel instead of running this flow."
-metadata:
-  author: imbue
-  crystallized: true
----
-
 # How to build an app
 
 An "app" here is something the user can click on as a tab in
@@ -19,24 +11,24 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
-## Who these steps are for
+## What this file is
 
-This file is the reference a `build-app-parallel` build is carried out from,
-and it has three readers:
+Reference, not a flow. It was the `build-app` skill until the parallel build
+replaced it, and it is kept for the three readers that need the mechanics:
 
-- **A worker**, building the one piece its task names. It follows the mechanics
-  below for that piece only, and skips the plan recorder -- the plan already
-  exists, and the worker is a node in it.
+- **A worker** of a `build-app-parallel` build, building the one piece its task
+  names. It follows the mechanics below for that piece only, and skips the plan
+  recorder -- the plan already exists, and the worker is a node in it.
 - **That skill's planner**, reading to learn what a build here involves before
   it writes the plan.
 - **The orchestrating agent**, to look something up.
 
-If a user asked you for an app, you are the third reader. Go back to
-`.agents/skills/build-app-parallel/SKILL.md` and follow that: it plans the build,
-runs the pieces as workers, and brings you back here only for a detail. Building
-the app from this file instead skips the plan, the parallel workers and the
-reviews the plan schedules -- an eval run did exactly that, silently, because
-this note was not here.
+Nothing routes here. If a user asked you for an app, follow
+`.agents/skills/build-app-parallel/SKILL.md`: it plans the build, runs the pieces
+as workers, and sends you here only for a detail. Building an app straight from
+this file skips the plan, the parallel workers and the reviews the plan
+schedules -- an eval run did exactly that, silently, back when this file was
+still a skill an agent could pick up.
 
 ## First: fire off the plan recorder
 
@@ -173,7 +165,7 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
+uv run .agents/shared/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \

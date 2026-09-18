@@ -55,8 +55,8 @@ if [[ -z "$tool_name" || "$tool_name" == "Bash" ]]; then
         exit 0
     fi
 
-    # The build-app plan recorder is explicitly not work: build-app tells the agent to
-    # fire it and forget it, so nudging for a step here would put a step in the user's
+    # The plan recorder is explicitly not work: the flow that fires it fires it and
+    # forgets it, so nudging for a step here would put a step in the user's
     # progress view for something they must never be shown. It returns immediately and
     # touches nothing outside data/.imbue/plans/.
     if echo "$command" | grep -q 'imbue_plan_extra/write_plan\.sh'; then

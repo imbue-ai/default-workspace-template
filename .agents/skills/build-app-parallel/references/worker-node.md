@@ -54,7 +54,7 @@ you when two of you touch the same file.
 
 ## How to build
 
-`.agents/skills/build-app/SKILL.md` describes how a whole app is built here, from
+`.agents/shared/build-app/README.md` describes how a whole app is built here, from
 the first question to the hardening handoff. Use it only as a reference for *how*
 to do your subtask: the scaffolder, file-path conventions, the `frontend-design`
 skill before any markup, raw-data affordances. It never tells you *what* to do.
