@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 import tool_env
 from update_apply_contract import SnapshotRecord, snapshots_root
@@ -95,7 +95,7 @@ def run_provisioner(runner: Runner, repo_root: Path) -> str | None:
 
 
 def snapshot_targets(
-    plan: ApplyPlan, repo_root: Path, runner: Runner
+    plan: ApplyPlan, repo_root: Path, destinations: Mapping[str, ToolDestination]
 ) -> list[tuple[str, Path]]:
     """The state the apply's destructive steps can destroy, by plan.
 
@@ -108,11 +108,9 @@ def snapshot_targets(
     non-critical app's tool is not copied aside: a rollback reinstalls it from
     the restored tree instead.
 
-    A tool environment is named by :func:`_refresh_destination`, the same
-    question the reinstall asks, so what is copied aside is what the reinstall
-    overwrites. Asking it separately (from ``PATH`` alone) meant the last-resort
-    install into the build's pinned home rebuilt an environment nothing had
-    copied, leaving the rollback with only the network to recover it.
+    A tool environment is named by ``destinations``
+    (:func:`resolve_tool_destinations`), the same value the reinstall is given,
+    so what is copied aside is what the reinstall overwrites.
     """
     targets: list[tuple[str, Path]] = []
     if plan.frontend:
@@ -120,17 +118,17 @@ def snapshot_targets(
             targets.append((bundle.snapshot_name, repo_root / bundle.static_dir))
     if plan.frontend_manifest:
         targets.append(("node_modules", repo_root / NPM_ROOT_DIR / "node_modules"))
-    tools: list[tuple[str, str]] = []
+    tool_names: list[str] = []
     if plan.backend_manifest:
         targets.append(("venv", repo_root / ".venv"))
-        tools.append((MNGR_TOOL_NAME, MNGR_EXECUTABLE))
-    tools.extend(
-        (app.tool_name, app.executable) for app in plan.app_tools if app.is_critical
-    )
-    for tool_name, executable in tools:
-        destination = _refresh_destination(executable, tool_name, runner)
+        tool_names.append(MNGR_TOOL_NAME)
+    tool_names.extend(app.tool_name for app in plan.app_tools if app.is_critical)
+    for tool_name in tool_names:
         targets.append(
-            (tool_snapshot_name(tool_name), destination.tool_dir / tool_name)
+            (
+                tool_snapshot_name(tool_name),
+                destinations[tool_name].tool_dir / tool_name,
+            )
         )
     return targets
 
@@ -152,7 +150,7 @@ BACKEND_SNAPSHOT_NAMES = frozenset({"venv", tool_snapshot_name(MNGR_TOOL_NAME)})
 def take_snapshots(
     plan: ApplyPlan,
     repo_root: Path,
-    runner: Runner,
+    destinations: Mapping[str, ToolDestination],
     existing: Sequence[SnapshotRecord],
 ) -> list[SnapshotRecord]:
     """Copy aside everything the forward apply could destroy; return the manifest.
@@ -172,7 +170,7 @@ def take_snapshots(
     ]
     already = {record.name for record in kept}
     root = snapshots_root(repo_root)
-    for name, source in snapshot_targets(plan, repo_root, runner):
+    for name, source in snapshot_targets(plan, repo_root, destinations):
         if name in already:
             continue
         if not source.exists():
@@ -304,12 +302,12 @@ def _pinned_tool_location() -> tuple[Path, Path]:
     return tool_env.tools_dir(home), tool_env.bin_dir(home)
 
 
-class _ToolDestination(NamedTuple):
+class ToolDestination(NamedTuple):
     """Where a refresh of one tool installs, and what it says about landing there.
 
-    ``note`` is the line :func:`_uv_tool_env` writes when the destination is not
-    the tool's own installation, and ``None`` when it is -- the ordinary case,
-    which has nothing to explain.
+    ``note`` is the line the reinstall writes when the destination is not the
+    tool's own installation, and ``None`` when it is -- the ordinary case, which
+    has nothing to explain.
     """
 
     tool_dir: Path
@@ -319,7 +317,7 @@ class _ToolDestination(NamedTuple):
 
 def _refresh_destination(
     executable: str, tool_name: str, runner: Runner
-) -> _ToolDestination:
+) -> ToolDestination:
     """Where a refresh of ``tool_name`` installs: ``executable``'s own
     installation when we can confirm which that is, else the mngr tool's, else
     the one the build pins.
@@ -339,24 +337,20 @@ def _refresh_destination(
     apply read as success -- a workspace whose ``mngr`` had been deleted, or an
     old lease that never had a uv-tool ``mngr`` to resolve, updated itself into
     having no ``mngr`` on any PATH at all.
-
-    The snapshot asks this too (:func:`snapshot_targets`), which is why the
-    answer is a value and the reporting is the caller's: the copy taken aside
-    has to be of the environment the reinstall is about to rebuild.
     """
     own = _installed_tool_location(executable, tool_name, runner)
     if own is not None:
-        return _ToolDestination(own[0], own[1], None)
+        return ToolDestination(own[0], own[1], None)
     beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if beside_mngr is not None:
-        return _ToolDestination(
+        return ToolDestination(
             beside_mngr[0],
             beside_mngr[1],
             f"refresh: '{executable}' is not an installed uv tool on PATH; "
             f"installing '{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n",
         )
     pinned = _pinned_tool_location()
-    return _ToolDestination(
+    return ToolDestination(
         pinned[0],
         pinned[1],
         f"refresh: could not identify the uv tool behind '{executable}' "
@@ -366,20 +360,25 @@ def _refresh_destination(
     )
 
 
-def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
-    """The environment for a ``uv tool`` call, aimed at the destination
-    :func:`_refresh_destination` resolves, and saying so when that is not the
-    tool's own installation."""
-    env = dict(os.environ)
-    destination = _refresh_destination(executable, tool_name, runner)
-    if destination.note is not None:
-        sys.stderr.write(destination.note)
-    env["UV_TOOL_DIR"] = str(destination.tool_dir)
-    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
-    return env
+def resolve_tool_destinations(
+    plan: ApplyPlan, runner: Runner
+) -> dict[str, ToolDestination]:
+    """Where each tool ``plan`` reinstalls will land, keyed by tool name.
+
+    Resolved once and handed to both the snapshot and the reinstall, so the
+    environment copied aside is the one the reinstall rebuilds.
+    """
+    tools: list[tuple[str, str]] = []
+    if plan.backend_manifest:
+        tools.append((MNGR_TOOL_NAME, MNGR_EXECUTABLE))
+    tools.extend((app.tool_name, app.executable) for app in plan.app_tools)
+    return {
+        tool_name: _refresh_destination(executable, tool_name, runner)
+        for tool_name, executable in tools
+    }
 
 
-def _tool_extras(tool_name: str, env: dict) -> list[str]:
+def _tool_extras(tool_name: str, tool_dir: Path) -> list[str]:
     """Return the ``--with``/``--with-editable`` args a tool was installed with.
 
     A ``uv tool install --reinstall`` rebuilds the environment from the base
@@ -387,12 +386,11 @@ def _tool_extras(tool_name: str, env: dict) -> list[str]:
     its plugins. uv records them in the tool's receipt; read them back rather
     than keeping a second copy of the plugin list to drift.
 
-    ``env`` is :func:`_uv_tool_env`'s, so ``UV_TOOL_DIR`` is the directory this
-    install is about to write to and the receipt to read is the one already
-    there. Asking ``uv tool dir`` instead would answer for ``$HOME``, which is
-    the directory we are overriding.
+    ``tool_dir`` is the directory this install is about to write to, so the
+    receipt read is the one already there. Asking ``uv tool dir`` instead would
+    answer for ``$HOME``, which is the directory being overridden.
     """
-    receipt = Path(env["UV_TOOL_DIR"]) / tool_name / RECEIPT
+    receipt = tool_dir / tool_name / RECEIPT
     try:
         parsed = tomllib.loads(receipt.read_text())
     except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -498,15 +496,15 @@ def _canonical(name: str) -> str:
 
 def _reinstall_tool(
     tool_name: str,
-    executable: str,
     source_dir: str,
     plugin_key: str,
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
+    destination: ToolDestination,
     timeout: float | None = None,
 ) -> None:
-    """Re-resolve the installed ``executable``'s tool from its in-tree source,
+    """Re-resolve ``tool_name`` into ``destination`` from its in-tree source,
     keeping the extras it was installed with and adding the merged tree's own
     plugin manifest (the plugins it assigns to ``plugin_key``).
 
@@ -514,7 +512,11 @@ def _reinstall_tool(
     rollback restores the tool-environment snapshot), a recovery install must
     keep the orchestrator's protection (``keep_protected``).
     """
-    env = _uv_tool_env(executable, tool_name, runner)
+    if destination.note is not None:
+        sys.stderr.write(destination.note)
+    env = dict(os.environ)
+    env["UV_TOOL_DIR"] = str(destination.tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
     argv = [
         "uv",
         "tool",
@@ -522,7 +524,7 @@ def _reinstall_tool(
         "-e",
         source_dir,
         *_merge_extras(
-            _tool_extras(tool_name, env),
+            _tool_extras(tool_name, destination.tool_dir),
             _manifest_extras(plugin_key, repo_root),
         ),
         "--reinstall",
@@ -541,6 +543,7 @@ def refresh_backend_dependencies(
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
+    destinations: Mapping[str, ToolDestination],
     timeout: float | None = None,
 ) -> None:
     """Re-resolve the two shared backend environments from the current tree,
@@ -549,12 +552,12 @@ def refresh_backend_dependencies(
     budget; recovery passes none)."""
     _reinstall_tool(
         MNGR_TOOL_NAME,
-        MNGR_EXECUTABLE,
         MNGR_DIR,
         MNGR_PLUGIN_KEY,
         repo_root,
         runner,
         expend,
+        destinations[MNGR_TOOL_NAME],
         timeout,
     )
     run_checked(
@@ -571,6 +574,7 @@ def refresh_app_tools(
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
+    destinations: Mapping[str, ToolDestination],
     timeout: float | None = None,
 ) -> None:
     """Reinstall each app's own tool environment from its directory in the
@@ -579,11 +583,11 @@ def refresh_app_tools(
     for app in app_tools:
         _reinstall_tool(
             app.tool_name,
-            app.executable,
             app.directory,
             app.plugin_key,
             repo_root,
             runner,
             expend,
+            destinations[app.tool_name],
             timeout,
         )

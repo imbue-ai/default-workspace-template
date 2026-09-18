@@ -1833,7 +1833,10 @@ def _plant_snapshotted_marker(repo_root: Path, **kwargs) -> list:
     """
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
     _plant_marker(repo_root, snapshots=snapshots, **kwargs)
     return snapshots
@@ -4685,7 +4688,7 @@ def test_only_apply_and_recover_band_themselves(
 # mngr tool and one per Python app).
 # ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
 # so both halves of this are load-bearing: WHICH installation is rebuilt
-# (``_uv_tool_env``, from the console script's own shebang) and WHAT it is
+# (``resolve_tool_destinations``, from the console script's own shebang) and WHAT it is
 # rebuilt with (``_tool_extras``, read back out of uv's receipt). For the mngr
 # tool those extras ARE its plugins.
 
@@ -5161,7 +5164,12 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     )
     runner = _RecordingRunner()  # no tools on PATH -> no tool-env targets
 
-    snapshots = update_environment.take_snapshots(plan, repo_root, runner, [])
+    snapshots = update_environment.take_snapshots(
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, runner),
+        [],
+    )
 
     assert {record.name for record in snapshots} == {
         "bundle",
@@ -5215,7 +5223,9 @@ def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(
         update_classification.read_app_tools(repo_root),
     )
 
-    targets = update_environment.snapshot_targets(plan, repo_root, runner)
+    targets = update_environment.snapshot_targets(
+        plan, repo_root, update_environment.resolve_tool_destinations(plan, runner)
+    )
 
     assert targets == [("tool-system-interface", shell_tool)]
 
@@ -5226,11 +5236,13 @@ def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> 
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
-    runner = _RecordingRunner()
-    first = update_environment.take_snapshots(plan, repo_root, runner, [])
+    destinations = update_environment.resolve_tool_destinations(
+        plan, _RecordingRunner()
+    )
+    first = update_environment.take_snapshots(plan, repo_root, destinations, [])
     (repo_root / update_layout.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
 
-    second = update_environment.take_snapshots(plan, repo_root, runner, first)
+    second = update_environment.take_snapshots(plan, repo_root, destinations, first)
 
     assert [record.copy for record in second] == [record.copy for record in first]
     copy_index = Path(first[0].copy) / "index.html"
@@ -5242,7 +5254,10 @@ def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) ->
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
 
     assert snapshots == []
@@ -5268,7 +5283,10 @@ def test_a_copy_that_cannot_be_taken_degrades_to_a_warning(
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
 
     assert snapshots == []
