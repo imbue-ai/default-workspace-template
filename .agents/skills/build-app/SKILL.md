@@ -19,6 +19,25 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
+## Who these steps are for
+
+This file is the reference a `build-app-parallel` build is carried out from,
+and it has three readers:
+
+- **A worker**, building the one piece its task names. It follows the mechanics
+  below for that piece only, and skips the plan recorder -- the plan already
+  exists, and the worker is a node in it.
+- **That skill's planner**, reading to learn what a build here involves before
+  it writes the plan.
+- **The orchestrating agent**, to look something up.
+
+If a user asked you for an app, you are the third reader. Go back to
+`.agents/skills/build-app-parallel/SKILL.md` and follow that: it plans the build,
+runs the pieces as workers, and brings you back here only for a detail. Building
+the app from this file instead skips the plan, the parallel workers and the
+reviews the plan schedules -- an eval run did exactly that, silently, because
+this note was not here.
+
 ## First: fire off the plan recorder
 
 Before anything else, run this once, briefing it the way you would brief a

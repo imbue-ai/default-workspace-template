@@ -21,9 +21,13 @@ You orchestrate. You do not build the app yourself:
   result, and hand the app to hardening.
 
 `.agents/skills/build-app/SKILL.md` is the reference for how an app is built
-here. The planner and the workers read it; do not follow its steps yourself. Its
-Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`) are yours, and
-are restated below.
+here. The planner and the workers read it; you open it to look something up, and
+never to follow. In particular its first step fires a plan recorder that is not
+yours -- Step 2 below runs the planner this build uses. An eval run opened that
+file, followed it from the top, and built the whole app by hand: no plan, no
+workers, no reviews, and nothing to show for the flow it was supposed to be
+running. Its Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`)
+are yours, and are restated below.
 
 **You speak to the user only when an interactive node says to.** The plan names
 every conversation the build has, and those are the only messages you send: no
