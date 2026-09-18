@@ -1574,11 +1574,12 @@ def rollback_last(
     The outcome is written into the record (the notice shows it) rather than sent to
     the agent that drove the apply; the record stays until a person closes it.
 
-    Held under an exclusive lock for its whole run. The shell launches this detached
-    and answers at once, so two presses of the button can start two of it before
-    either has written its progress; the second must refuse without touching the
-    record or the copies, or its failed revert would settle the record and discard
-    the copies the first is restoring from.
+    Held under an exclusive lock for its whole run. The shell serializes its own
+    launches and holds each until the script has written its first progress, but
+    a second rollback-last (run by hand, or launched beside a hand-run one) or a
+    confirm-last can still land while this one runs; it must refuse without
+    touching the record or the copies, or its failed revert would settle the
+    record and discard the copies the first is restoring from.
     """
     try:
         with _holding_rollback_point_lock(repo_root):
