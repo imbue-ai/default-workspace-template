@@ -184,12 +184,18 @@ cat /tmp/update-self-recheck.json
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
-`exceeds_ceiling` is `true` here and the user has not already confirmed an
-over-ceiling override, take that confirmation now as in Step 2, offering the
-capped ref (re-run without `--override` to learn it). If they take the capped
-ref, set `$REF` to it and **re-run §2a** before dispatching (the staged copy
-must match the target). If they decline every option, record `run-status
-verdict REFUSED --detail "..."` as in Step 2.
+`exceeds_ceiling` is `true` here:
+
+- **The user did not name `$REF`** (Step 2 chose it without `--override`): it
+  is a release above the ceiling, so do not mention it or ask about it. Re-run
+  without `--override` to learn the capped ref, set `$REF` to it, and **re-run
+  §2a** before dispatching (the staged copy must match the target). A refusal
+  from that re-run is handled as in Step 2.
+- **The user named it** and has not already confirmed it: take that
+  confirmation now as in Step 2, offering the capped ref (learned the same
+  way). If they take the capped ref, set `$REF` to it and **re-run §2a**. If
+  they decline every option, record `run-status verdict REFUSED --detail
+  "..."` as in Step 2.
 
 ### 3b. Launch
 
