@@ -3,11 +3,13 @@ from textwrap import dedent
 
 from scripts.flake_reconcile import CheckRunRecord
 from scripts.flake_reconcile import ClusterStatus
+from scripts.flake_reconcile import FlakeTicket
 from scripts.flake_reconcile import RunOutcome
 from scripts.flake_reconcile import aggregate_flaky_tests
 from scripts.flake_reconcile import merge_check_run_pages
 from scripts.flake_reconcile import parse_check_run_summary
 from scripts.flake_reconcile import preferred_status_for_branches
+from scripts.flake_reconcile import tickets_missing_project
 
 
 def test_preferred_status_ready_when_a_flake_hit_main() -> None:
@@ -232,3 +234,25 @@ def test_merge_check_run_pages_tolerates_a_page_carrying_no_check_runs() -> None
     # A commit with no check-runs still answers with a page, and gh can emit no pages at all.
     assert merge_check_run_pages(({"total_count": 0},)) == ()
     assert merge_check_run_pages(()) == ()
+
+
+def _ticket(identifier: str, project_id: str) -> FlakeTicket:
+    return FlakeTicket(
+        identifier=identifier,
+        issue_id=f"uuid-{identifier}",
+        url=f"https://linear.app/imbue/issue/{identifier}",
+        state_type="unstarted",
+        is_open=True,
+        description="",
+        project_id=project_id,
+    )
+
+
+def test_tickets_missing_project_selects_every_labelled_ticket_not_on_the_project() -> None:
+    tickets = (
+        _ticket("MIND-1", "proj-uuid"),
+        _ticket("MIND-2", ""),
+        _ticket("MIND-3", "some-other-project"),
+    )
+    missing = tickets_missing_project(tickets, "proj-uuid")
+    assert tuple(ticket.identifier for ticket in missing) == ("MIND-2", "MIND-3")

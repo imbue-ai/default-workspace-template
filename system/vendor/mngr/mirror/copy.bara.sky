@@ -118,6 +118,9 @@ PUBLIC_FILES = glob(
         # The mngr_forward behavior-corpus guard test, same story: its dev-group
         # is stripped via BEGIN-INTERNAL markers in libs/mngr_forward/pyproject.toml.
         "libs/mngr_forward/imbue/mngr_forward/test_behavior_corpus.py",
+        # The mngr_file behavior-corpus guard test, same story: its dev-group
+        # is stripped via BEGIN-INTERNAL markers in libs/mngr_file/pyproject.toml.
+        "libs/mngr_file/imbue/mngr_file/test_behavior_corpus.py",
     ],
 )
 

@@ -8,10 +8,10 @@ drops only the box transport and the proxy in front of the app. The app is a dir
 files served on a local port: a fixture under `flow_lab_apps/`, or an app pulled out of a trial's
 deliverable bundle to reproduce a flow that went wrong there without paying for the trial.
 
-Two entry points use it. The tests in `test_flow_lab.py` drive the fixtures with a scripted agent,
-so a change to the executor or the state summariser is measured against known page behaviours.
+Two entry points use it. The tests in `test_flow_lab.py` drive the fixtures with scripted flows, so
+a change to the executor or the state summariser is measured against known page behaviours.
 `minds-evals flow-lab` drives any local app with the real verification agent, which is how a prompt
-rule is tried out.
+rule is tried out, or with a script, which is how a scripted flow is checked before a trial runs it.
 """
 
 import json
@@ -40,9 +40,13 @@ from imbue.minds_evals import flow_browser
 from imbue.minds_evals import flow_runner
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import FlowStartPath
 from imbue.minds_evals.data_types import FlowSurface
+from imbue.minds_evals.data_types import ScriptedFlowAction
 from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.evidence_collection import FLOW_LOG_FILENAME
+from imbue.minds_evals.expectations import flow_check_actions
 from imbue.minds_evals.expectations import slugify
 from imbue.minds_evals.resources.flow_step_protocol import StepReaction
 from imbue.mngr.utils.polling import poll_until
@@ -58,7 +62,7 @@ class _QuietRequestHandler(SimpleHTTPRequestHandler):
 @contextmanager
 def serve_static_app(app_dir: Path) -> Iterator[str]:
     """Serve a directory as an app's origin on a port of its own, yielding the origin URL (with a
-    trailing slash, so a page path or query appends to it directly)."""
+    trailing slash, as a forwarded origin has, so a flow's start path joins both the same way)."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), lambda *args: _QuietRequestHandler(*args, directory=str(app_dir)))
     thread = threading.Thread(target=server.serve_forever, name="flow-lab-app", daemon=True)
     thread.start()
@@ -111,6 +115,8 @@ class LocalFlowStepExecutor(flow_runner.FlowStepExecutor):
                 detail="the step script did not answer within {}s".format(self.step_timeout_seconds),
                 state_text="",
                 screenshot_name="",
+                screenshot_byte_count=0,
+                is_screenshot_png=False,
                 reaction=StepReaction.UNOBSERVED,
             )
         # A script that never got to print its verdict has said why on stderr, which is the only
@@ -119,14 +125,19 @@ class LocalFlowStepExecutor(flow_runner.FlowStepExecutor):
 
 
 @pure
-def lab_flow_check(name: str, actions: str, expect: str) -> UiFlowCheck:
-    """A flow declared on the spot, shaped as the generator would expand it from a case."""
+def lab_flow_check(
+    name: str, actions: str, script: tuple[ScriptedFlowAction, ...], expect: str, start_path: FlowStartPath
+) -> UiFlowCheck:
+    """A flow declared on the spot, shaped as the generator would expand it from a case: model-driven
+    from `actions`, or scripted when `script` is non-empty."""
     return UiFlowCheck(
         check_id="ui_flow_lab_{}".format(slugify(name)),
         name=name,
-        actions=actions,
+        actions=flow_check_actions(actions, script),
+        script=script,
         expect=expect,
         surface=FlowSurface.ORIGIN,
+        start_path=start_path,
     )
 
 
@@ -137,7 +148,7 @@ _PROFILE_CLEANUP_TIMEOUT_SECONDS: Final[float] = 10.0
 _PROFILE_CLEANUP_POLL_SECONDS: Final[float] = 0.2
 
 
-class _ProfileRemoval(MutableModel):
+class ProfileRemoval(MutableModel):
     """Takes a profile tree down, keeping what the latest attempt ran into so a tree that is left
     behind is reported with its reason rather than a guess.
 
@@ -158,53 +169,67 @@ class _ProfileRemoval(MutableModel):
             self.cause = "{}: {}".format(path, exc)
 
 
-@contextmanager
-def fresh_profile_dir() -> Iterator[Path]:
-    """A browser profile directory of its own, removed on exit once Chromium has let go of it.
+def remove_profile_tree(removal: ProfileRemoval) -> None:
+    """Retry `removal` until the tree it names stays gone.
 
     Terminating the browser waits for the browser process alone. Its renderer, GPU and
     crashpad helpers exit a moment later and can still be writing under ``Default/`` while the
     directory is removed, so one ``rmtree`` can find a directory refilled behind it and fail on
-    the final ``rmdir``. The removal is retried until the tree stays gone; a tree that never
-    does is left behind, with a warning naming what the last attempt ran into, rather than
-    failing the run over a temp directory.
+    the final ``rmdir``. A tree that never goes is left behind, with a warning naming what the last
+    attempt ran into, rather than failing the run over a temp directory.
     """
+    if poll_until(
+        removal.try_remove,
+        timeout=_PROFILE_CLEANUP_TIMEOUT_SECONDS,
+        poll_interval=_PROFILE_CLEANUP_POLL_SECONDS,
+    ):
+        return
+    logger.warning(
+        "Left the browser profile at {} behind after {}s of removals; the last one {}",
+        removal.directory,
+        _PROFILE_CLEANUP_TIMEOUT_SECONDS,
+        "failed with {}".format(removal.cause)
+        if removal.cause
+        else "reported no error, yet the directory is still there",
+    )
+
+
+@contextmanager
+def fresh_profile_dir() -> Iterator[Path]:
+    """A browser profile directory of its own, removed on exit once Chromium has let go of it."""
     profile_dir = Path(tempfile.mkdtemp(prefix="minds-evals-flow-lab-"))
     try:
         yield profile_dir
     finally:
-        removal = _ProfileRemoval(directory=profile_dir)
-        if not poll_until(
-            removal.try_remove,
-            timeout=_PROFILE_CLEANUP_TIMEOUT_SECONDS,
-            poll_interval=_PROFILE_CLEANUP_POLL_SECONDS,
-        ):
-            logger.warning(
-                "Left the browser profile at {} behind after {}s of removals; the last one {}",
-                profile_dir,
-                _PROFILE_CLEANUP_TIMEOUT_SECONDS,
-                "failed with {}".format(removal.cause)
-                if removal.cause
-                else "reported no error, yet the directory is still there",
-            )
+        remove_profile_tree(ProfileRemoval(directory=profile_dir))
 
 
 async def run_lab_flow(
     app_dir: Path,
-    page: str,
     check: UiFlowCheck,
-    agent: ui_flows.VerificationAgent,
+    model_agent: ui_flows.VerificationAgent | None,
     output_dir: Path,
     chromium_path: Path,
     flow_deadline_seconds: float = flow_runner.FLOW_DEADLINE_SECONDS,
 ) -> flow_runner.FlowRun:
-    """Serve `app_dir`, open `page` on it in a fresh browser, and drive one flow to its end.
+    """Serve `app_dir`, open the flow's start path on it in a fresh browser, and drive the flow to
+    its end, with `model_agent` for a model-driven flow and the flow's own script for a scripted one.
 
     Leaves the same evidence a trial's flow directory holds -- `log.jsonl` and the `step_NNN.png`
     frames -- in `output_dir`, so the viewer's readers and the judge's digest renderer can be
-    pointed at it. `page` is appended to the served origin: empty for its index, or a query such as
-    `?latency=300` to select a fixture's behaviour.
+    pointed at it. The start path joins the served origin exactly as it joins a forwarded one at
+    trial time: empty for the index, or a query such as `?latency=300` to select a fixture's
+    behaviour. A model-driven flow with no agent errors before anything is launched, as it does at
+    trial time.
     """
+    if not check.script and model_agent is None:
+        return flow_runner.FlowRun(
+            status=CheckStatus.ERROR,
+            reason=ui_flows.REASON_VERIFIER_AGENT_FAILED,
+            detail="no verification agent was configured to carry out a model-driven flow",
+            records=(),
+            verifier_call_count=0,
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     with (
         ConcurrencyGroup(name="flow-lab") as concurrency_group,
@@ -215,9 +240,11 @@ async def run_lab_flow(
         executor = LocalFlowStepExecutor(
             cdp_endpoint_url=cdp_endpoint_url, screenshot_dir=output_dir, concurrency_group=concurrency_group
         )
+        agent = flow_runner.choose_flow_agent(check, origin, model_agent)
+        assert agent is not None, "a model-driven flow with no agent returns before anything is launched"
         run = await flow_runner.run_flow(
             check,
-            origin + page,
+            ui_flows.flow_start_url(origin, check.start_path),
             agent,
             executor,
             # No collection phase to run out of: the flow's own deadline is the only one.

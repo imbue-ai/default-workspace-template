@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "case_id": "instrument",
+  "base_sha": "e3ed94c7d3253deb96bb90f25a5fdaf237d30026",
+  "dwt_tip_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+  "preexisting_registrations": [
+    "browser",
+    "chat",
+    "files",
+    "owner-exec",
+    "system_interface",
+    "terminal",
+    "todo-fixture"
+  ],
+  "is_registry_present": true,
+  "seeded_registrations": [
+    "todo-fixture"
+  ],
+  "is_expectations_declared": true,
+  "is_evidence_complete": true,
+  "started_at": "2026-09-16T05:16:06.773946+00:00",
+  "phases": [
+    {
+      "name": "workspace_state",
+      "seconds": 18.57
+    },
+    {
+      "name": "common_transcript",
+      "seconds": 54.1
+    },
+    {
+      "name": "tickets",
+      "seconds": 16.05
+    },
+    {
+      "name": "file_inventory",
+      "seconds": 32.86
+    },
+    {
+      "name": "repo_state",
+      "seconds": 33.26
+    },
+    {
+      "name": "test_commands",
+      "seconds": 35.46
+    },
+    {
+      "name": "http_probes",
+      "seconds": 48.26
+    },
+    {
+      "name": "app_checks",
+      "seconds": 0.0
+    },
+    {
+      "name": "ui_flows",
+      "seconds": 131.89
+    },
+    {
+      "name": "timing_checks",
+      "seconds": 0.0
+    }
+  ],
+  "entries": [
+    {
+      "entry_id": "file_inventory",
+      "check_class": "files",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "8043 file(s) inventoried",
+      "evidence_path": "verification/file_inventory.jsonl",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "deliverable_bundle",
+      "check_class": "bundle",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "HEAD cb9d72d64c9c (1 commit(s) beyond the prepared clone); clean",
+      "evidence_path": "verification/deliverable.bundle",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "files_0",
+      "check_class": "files",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "1 inventory path(s) match 'workspace/system/fixtures/todo-fixture/index.html'; expected at least 1",
+      "evidence_path": "verification/file_inventory.jsonl",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": 1,
+      "value": null
+    },
+    {
+      "entry_id": "files_1",
+      "check_class": "files",
+      "status": "failed",
+      "env": "live",
+      "reason": "too_few_files",
+      "detail": "0 inventory path(s) match 'workspace/system/fixtures/todo-fixture/absent-7f3a.html'; expected at least 1",
+      "evidence_path": "verification/file_inventory.jsonl",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": 0,
+      "value": null
+    },
+    {
+      "entry_id": "test_command_0",
+      "check_class": "test_command",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "$ test -s system/fixtures/todo-fixture/index.html\nexit 0\n",
+      "evidence_path": "",
+      "exit_code": 0,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "test_command_1",
+      "check_class": "test_command",
+      "status": "failed",
+      "env": "live",
+      "reason": "nonzero_exit",
+      "detail": "$ test -e system/fixtures/todo-fixture/absent-7f3a.html\nexit 1\n",
+      "evidence_path": "",
+      "exit_code": 1,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "http_0_registered_apps_todo_fixture",
+      "check_class": "http",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "http://localhost:8090 -> HTTP 200 in 0.007s (expected 200)",
+      "evidence_path": "verification/http/http_0_registered_apps_0_todo_fixture.json",
+      "exit_code": null,
+      "status_code": 200,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "http_1_todo_fixture_todo_fixture",
+      "check_class": "http",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "http://localhost:8090 -> HTTP 200 in 0.003s (expected 200)",
+      "evidence_path": "verification/http/http_1_todo_fixture_0_todo_fixture.json",
+      "exit_code": null,
+      "status_code": 200,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "http_2_todo_fixture_todo_fixture",
+      "check_class": "http",
+      "status": "failed",
+      "env": "live",
+      "reason": "body_mismatch",
+      "detail": "http://localhost:8090 -> HTTP 200 in 0.002s (expected 200)",
+      "evidence_path": "verification/http/http_2_todo_fixture_0_todo_fixture.json",
+      "exit_code": null,
+      "status_code": 200,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "app_registered",
+      "check_class": "app",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "0 delivered app(s) registered (none); expected at least 0",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_0_plain",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: 'walk dog' was added, completed and deleted; the seed tasks are untouched.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/plain",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_1_deferred",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: 'walk dog' is listed.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/deferred",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_2_armed_delete",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: 'Buy milk' is gone.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/armed_delete",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_3_pending",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: 'walk dog' is listed once saving finishes.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/pending",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_4_ticker",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: Nothing but the clock changes.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/ticker",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_5_start_over",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: The page reloads at its own root.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/start_over",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "ui_flow_6_unnamed",
+      "check_class": "ui_flows",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "expected: 'walk dog' was added, completed through its nameless checkbox and deleted; the seed tasks are untouched.\nagent's reading of the final state: scripted flow; no reading",
+      "evidence_path": "verification/flows/unnamed",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "time_to_goal",
+      "check_class": "timing",
+      "status": "failed",
+      "env": "live",
+      "reason": "timing_prerequisite_failed",
+      "detail": "66.6s to the reply to client message 1 (fast 600s, slow 1500s), but the time does not count: a required check failed in the http class(es)",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": 66.6
+    }
+  ]
+}

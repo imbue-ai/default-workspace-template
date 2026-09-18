@@ -46,10 +46,15 @@ from pydantic import Field
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.check_diagnostics import format_fact_outcome
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import CiReportContext
 from imbue.minds_evals.data_types import DecidedPair
+from imbue.minds_evals.data_types import DiagnosticRunCheck
+from imbue.minds_evals.data_types import DiagnosticTrialCheck
+from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import FactOutcome
 from imbue.minds_evals.data_types import FrozenPair
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
@@ -61,11 +66,23 @@ from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
 # The pattern the notify job downloads every summary artifact under, and the stems of the files
 # inside them. The download merges the artifacts into one flat directory, so a summary file's own
 # name is what identifies the pass: the oracle runs per pair and eval config, the live pass per
-# cell. These names are composed here from the matrix rather than discovered on disk, so they must
-# stay equal to the ones the scheduled workflow's check steps write.
+# cell, the fixture diagnostic per pair and the behaviour diagnostic per pair and harness, and a
+# live cell's invariants ride beside its own summary. These names are composed here from the matrix
+# rather than discovered on disk, so they must stay equal to the ones the scheduled workflow's check
+# steps write.
 SUMMARY_ARTIFACT_PREFIX: Final[str] = "minds-evals-summary-"
 ORACLE_SUMMARY_STEM: Final[str] = "oracle-summary"
 LIVE_SUMMARY_STEM: Final[str] = "live-summary"
+LIVE_INVARIANTS_SUMMARY_STEM: Final[str] = "live-invariants"
+DIAGNOSE_FIXTURE_SUMMARY_STEM: Final[str] = "diagnose-fixture-summary"
+DIAGNOSE_BEHAVIOUR_SUMMARY_STEM: Final[str] = "diagnose-behaviour-summary"
+
+# How the report names a diagnose job: `diagnose` and its family, and the harness after a behaviour one.
+DIAGNOSE_LABEL: Final[str] = "diagnose"
+FIXTURE_FAMILY_LABEL: Final[str] = "fixture"
+BEHAVIOUR_FAMILY_LABEL: Final[str] = "behaviour"
+# What a failing fact's note says when it is a strict known failure whose defect this trial did not record.
+UNEXPECTEDLY_PASSING_NOTE_PREFIX: Final[str] = "unexpectedly passing: "
 
 # Who the run posts as. The webhook carries no identity of its own, so the message names itself, and
 # its avatar is the verdict at a glance in the channel list: the green one only where every arm the
@@ -161,6 +178,9 @@ MAX_TABLE_CELLS_PER_ROW: Final[int] = 20
 MAX_TABLE_CHARACTERS: Final[int] = 10000
 MAX_TABLE_CELL_CHARACTERS: Final[int] = 120
 TABLE_ELLIPSIS: Final[str] = "..."
+# Slack refuses a table of more rows than this, header included, and the whole message with it. The
+# failures table is the one that can reach it: a diagnostic lists every failing fact as a row of its own.
+MAX_TABLE_ROWS: Final[int] = 100
 # What is left of a judge table row once its non-criterion columns have taken their cells.
 MAX_JUDGE_CRITERIA: Final[int] = MAX_TABLE_CELLS_PER_ROW - 4
 
@@ -205,6 +225,31 @@ class UnreadSummary(FrozenModel):
 SummaryReading = RunCheck | UnreadSummary
 
 
+class InvariantMissTally(FrozenModel):
+    """One live invariant a cell missed, and on how many of the cell's trials."""
+
+    fact_name: str = Field(description="The invariant, without the step it was read from")
+    trial_count: int = Field(description="How many of the cell's trials missed it, each counted once")
+
+
+class LiveInvariantReading(FrozenModel):
+    """What one cell's trials made of the invariants every trial is held to, whatever its case.
+
+    A cell's trials run the same case against the same table, so a broken reader misses the same fact
+    on every one of them. Counting the trials per fact is what keeps that a line rather than a wall.
+    """
+
+    trial_count: int = Field(description="How many trials were read against the invariants")
+    misses: tuple[InvariantMissTally, ...] = Field(
+        description="Each invariant some trial missed, in the order the trials first name them"
+    )
+
+
+# What a pass that no live cell read against the invariants carries: the oracle, a skipped cell, and
+# a cell whose invariants summary is absent or unreadable.
+NO_LIVE_INVARIANTS: Final[LiveInvariantReading] = LiveInvariantReading(trial_count=0, misses=())
+
+
 class PassReport(FrozenModel):
     """One pass a message reports -- its suite's oracle, or one of the suite's cells -- as the
     message presents it.
@@ -217,6 +262,32 @@ class PassReport(FrozenModel):
     verdict: ArmVerdict = Field(description="How this pass came out")
     detail: str = Field(description="What the details block says about the pass; empty when it was graded")
     trials: tuple[TrialCheck, ...] = Field(description="The trials it graded; empty when it graded none")
+    live_invariants: LiveInvariantReading = Field(
+        description="The live invariants this pass's trials missed; only a live cell is read against them"
+    )
+
+
+class DiagnosticPassVerdict(LowerCaseStrEnum):
+    """How one diagnose job of a pair came out: the worst verdict of its trials, or BROKEN when it left
+    no summary to read. `DIAGNOSTIC_PASS_VERDICT_SEVERITY` is where their order is decided."""
+
+    FAILED = auto()
+    BROKEN = auto()
+    NOT_MEASURED = auto()
+    NOT_FOLLOWED = auto()
+    KNOWN = auto()
+    PASSED = auto()
+
+
+class DiagnosticPassReport(FrozenModel):
+    """One diagnose job of a pair as the message presents it: a clause of the pair's opening line, rows of
+    the failures table, and lines of the details block."""
+
+    label: str = Field(description="How a table row or detail line names the job: 'diagnose behaviour codex'")
+    family_label: str = Field(description="How the opening line names the job: 'behaviour codex'")
+    verdict: DiagnosticPassVerdict = Field(description="How the job came out")
+    detail: str = Field(description="Why a broken job has no verdict; empty for one that was checked")
+    trials: tuple[DiagnosticTrialCheck, ...] = Field(description="The trials it checked; empty when broken")
 
 
 class SuiteReport(FrozenModel):
@@ -229,10 +300,21 @@ class SuiteReport(FrozenModel):
 
     pair: DecidedPair = Field(description="The pair, with the refs it froze to")
     config_slug: str = Field(description="The eval config the message reports on; empty when it reports on none")
-    verdict: ArmVerdict = Field(description="How the suite's oracle pass and all of its cells came out together")
+    verdict: ArmVerdict = Field(
+        description="How the suite's oracle pass, all of its cells and any diagnostics it carries came out together"
+    )
     summary_text: str = Field(description="Why the suite reads as it does; empty when the verdict says it all")
     oracle: PassReport | None = Field(description="The suite's oracle pass; None when the run attempted none")
     cells: tuple[PassReport, ...] = Field(description="The suite's live passes, in matrix order; empty when none ran")
+    # The diagnose jobs belong to the pair, not to one of its eval configs, so they ride on the
+    # pair's first message and every later message of the same pair carries none: repeating them
+    # would count one broken instrument as several.
+    diagnostics: tuple[DiagnosticPassReport, ...] = Field(
+        description="The pair's diagnose jobs, fixture first; empty on every message but the pair's first"
+    )
+    unsupported_harnesses: tuple[str, ...] = Field(
+        description="The harnesses whose behaviour cell this pair cannot run, in matrix order"
+    )
 
 
 class GridMark(FrozenModel):
@@ -296,9 +378,16 @@ class JudgeTable(FrozenModel):
 class FailedTrial(FrozenModel):
     """One trial that did not pass, as the failures table lists it."""
 
-    config: str = Field(description="The harness config whose pass ran the trial")
+    config: str = Field(description="The harness config whose pass ran the trial, or the diagnose job")
     case_key: str = Field(description="The case it ran")
-    note: str = Field(description="What stopped it")
+    note: str = Field(description="What stopped it, or the one diagnostic fact the row is about")
+
+
+class FailedTrialsTable(FrozenModel):
+    """The failures table as the message draws it: the rows its table budget kept, and how many it could not."""
+
+    rows: tuple[FailedTrial, ...] = Field(description="The rows kept, in the order they were listed")
+    dropped_rows: int = Field(description="How many rows the message's table budget left no room for")
 
 
 class SlackMessage(FrozenModel):
@@ -315,6 +404,22 @@ EMPTY_GRID: Final[Grid] = Grid(headings=(), rows=())
 
 # The judge table of a message whose passes graded nothing.
 EMPTY_JUDGE_TABLE: Final[JudgeTable] = JudgeTable(criteria=(), rows=(), total_criteria=0, dropped_rows=0)
+
+# The failures table of a message about nothing that failed.
+EMPTY_FAILED_TRIALS: Final[FailedTrialsTable] = FailedTrialsTable(rows=(), dropped_rows=0)
+
+# The diagnose job verdicts, worst first. A failure is the instrument's own fault and the one a reader
+# acts on; a broken job and a trial that measured nothing both leave the night unmeasured, which
+# outranks an agent that did not follow the prompt; a known failure is expected, and a pass is the only
+# clean result.
+DIAGNOSTIC_PASS_VERDICT_SEVERITY: Final[tuple[DiagnosticPassVerdict, ...]] = (
+    DiagnosticPassVerdict.FAILED,
+    DiagnosticPassVerdict.BROKEN,
+    DiagnosticPassVerdict.NOT_MEASURED,
+    DiagnosticPassVerdict.NOT_FOLLOWED,
+    DiagnosticPassVerdict.KNOWN,
+    DiagnosticPassVerdict.PASSED,
+)
 
 
 # The stand-in for a pass that has no summary of its own to read.
@@ -360,6 +465,48 @@ def oracle_summary_path(summaries_dir: Path, pair_name: str, config_slug: str) -
 def live_summary_path(summaries_dir: Path, pair_name: str, config_slug: str, harness_config: str) -> Path:
     """Where the cell's live pass uploaded its summary."""
     return summaries_dir / "{}-{}-{}-{}.json".format(LIVE_SUMMARY_STEM, pair_name, config_slug, harness_config)
+
+
+@pure
+def live_invariants_summary_path(summaries_dir: Path, pair_name: str, config_slug: str, harness_config: str) -> Path:
+    """Where the cell's live pass uploaded the live invariants it was read against."""
+    return summaries_dir / "{}-{}-{}-{}.json".format(
+        LIVE_INVARIANTS_SUMMARY_STEM, pair_name, config_slug, harness_config
+    )
+
+
+@pure
+def diagnose_fixture_summary_path(summaries_dir: Path, pair_name: str) -> Path:
+    """Where the pair's fixture diagnostic uploaded its summary."""
+    return summaries_dir / "{}-{}.json".format(DIAGNOSE_FIXTURE_SUMMARY_STEM, pair_name)
+
+
+@pure
+def diagnose_behaviour_summary_path(summaries_dir: Path, pair_name: str, harness: str) -> Path:
+    """Where the pair's behaviour diagnostic on one harness uploaded its summary."""
+    return summaries_dir / "{}-{}-{}.json".format(DIAGNOSE_BEHAVIOUR_SUMMARY_STEM, pair_name, harness)
+
+
+@pure
+def parse_diagnostic_run_check(summary_text: str) -> DiagnosticRunCheck:
+    """check-diagnostics' JSON summary, back into the model it was dumped from.
+
+    Only the run carries a computed field, so only the run's is stripped. Raises json.JSONDecodeError
+    and ValidationError as `parse_run_check` does.
+    """
+    return DiagnosticRunCheck.model_validate(without_computed_fields(json.loads(summary_text), DiagnosticRunCheck))
+
+
+def read_diagnostic_summary(summary_path: Path) -> DiagnosticRunCheck | UnreadSummary:
+    """One diagnostic check's summary artifact, tolerating its absence and its corruption exactly as
+    `read_summary` does, and for the same reasons."""
+    if not summary_path.is_file():
+        return ABSENT_SUMMARY
+    try:
+        return parse_diagnostic_run_check(summary_path.read_text())
+    except (OSError, ValueError) as exc:
+        logger.warning("Cannot read the diagnostics summary at {}: {}", summary_path, exc)
+        return UnreadSummary(is_summary_absent=False)
 
 
 def read_summary(summary_path: Path) -> SummaryReading:
@@ -566,13 +713,27 @@ def render_oracle_pass(reading: SummaryReading) -> PassReport:
     which is what a failed oracle's message is mostly made of.
     """
     if isinstance(reading, UnreadSummary):
-        return PassReport(label=ORACLE_LABEL, verdict=ArmVerdict.BROKEN, detail="", trials=())
+        return PassReport(
+            label=ORACLE_LABEL,
+            verdict=ArmVerdict.BROKEN,
+            detail="",
+            trials=(),
+            live_invariants=NO_LIVE_INVARIANTS,
+        )
     verdict = ArmVerdict.PASSED if reading.is_passed else ArmVerdict.FAILED
-    return PassReport(label=ORACLE_LABEL, verdict=verdict, detail="", trials=reading.trials)
+    return PassReport(
+        label=ORACLE_LABEL,
+        verdict=verdict,
+        detail="",
+        trials=reading.trials,
+        live_invariants=NO_LIVE_INVARIANTS,
+    )
 
 
 @pure
-def render_running_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_passed: bool) -> PassReport:
+def render_running_cell_pass(
+    cell: MatrixCell, live: SummaryReading, is_oracle_passed: bool, live_invariants: LiveInvariantReading
+) -> PassReport:
     """One cell the run meant to evaluate.
 
     A cell whose own suite's oracle did not pass never started, so it is reported as not evaluated
@@ -587,19 +748,29 @@ def render_running_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_p
                 verdict=ArmVerdict.NOT_EVALUATED,
                 detail="not evaluated (the oracle pass did not pass)",
                 trials=(),
+                live_invariants=NO_LIVE_INVARIANTS,
             )
         return PassReport(
             label=cell.harness_config,
             verdict=ArmVerdict.BROKEN,
             detail=describe_unread_summary(live, "live"),
             trials=(),
+            live_invariants=live_invariants,
         )
     verdict = ArmVerdict.PASSED if live.is_passed else ArmVerdict.FAILED
-    return PassReport(label=cell.harness_config, verdict=verdict, detail="", trials=live.trials)
+    return PassReport(
+        label=cell.harness_config,
+        verdict=verdict,
+        detail="",
+        trials=live.trials,
+        live_invariants=live_invariants,
+    )
 
 
 @pure
-def render_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_passed: bool) -> PassReport:
+def render_cell_pass(
+    cell: MatrixCell, live: SummaryReading, is_oracle_passed: bool, live_invariants: LiveInvariantReading
+) -> PassReport:
     """One cell: the harness config it ran the pair on, and how that live pass came out."""
     match cell.decision:
         case CellDecision.SKIP:
@@ -608,11 +779,54 @@ def render_cell_pass(cell: MatrixCell, live: SummaryReading, is_oracle_passed: b
                 verdict=ArmVerdict.SKIPPED,
                 detail="skipped (already green)",
                 trials=(),
+                live_invariants=NO_LIVE_INVARIANTS,
             )
         case CellDecision.RUN:
-            return render_running_cell_pass(cell, live, is_oracle_passed)
+            return render_running_cell_pass(cell, live, is_oracle_passed, live_invariants)
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def diagnostic_trial_misses(trial: DiagnosticTrialCheck) -> tuple[FactOutcome, ...]:
+    """Every fact of one checked trial that did not come out as the table wanted.
+
+    The statuses are disjoint, so this is each fact once. A known failure is not a miss: it is the
+    value the table asked for.
+    """
+    return (
+        *trial.failed_facts,
+        *trial.not_recorded_facts,
+        *trial.unexpectedly_passing_facts,
+        *trial.not_followed_facts,
+        *trial.unmet_preconditions,
+    )
+
+
+@pure
+def tally_invariant_misses(trials: Sequence[DiagnosticTrialCheck]) -> tuple[InvariantMissTally, ...]:
+    """Each invariant some trial missed, named once, with the trials that missed it counted.
+
+    A fact a table pins to several steps can miss more than once on one trial; it still counts as
+    that one trial, so no count can exceed the trials read.
+    """
+    counts: dict[str, int] = {}
+    for trial in trials:
+        for fact_name in dict.fromkeys(outcome.fact_name for outcome in diagnostic_trial_misses(trial)):
+            counts[fact_name] = counts.get(fact_name, 0) + 1
+    return tuple(InvariantMissTally(fact_name=fact_name, trial_count=count) for fact_name, count in counts.items())
+
+
+def read_live_invariants(summary_path: Path) -> LiveInvariantReading:
+    """What a live cell's trials made of the invariants every trial is held to, whatever its case.
+
+    A cell with no invariants summary misses nothing here: the read gates nothing, and a job that
+    died before it is already reported by its own pass.
+    """
+    reading = read_diagnostic_summary(summary_path)
+    if isinstance(reading, UnreadSummary):
+        return NO_LIVE_INVARIANTS
+    return LiveInvariantReading(trial_count=len(reading.trials), misses=tally_invariant_misses(reading.trials))
 
 
 @pure
@@ -639,21 +853,124 @@ def suite_config_slugs(pair: DecidedPair, matrix: CiMatrix) -> tuple[str, ...]:
 def read_cell_passes(
     pair_name: str, config_slug: str, cells: Sequence[MatrixCell], summaries_dir: Path, oracle: PassReport
 ) -> tuple[PassReport, ...]:
-    """One suite's cells, each with whatever its live pass left behind, in matrix order."""
+    """One suite's cells, in matrix order, each with whatever live invariants its trials missed."""
     is_oracle_passed = oracle.verdict is ArmVerdict.PASSED
     passes: list[PassReport] = []
     for cell in cells:
-        live = (
-            ABSENT_SUMMARY
-            if cell.decision is CellDecision.SKIP
-            else read_summary(live_summary_path(summaries_dir, pair_name, config_slug, cell.harness_config))
+        if cell.decision is CellDecision.SKIP:
+            passes.append(render_cell_pass(cell, ABSENT_SUMMARY, is_oracle_passed, NO_LIVE_INVARIANTS))
+            continue
+        live = read_summary(live_summary_path(summaries_dir, pair_name, config_slug, cell.harness_config))
+        live_invariants = read_live_invariants(
+            live_invariants_summary_path(summaries_dir, pair_name, config_slug, cell.harness_config)
         )
-        passes.append(render_cell_pass(cell, live, is_oracle_passed))
+        passes.append(render_cell_pass(cell, live, is_oracle_passed, live_invariants))
     return tuple(passes)
 
 
 @pure
-def render_skipped_suite_report(pair: DecidedPair, config_slug: str, cells: Sequence[MatrixCell]) -> SuiteReport:
+def diagnostic_pass_verdict_for_trial(verdict: DiagnosticVerdict) -> DiagnosticPassVerdict:
+    match verdict:
+        case DiagnosticVerdict.FAILED:
+            return DiagnosticPassVerdict.FAILED
+        case DiagnosticVerdict.NOT_MEASURED:
+            return DiagnosticPassVerdict.NOT_MEASURED
+        case DiagnosticVerdict.NOT_FOLLOWED:
+            return DiagnosticPassVerdict.NOT_FOLLOWED
+        case DiagnosticVerdict.KNOWN:
+            return DiagnosticPassVerdict.KNOWN
+        case DiagnosticVerdict.PASSED:
+            return DiagnosticPassVerdict.PASSED
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def worst_diagnostic_trial_verdict(trials: Sequence[DiagnosticTrialCheck]) -> DiagnosticPassVerdict:
+    """The verdict a diagnose job reads as: the worst of its trials'."""
+    verdicts = {diagnostic_pass_verdict_for_trial(trial.verdict) for trial in trials}
+    return next(
+        (verdict for verdict in DIAGNOSTIC_PASS_VERDICT_SEVERITY if verdict in verdicts), DiagnosticPassVerdict.PASSED
+    )
+
+
+@pure
+def render_diagnostic_pass(family_label: str, reading: DiagnosticRunCheck | UnreadSummary) -> DiagnosticPassReport:
+    """One diagnose job, from whatever its summary artifact yielded."""
+    label = "{} {}".format(DIAGNOSE_LABEL, family_label)
+    if isinstance(reading, UnreadSummary):
+        return DiagnosticPassReport(
+            label=label,
+            family_label=family_label,
+            verdict=DiagnosticPassVerdict.BROKEN,
+            detail=describe_unread_summary(reading, "diagnostics"),
+            trials=(),
+        )
+    return DiagnosticPassReport(
+        label=label,
+        family_label=family_label,
+        verdict=worst_diagnostic_trial_verdict(reading.trials),
+        detail="",
+        trials=reading.trials,
+    )
+
+
+def read_diagnostic_passes(
+    pair: DecidedPair, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext
+) -> tuple[DiagnosticPassReport, ...]:
+    """Every diagnose job the run decided for one pair, fixture first, whatever the pair's own decision.
+
+    A run that stops after the oracle passes skips the diagnose jobs with the rest of the live pass, so
+    it reports none rather than every one as broken.
+    """
+    if context.is_live_pass_skipped:
+        return ()
+    fixture_passes = tuple(
+        render_diagnostic_pass(
+            FIXTURE_FAMILY_LABEL, read_diagnostic_summary(diagnose_fixture_summary_path(summaries_dir, pair.pair))
+        )
+        for diagnostic in matrix.fixture_diagnostics
+        if diagnostic.pair == pair.pair
+    )
+    behaviour_passes = tuple(
+        render_diagnostic_pass(
+            "{} {}".format(BEHAVIOUR_FAMILY_LABEL, diagnostic.harness),
+            read_diagnostic_summary(diagnose_behaviour_summary_path(summaries_dir, pair.pair, diagnostic.harness)),
+        )
+        for diagnostic in matrix.behaviour_diagnostics
+        if diagnostic.pair == pair.pair
+    )
+    return (*fixture_passes, *behaviour_passes)
+
+
+@pure
+def unsupported_harnesses_for(pair: DecidedPair, matrix: CiMatrix, context: CiReportContext) -> tuple[str, ...]:
+    """The harnesses whose behaviour cell the run did not schedule for this pair.
+
+    A run that stops after the oracle scheduled no diagnostics at all, so it names none unsupported
+    either: nothing was left out that would otherwise have run.
+    """
+    if context.is_live_pass_skipped:
+        return ()
+    return tuple(cell.harness for cell in matrix.unsupported_diagnostics if cell.pair == pair.pair)
+
+
+@pure
+def diagnostics_arm_verdicts(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[ArmVerdict, ...]:
+    """What a pair's diagnostics add to its verdict: a failed diagnostic fails the pair, and nothing else
+    a diagnostic says moves it, since the diagnostics gate nothing and a pair's cells are what it is
+    judged on."""
+    is_any_failed = any(diagnostic.verdict is DiagnosticPassVerdict.FAILED for diagnostic in diagnostics)
+    return (ArmVerdict.FAILED,) if is_any_failed else ()
+
+
+def render_skipped_suite_report(
+    pair: DecidedPair,
+    config_slug: str,
+    cells: Sequence[MatrixCell],
+    diagnostics: Sequence[DiagnosticPassReport],
+    unsupported_harnesses: Sequence[str],
+) -> SuiteReport:
     """A suite of a running pair that runs none of its own cells: every one of them is already green.
 
     An oracle pass exists exactly where a cell gates on one, so the run pays for none here, and
@@ -661,25 +978,39 @@ def render_skipped_suite_report(pair: DecidedPair, config_slug: str, cells: Sequ
     keep their columns the way a skipped cell of a running suite does, so a reader sees what was not
     measured tonight rather than seeing the suite disappear.
     """
-    passes = tuple(render_cell_pass(cell, ABSENT_SUMMARY, False) for cell in cells)
+    passes = tuple(render_cell_pass(cell, ABSENT_SUMMARY, False, NO_LIVE_INVARIANTS) for cell in cells)
     return SuiteReport(
         pair=pair,
         config_slug=config_slug,
-        verdict=combine_verdicts(tuple(cell_pass.verdict for cell_pass in passes)),
+        verdict=combine_verdicts(
+            (*(cell_pass.verdict for cell_pass in passes), *diagnostics_arm_verdicts(diagnostics))
+        ),
         summary_text="",
         oracle=None,
         cells=passes,
+        diagnostics=tuple(diagnostics),
+        unsupported_harnesses=tuple(unsupported_harnesses),
     )
 
 
 def read_suite_report(
-    pair: DecidedPair, config_slug: str, matrix: CiMatrix, summaries_dir: Path, context: CiReportContext
+    pair: DecidedPair,
+    config_slug: str,
+    matrix: CiMatrix,
+    summaries_dir: Path,
+    context: CiReportContext,
+    diagnostics: Sequence[DiagnosticPassReport],
+    unsupported_harnesses: Sequence[str],
 ) -> SuiteReport:
     """One suite of a pair the run evaluated: the oracle pass of this pair and eval config is what
-    the suite is judged on, and its cells are what the grid is made of."""
+    the suite is judged on, and its cells are what the grid is made of.
+
+    The diagnostics are the pair's rather than the suite's, so the caller hands them to exactly one
+    of the pair's messages.
+    """
     cells_of_suite = suite_cells(pair, config_slug, matrix)
     if cells_of_suite and all(cell.decision is CellDecision.SKIP for cell in cells_of_suite):
-        return render_skipped_suite_report(pair, config_slug, cells_of_suite)
+        return render_skipped_suite_report(pair, config_slug, cells_of_suite, diagnostics, unsupported_harnesses)
     reading = read_summary(oracle_summary_path(summaries_dir, pair.pair, config_slug))
     oracle = render_oracle_pass(reading)
     # A run that stops after the oracle passes has cells in its matrix that never ran; putting a
@@ -692,10 +1023,14 @@ def read_suite_report(
     return SuiteReport(
         pair=pair,
         config_slug=config_slug,
-        verdict=combine_verdicts((oracle.verdict, *(cell.verdict for cell in cells))),
+        verdict=combine_verdicts(
+            (oracle.verdict, *(cell.verdict for cell in cells), *diagnostics_arm_verdicts(diagnostics))
+        ),
         summary_text=describe_oracle(reading),
         oracle=oracle,
         cells=cells,
+        diagnostics=tuple(diagnostics),
+        unsupported_harnesses=tuple(unsupported_harnesses),
     )
 
 
@@ -717,14 +1052,25 @@ def read_pair_reports(
                     summary_text="a ref did not resolve",
                     oracle=None,
                     cells=(),
+                    diagnostics=(),
+                    unsupported_harnesses=(),
                 ),
             )
         case PairDecision.SKIP:
             # One message, for the same reason as above. The emoji answers "is this pair good?",
-            # which a skip does not change.
+            # which a skip does not change -- but its diagnostics still ran, since an all-green
+            # night is exactly when they are the only measurement.
+            diagnostics = read_diagnostic_passes(pair, matrix, summaries_dir, context)
             return (
                 SuiteReport(
-                    pair=pair, config_slug="", verdict=ArmVerdict.SKIPPED, summary_text="", oracle=None, cells=()
+                    pair=pair,
+                    config_slug="",
+                    verdict=combine_verdicts((ArmVerdict.SKIPPED, *diagnostics_arm_verdicts(diagnostics))),
+                    summary_text="",
+                    oracle=None,
+                    cells=(),
+                    diagnostics=diagnostics,
+                    unsupported_harnesses=unsupported_harnesses_for(pair, matrix, context),
                 ),
             )
         case PairDecision.RUN:
@@ -732,7 +1078,22 @@ def read_pair_reports(
             # that contradicts itself -- and one message reading as broken beats a pair the report
             # leaves out altogether.
             slugs = suite_config_slugs(pair, matrix) or ("",)
-            return tuple(read_suite_report(pair, slug, matrix, summaries_dir, context) for slug in slugs)
+            # The diagnose jobs are the pair's, so only its first message carries them: a pair with
+            # two suites would otherwise report one broken instrument twice.
+            diagnostics = read_diagnostic_passes(pair, matrix, summaries_dir, context)
+            unsupported = unsupported_harnesses_for(pair, matrix, context)
+            return tuple(
+                read_suite_report(
+                    pair,
+                    slug,
+                    matrix,
+                    summaries_dir,
+                    context,
+                    diagnostics if index == 0 else (),
+                    unsupported if index == 0 else (),
+                )
+                for index, slug in enumerate(slugs)
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -915,6 +1276,104 @@ def format_unconfirmed_model_lines(columns: Sequence[PassReport]) -> tuple[str, 
 
 
 @pure
+def format_fact_references(outcomes: Sequence[FactOutcome]) -> str:
+    """Facts named for a detail line: each by name and step, with the issue or reason a known failure gives."""
+    return "; ".join(
+        "{}{}{}".format(
+            outcome.fact_name,
+            " [{}]".format(outcome.step_name) if outcome.step_name else "",
+            " ({})".format(outcome.known_failure.label) if outcome.known_failure is not None else "",
+        )
+        for outcome in outcomes
+    )
+
+
+@pure
+def format_diagnostic_trial_key(trial: DiagnosticTrialCheck) -> str:
+    return trial.case_id or trial.trial_name or UNKNOWN_MARK
+
+
+@pure
+def format_invariant_misses(reading: LiveInvariantReading) -> str:
+    """The cell's missed invariants, each named once with the share of its trials that missed it."""
+    return "; ".join(
+        "{} ({} of {} trial{})".format(
+            miss.fact_name, miss.trial_count, reading.trial_count, "" if reading.trial_count == 1 else "s"
+        )
+        for miss in reading.misses
+    )
+
+
+@pure
+def format_invariant_miss_lines(columns: Sequence[PassReport]) -> tuple[str, ...]:
+    """One line per cell whose trials missed an invariant every trial is held to whatever its case.
+
+    It gates nothing and moves no verdict: this line is the whole of what the reading does, and it is
+    what turns "the readers are checked once a night on a fixture" into "on every real trial".
+    """
+    return tuple(
+        "*{}* live invariants missed: {}".format(column.label, format_invariant_misses(column.live_invariants))
+        for column in columns
+        if column.live_invariants.misses
+    )
+
+
+@pure
+def format_unsupported_lines(report: SuiteReport) -> tuple[str, ...]:
+    """One line naming the behaviour cells this pair never ran, so a night that measured one harness
+    less does not read as a night that measured them all."""
+    if not report.unsupported_harnesses:
+        return ()
+    return (
+        "*{} {}* not run on this pair: {}".format(
+            DIAGNOSE_LABEL, BEHAVIOUR_FAMILY_LABEL, ", ".join(report.unsupported_harnesses)
+        ),
+    )
+
+
+@pure
+def format_diagnostic_unmeasured_lines(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[str, ...]:
+    """One line per diagnose job that left no summary, per trial that measured nothing and per trial whose
+    agent did not follow the prompt: each leaves the night without the measurement its job exists for."""
+    lines: list[str] = []
+    for diagnostic in diagnostics:
+        if diagnostic.detail:
+            lines.append("*{}* -- {}".format(diagnostic.label, diagnostic.detail))
+        for trial in diagnostic.trials:
+            if trial.not_measured_reason:
+                lines.append(
+                    "*{}* `{}`: not measured: {}".format(
+                        diagnostic.label, format_diagnostic_trial_key(trial), trial.not_measured_reason
+                    )
+                )
+            if trial.not_followed_facts:
+                lines.append(
+                    "*{}* `{}`: not followed: {}{}".format(
+                        diagnostic.label,
+                        format_diagnostic_trial_key(trial),
+                        format_fact_references(trial.not_followed_facts),
+                        " ({} dependent fact(s) not asserted)".format(len(trial.unmet_preconditions))
+                        if trial.unmet_preconditions
+                        else "",
+                    )
+                )
+    return tuple(lines)
+
+
+@pure
+def format_diagnostic_known_lines(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[str, ...]:
+    """One line per diagnostic trial that recorded a known failure, naming each and what tracks it."""
+    return tuple(
+        "*{}* `{}`: known: {}".format(
+            diagnostic.label, format_diagnostic_trial_key(trial), format_fact_references(trial.known_facts)
+        )
+        for diagnostic in diagnostics
+        for trial in diagnostic.trials
+        if trial.known_facts
+    )
+
+
+@pure
 def format_detail_lines(report: SuiteReport) -> tuple[str, ...]:
     """Everything neither the grid nor a pass's own section says, grouped so a reader can stop after
     the first group.
@@ -922,6 +1381,12 @@ def format_detail_lines(report: SuiteReport) -> tuple[str, ...]:
     A graded pass's failures are in the failures table, so what is left here is the passes with no
     column of their own: the cells that graded nothing, and above all a failed oracle, whose trials
     are what its message is mostly made of.
+
+    A diagnostic that measured nothing, and a behaviour cell the pair cannot run, are named straight
+    after them: those jobs gate nothing, so this is the only place a night without that measurement
+    stops reading as a clean one. The live invariants a cell's own trials missed follow, and the
+    diagnostics' known failures come last, since a known failure is expected every night it is
+    declared.
 
     The unconfirmed models are every pass's, graded or not. Nothing else in the message says a
     passing arm was never confirmed to have answered on the model it names, and a green arm that
@@ -932,8 +1397,12 @@ def format_detail_lines(report: SuiteReport) -> tuple[str, ...]:
     uncovered = tuple(column for column in columns if column not in graded)
     return (
         *format_status_lines(columns),
+        *format_diagnostic_unmeasured_lines(report.diagnostics),
+        *format_unsupported_lines(report),
         *format_failure_lines(uncovered),
+        *format_invariant_miss_lines(columns),
         *format_unconfirmed_model_lines(columns),
+        *format_diagnostic_known_lines(report.diagnostics),
     )
 
 
@@ -1156,6 +1625,61 @@ def render_failed_trials(columns: Sequence[PassReport]) -> tuple[FailedTrial, ..
 
 
 @pure
+def render_diagnostic_failed_facts(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[FailedTrial, ...]:
+    """Every fact a pair's diagnostics failed on, one row each, in job order.
+
+    One row per fact rather than per trial, because the fact is what a diagnostic failure is about: it
+    names the reader that regressed, and it is what a filed issue is keyed on.
+    """
+    return tuple(
+        FailedTrial(
+            config=clamp_cell_text(diagnostic.label),
+            case_key=clamp_cell_text(format_diagnostic_trial_key(trial)),
+            note=clamp_cell_text(note),
+        )
+        for diagnostic in diagnostics
+        for trial in diagnostic.trials
+        for note in (
+            *(format_fact_outcome(outcome) for outcome in trial.failed_facts),
+            *(format_fact_outcome(outcome) for outcome in trial.not_recorded_facts),
+            *(
+                UNEXPECTEDLY_PASSING_NOTE_PREFIX + format_fact_outcome(outcome)
+                for outcome in trial.unexpectedly_passing_facts
+            ),
+        )
+    )
+
+
+@pure
+def budget_failed_trials(failures: Sequence[FailedTrial], spent: int) -> FailedTrialsTable:
+    """The failures table cut to Slack's row cap and to the table budget the grid left it.
+
+    Whole rows in the order given, so the live passes' failures, which the matrix bounds, go before the
+    diagnostics' failing facts, which it does not. The header row is counted first, as the judge table's is.
+    """
+    header_cost = len(JUDGE_CONFIG_HEADING) + len(GRID_CASE_HEADING) + len(FAILED_TRIALS_NOTE_HEADING)
+    remaining = MAX_TABLE_CHARACTERS - spent - header_cost
+    kept: list[FailedTrial] = []
+    for failure in failures:
+        cost = len(failure.config) + len(failure.case_key) + len(failure.note)
+        if cost > remaining or len(kept) + 1 >= MAX_TABLE_ROWS:
+            break
+        remaining -= cost
+        kept.append(failure)
+    return FailedTrialsTable(rows=tuple(kept), dropped_rows=len(failures) - len(kept))
+
+
+@pure
+def format_dropped_failures_line(table: FailedTrialsTable) -> str:
+    """What the failures table says out loud when the message's budget cost it rows."""
+    if not table.dropped_rows:
+        return ""
+    return "_showing {} of {} failing rows; the rest are in the run's summary_".format(
+        len(table.rows), len(table.rows) + table.dropped_rows
+    )
+
+
+@pure
 def format_criteria_legend(criteria: Sequence[JudgeCriterion]) -> str:
     """Which dimension scored which criteria, said once above the table rather than in every
     heading."""
@@ -1212,12 +1736,17 @@ def format_failed_trials_rows(failures: Sequence[FailedTrial]) -> tuple[tuple[st
 
 
 @pure
-def format_failed_trials_fallback(failures: Sequence[FailedTrial]) -> tuple[str, ...]:
+def format_failed_trials_fallback(failures: FailedTrialsTable) -> tuple[str, ...]:
     """The failures table as the fallback carries it, under the same heading the blocks give it."""
-    rows = format_failed_trials_rows(failures)
+    rows = format_failed_trials_rows(failures.rows)
     if not rows:
         return ()
-    return (FAILED_TRIALS_HEADING, "```\n{}\n```".format(format_fixed_width_grid(rows)))
+    dropped_line = format_dropped_failures_line(failures)
+    return (
+        FAILED_TRIALS_HEADING,
+        "```\n{}\n```".format(format_fixed_width_grid(rows)),
+        *((dropped_line,) if dropped_line else ()),
+    )
 
 
 @pure
@@ -1244,6 +1773,8 @@ def describe_unhealthy_jobs(context: CiReportContext) -> tuple[str, ...]:
         ("resolve", context.resolve_result),
         ("oracle", context.oracle_result),
         ("evaluate", context.evaluate_result),
+        ("diagnose-fixture", context.diagnose_fixture_result),
+        ("diagnose-behaviour", context.diagnose_behaviour_result),
     )
     return tuple("{}={}".format(name, result) for name, result in results if result not in HEALTHY_JOB_RESULTS)
 
@@ -1264,13 +1795,63 @@ def format_job_note(context: CiReportContext, is_only_the_job_unhealthy: bool) -
 
 
 @pure
+def count_diagnostic_failing_facts(diagnostic: DiagnosticPassReport) -> int:
+    return sum(
+        len(trial.failed_facts) + len(trial.not_recorded_facts) + len(trial.unexpectedly_passing_facts)
+        for trial in diagnostic.trials
+    )
+
+
+@pure
+def format_diagnostic_clause_name(diagnostic: DiagnosticPassReport) -> str:
+    """A diagnose job as the opening line names it, with its failing fact count when it failed."""
+    if diagnostic.verdict is not DiagnosticPassVerdict.FAILED:
+        return diagnostic.family_label
+    fact_count = count_diagnostic_failing_facts(diagnostic)
+    return "{} ({} fact{})".format(diagnostic.family_label, fact_count, "" if fact_count == 1 else "s")
+
+
+@pure
+def format_diagnostics_clause(report: SuiteReport) -> str:
+    """The pair's diagnostics on its opening line: the worst verdict of its diagnose jobs, the jobs that
+    came out that way, and the behaviour cells the pair cannot run at all; empty when the run attempted
+    no diagnostics.
+
+    Every job is named unless every one passed, so a known failure or a night without a measurement
+    reads as itself at the top of the message rather than only in its details.
+    """
+    diagnostics = report.diagnostics
+    if not diagnostics:
+        return ""
+    unsupported_clause = (
+        " ({} unsupported)".format(", ".join(report.unsupported_harnesses)) if report.unsupported_harnesses else ""
+    )
+    worst = next(
+        verdict
+        for verdict in DIAGNOSTIC_PASS_VERDICT_SEVERITY
+        if any(diagnostic.verdict is verdict for diagnostic in diagnostics)
+    )
+    word = worst.value.replace("_", " ")
+    if worst is DiagnosticPassVerdict.PASSED:
+        return "diagnostics {}{}".format(word, unsupported_clause)
+    return "diagnostics {}: {}{}".format(
+        word,
+        ", ".join(
+            format_diagnostic_clause_name(diagnostic) for diagnostic in diagnostics if diagnostic.verdict is worst
+        ),
+        unsupported_clause,
+    )
+
+
+@pure
 def format_pair_section(
     report: SuiteReport, context: CiReportContext, emoji: str, is_only_the_job_unhealthy: bool
 ) -> str:
     """The pair's own two lines: which commits it froze to and what became of them, then the run."""
     label_line = "{} {}".format(emoji, format_pair_label(report.pair))
-    if report.summary_text:
-        label_line = "{} -- {}".format(label_line, report.summary_text)
+    summary_clauses = [clause for clause in (report.summary_text, format_diagnostics_clause(report)) if clause]
+    if summary_clauses:
+        label_line = "{} -- {}".format(label_line, "; ".join(summary_clauses))
     run_line = "{} in {}, _trigger=_ `{}`{}{}".format(
         format_verdict_word(report.verdict),
         format_duration(context.duration_seconds),
@@ -1449,7 +2030,7 @@ def build_message(
     pair_section: str,
     grid: Grid,
     judge_table: JudgeTable,
-    failures: Sequence[FailedTrial],
+    failures: FailedTrialsTable,
     details_section: str,
     links: str,
 ) -> SlackMessage:
@@ -1465,9 +2046,11 @@ def build_message(
         blocks.append(build_grid_block(grid))
         blocks.append(build_context_block(format_reward_scale_note()))
         text_parts.append("```\n{}\n```".format(format_fixed_width_grid(format_grid_text_rows(grid))))
-    if failures:
+    if failures.rows:
         blocks.append(build_section_block(FAILED_TRIALS_HEADING))
-        blocks.append(build_failed_trials_block(failures))
+        blocks.append(build_failed_trials_block(failures.rows))
+        if failures.dropped_rows:
+            blocks.append(build_context_block(format_dropped_failures_line(failures)))
     text_parts.extend(format_failed_trials_fallback(failures))
     blocks.extend(build_judge_blocks(judge_table))
     text_parts.extend(format_judge_fallback(judge_table))
@@ -1499,10 +2082,11 @@ def render_suite_message(
     details = format_budgeted_block(format_detail_lines(report))
     graded = judge_passes(report)
     grid = render_grid(grid_columns(report))
-    failures = render_failed_trials(graded)
-    spent = count_table_characters(format_grid_table_cells(grid)) + count_table_characters(
-        format_failed_trials_rows(failures)
+    grid_spent = count_table_characters(format_grid_table_cells(grid))
+    failures = budget_failed_trials(
+        (*render_failed_trials(graded), *render_diagnostic_failed_facts(report.diagnostics)), grid_spent
     )
+    spent = grid_spent + count_table_characters(format_failed_trials_rows(failures.rows))
     return build_message(
         format_header_text(report),
         emoji,
@@ -1533,7 +2117,7 @@ def render_undecided_message(context: CiReportContext) -> SlackMessage:
         section,
         EMPTY_GRID,
         EMPTY_JUDGE_TABLE,
-        (),
+        EMPTY_FAILED_TRIALS,
         "",
         format_links_line(context.run_url),
     )
@@ -1563,9 +2147,13 @@ def render_slack_report(
         report for pair in matrix.pairs for report in read_pair_reports(pair, matrix, summaries_dir, context)
     )
     # Read across the whole run, not per message: a red job that one arm's failure already explains
-    # is not news in the message of another pair or another suite.
+    # is not news in the message of another pair or another suite. A broken diagnose job is such an
+    # explanation too, though it leaves its pair's verdict alone: its details line already names the
+    # job that went red.
     is_any_arm_bad = any(
-        report.verdict in (ArmVerdict.FAILED, ArmVerdict.BROKEN, ArmVerdict.NOT_EVALUATED) for report in reports
+        report.verdict in (ArmVerdict.FAILED, ArmVerdict.BROKEN, ArmVerdict.NOT_EVALUATED)
+        or any(diagnostic.verdict is DiagnosticPassVerdict.BROKEN for diagnostic in report.diagnostics)
+        for report in reports
     )
     is_only_the_job_unhealthy = bool(describe_unhealthy_jobs(context)) and not is_any_arm_bad
     return tuple(render_suite_message(report, context, is_only_the_job_unhealthy) for report in reports)
