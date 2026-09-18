@@ -257,7 +257,8 @@ def default_sweep_homes() -> list[Path]:
     this list feeds a deletion, and ``TOOL_ENV_HOME`` is a test override that
     must not be able to redirect it. Which installation survives the sweep is
     a separate question, answered from ``PATH`` by
-    :func:`remove_shadowing_mngr_installs`.
+    :func:`remove_shadowing_mngr_installs` and
+    :func:`remove_shadowing_app_tool_installs`.
     """
     homes = [Path(tool_env.DEFAULT_TOOL_HOME)]
     if os.environ.get("HOME"):
