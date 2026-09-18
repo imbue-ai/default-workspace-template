@@ -330,6 +330,8 @@ def up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
+    for sibling in with_apps:
+        _require_frameable_sibling(worktree, sibling)
     # Siblings first, because the registry copy this app is booted with has to name their
     # URLs. A sibling therefore boots before this app exists: a chat previewed under a shell
     # resolves {shell_url} to "" and runs without a nudger, so the preview shell refetches
@@ -401,6 +403,22 @@ def up(
         # a retry, which reuses them.
         _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     return code
+
+
+def _require_frameable_sibling(worktree: Path, sibling: str) -> None:
+    """Refuse a sibling whose instances API is served apart from its page.
+
+    The registry copy points a sibling's row, ``instances_url`` included, at the
+    preview's main port. A manifest that declares its own ``instances_url`` (the
+    terminal's sidecar) serves that API on another port, and the preview table does
+    not say which, so the preview shell would be handed the wrong one.
+    """
+    _, manifest = find_manifest(worktree, sibling)
+    if manifest.instances_url is not None:
+        raise PreviewError(
+            f"{sibling!r} serves its instances API apart from its page ({manifest.instances_url}), "
+            "so a shell preview cannot frame its preview; preview it on its own instead"
+        )
 
 
 def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
