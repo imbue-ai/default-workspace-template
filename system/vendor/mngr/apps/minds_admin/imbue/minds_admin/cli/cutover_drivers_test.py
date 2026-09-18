@@ -909,7 +909,7 @@ class OrderedStubOuter(StubOuter):
                 return result
         return super().execute_idempotent_command(command, user, cwd, env, timeout_seconds)
 
-    def write_file(self, path: Path, content: bytes, mode: str | None = None, is_atomic: bool = False) -> None:
+    def write_file(self, path: Path, content: bytes, mode: str | None = None, is_atomic: bool = True) -> None:
         self.events.append(f"write:{path}")
         super().write_file(path, content, mode, is_atomic)
 

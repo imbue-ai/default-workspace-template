@@ -45,13 +45,20 @@ class FakeHost(BaseFakeHost):
     def __init__(self, host_dir: Path) -> None:
         super().__init__(host_dir=host_dir)
 
-    def write_file(self, path: Path, content: bytes, mode: str | None = None) -> None:
+    def write_file(self, path: Path, content: bytes, mode: str | None = None, is_atomic: bool = True) -> None:
         self.written_files[path] = content
-        super().write_file(path, content, mode)
+        super().write_file(path, content, mode, is_atomic)
 
-    def write_text_file(self, path: Path, content: str, encoding: str = "utf-8", mode: str | None = None) -> None:
+    def write_text_file(
+        self,
+        path: Path,
+        content: str,
+        encoding: str = "utf-8",
+        mode: str | None = None,
+        is_atomic: bool = True,
+    ) -> None:
         self.written_files[path] = content.encode(encoding)
-        super().write_text_file(path, content, encoding, mode)
+        super().write_text_file(path, content, encoding, mode, is_atomic)
 
     def execute_idempotent_command(
         self,

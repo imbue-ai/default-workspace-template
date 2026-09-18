@@ -425,8 +425,14 @@ body:has(#notice-band) .workspace-surface {
  * margin. A card centered in the whole window loses its top behind the chrome.
  */
 .modal-viewport {
-  padding-top: calc(38px + var(--notice-band-height) + 16px);
-  padding-bottom: 16px;
+  /* The trailing 36px on each end keeps the card off the window's full height;
+     it read as too vertical when it stretched the whole way. */
+  padding-top: calc(38px + var(--notice-band-height) + 16px + 36px);
+  padding-bottom: calc(16px + 36px);
+  /* Painted above the titlebar (z-110) so the dim covers it, which means this
+     backdrop must subtract the titlebar's drag region itself -- see the
+     no-drag block below for why z-order alone is not enough. */
+  -webkit-app-region: no-drag;
 }
 
 .accent-spine::before {
@@ -777,6 +783,21 @@ body:has(#notice-band) .workspace-surface {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/*
+ * The turning arrows on a shared path that is actively transferring. A slow
+ * turn reads as "working away"; anything quicker reads as a spinner, which
+ * would say "wait for me" about something the user need not wait for. Reduced
+ * motion stops it, leaving the glyph and its label to say the same thing.
+ */
+.sync-spin {
+  animation: spin 3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-spin {
+    animation: none;
   }
 }
 

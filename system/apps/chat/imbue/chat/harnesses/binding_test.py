@@ -17,18 +17,14 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
-from imbue.chat.harnesses.account_scope import ScopeError
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
-from imbue.chat.harnesses.account_scope import agent_credential_path
-from imbue.chat.harnesses.binding import BindingError
+from imbue.chat.harnesses.account_binding import BindingError
+from imbue.chat.harnesses.account_binding import CredentialLinkAccountBinding
 from imbue.chat.harnesses.binding import REBIND_VERIFIED_HARNESSES
-from imbue.chat.harnesses.binding import create_args
 from imbue.chat.harnesses.binding import is_rebind_supported
-from imbue.chat.harnesses.binding import rebind_agent
 from imbue.chat.harnesses.binding import resolve_binding
-from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import LANES
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
 
 _BOUND_HARNESSES = (
@@ -39,61 +35,68 @@ _BOUND_HARNESSES = (
 )
 
 
+def _link_binding(harness: HarnessType) -> CredentialLinkAccountBinding:
+    """The binding of a harness bound by a credential link, which is what names both ends of the link."""
+    binding = build_account_binding(harness)
+    assert isinstance(binding, CredentialLinkAccountBinding)
+    return binding
+
+
 def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> None:
     """One variable per harness is the entire multi-account mechanism."""
-    assert account_env(HarnessType.CLAUDE, tmp_path) == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
-    assert account_env(HarnessType.CODEX, tmp_path) == {"CODEX_HOME": str(tmp_path)}
+    assert build_account_binding(HarnessType.CLAUDE).account_env(tmp_path) == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
+    assert build_account_binding(HarnessType.CODEX).account_env(tmp_path) == {"CODEX_HOME": str(tmp_path)}
     # agy has no config-dir override at all; relocating HOME is the only scope it offers.
-    assert account_env(HarnessType.ANTIGRAVITY, tmp_path) == {"HOME": str(tmp_path)}
-    assert account_env(HarnessType.PI_CODING, tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
+    assert build_account_binding(HarnessType.ANTIGRAVITY).account_env(tmp_path) == {"HOME": str(tmp_path)}
+    assert build_account_binding(HarnessType.PI_CODING).account_env(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
 
 
-def test_a_harness_with_no_scoping_raises_rather_than_binding_nothing(tmp_path: Path) -> None:
-    with pytest.raises(ScopeError):
-        account_env(HarnessType.OPENCODE, tmp_path)
+def test_a_harness_no_account_runs_has_no_binding_to_build() -> None:
+    """No lane signs in to opencode, so there is nothing to scope, create, or rebind it with: asking raises."""
+    with pytest.raises(BindingError):
+        build_account_binding(HarnessType.OPENCODE)
 
 
 def test_credential_paths_match_what_mngr_provisions(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    assert agent_credential_path(HarnessType.CODEX, state) == state / "plugin/codex/home/auth.json"
-    assert agent_credential_path(HarnessType.PI_CODING, state) == state / "plugin/pi_coding/auth.json"
-    assert agent_credential_path(HarnessType.ANTIGRAVITY, state) == (
+    assert _link_binding(HarnessType.CODEX).agent_credential_path(state) == state / "plugin/codex/home/auth.json"
+    assert _link_binding(HarnessType.PI_CODING).agent_credential_path(state) == state / "plugin/pi_coding/auth.json"
+    assert _link_binding(HarnessType.ANTIGRAVITY).agent_credential_path(state) == (
         state / "plugin/antigravity/home/.gemini/antigravity-cli/antigravity-oauth-token"
     )
     # claude binds by environment, so it has no path to repoint.
-    assert agent_credential_path(HarnessType.CLAUDE, state) is None
+    assert not isinstance(build_account_binding(HarnessType.CLAUDE), CredentialLinkAccountBinding)
 
 
 def test_the_account_side_of_each_link_mirrors_the_agent_side(tmp_path: Path) -> None:
     """Source and destination must be the same shape or the symlink points at nothing."""
     for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
-        source = account_credential_path(harness, tmp_path)
-        agent_side = agent_credential_path(harness, tmp_path / "state")
-        assert source is not None and agent_side is not None
+        source = _link_binding(harness).account_credential_path(tmp_path)
+        agent_side = _link_binding(harness).agent_credential_path(tmp_path / "state")
         assert source.name == agent_side.name
 
 
 def test_claude_binds_through_the_env_file(tmp_path: Path) -> None:
     """--env lands in <state>/env before provisioning, which is early enough; a post-create
     repoint would arrive after the first turn had already run."""
-    args = create_args(HarnessType.CLAUDE, tmp_path, tmp_path / "state")
+    args = build_account_binding(HarnessType.CLAUDE).create_args(tmp_path, tmp_path / "state")
     assert args == ["--env", f"CLAUDE_CONFIG_DIR={tmp_path}"]
 
 
 def test_the_others_bind_by_replacing_the_provisioned_symlink(tmp_path: Path) -> None:
     for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
-        flag, command = create_args(harness, tmp_path, tmp_path / "state")
+        flag, command = _link_binding(harness).create_args(tmp_path, tmp_path / "state")
         assert flag == "--extra-provision-command"
         # `ln -sfn` replaces whatever provisioning linked -- the same operation mngr used.
         assert "ln -sfn" in command
-        assert str(account_credential_path(harness, tmp_path)) in command
-        assert str(agent_credential_path(harness, tmp_path / "state")) in command
+        assert str(_link_binding(harness).account_credential_path(tmp_path)) in command
+        assert str(_link_binding(harness).agent_credential_path(tmp_path / "state")) in command
 
 
 def test_the_provision_command_quotes_paths(tmp_path: Path) -> None:
     """It is shell-evaluated on the host, unlike the argv around it."""
     spaced = tmp_path / "a dir with spaces"
-    _, command = create_args(HarnessType.CODEX, spaced, tmp_path / "state")
+    _, command = build_account_binding(HarnessType.CODEX).create_args(spaced, tmp_path / "state")
     assert "'" in command
 
 
@@ -105,7 +108,7 @@ def test_seeding_claude_dismisses_the_dialogs_that_would_block_readiness(tmp_pat
     work_dir.mkdir()
     account = tmp_path / "acct"
 
-    seed_account(HarnessType.CLAUDE, account, work_dir)
+    build_account_binding(HarnessType.CLAUDE).seed_account(account, work_dir)
 
     # mngr's own verifier for the same condition -- it raises if anything is undismissed.
     check_claude_dialogs_dismissed(account / ".claude.json", work_dir)
@@ -117,7 +120,7 @@ def test_seeding_codex_pins_the_file_credential_store(tmp_path: Path) -> None:
     OS keyring: auth.json is never written, the bind symlink dangles, the chat runs signed
     out -- and `codex login status` against that dir still reports success."""
     account = tmp_path / "acct"
-    seed_account(HarnessType.CODEX, account, tmp_path)
+    build_account_binding(HarnessType.CODEX).seed_account(account, tmp_path)
     assert 'cli_auth_credentials_store = "file"' in (account / "config.toml").read_text()
 
 
@@ -125,7 +128,7 @@ def test_seeding_does_not_clobber_an_existing_codex_config(tmp_path: Path) -> No
     account = tmp_path / "acct"
     account.mkdir()
     (account / "config.toml").write_text("model = 'gpt-5'\n")
-    seed_account(HarnessType.CODEX, account, tmp_path)
+    build_account_binding(HarnessType.CODEX).seed_account(account, tmp_path)
     assert (account / "config.toml").read_text() == "model = 'gpt-5'\n"
 
 
@@ -134,8 +137,8 @@ def test_seeding_is_idempotent(tmp_path: Path) -> None:
     work_dir.mkdir()
     for harness in _BOUND_HARNESSES:
         account = tmp_path / f"acct-{harness.value}"
-        seed_account(harness, account, work_dir)
-        seed_account(harness, account, work_dir)
+        build_account_binding(harness).seed_account(account, work_dir)
+        build_account_binding(harness).seed_account(account, work_dir)
         assert account.is_dir()
 
 
@@ -222,10 +225,28 @@ def test_claude_is_bound_by_an_export_that_children_inherit(tmp_path: Path) -> N
     """
     account = tmp_path / "acct"
 
-    args = create_args(HarnessType.CLAUDE, account, tmp_path / "state")
+    args = build_account_binding(HarnessType.CLAUDE).create_args(account, tmp_path / "state")
 
     assert args == ["--env", f"CLAUDE_CONFIG_DIR={account}"]
-    assert account_env(HarnessType.CLAUDE, account) == {"CLAUDE_CONFIG_DIR": str(account)}
+    assert build_account_binding(HarnessType.CLAUDE).account_env(account) == {"CLAUDE_CONFIG_DIR": str(account)}
+
+
+def test_every_lane_runs_on_a_harness_that_registers_an_account_binding(tmp_path: Path) -> None:
+    """An account on a lane whose harness registers no binding could be signed in to but never run a chat."""
+    for lane in LANES:
+        assert build_account_binding(lane.harness).account_env(tmp_path), lane.id
+
+
+def test_a_re_auth_clears_every_file_that_says_the_account_is_signed_in(tmp_path: Path) -> None:
+    """claude's pasted credential and the store its own sign-in writes; one linked file for the others."""
+    assert build_account_binding(HarnessType.CLAUDE).credential_paths(tmp_path) == (
+        tmp_path / "settings.json",
+        tmp_path / ".credentials.json",
+    )
+    for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
+        assert build_account_binding(harness).credential_paths(tmp_path) == (
+            _link_binding(harness).account_credential_path(tmp_path),
+        )
 
 
 def test_every_scoped_harness_can_be_rebound_and_the_unscoped_one_cannot() -> None:
@@ -241,7 +262,7 @@ def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_
     env_path.write_text(f"MNGR_AGENT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'old'}\nMINDS_CHAT_ID=agent-1\n")
     env_path.chmod(0o600)
 
-    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", state)
+    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
 
     assert (
         env_path.read_text() == f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
@@ -249,14 +270,14 @@ def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
     assert not env_path.with_name("env.rebind-tmp").exists()
     # Again is the same file; a value with a space is quoted the way mngr quotes its own.
-    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", state)
+    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
     assert env_path.read_text().count("CLAUDE_CONFIG_DIR=") == 1
-    rebind_agent(HarnessType.CLAUDE, tmp_path / "with space", state)
+    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "with space", state)
     assert env_path.read_text().endswith(f'CLAUDE_CONFIG_DIR="{tmp_path / "with space"}"\n')
     # An agent with no env file yet gets one holding just the line.
     bare = tmp_path / "bare"
     bare.mkdir()
-    rebind_agent(HarnessType.CLAUDE, tmp_path / "new", bare)
+    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", bare)
     assert (bare / "env").read_text() == f"CLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
 
 
@@ -265,9 +286,8 @@ def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
     tmp_path: Path, harness: HarnessType
 ) -> None:
     state = tmp_path / "state"
-    dest = agent_credential_path(harness, state)
-    source = account_credential_path(harness, tmp_path / "account")
-    assert dest is not None and source is not None
+    dest = _link_binding(harness).agent_credential_path(state)
+    source = _link_binding(harness).account_credential_path(tmp_path / "account")
     # Nothing there yet (a fresh state dir), then a copy, then an older link: each ends as the new link.
     for before in (None, "a copied credential", str(tmp_path / "elsewhere")):
         if before is None:
@@ -278,11 +298,6 @@ def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
         else:
             dest.unlink(missing_ok=True)
             dest.write_text(before)
-        rebind_agent(harness, tmp_path / "account", state)
+        _link_binding(harness).rebind_agent(tmp_path / "account", state)
         assert dest.is_symlink() and os.readlink(dest) == str(source)
     assert not dest.with_name(f"{dest.name}.rebind-tmp").exists()
-
-
-def test_a_harness_with_no_binding_cannot_be_rebound(tmp_path: Path) -> None:
-    with pytest.raises(BindingError):
-        rebind_agent(HarnessType.OPENCODE, tmp_path / "account", tmp_path / "state")

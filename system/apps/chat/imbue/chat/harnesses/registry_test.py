@@ -18,9 +18,9 @@ def _notice_popups(harness: HarnessType) -> list[HarnessPopup]:
 
 def _can_launch_fast(harness: HarnessType) -> bool:
     """Whether this harness has a fast mode at all, read off the ONE place that declares it:
-    the fast-mode grace-period prompt. Derived rather than listed, so a harness that gains
+    the fast-mode turn-limit check. Derived rather than listed, so a harness that gains
     (or loses) fast mode cannot end up declining a /fast it does not have."""
-    return any(popup.action is PopupAction.FAST_MODE_PROMPT for popup in HARNESS_SPECS[harness].popups)
+    return any(popup.action is PopupAction.FAST_MODE_LIMIT for popup in HARNESS_SPECS[harness].popups)
 
 
 def test_every_harness_declines_the_model_bar_commands_with_the_picker_notice() -> None:
@@ -31,7 +31,12 @@ def test_every_harness_declines_the_model_bar_commands_with_the_picker_notice() 
     # /fast is NOT universal: only the fast-capable harnesses declare it. Declining it
     # elsewhere would point the user at a picker control that is not rendered for that
     # harness, which is worse than letting the text through.
+    #
+    # The seed pseudo-harness is skipped: no agent ever runs on it, so no composer can
+    # type a command into it, and it declares no popups at all.
     for harness in HARNESS_SPECS:
+        if harness is HarnessType.SEED:
+            continue
         bodies = {
             command: popup.notice_body
             for popup in _notice_popups(harness)

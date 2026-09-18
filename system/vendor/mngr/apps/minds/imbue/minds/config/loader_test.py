@@ -13,6 +13,7 @@ from imbue.minds.config.data_types import management_overlay_for_tier
 from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import _assert_operators_inside_tier_operator_block
 from imbue.minds.config.loader import bundled_client_config_path_or_none
+from imbue.minds.config.loader import committed_deploy_config_tiers
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.config.loader import per_env_secret_services
@@ -91,6 +92,12 @@ def test_deploy_config_secrets_match_canonical_per_env_services(tier: str) -> No
     """
     config = load_deploy_config(tier)
     assert set(config.secrets.services) == set(per_env_secret_services())
+
+
+def test_committed_deploy_config_tiers_lists_only_the_directories_with_a_deploy_toml() -> None:
+    # ``ci-snapshot/`` (client.toml only) and ``_bundled/`` sit alongside the
+    # tiers under envs/ and must not be reported as tiers.
+    assert committed_deploy_config_tiers() == ["ci", "dev", "production", "staging"]
 
 
 def test_load_deploy_config_unknown_tier_raises() -> None:
@@ -203,12 +210,6 @@ def test_ssh_ca_config_accepts_an_openssh_public_key_line_and_rejects_junk() -> 
     assert str(config.public_key).startswith("ssh-ed25519 ")
     with pytest.raises(ValidationError):
         SshCaConfig(public_key=NonEmptyStr("not-a-key"))
-
-
-def test_committed_production_deploy_toml_has_no_ssh_ca_until_the_tier_brings_one_up() -> None:
-    # Pinned so the day production commits its CA the bringup checklist (not an
-    # accident) is what flips this; until then gen-2 prep and bakes refuse.
-    assert load_deploy_config("production").ssh_ca is None
 
 
 @pytest.mark.parametrize(

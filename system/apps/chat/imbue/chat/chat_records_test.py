@@ -13,6 +13,7 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import RECORD_VERSION
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -56,6 +57,38 @@ def test_a_record_refuses_agents_that_contradict_what_it_says_about_them() -> No
     # A converging chat (every agent archived, none active yet) and a single agent are both fine.
     ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(2, second, is_archived=True)))
     ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=False),))
+
+
+def test_a_seed_segment_is_the_chats_first_ended_member_and_no_agent_mngr_knows() -> None:
+    """A seeded chat's record exists before any agent does: the seed is its first member under
+    the chat's own id, already ended, and is left out of the agents a destroy or a listing names."""
+    chat_id, agent = _agent_id(), _agent_id()
+    seed = make_chat_agent_entry(1, chat_id, is_archived=True, harness=HarnessType.SEED)
+
+    seed_only = ChatRecord(chat_id=ChatId(chat_id), agents=(seed,), seed_title="Getting started")
+    assert seed_only.is_seeded and seed_only.is_seed_only
+    assert seed_only.mngr_agent_ids == () and seed_only.active_entry is None
+
+    launched = ChatRecord(chat_id=ChatId(chat_id), agents=(seed, make_chat_agent_entry(2, agent, is_archived=False)))
+    assert launched.is_seeded and not launched.is_seed_only
+    assert launched.member_agent_ids == (chat_id, agent) and launched.mngr_agent_ids == (agent,)
+
+    plain = ChatRecord(chat_id=ChatId(chat_id), agents=(make_chat_agent_entry(1, chat_id, is_archived=False),))
+    assert not plain.is_seeded and not plain.is_seed_only and plain.mngr_agent_ids == (chat_id,)
+
+    with pytest.raises(ValidationError, match="seed segment can only be the chat's first"):
+        ChatRecord(
+            chat_id=ChatId(chat_id),
+            agents=(
+                make_chat_agent_entry(1, chat_id, is_archived=True),
+                make_chat_agent_entry(2, agent, is_archived=True, harness=HarnessType.SEED),
+            ),
+        )
+    with pytest.raises(ValidationError, match="seed segment can only be the chat's first"):
+        ChatRecord(
+            chat_id=ChatId(chat_id),
+            agents=(make_chat_agent_entry(1, chat_id, is_archived=False, harness=HarnessType.SEED),),
+        )
 
 
 def test_a_records_handoff_must_retire_its_last_agent_and_name_a_new_successor() -> None:
@@ -155,6 +188,36 @@ def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> 
     finally:
         chat_dir.chmod(0o755)
     assert store.read(ChatId(first)) is not None
+
+
+def test_a_rebind_written_under_the_claude_named_sessions_field_reads_and_is_rewritten_harness_neutral(
+    tmp_path: Path,
+) -> None:
+    """A rebind a chat app from before the binding refactor left unfinished names its sessions dir
+    ``claude_sessions_config_dir``; the resumed rebind must still find the files, and its next write
+    uses the new name."""
+    store = FileChatRecordStore(root=tmp_path / "chats")
+    agent_id = _agent_id()
+    store.write(
+        ChatRecord(
+            chat_id=ChatId(agent_id),
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False),),
+            rebind=make_chat_rebind_record(agent_id=agent_id),
+        )
+    )
+    record_path = tmp_path / "chats" / agent_id / "record.json"
+    older = json.loads(record_path.read_text())
+    older["rebind"].pop("sessions_dir")
+    older["rebind"]["claude_sessions_config_dir"] = "/home/user/.minds/accounts/acct-anthropic"
+    record_path.write_text(json.dumps(older))
+
+    read_back = store.read(ChatId(agent_id))
+    assert read_back is not None and read_back.rebind is not None
+    assert read_back.rebind.sessions_dir == "/home/user/.minds/accounts/acct-anthropic"
+    store.write(read_back)
+    rewritten = json.loads(record_path.read_text())["rebind"]
+    assert rewritten["sessions_dir"] == "/home/user/.minds/accounts/acct-anthropic"
+    assert "claude_sessions_config_dir" not in rewritten
 
 
 def test_a_file_store_refuses_a_record_from_a_newer_build(tmp_path: Path) -> None:

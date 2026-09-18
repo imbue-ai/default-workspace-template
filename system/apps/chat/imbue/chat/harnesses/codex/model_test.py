@@ -20,11 +20,13 @@ from typing import Any
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.codex.account_models import AccountModelProbeError
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.model import CodexModelResolver
 from imbue.chat.harnesses.codex.model import _bind_root_thread
 from imbue.chat.harnesses.codex.model import _subscribe_root_thread
+from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import codex_model_to_option
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -485,3 +487,46 @@ def test_subscribe_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
     client = _BindFakeClient(loaded=("a", "b"))
     with pytest.raises(CodexAppServerError):
         _subscribe_root_thread(client, tmp_path)
+
+
+# what an ACCOUNT offers, asked of the account rather than of one of its agents
+
+
+def _refuse_to_probe(account_dir: Path) -> tuple[CodexModel, ...]:
+    """A probe that cannot reach codex at all -- absent, signed out, offline."""
+    raise AccountModelProbeError("codex is not installed")
+
+
+def test_an_accounts_models_are_probed_and_kept_for_when_the_probe_cannot_run(tmp_path: Path) -> None:
+    """The probe's answer is what the account offers, and it is written through: the switch dialog for an
+    account no agent has ever run on is exactly the case the sidecar cannot already cover."""
+    probed = (_codex_model("gpt-6-astra", "GPT-6 Astra", ("low", "high"), tiers=("priority",)),)
+    options = CodexModelResolver.list_account_options(tmp_path, probe=lambda account_dir: probed)
+    assert [option.id for option in options] == ["gpt-6-astra"]
+    assert options[0].supports_fast is True
+    # Kept raw, so a later change to the mapping needs no second probe.
+    assert read_codex_model_options(codex_model_options_path(tmp_path)) == probed
+
+
+def test_an_accounts_models_fall_back_to_the_sidecar_when_the_probe_fails(tmp_path: Path) -> None:
+    """Codex unreachable (absent, signed out, offline) leaves the last known set rather than an empty picker."""
+    kept = (_codex_model("gpt-5.5", "GPT-5.5", ("low",)),)
+    write_codex_model_options(codex_model_options_path(tmp_path), kept)
+    offered = CodexModelResolver.list_account_options(tmp_path, probe=_refuse_to_probe)
+    assert [option.id for option in offered] == ["gpt-5.5"]
+
+
+def test_an_account_with_no_probe_and_no_sidecar_offers_nothing(tmp_path: Path) -> None:
+    """Nothing known means the dialog offers only the default -- never another account's models, which the
+    destination may not be able to run at all."""
+    assert CodexModelResolver.list_account_options(tmp_path, probe=_refuse_to_probe) == ()
+
+
+def test_a_probe_that_answers_with_nothing_leaves_the_sidecar_both_kept_and_offered(tmp_path: Path) -> None:
+    """A daemon that came up but listed no models is not evidence the account has none, so that answer
+    neither overwrites what is known nor is shown to the user in place of it."""
+    kept = (_codex_model("gpt-5.5", "GPT-5.5", ("low",)),)
+    write_codex_model_options(codex_model_options_path(tmp_path), kept)
+    offered = CodexModelResolver.list_account_options(tmp_path, probe=lambda account_dir: ())
+    assert [option.id for option in offered] == ["gpt-5.5"]
+    assert read_codex_model_options(codex_model_options_path(tmp_path)) == kept

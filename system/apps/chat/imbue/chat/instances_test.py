@@ -175,6 +175,7 @@ def test_a_chat_being_created_is_a_provisional_instance(agent_manager: AgentMana
     ("phase", "status"),
     [
         (ProvisionalChatPhase.AWAITING_ACCOUNT, InstanceStatus.ATTENTION),
+        (ProvisionalChatPhase.AWAITING_FIRST_SEND, InstanceStatus.IDLE),
         (ProvisionalChatPhase.FAILED, InstanceStatus.ERROR),
     ],
 )

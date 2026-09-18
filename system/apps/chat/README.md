@@ -102,17 +102,19 @@ A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
 and lane: the same route, dispatched on the target account's harness and lane
 (the answer's `kind` says which it was). The chat app drains the agent's queue
 as a handoff does, then stops the agent, repoints its binding in its own state
-dir (the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the
-chat's session files into the new account's folder so `claude --resume` and the
+dir (the harness's account binding, `harnesses/<harness>/account_binding.py`:
+the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the chat's
+session files into the new account's folder so `claude --resume` and the
 watcher still find them; the credential symlink for codex, pi, and antigravity),
 rewrites its `account` label, starts it again with `mngr start --no-resume`,
-and delivers the held messages once it is up. The agent, its transcript, its tk
-steps, and its model settings stay; the record's `rebind` entry carries the
-state through a restart of the app, and a rebind on a one-agent chat drops the
-record again when it completes. There is no cancel (the agent restarts as soon
-as the armed switch's next message carries it out); a failed start leaves the
-chat in the `failed` phase, and the retry offers the accounts of the same
-harness and lane.
+applies the model picked for it if one was, and delivers the held messages once
+it is up. The agent, its transcript, its tk steps, and, unless another model was
+picked, its model settings stay; the record's `rebind` entry carries the state
+through a restart of the app, and a rebind on a one-agent chat drops the record
+again when it completes. There is no cancel (the agent restarts as soon as the
+armed switch's next message carries it out); a failed start or a model pick the
+agent cannot take leaves the chat in the `failed` phase, and the retry offers
+the accounts of the same harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
 may be rebound on; a same-lane target on any other harness is a handoff.
 
@@ -124,9 +126,11 @@ target, and the send button reads "Switch and send" and carries the switch out
 with the typed message as the first the chat sends after it, with no second
 confirmation. "Start a new chat" opens a chat on that account and model
 instead, with the draft moved over. Pressing an account on the chat's own
-harness and lane (a rebind) asks nothing: the agent keeps its conversation and
-its model, so the press arms the switch at once and the next message carries
-it out, with the strip offering Cancel but no Change. A chat that has had no
+harness and lane (a rebind) asks nothing: the agent keeps its conversation and,
+by default, its model, so the press arms the switch at once and the next
+message carries it out. The strip's Change (and the model bar's Model row)
+opens the dialog's rebind variant, whose picker starts from "Keep the current
+model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
 write a summary asks.
@@ -147,11 +151,15 @@ written for the user, which the page and the shell's tab menu show as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A new chat created
-with a pick (`POST /api/chats/create` takes `model` too) is set up the same
-way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
-successor's models from: the catalog for a static harness, the options the
-account's last agent was offered for codex.
+goes to it through the send path, then the held messages. A rebind's pick is
+applied the same way once the agent is back on the new account, retried for a
+while since `mngr start` does not wait for the harness to come up. A new chat
+created with a pick (`POST /api/chats/create` takes `model` too) is set up the
+same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
+gets the target account's models, for a handoff's successor and a rebound agent
+alike: the catalog for a static harness, for codex the options an agent of the
+account was last offered, and nothing for antigravity, whose model is changed
+from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -178,6 +186,38 @@ its own: a chat app that cannot be reached, one with no create route, and one
 whose create route predates these fields, which it tells apart by the 400 naming
 the field it does not know (a workspace that has taken a template update and has
 not restarted its chat app yet).
+
+A chat can also start from a conversation that happened before the workspace
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+`system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
+workspace is ready) takes a title and the turns of the onboarding conversation
+and opens a chat on them: the turns are written as the chat's first segment
+(`data/.apps/chat/chats/<chat-id>/seed.jsonl`, read through the `seed`
+pseudo-harness like any archived segment), the record names the seed as its
+first member, and the chat is listed as a provisional chat in the
+`awaiting_first_send` phase, its transcript on the page with a composer under
+it. The user's first message is what launches the chat's first real agent
+(the provider chooser opens then if nothing is signed in), which joins the
+record as the seed's successor with the `chat_id` and `chat_seq` labels a
+handoff's successor carries. The seed survives a restart of this app because
+the record does; discarding the chat before its first send drops both.
+
+Every chat that starts with no message is greeted: the `welcome` create
+template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
+says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
+is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
+folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+**off** (standard speed throughout), **auto** (fast for the first
+`fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
+(fast throughout). A new chat starts in the workspace's default mode
+(`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
+at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
+a chat whose mode calls for it launches through the `fast` create template, a
+handoff's successor included. The model picker's fast row states the chat's
+mode and opens a small chooser where the mode, auto's turn limit and the
+default for new chats are set; `/fast on` and `/fast off` typed in the
+composer choose the mode too. The first time auto switches a chat in a
+workspace, a one-time notice over the model bar explains it.
 
 ## Provider accounts
 

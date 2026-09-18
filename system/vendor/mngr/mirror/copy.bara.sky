@@ -25,13 +25,14 @@ PUBLIC_FILES = glob(
         "mirror/overlay/pyproject.toml",
         "mirror/overlay/uv.lock",
         "mirror/overlay/.github/workflows/ci.yml",
-        # All PyPI-published libs, plus skitwright (unpublished but imported
-        # by libs/mngr's e2e tests). Absent by design: mngr_tmr,
-        # mngr_mapreduce, mngr_claude_subagent_proxy (internal-only).
+        # Every publishable lib (libs/* not in UNPUBLISHED_PACKAGES), plus
+        # unpublished libs that public tests import: skitwright, the CLI
+        # end-to-end test framework libs/mngr's tests run on.
         "libs/concurrency_group/**",
         "libs/imbue_common/**",
         "libs/mngr/**",
         "libs/mngr_antigravity/**",
+        "libs/mngr_autocompact/**",
         "libs/mngr_aws/**",
         "libs/mngr_azure/**",
         "libs/mngr_claude/**",
@@ -66,10 +67,8 @@ PUBLIC_FILES = glob(
         "libs/overlay/**",
         "libs/resource_guards/**",
         "libs/skitwright/**",
-        # Product apps are public. Deployment/infra apps (modal_litellm,
-        # remote_service_connector, observability, share_relay) and internal
-        # tools (slack_exporter, minds_admin -- the private operator CLI that
-        # carries the env/pool/server lifecycle) are absent by design.
+        # Product apps are public; every other app (deployment/infra apps and
+        # internal tools) is absent by design.
         "apps/minds/**",
         # scripts/ public subset: each entry is referenced by public code,
         # docs, or the shipped wheel (see the spec's boundary table). The

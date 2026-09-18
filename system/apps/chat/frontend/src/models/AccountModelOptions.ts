@@ -1,11 +1,15 @@
 /**
- * The models an account can run a NEW agent on: what the switch dialog's picker offers for the
- * successor a handoff creates, or for a new chat, before either agent exists.
+ * The models an account can run an agent on: what the switch dialog's picker offers for the agent a
+ * switch leaves the chat on (a handoff's successor, or a rebind's agent restarted on the account), or
+ * for a new chat.
  *
  * Read from ``GET /api/accounts/:id/model-options``, the account-level twin of the per-chat
- * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the options the
- * account's last agent was offered (empty when it has run none). Unlike the per-chat twin, this
- * route names no model ids of its own -- there is no agent yet whose set could narrow the catalog.
+ * ``/model-options``: a static harness offers its catalog, a dynamic one (codex) the models the
+ * account's own codex answers with, asked of the account rather than of one of its agents -- so an
+ * account no agent has ever run on has a set too, and an account is never described by another
+ * account's models, which its subscription may not match. Unlike the per-chat twin,
+ * this route names no model ids of its own -- the agent the pick is for is not on the account yet, so
+ * it has no set that could narrow the catalog.
  */
 
 import m from "mithril";
@@ -18,9 +22,12 @@ interface AccountModelOptionsResponse {
   options?: CatalogModelOption[] | null;
 }
 
-/** The pickable options for a new agent on ``accountId``, in catalog order; empty when nothing is known. */
+/** The pickable options for an agent on ``accountId``, in catalog order; empty when nothing is known, and
+ *  for a harness whose model the chat app cannot switch (agy's is changed from the agent's terminal). */
 export async function fetchAccountModelOptions(accountId: string): Promise<CatalogModelOption[]> {
   await ensureHarnessCatalogs();
+  const catalog = getHarnessCatalog(accountForAgent(accountId)?.harness);
+  if (catalog?.switch_mode === "read_only") return [];
   const response = await m.request<AccountModelOptionsResponse>({
     method: "GET",
     url: apiUrl("/api/accounts/:accountId/model-options"),
@@ -28,6 +35,5 @@ export async function fetchAccountModelOptions(accountId: string): Promise<Catal
   });
   const options = response.options ?? null;
   if (options !== null) return options.filter((option) => option.in_picker);
-  const catalog = getHarnessCatalog(accountForAgent(accountId)?.harness);
   return (catalog?.options ?? []).filter((option) => option.in_picker);
 }

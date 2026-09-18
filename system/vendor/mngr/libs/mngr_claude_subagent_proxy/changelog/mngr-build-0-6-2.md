@@ -1,0 +1,1 @@
+- The real-Claude subagent release tests gitignore the plugin's provisioning artifacts (`.claude/agents/mngr-proxy/` and `.claude/skills/mngr-proxy/`) in their test repo, which the plugin's worktree guard now requires before it will provision an agent.
