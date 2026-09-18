@@ -65,6 +65,7 @@ from update_environment import (
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
+    remove_shadowing_app_tool_installs,
     remove_shadowing_mngr_installs,
     resolve_tool_destinations,
     restore_snapshots,
@@ -1042,6 +1043,12 @@ def apply_update(
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
+            )
+        for stale in remove_shadowing_app_tool_installs(
+            runner, sweep_homes, read_app_tools(repo_root)
+        ):
+            sys.stderr.write(
+                f"refresh: removed {stale}, a stale app tool install that shadowed the pinned one\n"
             )
         _advance(PHASE_REFRESHED)
 
