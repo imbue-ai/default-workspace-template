@@ -391,6 +391,42 @@ def test_down_tears_down_the_siblings_it_booted_and_drops_the_registry_copy(
     assert mod.live_preview_url(tmp_path, "chat") is None
 
 
+def test_a_re_up_without_siblings_still_tears_down_the_ones_an_earlier_up_booted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The earlier ``--with`` sibling is still running, and the record is ``down``'s only way to it."""
+    worktree = _write_worktree(tmp_path)
+    live_registry = tmp_path / "apps.toml"
+    live_registry.write_text(
+        _dump_registry(
+            [{"name": "chat-preview-app", "url": "http://localhost:1", "label": "p"}]
+        )
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
+    runner = _RecordingRunner(tmp_path)
+    for with_apps in (["chat"], []):
+        assert (
+            mod.up(
+                "system_interface",
+                worktree,
+                tmp_path,
+                with_apps=with_apps,
+                instance_key="agent-1",
+                runner=runner,
+                dump_registry=_dump_registry,
+            )
+            == 0
+        )
+    runner.calls.clear()
+
+    assert mod.down("system_interface", tmp_path, runner=runner) == 0
+
+    downs = [
+        call[call.index("--name") + 1] for call in runner.calls if call[2] == "down"
+    ]
+    assert downs == ["system_interface-preview", "chat-preview"]
+
+
 def test_a_failed_sibling_stops_the_boot_before_the_app_itself(tmp_path: Path) -> None:
     worktree = _write_worktree(tmp_path)
     runner = _RecordingRunner(tmp_path, failing_names=["chat-preview"])

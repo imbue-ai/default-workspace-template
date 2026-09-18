@@ -384,20 +384,25 @@ def up(
         shell_url,
         resolve_open_path(manifest, instance_key),
     )
+    # An earlier ``up --with`` of this preview may have booted siblings this call does not
+    # name; they are still running, and ``down`` finds them only through this record.
+    siblings = list(
+        dict.fromkeys([*with_apps, *_recorded_siblings(repo_root, app_name)])
+    )
     _preview_state_path(repo_root, app_name).parent.mkdir(parents=True, exist_ok=True)
     _preview_state_path(repo_root, app_name).write_text(
         json.dumps(
             {
                 "app": app_name,
                 "worktree": str(worktree),
-                "with": list(with_apps),
+                "with": siblings,
                 "manifest": str(manifest_path),
             }
         )
     )
     code = runner.run(argv, cwd=repo_root)
-    if code != 0 and not preview_url_by_app:
-        # Kept when siblings came up: their names live only in this record, so dropping it
+    if code != 0 and not siblings:
+        # Kept when siblings may be up: their names live only in this record, so dropping it
         # would leave them running with nothing left for ``down`` to reach them by. They are
         # left running rather than torn down here, since the usual next move is a rebuild and
         # a retry, which reuses them.
@@ -443,14 +448,18 @@ def refresh(app_name: str, repo_root: Path, *, runner: Runner) -> int:
     )
 
 
+def _recorded_siblings(repo_root: Path, app_name: str) -> list[str]:
+    """The siblings the app's preview record says were booted with it."""
+    state = _read_json(_preview_state_path(repo_root, app_name))
+    recorded = state.get("with") if state is not None else None
+    if not isinstance(recorded, list):
+        return []
+    return [str(name) for name in recorded]
+
+
 def down(app_name: str, repo_root: Path, *, runner: Runner) -> int:
     """Tear the preview down, then the siblings it booted; keep everything a survivor still needs."""
-    state = _read_json(_preview_state_path(repo_root, app_name))
-    siblings = (
-        [str(name) for name in state.get("with", [])]
-        if state is not None and isinstance(state.get("with"), list)
-        else []
-    )
+    siblings = _recorded_siblings(repo_root, app_name)
     code = runner.run(
         [
             sys.executable,
