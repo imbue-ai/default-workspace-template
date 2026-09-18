@@ -18,8 +18,8 @@
  * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
  * (`components/menu`), not this file's: it opens on a click of the chip, its submenus open on
  * hover, and it is dismissed the way it was summoned. What this file owns is the rows -- the
- * effort slider, the fast-mode row, the account list with its controls, the model list with its
- * search -- and the data behind them.
+ * effort slider, the account list with its controls, the model list with its search, the
+ * fast-mode chooser -- and the data behind them.
  */
 
 import m from "mithril";
@@ -27,7 +27,16 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
-import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
+import type { ChatFastModeState } from "../models/FastMode";
+import { FAST_MODES, ensureFastModeState, fastModeDetail, fastModeLabel, getFastModeState } from "../models/FastMode";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  ensureChatSettings,
+  getChatSettings,
+  updateChatSettings,
+} from "../models/ChatSettings";
+import { getEventsForChat } from "../models/Response";
+import { chooseFastMode } from "./fast-mode-limit";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -44,10 +53,14 @@ import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
-import { createMenu, menuRowClass, startTruncated, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { Portal } from "@imbue/workspace-ui/src/portal";
+import {
+  createMenu,
+  menuDividerClass,
+  menuRowClass,
+  startTruncated,
+  type MenuRow,
+} from "@imbue/workspace-ui/src/components/menu";
 import { accountRow, emptyAccountRowState } from "./accountRow";
-import { FastModeModal } from "./FastModeModal";
 import * as css from "./modelProviderMenuStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -109,9 +122,11 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
-  // The fast-mode chooser is up (models/FastMode.ts); opened from the fast row, which closes
-  // the menu, so it outlives the menu it was opened from.
-  let isFastModeModalOpen = false;
+  // What the fast submenu's turn-limit field shows while it is being typed into, or null when it
+  // shows the stored limit: mithril re-asserts `value` on every redraw, and every keystroke
+  // causes one. Held open while it is non-null, so a drifting pointer cannot take the half-typed
+  // number down with the submenu.
+  let limitDraft: string | null = null;
   // What the last view saw, for the menu's own open hook to read: which chat is showing, and
   // whether its picker is the kind whose model list is worth warming.
   let viewedChatId = "";
@@ -122,6 +137,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     rowState.confirmingRemoval = null;
     rowState.renamingId = null;
     rowState.renameDraft = "";
+    limitDraft = null;
   }
 
   const menu = createMenu({
@@ -151,11 +167,14 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       resetSubmenuState();
       modelQuery = "";
     },
-    // A rename mid-type or an armed "Remove?" (providers), and a typed search (model), are all
-    // work a drifting pointer must not throw away.
+    // A rename mid-type or an armed "Remove?" (providers), a typed search (model) and a
+    // half-typed turn limit (fast) are all work a drifting pointer must not throw away.
     holdsSubmenuOpen: (key) => {
       if (key === "providers") {
         return rowState.renamingId !== null || rowState.confirmingRemoval !== null;
+      }
+      if (key === "fast") {
+        return limitDraft !== null;
       }
       return modelQuery !== "";
     },
@@ -181,7 +200,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       // answers with `models` (ids), null meaning "offer the whole catalog".
       offeredModels = response.models == null ? null : new Set(response.models);
       dynamicOptions = response.options ?? null;
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to load offered models for chat ${chatId}`, error);
       offeredModels = null;
       dynamicOptions = null;
     } finally {
@@ -294,10 +314,10 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     ]);
   }
 
-  /** A row that states a value and opens a chooser of its OWN -- a dialog, not a submenu, which
-   *  is the one shape the shared menu has no kind for. Dressed as the submenu rows beside it:
-   *  the shared row, its label a step back from its value, and a chevron saying there is
-   *  somewhere to go. The menu closes on the way, because what opens is a modal over it. */
+  /** A row that states a value and opens a DIALOG rather than a submenu, which is the one shape
+   *  the shared menu has no kind for. Dressed as the submenu rows beside it: the shared row, its
+   *  label a step back from its value, and a chevron saying there is somewhere to go. The menu
+   *  closes on the way, because what opens is a modal over it. */
   function pickerRow(opts: { label: string; value: string; tooltip: string | null; onOpen: () => void }): m.Vnode {
     return m(
       "button",
@@ -334,17 +354,128 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     return fastModeLabel(state);
   }
 
-  /** Fast mode, as a row that opens the chooser. The chooser is a modal of its own so the menu
-   *  stays a list of one-line facts. */
-  function fastRow(opts: { chatId: string; tooltip: string | null }): m.Vnode {
-    return pickerRow({
-      label: "Fast Mode",
-      value: fastModeValue(opts.chatId),
-      tooltip: opts.tooltip,
-      onOpen: () => {
-        isFastModeModalOpen = true;
-      },
-    });
+  /** The Fast Mode row's submenu: the chat's three modes, the limit auto runs to, and a way to
+   *  make the chat's mode what new chats start in.
+   *
+   * Choosing applies at once (views/fast-mode-limit.ts), so there is nothing to confirm and the
+   * submenu stays up: picking auto is usually followed by setting the limit it runs to, and the
+   * default row reads off whichever mode was just picked. */
+  function fastModeSubmenu(chatId: string): m.Children {
+    const settings = getChatSettings();
+    if (settings === null) void ensureChatSettings();
+    const known = getFastModeState(chatId);
+    if (known === null) void ensureFastModeState(chatId);
+    const effective = settings ?? DEFAULT_CHAT_SETTINGS;
+    const state: ChatFastModeState = known ?? { mode: effective.fast_mode_default, is_switched: false };
+    const limit = effective.fast_mode_turn_limit;
+    const isDefault = effective.fast_mode_default === state.mode;
+    const currentLabel = FAST_MODES.find((option) => option.mode === state.mode)?.label ?? "";
+    return [
+      m(
+        "div",
+        { class: "fast-mode-options", role: "radiogroup", "aria-label": "Fast mode" },
+        FAST_MODES.map(({ mode, label }) => {
+          const isCurrent = state.mode === mode;
+          return m(
+            "button",
+            {
+              type: "button",
+              key: mode,
+              role: "radio",
+              "aria-checked": isCurrent ? "true" : "false",
+              "data-fast-mode": mode,
+              class: isCurrent ? css.FAST_ROW_SELECTED : css.FAST_ROW,
+              onclick: () => {
+                if (!isCurrent) chooseFastMode(chatId, mode, getEventsForChat(chatId));
+              },
+            },
+            [
+              m("span", { class: css.FAST_ROW_TEXT }, [
+                m("span", { class: css.SUBMENU_ROW_NAME }, [
+                  label,
+                  // These rows are the bare mode names, so auto carries its own "(off now)":
+                  // without it this row would read "Auto" while the row that opened the submenu,
+                  // which states the same mode through `fastModeLabel`, reads "Auto (off now)".
+                  isCurrent && mode === "auto" && state.is_switched
+                    ? m("span", { class: "ml-1.5 type-helper text-faint" }, "(off now)")
+                    : null,
+                ]),
+                m("span", { class: css.FAST_ROW_DETAIL }, fastModeDetail(mode, limit)),
+              ]),
+              isCurrent
+                ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                : null,
+            ],
+          );
+        }),
+      ),
+      m("div", { class: menuDividerClass() }),
+      state.mode === "auto"
+        ? m("label", { class: css.FAST_LIMIT_ROW }, [
+            "Turn off after",
+            m(
+              "span",
+              { class: css.FAST_LIMIT_FIELD },
+              m("input", {
+                type: "number",
+                min: 1,
+                step: 1,
+                class: inputClass({ extra: css.FAST_LIMIT_INPUT_EXTRA }),
+                "aria-label": "Fast mode turn limit",
+                value: limitDraft ?? String(limit),
+                disabled: settings === null,
+                oninput: (event: Event) => {
+                  limitDraft = (event.target as HTMLInputElement).value;
+                },
+                onchange: (event: Event) => {
+                  const typed = (event.target as HTMLInputElement).value;
+                  limitDraft = null;
+                  applyTurnLimit(typed);
+                },
+                onblur: () => {
+                  limitDraft = null;
+                },
+                onkeydown: (event: KeyboardEvent) => {
+                  if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                },
+              }),
+            ),
+            limit === 1 ? "turn" : "turns",
+          ])
+        : null,
+      // One way only, hence a row rather than a checkbox: a mode can be made the default, and the
+      // way to undo that is to make another one the default. The tick says it already is.
+      m(
+        "button",
+        {
+          type: "button",
+          class: isDefault ? css.SUBMENU_ROW_INERT : css.SUBMENU_ADD,
+          "data-fast-mode-default": state.mode,
+          "aria-disabled": isDefault || settings === null ? "true" : undefined,
+          onclick: () => {
+            const current = getChatSettings();
+            if (current === null || current.fast_mode_default === state.mode) return;
+            void updateChatSettings({ ...current, fast_mode_default: state.mode });
+          },
+        },
+        [
+          m("span", { class: css.SUBMENU_ROW_NAME }, `Use ${currentLabel} for new chats`),
+          isDefault
+            ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+            : null,
+        ],
+      ),
+    ];
+  }
+
+  /** File a changed turn limit on the workspace's settings. An emptied field, a word, or a
+   *  number below one is not a limit, and leaves the stored one alone. */
+  function applyTurnLimit(typed: string): void {
+    const current = getChatSettings();
+    if (current === null) return;
+    const parsed = Number.parseInt(typed, 10);
+    if (Number.isNaN(parsed) || parsed < 1 || parsed === current.fast_mode_turn_limit) return;
+    void updateChatSettings({ ...current, fast_mode_turn_limit: parsed });
   }
 
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
@@ -611,20 +742,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             ],
       );
 
-      // The fast-mode chooser outlives the menu it was opened from (the row closes the menu), so
-      // it portals on its own while the menu is down.
-      const fastModeModal = isFastModeModalOpen
-        ? m(Portal, {
-            children: m(FastModeModal, {
-              chatId,
-              onClose: () => {
-                isFastModeModalOpen = false;
-              },
-            }),
-          })
-        : null;
-
-      if (!menu.isOpen()) return [trigger, fastModeModal];
+      if (!menu.isOpen()) return trigger;
 
       const currentIdentity: ModelIdentity =
         matched === null
@@ -712,11 +830,17 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
               }),
           });
           if (matched.supports_fast) {
-            // Read-only leaves the mode stated and nothing to press, the same way the Model row
+            // Read-only leaves the mode stated and nothing to open, the same way the Model row
             // stands down: the chooser would offer a switch the harness cannot take.
             rows.push(
               interactive
-                ? { kind: "custom", key: "fast", render: () => fastRow({ chatId, tooltip: readOnlyTooltip }) }
+                ? {
+                    kind: "submenu",
+                    key: "fast",
+                    label: "Fast Mode",
+                    value: fastModeValue(chatId),
+                    content: () => fastModeSubmenu(chatId),
+                  }
                 : {
                     kind: "value",
                     key: "fast",
@@ -731,7 +855,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       rows.push({ kind: "divider" });
       rows.push({ kind: "action", key: "stop-agent", label: "Stop agent", onSelect: () => stopAgent(chatId) });
 
-      return [trigger, menu.view(rows), fastModeModal];
+      return [trigger, menu.view(rows)];
     },
   };
 }
