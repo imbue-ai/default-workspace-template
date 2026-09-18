@@ -980,8 +980,8 @@ def launch(
     branch not being checked out in another worktree at create time (git forbids
     the same branch in two worktrees); the ``BASE:NEW`` form has no such
     constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
-    out. The spec is handed to ``mngr create`` verbatim; this script no longer
-    parses it, so a malformed one surfaces as mngr's own error.
+    out. The spec is handed to ``mngr create`` verbatim, so a malformed one
+    surfaces as mngr's own error.
     """
     runner = runner or Runner()
 
