@@ -450,4 +450,243 @@ Run them after sections A to F pass, in a clean workspace state (S0.4).
 
 ## Findings
 
-(none recorded yet)
+### 2026-09-18 — `criticaltest` Docker staging acceptance run
+
+**Result: automated coverage passed after environment corrections; live acceptance
+found blockers. This is not a clean acceptance pass. No product fixes were made.**
+Test-only edits, deliberate failures, and recovery commits were confined to staging.
+
+#### Target and evidence
+
+- Container: `minds-staging-criticaltest` (`c94b7e1c9a20`), workspace
+  `/home/user/workspace`; connected using `docker exec`.
+- Reviewed template checkout `7b55117bd`, with vendored mngr `198df9eec7`.
+  The container's flattened initial commit was `f362d9ea8`. SHA-256 checks of all
+  154 changed files present in the template matched the staging files.
+- Evidence: `/home/user/workspace/data/.tasks/critical-test-results/` in the
+  container. `components.jsonl` records commands, statuses, pids, and update
+  records. The directory also contains JUnit XML, command logs, and screenshots.
+- Browser checks used Fortress with a local registry-based HTTP/WebSocket
+  forwarding adapter. This tested the real app frontends and APIs, but **not the
+  desktop/connector forwarding path**. No browser client was connected initially.
+- The hardening worker was the plan's permitted small stand-in, not a full
+  hardening/review run. Its branch, commit, report, and destruction were checked.
+
+#### Automated suites
+
+| Selection | Result after targeted reruns |
+|---|---|
+| Shared scripts, update-app, update-self, launch-task, app_manifest, manifest/layout checks, oom_priority | 986 passed, 1 skipped |
+| Chat, system_interface, terminal | 2,244 passed, 3 skipped |
+| Vendored mngr observe/host/notification selections | 447 passed |
+| Frontend npm workspaces | 87 + 277 + 648 = 1,012 passed |
+| Explicit shell release `-k "rollback_point or preview"` | 1 passed, 29 deselected; repeats coverage above |
+
+That is **4,689 passing tests and 4 skips**, excluding the explicit duplicate
+release run and repeated tests in the targeted reruns. The chat system test and
+shell browser tests ran. The four skips were the deliberately disabled expensive
+nested-dispatch test, a file-permissions assertion skipped as root, the
+Claude-to-Pi release test needing two API credentials, and the live Claude
+message-conservation release test needing its credentials file.
+
+The initial runs were not clean: `/tmp` is mounted `noexec`; a subsequent temp
+path inside the checkout made nested git tests find the parent repository, and
+long temp paths exceeded the Unix socket limit. There was also one intermittent
+already-reaped-child failure. The corrected targeted reruns passed (58 core and
+23 app tests). Use **`/private/tmp`**, which is executable, outside the checkout,
+short enough for sockets, and accepted by mngr's temporary-HOME guard. No mount
+change was made. Vendored mngr required `uv sync --all-packages` first.
+
+Reproduction commands, from the workspace root unless indicated:
+
+```sh
+uv run pytest .agents/shared/scripts .agents/skills/update-app/scripts \
+  .agents/skills/update-self/scripts .agents/skills/launch-task/scripts \
+  system/libs/app_manifest system/test_app_manifests.py \
+  system/test_supervisord_layout.py system/services/oom_priority \
+  --basetemp=/private/tmp/critical-core
+uv run pytest system/apps/chat system/apps/system_interface system/apps/terminal \
+  --basetemp=/private/tmp/critical-apps
+# From system/vendor/mngr, after uv sync --all-packages:
+TMPDIR=/private/tmp uv run pytest libs/mngr/imbue/mngr/api/observe_test.py \
+  libs/mngr/imbue/mngr/hosts/host_test.py libs/mngr/imbue/mngr/hosts/test_host.py \
+  libs/mngr_notifications/imbue/mngr_notifications/cli_test.py \
+  --basetemp=/private/tmp/critical-mngr
+# From system:
+npm test
+```
+
+#### Findings requiring attention
+
+1. **B1/C6 — terminal preview cannot boot.** The sidecar manifest declares
+   `http://127.0.0.1:7682`, while `--instances-url` uses an allocated preview port.
+   `_load_sidecar_manifest` rejects the mismatch even with `--no-register`.
+   Terminal preview, its refresh, and the preview portion of X4 are blocked.
+   Raw launcher coverage used a stdlib HTTP server instead.
+2. **F5 — the scaffolded runner crashes.** The generated runner reads
+   `os.environ` without importing `os`; preview exits with `NameError`. Manifest
+   generation/validation succeeds. Evidence: `f5-scaffold.log`, `f5-sync.log`,
+   and F5 entries in `components.jsonl`.
+3. **E15 — rollback can falsely report healthy and discard recovery copies.**
+   Emptied the kept `chat_bundle` directory after a shared-UI apply, then rolled
+   back. Exit was **0**, outcome was “Rolled back to the previous version,” and
+   snapshots were discarded. Chat health was HTTP 200 with
+   **`is_frontend_built: false`**; its page said “This workspace's chat interface
+   is not built yet.” No `emergency.json` was written. The instances API and
+   status-only health checks do not catch this frontend failure. Evidence:
+   `rollback-missing-bundle15.log`, `E15-after` in `components.jsonl`.
+4. **E4 — two simultaneous browser rollback requests both return 202.** The
+   expected second-request 409 did not occur. One detached invocation refused
+   the lock; the other failed its revert commit with exit 128 and left staged
+   changes. The exact cause of that commit failure remains undiagnosed. The
+   test-owned staged revert was committed to recover. Later uncontended browser
+   rollback succeeded, including socket reconnection and outcome dismissal.
+   Evidence: `e4-concurrency.json`, `E4-failure-state` in `components.jsonl`.
+   CLI lock-held tests separately passed; the subsequent apply in the first
+   experiment ran after the failed rollback exited, not through a held lock.
+5. **E2/E5 — rollback scope is broader than the chat-only expectation.** A
+   composer-only edit recorded both `chat` and `system_interface`, took both
+   bundle snapshots, and displayed both chat bands and a shell banner. Shell-only
+   frontend edits also recorded both. Uncontended rollback restarted both, leaving
+   terminal unchanged. Root npm builds/snapshot classification explain the
+   observed behavior, but E2's chat-only acceptance criterion is not met.
+   Forward apply restarts all critical programs through the services agent.
+6. **E8 — a startup-only change has no visible rollback notice.** A comment in
+   `system/libs/bootstrap/src/bootstrap/manager.py` correctly set
+   `needs_services_restart: true`, but `apps` and `programs` were empty. There was
+   no app band/banner from which to open the required explanatory dialog. CLI
+   rollback restored the source without changing service pids and correctly
+   requested `mngr start --restart system-services`.
+7. **C3 — unknown preview API routes return the SPA.** `GET /api/nope` returned
+   HTTP 200 HTML rather than JSON 404. All ten tested mutation routes returned
+   403 as intended. The actual New Tab action tile was inert and preview layout
+   changes left the live layout byte-identical.
+8. **C5 — re-upping chat leaves the shell preview's copied registry stale.**
+   Chat moved from port 39163 to 39073; the shell copy still named 39163. The new
+   chat nudger did point at the shell preview. Re-upping the shell repairs the
+   registry; merely re-upping chat does not.
+9. **C10 — a missing frontend is accepted as a successful sibling boot.**
+   Hid the chat worktree's `static/` directory and booted shell with chat. Both
+   started and `up` returned 0. HTTP status-only preview health does not check
+   `is_frontend_built`. Restored the directory and tore the previews down.
+10. **D5 — branch is correct, synchronous completion was not observed.**
+    `launch-sync --timeout 120` returned `timed_out: true` and the correct
+    `mngr/update-tp1` branch. The worker subsequently delivered its done report.
+    This is an observed early-idle/completion-timing limitation, not a verified
+    successful synchronous report. Evidence: `d5.json` and the worker report.
+11. **E9 / extra no-op check — empty program lists reach supervisor restart.**
+    A drop-in-only rollback applied the reread/update (chat pid changed and the
+    test environment line disappeared), then called restart without a program
+    and logged “restart requires a process name.” It still exited 0. A no-op
+    `apply --merge-ref HEAD --keep-rollback-point` also kept an empty-scope point
+    naming an existing merge; rolling it back reverted that earlier merge rather
+    than doing nothing. Avoid treating no-op apply as a harmless fixture reset.
+
+#### Live scenario ledger
+
+“Partial” means the listed assertions were exercised, but the complete scenario
+should not be marked passed. Grouped rows share the stated qualification.
+
+| ID | Status | What was observed |
+|---|---|---|
+| S0 | Pass with environment notes | Source parity, baseline health, initial clean tree, preview worktree/build, tools and pids recorded. |
+| A1 | Pass | Shared healthy observer; chat list and real chat creation work. |
+| A2–A3 | Pass | 60-second observer outage retains a 200 list; create during outage appears in chat's own refreshed list; recovery resumes the follower. |
+| A4 | Pass | SIGKILL respawns observer; chat pid remains stable; health samples recorded. |
+| A5 | Pass | Chat started before observer gives initial-snapshot 503, then 200 after observer starts. |
+| A6 | Pass | Missing observer working directory logs fallback and recovers. |
+| A7 | Pass with tool note | Vendored all-packages mngr notify uses existing observer; with it stopped, starts a fallback observer; cleaned up afterward. Default root CLI lacks notify plugin. |
+| A8–A9 | Pass | Preflight boots without follower; priorities terminal 10, shell 20, observer 24, chat 25. |
+| B1 | Fail / partial substitute | Terminal blocked as above; raw HTTP fixture verified multiport/copy/wrapper behavior. |
+| B2–B5 | Pass with raw fixture | Missing copy source creates empty directory; invalid bindings/placeholders refuse; wrapper inner path works; refresh retains ports/wrapper and changes inner pid. |
+| B6 | Pass on clean retry | Failed refresh exits 1, retains new failure log/pid and same ports/wrapper; subsequent valid refresh recovers. Discarded an earlier harness-interrupted attempt. |
+| B7 | Pass | Failed boot preserves logs; bounded timeout reports the failure. |
+| B8–B10 | Pass | TERM-resistant teardown escalates in 16.22 s; deregisters; repeated down is safe; refresh without up refuses. |
+| C1 | Partial | Real transcript through wrapper; preview send reaches test agent and reply appears live; live chat-data hashes unchanged immediately after preview send; secondary configuration checked. Different-account switching unavailable: only one account exists. |
+| C2 | Pass | Missing required instance key refuses. |
+| C3 | Fail / partial | API mutations blocked, preview meta/inventory true, actual New Tab tile inert, layout isolation verified; unknown API route fails criterion. Not every menu/picker/stopped-app visual state was individually exercised. |
+| C4 | Partial | Sibling boot order/config and rewritten registry checked; nested iframe renders real test chat from preview origin. A separately timed sweep-vs-nudge latency assertion was not collected. |
+| C5 | Gap confirmed | Nudger points at shell preview; registry remains on old chat port. |
+| C6 | Fail | Terminal sidecar manifest mismatch. |
+| C7–C9 | Pass | Unsupported sibling and cross-worktree ownership refuse; re-up preserves sibling association; shell down removes both. |
+| C10 | Fail | Missing chat frontend does not fail sibling boot. |
+| C11 | Partial | Visible chat composer and shell New Tab changes rebuild/refresh successfully; ports and wrapper retained. Terminal refresh blocked by C6. |
+| C12–C13 | Pass | Custom wrapper title checked; nonexistent worktree refuses after removing ownership conflict. |
+| D1–D4 | Pass | Held branch refuses without leftover agent; dirty removal refuses; clean handoff uses intended branch/commit; destroy reports it and preserves caller-created branch, including `--delete-branches`. |
+| D5 | Partial | Correct branch in JSON; timed-out synchronous result, followed by actual done report. |
+| D6 | Pass | Temporarily hid stopped worker's work_dir; start hint names the correct existing branch; restored before destruction. |
+| E1 | Pass | Served chat diff names the injected server change and becomes empty after its recovery. |
+| E2 | Fail on scope | Successful apply, snapshot paths, notice API and two windows checked; includes shell as well as chat. Snapshot size 1,020 KiB; cached worker-bundle apply 28 s. |
+| E3 | Pass | “Everything seems good” returns 204, removes record/copies and buttons in both windows without reload; repeated POST returns 409. |
+| E4 | Fail on concurrency / partial recovery pass | Both concurrent requests accepted; initial commit failure; uncontended browser rollback subsequently succeeds with outcome, reconnection and Close in both windows. Scope is both chat and shell. |
+| E5 | Partial | Shell banner, real dialog, successful browser rollback and reconnection; chat also restarted because both bundles are in the point. |
+| E6 | Pass | Shared UI apply records both apps/programs; rollback restarts both and leaves terminal pid unchanged; outcome and cleanup succeed. |
+| E7 | Pass | Terminal-only band and restart; chat/shell pids unchanged on rollback; tmux session listing identical before/after. |
+| E8 | Partial / UI gap | Classification and CLI rollback correct, pids unchanged, restart instruction present in outcome; empty apps hides the notice/dialog. |
+| E9 | Partial / warning | Drop-in env line reverted and chat reread/update changed its pid; empty restart invocation emits warning. |
+| E10 | Pass on records | Kept apply replaces merge SHA; plain final apply removes prior notice and leaves no new one. Snapshot deletion also checked through E3. |
+| E11 | Pass, deterministic lock test | With actual rollback lock held, apply exits 1 with expected text; HEAD unchanged and no marker created. |
+| E12 | Pass | No-point/already-settled/dirty-tree/lock-held refusals; confirm during rollback refuses; no-point confirm succeeds; rollback while an actual apply pid is alive refuses. |
+| E13 | Pass | Synthetic partway record refuses CLI rollback; both UI verbs disappear; CLI confirm closes record. Restored normal record to exercise E3. |
+| E14 | Pass | Syntax error returns 2 in 14.18 s with all live pids unchanged. Bootable chat with instances API permanently 503 returns 2 in 290.23 s, names failing API, restores healthy services, leaves no point. |
+| E15 | Fail for bundle variant | Empty kept chat bundle yields missing UI but rollback returns 0 and no emergency. Tool-environment sabotage / actual exit-3 recovery was not run: this image's active root-venv launchers are not captured as uv-tool snapshots. |
+| E16 | Partial | Plain `--ff-only` apply succeeds with no notice/marker/snapshots. Direct apply does not create `run.json`; the separate update-self run-status orchestration was not exercised. |
+| E17 | Pass | Restarted chat after all three services were RUNNING and both HTTP probes answered 200. Restart succeeded; apply waited and exited 0 in 40.46 s. First socket-unavailable attempt did not count. |
+| E18 | Pass | A second worktree's preview boots while the previous update notice exists; pending API retains that notice. |
+| F1 | Pass | Preview inner and wrapper pids have oom_score_adj 200 (user band). |
+| F2 | Pass | No connected clients yields 412; same open succeeds after browser reconnects and establishes its socket. |
+| F3 | Recorded | Frontend-only kept snapshots total 1,020 KiB; active uv-tool snapshots were unavailable in this image. |
+| F4 | Partial / plan correction | Shell copy contains preview chat URL/label and browser follows it. `layout.py list` does not report URLs; `forward_port.py --list` is not a supported command. |
+| F5 | Fail | Generated runner missing import; no fix made. |
+| F6 | Pass | All five invalid manifest cases refuse with expected diagnostics. |
+| X1 | Partial, blockers recorded | Lease, edit, preview, refresh, commit, teardown, stand-in worker handoff/report, apply and notice actions exercised. Scope/concurrency failures prevent a clean full-loop pass. |
+| X2 | Partial | Visible shell preview edit/refresh and separate shell apply/rollback/confirm exercised; no separate full hardening run. |
+| X3 | Pass with stand-in qualification | Sibling preview and shared-UI apply/rollback/confirm exercised. |
+| X4 | Blocked / live half passed | Preview blocked by C6; terminal live rollback and tmux survival passed. |
+| X5 | Pass | Abandon/teardown, existing-branch `-b` refusal, resume with existing branch, clean remove. |
+| X6 | Pass | Actual second test chat saw the lease in `tk ready`, inspected/released it, and tore down shell plus chat previews. Orchestrator removed the test worktree. |
+
+#### Harness and plan corrections
+
+- Use `uv run python system/scripts/layout.py`; bare Python in this image lacks
+  `tomlkit`. Use the registry file for port listings, not `forward_port.py --list`.
+- Current bootstrap code is under `system/libs/bootstrap/`, not the obsolete
+  `system/scripts/bootstrap*` example.
+- When invoking apply through `docker exec`, copy runtime configuration **without
+  `MNGR_AGENT_ID`, `MNGR_AGENT_STATE_DIR`, or `MNGR_AGENT_NAME`**. Inheriting the
+  services agent's identity made the first apply kill its own test driver on
+  restart. Startup recovery correctly reverted that interrupted attempt. Later
+  runs removed those identity variables.
+- The snapshot locator warns that the root `.venv` entrypoints are not installed
+  uv tools on PATH. Frontend snapshots work, but this run cannot claim automatic
+  tool-environment-copy coverage for the staging launcher configuration.
+- `c3-ui.json` contains an initial click on the existing Terminal rail row, not
+  the New Tab action tile. The corrected assertion is `c3-ui-verified.json`.
+- A synthetic marker initially used a plain Python pid, which is correctly
+  ignored by the Linux command-line/PID-reuse guard. `E12-actual-live-apply` is
+  the valid test, performed against a real running update-self process.
+
+
+#### Cleanup verification
+
+- Final staging HEAD: `d2f0af3ca4f36c7e28f59a8951cbfe4baf9e547b`.
+  `git status --porcelain` and `git diff --name-only f362d9ea8 HEAD` are both
+  empty: all tracked source content is back to its starting state. The intentional
+  test/recovery history remains for diagnosis; no reset/rewrite was used.
+- Chat and shell health are 200 with `is_frontend_built: true`; chat follows the
+  healthy observer. The original Welcome transcript renders with its composer.
+- Only the main worktree remains. No preview registry rows or isolated-instance
+  records, no test workers/chats, no test terminal instance, and no active editing
+  lease remain. Original Welcome and system-services agents were preserved.
+- No `last-good.json`, `marker.json`, `emergency.json`, or snapshots directory
+  remains. The final browser shows no update notice. Private browser and forwarding
+  adapter were stopped. Test branches and diagnostic artifacts were retained.
+- The corrected E17 injection occurred at `1789760839.200` after RUNNING/200
+  observations; `supervisorctl restart chat` completed successfully at
+  `1789760844.344`. The final apply completed successfully after 40.46 seconds.
+  Timings and pids are in `E17-healthy-before-restart`, `E17-live-chat-restart`, and
+  `E10-E16-plain-ff` in `components.jsonl`.
+- A portable evidence archive is also saved in the local mngr checkout at
+  `.test_output/criticaltest-2026-09-18.tar.gz`. It includes the result document,
+  top-level logs/XML/screenshots and test-driver scripts, excluding dependency
+  caches and large scratch worktrees.
