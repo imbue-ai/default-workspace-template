@@ -810,8 +810,8 @@ def apply_update(
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
 
-    ``sweep_homes`` are the homes swept for a stale mngr install after the
-    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
+    ``sweep_homes`` are the homes swept for stale mngr and app tool installs
+    after the refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
