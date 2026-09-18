@@ -70,8 +70,10 @@ PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 # The kept rollback point of the last apply run with ``--keep-rollback-point``
 # (the careful flow for a critical app): what it landed, what it touched, and the
 # pre-apply copies it left in place. The shell reads it to raise the "recently
-# updated" notice, and only a person closes it -- confirming discards the copies,
-# rolling back restores them. Any later apply replaces it.
+# updated" notice, and only a person closes it -- rolling back restores the
+# copies; confirming drops the record, and the copies with it unless a rollback
+# ran on the point (one that worked discarded them itself, one that failed kept
+# them for an agent). Any later apply replaces it.
 LAST_GOOD_FILENAME = "last-good.json"
 # Held by a running ``rollback-last`` for its whole run and by ``confirm-last``, so
 # a second rollback, or a confirm that would discard the copies, refuses.
