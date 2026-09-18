@@ -75,15 +75,68 @@ describe("the tool chip row", () => {
   const exec: ToolCall = { tool_call_id: "c2", tool_name: "exec", input_chars: 72, header_label: "Tool: Bash" };
   const unlabelled: ToolCall = { tool_call_id: "c3", tool_name: "Grep", input_chars: 6 };
 
-  it("names each call, dropping the harness's 'Tool:' prefix", () => {
-    mount([chip(read), chip(exec)]);
-    // A codex exec is named by what it actually did, never the bare "exec".
-    expect(labels()).toEqual(["Read", "Bash"]);
+  it("says what the call did, in two halves", () => {
+    const edit: ToolCall = {
+      tool_call_id: "c-edit",
+      tool_name: "Edit",
+      input_chars: 20,
+      action_verb: "edited",
+      action_target: ".../src/views/timeline-node.ts",
+    };
+    mount([chip(edit)]);
+    // The verb reads as prose and the target as the machine's own text, so they
+    // are separate elements rather than one string.
+    expect(root.querySelector(".tool-chip-verb")?.textContent).toBe("edited");
+    expect(root.querySelector(".tool-chip-target")?.textContent).toBe(".../src/views/timeline-node.ts");
   });
 
-  it("falls back to the tool name for a call parsed before labels existed", () => {
+  it("prefers the agent's own words when the tool recorded any", () => {
+    const bash: ToolCall = {
+      tool_call_id: "c-bash",
+      tool_name: "Bash",
+      input_chars: 60,
+      action_verb: "ran",
+      action_target: "rg -n 'font-size' src/style.css",
+      action_note: "Sweep the stylesheet for every size",
+    };
+    mount([chip(bash)]);
+    // Nothing beats the agent saying what the command was for, so the note
+    // replaces the verb+target rather than joining it.
+    expect(labels()).toEqual(["Sweep the stylesheet for every size"]);
+    expect(root.querySelector(".tool-chip-target")).toBeNull();
+  });
+
+  it("falls back to the live strip's caption for a harness that stamps no action", () => {
+    // Every harness stamps `caption_label`; only some stamp the action fields. The
+    // caption is the same phrase in the present tense, which reads fine on a chip
+    // and beats dropping back to a bare tool name.
+    const other: ToolCall = {
+      tool_call_id: "c-other",
+      tool_name: "exec",
+      input_chars: 6,
+      caption_label: "Reading foo.py",
+    };
+    mount([chip(other)]);
+    expect(labels()).toEqual(["Reading foo.py"]);
+  });
+
+  it("falls back to the tool name for a call parsed before any label existed", () => {
     mount([chip(unlabelled)]);
     expect(labels()).toEqual(["Grep"]);
+  });
+
+  it("carries the whole phrase and the tool it came from in the hover title", () => {
+    const edit: ToolCall = {
+      tool_call_id: "c-title",
+      tool_name: "Edit",
+      input_chars: 20,
+      action_verb: "edited",
+      action_target: ".../src/views/timeline-node.ts",
+    };
+    mount([chip(edit)]);
+    // The row truncates a long target, and the chip no longer names its tool
+    // anywhere -- the title is where both are recoverable.
+    expect(chipButtons()[0].title).toBe("edited .../src/views/timeline-node.ts\nEdit");
   });
 
   it("shows no detail until a chip is picked", () => {

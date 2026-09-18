@@ -58,13 +58,41 @@ function toolIcon(toolName: string): IconName {
   }
 }
 
-/** What the chip says. The harness already worked out a human label for the
- *  call -- for codex that means unwrapping an `exec` whose real operation is
- *  buried in a JS argument -- and claude's is "Tool: Read", whose prefix is
- *  noise once the glyph beside it says "tool". */
-export function chipLabel(call: ToolCall): string {
-  const label = (call.header_label ?? "").replace(/^Tool:\s*/, "").trim();
-  return label || call.tool_name;
+/**
+ * What a chip says about its call, in the order the reader is best served.
+ *
+ * A chip used to say the tool's name -- "Read", "Bash", "Grep". That is enough to
+ * tell three calls apart and useless at twenty, where a row reads "Read Read Grep
+ * Read Bash Read" and identifies nothing. The harness already knows better, on two
+ * levels:
+ *
+ * 1. The agent's OWN words. Claude's shell and delegation tools require a short
+ *    description of what the command is for, and the agent writes one every time
+ *    ("Read the transcript container markup"). Nothing beats it, so it wins.
+ * 2. Otherwise, what the call did: a past-tense verb and the thing it acted on
+ *    ("read ChatPanel.ts", `searched "font-size" in src/views`). The two halves are
+ *    set in different type, so they stay apart.
+ *
+ * The fallbacks below that are for events this app parsed before the fields
+ * existed, and for the harnesses whose parsers do not stamp them yet: the live
+ * strip's caption ("Reading foo.py") is the same thing in the present tense and
+ * reads fine on a chip, and the bare tool name is the last resort.
+ */
+type ChipText = { kind: "note"; text: string } | { kind: "action"; verb: string; target: string };
+
+export function chipText(call: ToolCall): ChipText {
+  if (call.action_note) return { kind: "note", text: call.action_note };
+  if (call.action_verb) return { kind: "action", verb: call.action_verb, target: call.action_target ?? "" };
+  const caption = (call.caption_label ?? "").trim();
+  if (caption) return { kind: "note", text: caption };
+  const header = (call.header_label ?? "").replace(/^Tool:\s*/, "").trim();
+  return { kind: "note", text: header || call.tool_name };
+}
+
+/** The whole phrase as one string -- the hover title, where the row's truncation
+ *  does not apply and the reader wants all of it. */
+function chipTitle(text: ChipText): string {
+  return text.kind === "note" ? text.text : `${text.verb} ${text.target}`.trim();
 }
 
 /** Where a chip's open/closed state lives. Keyed by the call, so it survives
@@ -81,10 +109,24 @@ function chipKey(call: ToolCall): string {
 const ROW_CLASS = "tool-chip-row -ml-2 flex flex-wrap items-center gap-1";
 
 /** A ghost button: no fill at rest, a wash on hover, a stronger fill and full-
- *  strength text once it is the open one. */
+ *  strength text once it is the open one.
+ *
+ *  `max-w-[20rem]`: a chip now carries a phrase rather than a word, and one long
+ *  one must not take a whole line of the row to itself. Past that width the
+ *  target truncates and the hover title carries the rest. */
 const CHIP_BASE =
-  "tool-chip inline-flex cursor-pointer appearance-none items-center gap-1.5 rounded-md border-0 px-2 py-[2px] " +
-  "text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) hover:bg-fill-hover";
+  "tool-chip inline-flex max-w-[20rem] cursor-pointer appearance-none items-center gap-1.5 rounded-md border-0 " +
+  "px-2 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
+  "hover:bg-fill-hover";
+
+/** The verb is prose about what happened, so it keeps the reading face and never
+ *  shrinks -- it is the short half, and clipping it would lose the sentence. */
+const CHIP_VERB_CLASS = "tool-chip-verb shrink-0 whitespace-nowrap";
+
+/** The target is the machine's own text -- a path, a pattern, a command -- so it
+ *  takes the monospace face, and it is the half that gives way when a chip runs
+ *  out of room. */
+const CHIP_TARGET_CLASS = "tool-chip-target min-w-0 truncate font-mono opacity-80";
 
 /** The detail panel: a bordered box with no fill of its own, so it reads as an
  *  annotation on the row rather than as another block in the transcript.
@@ -201,6 +243,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
         chips.flatMap((chip) => {
           const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
           const failed = toolResults.get(chip.call.tool_call_id)?.is_error === true;
+          const text = chipText(chip.call);
           // Colour says two different things at once, so they are ordered: a
           // failed call stays red whether or not it is the open one, since the
           // failure matters more than the selection.
@@ -212,7 +255,9 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               type: "button",
               class: `${CHIP_BASE} ${tone} ${fill}`,
               "aria-pressed": isOpen ? "true" : "false",
-              title: chip.call.tool_name,
+              // The untruncated phrase, plus the tool it came from -- which the
+              // chip itself no longer says anywhere.
+              title: `${chipTitle(text)}\n${chip.call.tool_name}`,
               key: chip.call.tool_call_id,
               onclick: () => {
                 // One open at a time: opening a chip closes whichever was open.
@@ -228,7 +273,12 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
                   className: "tool-chip-icon shrink-0",
                 }),
               ),
-              m("span", { class: "tool-chip-label whitespace-nowrap" }, chipLabel(chip.call)),
+              text.kind === "note"
+                ? m("span", { class: "tool-chip-label min-w-0 truncate" }, text.text)
+                : [
+                    m("span", { class: `tool-chip-label ${CHIP_VERB_CLASS}` }, text.verb),
+                    text.target ? m("span", { class: CHIP_TARGET_CLASS }, text.target) : null,
+                  ],
             ],
           );
           if (!isOpen) return [button];

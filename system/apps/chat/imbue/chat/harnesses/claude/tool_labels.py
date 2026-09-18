@@ -13,7 +13,10 @@ from imbue.chat.harnesses.tool_labels import first_string_value
 from imbue.chat.harnesses.tool_labels import mcp_caption
 from imbue.chat.harnesses.tool_labels import parse_input_preview
 from imbue.chat.harnesses.tool_labels import quoted
+from imbue.chat.harnesses.tool_labels import past_tense
 from imbue.chat.harnesses.tool_labels import shorten
+from imbue.chat.harnesses.tool_labels import shorten_path
+from imbue.chat.harnesses.tool_labels import stated_note
 from imbue.imbue_common.pure import pure
 
 _BASH_TOOL_NAME = "Bash"
@@ -72,6 +75,91 @@ def _target(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     if plain is not None:
         return shorten(plain)
     return None
+
+
+# The tools whose target is what was looked FOR rather than where. "searched
+# system/apps/chat" says nothing about what was being sought.
+_SEARCH_TOOL_NAMES = ("Grep", "Glob", "WebSearch")
+
+
+@pure
+def _action_target(tool_name: str, tool_input: dict[str, Any]) -> str | None:
+    """What the call acted on, for a chip: the literal thing, not a summary.
+
+    This and the caption's ``_target`` diverge on exactly one tool, deliberately.
+    For a shell call the caption prefers the agent's own description, because the
+    live strip has room for one phrase and "why" beats "what". A chip shows that
+    description separately (as the note), so here the shell target is the command
+    that actually ran -- otherwise the two halves of a Bash chip would say the
+    same thing twice.
+    """
+    if tool_name == _BASH_TOOL_NAME:
+        command = first_string_value(tool_input, "command")
+        return shorten(command) if command is not None else None
+
+    if tool_name in _SEARCH_TOOL_NAMES:
+        searched = first_string_value(tool_input, *_TARGET_QUOTED_KEYS)
+        if searched is not None:
+            scope = first_string_value(tool_input, *_TARGET_PATH_KEYS)
+            return f"{quoted(searched)} in {shorten_path(scope)}" if scope is not None else quoted(searched)
+
+    path = first_string_value(tool_input, *_TARGET_PATH_KEYS)
+    if path is not None:
+        return shorten_path(path)
+    text = first_string_value(tool_input, *_TARGET_TEXT_KEYS)
+    if text is not None:
+        return shorten(text)
+    searched = first_string_value(tool_input, *_TARGET_QUOTED_KEYS)
+    if searched is not None:
+        return quoted(searched)
+    plain = first_string_value(tool_input, *_TARGET_PLAIN_KEYS)
+    if plain is not None:
+        return shorten(plain)
+    return None
+
+
+@pure
+def action_parts(tool_name: str, input_preview: str) -> tuple[str, str]:
+    """``(verb, target)`` for a tool chip -- what this call did, in past tense.
+
+    Returned as two halves rather than one string because the chip sets them in
+    different type: the verb is prose, the target is the machine's own text.
+    ``target`` is empty when the call acted on nothing nameable.
+
+    A tool with no verb in the table falls back to its own name as the verb --
+    the one case where a chip still says which tool ran, because there is nothing
+    more informative to say about it.
+    """
+    if not tool_name:
+        return "ran a tool", ""
+    tool_input = parse_input_preview(input_preview)
+    if tool_name in _SUBAGENT_TOOL_NAMES:
+        delegated = first_string_value(tool_input, "description")
+        return ("delegated", shorten(delegated)) if delegated is not None else ("delegated to a sub-agent", "")
+
+    target = _action_target(tool_name, tool_input) or ""
+    participle = _VERB_BY_TOOL_NAME.get(tool_name)
+    if participle is not None:
+        return past_tense(participle), target
+
+    mcp = mcp_caption(tool_name)
+    if mcp is not None:
+        # "Running <tool with spaces>" -> "called <tool with spaces>".
+        return f"called {mcp.removeprefix('Running ')}", target
+    return tool_name, target
+
+
+@pure
+def action_note(tool_name: str, input_preview: str) -> str | None:
+    """The agent's own words for this call, or None when it wrote none.
+
+    Only claude's shell and delegation tools take a description; a read, edit or
+    write records nothing of the kind, and this returns None for them rather than
+    inventing something.
+    """
+    if tool_name != _BASH_TOOL_NAME and tool_name not in _SUBAGENT_TOOL_NAMES:
+        return None
+    return stated_note(parse_input_preview(input_preview))
 
 
 @pure
