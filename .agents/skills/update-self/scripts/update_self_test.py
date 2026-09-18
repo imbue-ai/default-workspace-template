@@ -8,6 +8,7 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -7218,6 +7219,40 @@ def test_a_rollback_that_dies_partway_settles_the_notice_and_keeps_the_copies(
     assert record.snapshots and all(
         Path(snapshot.copy).exists() for snapshot in record.snapshots
     )
+
+
+@pytest.mark.parametrize("is_other_rollback_running", [True, False])
+def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
+    apply_repo: Path, is_other_rollback_running: bool
+) -> None:
+    """The shell launches rollbacks detached, so a double press starts two; and a
+    rollback killed outright leaves its progress behind unsettled. Either way another
+    run must refuse before it reverts anything: a failed second revert would settle the
+    record and discard the copies the first run (or an agent) is restoring from."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    if not is_other_rollback_running:
+        record.progress = update_apply._ROLLBACK_PROGRESS_RESTORING
+        update_apply_contract.write_last_good(record, apply_repo)
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+    runner = _rollback_runner(apply_repo)
+    lock_path = update_apply_contract.rollback_lock_path(apply_repo)
+
+    with open(lock_path, "w") as lock_file:
+        if is_other_rollback_running:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _rollback(runner, apply_repo)
+
+    assert code == 1
+    assert not runner.ran("git", "revert")
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
 
 
 def test_rollback_and_confirm_without_a_kept_point_change_nothing(

@@ -19,6 +19,7 @@ which is what the persistent marker and ``recover`` are for.
 from __future__ import annotations
 
 import datetime
+import fcntl
 import os
 import shutil
 import subprocess
@@ -50,6 +51,7 @@ from update_apply_contract import (
     provision_incomplete_path,
     read_last_good,
     read_marker,
+    rollback_lock_path,
     snapshots_root,
     write_emergency,
     write_last_good,
@@ -1501,7 +1503,44 @@ def rollback_last(
 
     The outcome is written into the record (the notice shows it) rather than sent to
     the agent that drove the apply; the record stays until a person closes it.
+
+    Held under an exclusive lock for its whole run. The shell launches this detached
+    and answers at once, so two presses of the button can start two of it before
+    either has written its progress; the second must refuse without touching the
+    record or the copies, or its failed revert would settle the record and discard
+    the copies the first is restoring from.
     """
+    lock_path = rollback_lock_path(repo_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.stderr.write(
+                "error: another rollback of this point is already running.\n"
+            )
+            return 1
+        return _rollback_last_locked(
+            repo_root,
+            runner=runner,
+            http=http,
+            sleeper=sleeper,
+            base_url=base_url,
+            now=now,
+            is_pid_live=is_pid_live,
+        )
+
+
+def _rollback_last_locked(
+    repo_root: Path,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    sleeper: Callable[[float], None],
+    base_url: str | None,
+    now: Callable[[], float],
+    is_pid_live: Callable[[int], bool],
+) -> int:
     record = read_last_good(repo_root)
     if record is None:
         sys.stderr.write("error: no kept rollback point; nothing to roll back to.\n")
@@ -1509,6 +1548,15 @@ def rollback_last(
     if record.outcome is not None:
         sys.stderr.write(
             f"error: this rollback point is already settled: {record.outcome}\n"
+        )
+        return 1
+    if record.progress is not None:
+        # No rollback holds the lock, so one stopped without settling the record.
+        # Its revert may already be committed; running another would fail and
+        # discard the copies an agent needs to finish the job by hand.
+        sys.stderr.write(
+            f"error: an earlier rollback of this point stopped partway ({record.progress}); "
+            "finish it by hand from the kept copies, then close the notice with confirm-last.\n"
         )
         return 1
     marker = read_marker(repo_root)
