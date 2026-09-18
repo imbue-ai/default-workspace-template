@@ -117,8 +117,11 @@ def test_an_install_under_another_home_goes_with_its_console_script(
         swept = tmp_path / "home-link"
         swept.symlink_to(runtime_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [swept]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [swept],
+        tool_env.MNGR_TOOL_NAME,
+        tool_env.MNGR_EXECUTABLE,
     )
 
     assert not shadow_env.exists()
@@ -143,8 +146,11 @@ def test_the_pinned_install_is_not_removed_when_reached_by_another_path(
     linked_home = tmp_path / "root-link"
     linked_home.symlink_to(pinned_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [linked_home, Path(f"{pinned_home}/")]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [linked_home, Path(f"{pinned_home}/")],
+        tool_env.MNGR_TOOL_NAME,
+        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []
@@ -163,8 +169,11 @@ def test_a_console_script_already_resolving_to_the_pinned_install_is_left_alone(
     pinned_env, _ = _install_mngr_tool(pinned_home)
     shim.write_text(f"#!{pinned_env}/bin/python\n")
 
-    tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [runtime_home]
+    tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [runtime_home],
+        tool_env.MNGR_TOOL_NAME,
+        tool_env.MNGR_EXECUTABLE,
     )
 
     assert not shadow_env.exists()
@@ -179,8 +188,11 @@ def test_nothing_is_removed_when_the_install_being_kept_is_missing(
     runtime_home = tmp_path / "home" / "user"
     shadow_env, shadow_script = _install_mngr_tool(runtime_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(tmp_path / "root"), [runtime_home]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(tmp_path / "root"),
+        [runtime_home],
+        tool_env.MNGR_TOOL_NAME,
+        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []
@@ -192,8 +204,11 @@ def test_a_home_with_no_install_is_a_no_op(tmp_path: Path) -> None:
     pinned_home = tmp_path / "root"
     _install_mngr_tool(pinned_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [tmp_path / "home" / "user"]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [tmp_path / "home" / "user"],
+        tool_env.MNGR_TOOL_NAME,
+        tool_env.MNGR_EXECUTABLE,
     )
 
     assert removed == []

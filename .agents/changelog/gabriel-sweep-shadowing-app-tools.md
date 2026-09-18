@@ -1,0 +1,3 @@
+An update now removes stale copies of the apps' own tools, not just `mngr`'s.
+
+Workspaces created before tools were pinned under `/root` carry a second copy of every app tool under `/home/user/.local`, and a login shell reaches those first -- so the terminal ran a `system-interface` a month older than the one each update refreshed. The apply already swept that leftover copy for `mngr`; it now sweeps each app's tool too, but only when its own PATH already reaches the pinned `/root` installation, so the copy PATH runs and the pinned one are never the ones removed. A tool whose only copy is under `/home/user` is left in place.

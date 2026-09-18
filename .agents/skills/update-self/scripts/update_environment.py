@@ -249,7 +249,7 @@ def _installed_tool_location(
 # left by a pre-minds-v0.4.3 apply (those followed uv's $HOME default instead
 # of targeting the installation on PATH).
 def default_sweep_homes() -> list[Path]:
-    """The homes a live apply sweeps for a stale mngr install: the caller's
+    """The homes a live apply sweeps for stale tool installs: the caller's
     ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the one the
     build installs tools under.
 
@@ -286,7 +286,36 @@ def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> lis
     canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if canonical is None:
         return []
-    return tool_env.remove_shadowing_mngr_installs(canonical[0], homes)
+    return tool_env.remove_shadowing_installs(
+        canonical[0], homes, MNGR_TOOL_NAME, MNGR_EXECUTABLE
+    )
+
+
+def remove_shadowing_app_tool_installs(
+    runner: Runner, homes: Sequence[Path], app_tools: Sequence[AppTool]
+) -> list[Path]:
+    """Delete stale copies of each app's tool under ``homes`` that shadow the pinned one.
+
+    The same pre-pin installs that left a second mngr under ``$HOME/.local`` left one
+    of every app tool beside it, and a login shell reaches those first too -- a month
+    behind the copy each apply refreshes. Stricter than the mngr sweep, because an app's
+    program line resolves its entry point through the pinned bin directory: a tool is
+    swept only when this apply's PATH already reaches its pinned installation, so
+    neither the copy PATH runs nor the pinned one is ever the one removed. A tool whose
+    only copy is under ``$HOME`` is left where it is.
+    """
+    pinned = tool_env.tools_dir(tool_env.tool_home()).resolve()
+    removed: list[Path] = []
+    for app in app_tools:
+        canonical = _installed_tool_location(app.executable, app.tool_name, runner)
+        if canonical is None or canonical[0].resolve() != pinned:
+            continue
+        removed.extend(
+            tool_env.remove_shadowing_installs(
+                canonical[0], homes, app.tool_name, app.executable
+            )
+        )
+    return removed
 
 
 def _pinned_tool_location() -> tuple[Path, Path]:

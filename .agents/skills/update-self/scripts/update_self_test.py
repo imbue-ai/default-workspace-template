@@ -4959,6 +4959,69 @@ def test_the_only_mngr_install_is_never_removed(tmp_path: Path) -> None:
     assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
 
 
+def test_the_apply_removes_a_stale_app_tool_install_once_path_reaches_the_pinned_one(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # The pre-pin installs left a copy of every app tool under $HOME beside the
+    # stale mngr, and a login shell runs those instead of the refreshed ones.
+    pinned_home = tool_env.tool_home()
+    pinned_shim, pinned_tools = _install_tool(
+        pinned_home, update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    stale_shim, stale_tools = _install_tool(
+        tmp_path / "home", update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.executables[update_layout.TOOL_NAME] = str(pinned_shim)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[tmp_path / "home", pinned_home],
+    )
+
+    assert code == 0
+    assert not stale_shim.exists()
+    assert not (stale_tools / update_layout.TOOL_NAME).exists()
+    assert pinned_shim.exists()
+    assert (pinned_tools / update_layout.TOOL_NAME).is_dir()
+
+
+@pytest.mark.parametrize("path_reaches", ["the-home-copy", "nothing"])
+def test_an_app_tool_is_not_swept_unless_path_reaches_its_pinned_install(
+    path_reaches: str, apply_repo: Path, tmp_path: Path
+) -> None:
+    # An app's program line resolves through the pinned bin directory, so the
+    # sweep must never remove the copy PATH runs or leave only an unreached
+    # one: with PATH on the $HOME copy, or on nothing, both copies stay.
+    pinned_home = tool_env.tool_home()
+    pinned_shim, pinned_tools = _install_tool(
+        pinned_home, update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    home_shim, home_tools = _install_tool(
+        tmp_path / "home", update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    if path_reaches == "the-home-copy":
+        runner.executables[update_layout.TOOL_NAME] = str(home_shim)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[tmp_path / "home", pinned_home],
+    )
+
+    assert code == 0
+    assert home_shim.exists()
+    assert (home_tools / update_layout.TOOL_NAME).is_dir()
+    assert pinned_shim.exists()
+    assert (pinned_tools / update_layout.TOOL_NAME).is_dir()
+
+
 def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

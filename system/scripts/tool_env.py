@@ -97,32 +97,32 @@ def tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     return tool_dir, script.parent
 
 
-def remove_shadowing_mngr_installs(
-    canonical_tools: Path, homes: Sequence[Path]
+def remove_shadowing_installs(
+    canonical_tools: Path, homes: Sequence[Path], tool_name: str, executable: str
 ) -> list[Path]:
-    """Delete mngr tool environments outside ``canonical_tools``, and the scripts into them.
+    """Delete ``tool_name``'s environments outside ``canonical_tools``, and the scripts into them.
 
     ``canonical_tools`` is the tool directory to keep, already identified by its caller --
     pinned by the build, resolved from ``PATH`` by the apply. Nothing is removed unless
     that installation is actually present, so a failed or half-finished install never
-    leaves the workspace with no mngr at all.
+    leaves the workspace without the tool at all.
 
     Directories are compared after ``resolve()``: a home reached as ``/root/`` or through a
     symlink is the installation being kept, not a shadow of it, and deleting it would
     destroy exactly what this is protecting. A console script goes only when it resolves
     into the environment being removed; one already pointing at the kept installation is a
     working shim, and removing the environment while stranding the script would leave a
-    ``mngr`` on PATH with a dead interpreter -- worse than the stale copy it replaced.
+    ``executable`` on PATH with a dead interpreter -- worse than the stale copy it replaced.
 
     Returns what was removed.
     """
     canonical = canonical_tools.resolve()
-    if not (canonical / MNGR_TOOL_NAME).is_dir():
+    if not (canonical / tool_name).is_dir():
         return []
     removed: list[Path] = []
     for home in homes:
         tools = tools_dir(home)
-        stale_env = tools / MNGR_TOOL_NAME
+        stale_env = tools / tool_name
         try:
             is_present = stale_env.is_dir()
         except PermissionError:
@@ -130,8 +130,8 @@ def remove_shadowing_mngr_installs(
             is_present = False
         if not is_present or tools.resolve() == canonical:
             continue
-        shim = bin_dir(home) / MNGR_EXECUTABLE
-        shim_location = tool_location(shim, MNGR_TOOL_NAME)
+        shim = bin_dir(home) / executable
+        shim_location = tool_location(shim, tool_name)
         if shim_location is not None and shim_location[0].resolve() == tools.resolve():
             shim.unlink()
             removed.append(shim)
@@ -143,8 +143,11 @@ def remove_shadowing_mngr_installs(
 def _drop_shadowing_mngr() -> list[Path]:
     """The build's call: keep the pinned installation, sweep the home the build runs under."""
     home = os.environ.get("HOME")
-    return remove_shadowing_mngr_installs(
-        tools_dir(tool_home()), [Path(home)] if home else []
+    return remove_shadowing_installs(
+        tools_dir(tool_home()),
+        [Path(home)] if home else [],
+        MNGR_TOOL_NAME,
+        MNGR_EXECUTABLE,
     )
 
 
