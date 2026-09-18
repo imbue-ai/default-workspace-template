@@ -39,8 +39,11 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 import argparse
 import importlib.util
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 from typing import Iterable
 
@@ -77,7 +80,9 @@ RESERVED_NAMES = frozenset(
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
-_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+_FORWARD_PORT_PATH = (
+    Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+)
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -164,7 +169,8 @@ def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     ports: set[int] = set()
     for path in _supervisord_conf_files(supervisord_conf):
         ports.update(
-            int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+            int(match.group(1))
+            for match in LOCALHOST_PORT_RE.finditer(path.read_text())
         )
     return ports
 
@@ -183,18 +189,29 @@ def _apps_toml_ports(apps_toml: Path) -> set[int]:
     return ports
 
 
+def _is_port_bound(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+    # Reserve known internal ports that may not have supervisor entries
+    in_use.add(8083)  # browser CDP proxy
     if requested is not None:
-        if requested in in_use:
+        if requested in in_use or _is_port_bound(requested):
             sys.exit(
                 f"error: --port {requested} is already in use by another app or service"
             )
         return requested
     port = LOWEST_AUTO_PORT
-    while port in in_use:
+    while port in in_use or _is_port_bound(port):
         port += 1
     return port
 
@@ -264,6 +281,9 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import json
+import os
+import time
 from pathlib import Path
 
 from flask import Flask, Response
@@ -283,6 +303,8 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 # instance on a spare port next to the live one (see the update-app skill).
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
 PORT = int(os.environ.get("{port_env_var}", "{port}"))
+
+_START_TIME = time.time()
 
 app = Flask("{package}", static_folder=None)
 
@@ -306,12 +328,15 @@ def index() -> Response:
 
 @app.route("/health")
 def health() -> Response:
-    return Response('{{"status": "ok"}}', mimetype="application/json")
+    payload = json.dumps({{"status": "ok", "pid": os.getpid(), "started_at": _START_TIME}})
+    return Response(payload, mimetype="application/json")
 
 
 def main() -> None:
+    # use_reloader=True enables rapid local development and mock iterations
+    # without requiring supervisord service restarts.
     run_simple(
-        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
+        "127.0.0.1", PORT, app, threaded=True, use_reloader=True, use_debugger=False
     )
 
 
@@ -414,7 +439,9 @@ def _display_name(description: str, explicit: str | None) -> str:
     candidate = explicit if explicit is not None else description
     candidate = candidate.strip()
     if not candidate:
-        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
+        sys.exit(
+            "error: the display name must not be empty (--display-name, or --description when it is omitted)"
+        )
     if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
         sys.exit(
             f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
@@ -443,7 +470,9 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
-    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name))
+    (lib_dir / "app.toml").write_text(
+        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name)
+    )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
@@ -567,6 +596,35 @@ def _run_uv_sync(repo_root: Path) -> None:
     _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
 
+def _start_and_wait(
+    repo_root: Path, name: str, port: int, timeout: float = 10.0
+) -> None:
+    # Reload supervisord to pick up the new program block
+    _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
+    _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
+
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "scaffold-check"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.05)
+
+    status_res = subprocess.run(
+        ["supervisorctl", "status", name], cwd=repo_root, capture_output=True, text=True
+    )
+    sys.exit(
+        f"error: service {name} failed to become healthy at {url} within {timeout}s (last error: {last_err})\n"
+        f"status: {status_res.stdout.strip()}"
+    )
+
+
 def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
@@ -580,7 +638,7 @@ def _find_repo_root(start: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
@@ -588,7 +646,11 @@ def main() -> None:
         default=None,
         help="what users see for the app (the manifest's display_name, at most 64 characters); defaults to the description",
     )
-    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
+    parser.add_argument(
+        "--icon-file",
+        required=True,
+        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
+    )
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
@@ -608,6 +670,11 @@ def main() -> None:
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="register with supervisord (reread + update) and wait for health endpoint",
+    )
     args = parser.parse_args()
 
     _validate_name(args.name)
@@ -623,7 +690,13 @@ def main() -> None:
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
-        repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
+        repo_root,
+        args.name,
+        args.description,
+        display_name,
+        port,
+        list(args.extra_dep),
+        icon_markup,
     )
     _write_supervisord_program(program_path, args.name, package, port)
 
@@ -632,13 +705,21 @@ def main() -> None:
         _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
+    if args.start:
+        _start_and_wait(repo_root, args.name, port)
+
+    start_msg = (
+        f"Service `{args.name}` started and healthy on http://127.0.0.1:{port}/.\n"
+        if args.start
+        else ""
+    )
     print(
-        f"Created lib at {lib_dir.relative_to(repo_root)} "
+        f"{start_msg}Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
         f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

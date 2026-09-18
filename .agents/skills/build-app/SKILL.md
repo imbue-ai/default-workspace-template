@@ -21,10 +21,7 @@ flows go through the `update-app` skill.
 
 ## First: fire off the plan recorder
 
-Before anything else, run this once, briefing it the way you would brief a
-sub-agent picking this up: what the user wants, plus anything already settled.
-Give it context, not a plan -- working out the approach is its whole job, and a
-plan in the brief just anchors it to yours.
+Before anything else, run this once to record what the user requested:
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
@@ -32,14 +29,16 @@ system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
 IMBUE_PLAN_BRIEF
 ```
 
+The goal of the brief is to allow resuming the work later. Don't include a plan,
+only the information directly provided by the user.
+
 Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
 no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
 backticks and `$(...)` in the brief stay literal instead of running. A pipe to
 `head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
 line it prints.
 
-It returns immediately and records a plan for offline analysis that nothing here
-reads back. It is not part of building the app: no `tk` step, no mention to the
+You don't need to expose this step to the user: no `tk` step, no mention to the
 user, no waiting, no acting on the line it prints, ignore any failure. Then
 carry on as if you had not run it.
 
@@ -137,12 +136,11 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
-- **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
-  picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
-  `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+- **Pick a free port.** The scaffolder (canonical path) auto-picks the lowest free
+  port at or above 8080 by parsing `system/supervisord.conf` and `data/.state/apps.toml`,
+  so running manual port checks (`ss -tln`) is unnecessary. If you are picking a port
+  manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
+  (system_interface), `8010` (the chat app) and `8081` (the browser service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
@@ -158,6 +156,7 @@ uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
+    --start \
     [--display-name "<what users see>"] \
     [--port <int>] \
     [--extra-dep <pkg>] [--extra-dep <pkg>] ...
@@ -173,6 +172,9 @@ Required:
   registered on every start.
 
 Optional:
+- `--start`: registers the app with supervisord (`reread` + `update`) and
+  waits for the service to answer healthy on `http://127.0.0.1:<port>/health`.
+  Recommended to eliminate separate manual supervisor commands.
 - `--display-name`: what users see for the app (the manifest's
   `display_name`, at most 64 characters). Defaults to the description,
   so pass it when the description is long.
@@ -272,8 +274,8 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   `system/apps/*` member glob already covers the package, and the final
   `uv sync --all-packages` keeps the root lockfile current for it.
 
-supervisord does not watch the config, so tell it to pick up the new
-program, then confirm it is running:
+If you passed `--start` to `scaffold_flask_lib.py`, the service is already registered and running healthy.
+If you ran without `--start`, tell supervisord to pick up the new program:
 
 ```bash
 supervisorctl reread && supervisorctl update
@@ -296,12 +298,21 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
-  Invoke the `frontend-design:frontend-design` skill before writing the markup
-  (see Step 2).
+  Read the reference `references/frontend-choices.md` for recommended design
+  choices.
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
+- **Fast mock iteration & reload verification**:
+  The starter `runner.py` runs with Werkzeug's reloader enabled (`use_reloader=True`).
+  When you edit `runner.py` or templates, changes take effect within ~50ms **without restarting the service**.
+  Verify your mock changes in ~0.1s using:
+  ```bash
+  python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+  ```
+  `smoketest_app.py` checks that the server's reload timestamp in `/health` is newer than your edited file and polls until `--marker` appears in the rendered response, guaranteeing you never see stale code or hit race conditions.
+  To capture a screenshot for visual inspection before presenting to the user, add `--screenshot /tmp/mock.png` (~1.3s total with headless browser).
 - `layout.py open` to surface it (see Step 4 for the command and its `--view` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
@@ -340,19 +351,6 @@ Use **sync handlers** (`def`, not `async def`). Flask handlers are
 sync `def`, and the starter runs on the threaded Werkzeug server
 (`run_simple(..., threaded=True)`), so concurrent requests are handled
 by separate threads -- no asyncio needed.
-
-### Rendering HTML for a human
-
-If your service renders HTML that a person will look at (anything
-beyond a pure JSON API, a webhook receiver, or a transparent proxy of
-a third-party tool), you must invoke the `frontend-design:frontend-design`
-skill **before** writing the markup. Always do this before working on UI,
-regardless of the scope of the work. It ships as a plugin: the bare name
-`frontend-design` does not resolve.
-
-Skip this step for routes that emit only JSON, only redirects, or that
-serve an existing third-party UI through the escape hatch below --
-there's no markup to design.
 
 ### Calling Claude from your service
 
@@ -411,9 +409,16 @@ Two cases, two patterns:
 ## Step 3: Verify
 
 Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- curl against the
-registered backend URL `http://127.0.0.1:<port>/` then a Playwright
-assertion on a unique-to-your-app marker.
+[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
+
+```bash
+python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+```
+
+Or with a visual screenshot:
+```bash
+python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
+```
 
 If verification surfaces something unexpected (connection refused,
 a tab stuck on the loading page, broken WebSockets), see
