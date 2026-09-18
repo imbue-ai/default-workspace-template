@@ -712,22 +712,26 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="fast"]');
-    const makeDefault = document.querySelector<HTMLElement>("[data-fast-mode-default]");
-    if (makeDefault === null) throw new Error("no default row");
-    expect(makeDefault.textContent).toContain("Use On for new chats");
-    expect(makeDefault.getAttribute("aria-disabled")).toBeNull();
+    const row = document.querySelector<HTMLElement>(".fast-mode-default");
+    expect(row?.textContent).toContain("Use On for new chats");
+    const toggle = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
+    if (toggle === null) throw new Error("no default toggle");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.disabled).toBe(false);
     click("[data-fast-mode-default]");
     expect(settingsWrites).toEqual([
       { fast_mode_default: "on", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false },
     ]);
 
-    // Auto is the settings' default, so its row says so and there is nothing to press.
+    // Auto is the settings' default, so its toggle is on -- and stays on: exactly one mode is
+    // what new chats start in, and turning this one off would leave the question unanswered.
     fastModeState.state = { mode: "auto", is_switched: false };
     render();
-    const already = document.querySelector<HTMLElement>("[data-fast-mode-default]");
-    expect(already?.textContent).toContain("Use Auto for new chats");
-    expect(already?.getAttribute("aria-disabled")).toBe("true");
-    expect(already?.querySelector("svg")).not.toBeNull();
+    expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
+    const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
+    if (already === null) throw new Error("no default toggle");
+    expect(already.getAttribute("aria-checked")).toBe("true");
+    expect(already.disabled).toBe(true);
     click("[data-fast-mode-default]");
     expect(settingsWrites).toHaveLength(1);
   });

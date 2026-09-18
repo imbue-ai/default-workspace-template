@@ -443,28 +443,34 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             limit === 1 ? "turn" : "turns",
           ])
         : null,
-      // One way only, hence a row rather than a checkbox: a mode can be made the default, and the
-      // way to undo that is to make another one the default. The tick says it already is.
-      m(
-        "button",
-        {
-          type: "button",
-          class: isDefault ? css.SUBMENU_ROW_INERT : css.SUBMENU_ADD,
-          "data-fast-mode-default": state.mode,
-          "aria-disabled": isDefault || settings === null ? "true" : undefined,
-          onclick: () => {
-            const current = getChatSettings();
-            if (current === null || current.fast_mode_default === state.mode) return;
-            void updateChatSettings({ ...current, fast_mode_default: state.mode });
-          },
-        },
-        [
-          m("span", { class: css.SUBMENU_ROW_NAME }, `Use ${currentLabel} for new chats`),
-          isDefault
-            ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-            : null,
-        ],
-      ),
+      // The switch only travels ONE way. Exactly one mode is what new chats start in, so there is
+      // no "off" to return to: turning this one off would leave the question unanswered. On, it
+      // states the setting and is inert; off, it is how the setting is moved here.
+      m("div", { class: css.FAST_DEFAULT_ROW }, [
+        m("span", { class: css.ROW_LABEL }, `Use ${currentLabel} for new chats`),
+        m(
+          "span",
+          { class: css.ROW_VALUE_STATIC },
+          m(
+            "button",
+            {
+              type: "button",
+              role: "switch",
+              class: `${css.switchClass("sm")} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              "data-fast-mode-default": state.mode,
+              "aria-label": `Use ${currentLabel} for new chats`,
+              "aria-checked": isDefault ? "true" : "false",
+              disabled: isDefault || settings === null,
+              onclick: () => {
+                const current = getChatSettings();
+                if (current === null || current.fast_mode_default === state.mode) return;
+                void updateChatSettings({ ...current, fast_mode_default: state.mode });
+              },
+            },
+            m("span", { class: css.switchKnobClass("sm", isDefault) }),
+          ),
+        ),
+      ]),
     ];
   }
 
