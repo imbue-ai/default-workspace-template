@@ -146,16 +146,18 @@ def test_non_release_ceiling_imposes_no_cap() -> None:
     assert result.ceiling == "main"
 
 
-def test_resolve_target_explains_when_every_tag_is_above_the_ceiling() -> None:
-    # Distinct from "upstream has no stable tags at all": here the user's fix is
-    # to update the app, so the message has to say so.
+def test_resolve_target_treats_tags_above_the_ceiling_as_absent() -> None:
+    # A release above the ceiling may not have reached this user's app channel
+    # yet, so the refusal neither names it nor offers a way past the app.
     try:
         update_target.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
-    except ValueError as exc:
-        assert "newer than this workspace's minds app" in str(exc)
-        assert "minds-v0.3.9" in str(exc)
+    except update_target.NoUpdateTargetError as exc:
+        message = str(exc)
+        assert "at or below this workspace's minds app (minds-v0.3.9)" in message
+        assert "minds-v0.4.0" not in message
+        assert "--override" not in message
     else:
-        raise AssertionError("expected ValueError when every tag is above the ceiling")
+        raise AssertionError("expected a refusal when every tag is above the ceiling")
 
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
@@ -358,12 +360,10 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
 ) -> None:
     """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer.
 
-    ``latest_available`` reports the release that was held back, which is what the
-    approval message tells the user about.
-
     The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
     the capped target is a real update and the pass proceeds -- otherwise this
-    would be asserting the already-merged refusal's territory instead.
+    would be asserting the already-merged refusal's territory instead. The output
+    carries nothing about 0.4.0, the release above the ceiling.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -389,26 +389,26 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         "kind": "tag",
         "ceiling": "minds-v0.3.9",
         "exceeds_ceiling": False,
-        "latest_available": "minds-v0.4.0",
-        # minds-v0.4.0 was available and the ceiling is why it wasn't taken, so
-        # the approval message owes the user the "held back" line.
-        "held_back_by_ceiling": True,
     }
 
 
-def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize(
+    "unmerged_tags", [(), ("minds-v0.4.0",)], ids=["newest-upstream", "capped"]
+)
+def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
+    tmp_path, monkeypatch, capsys, unmerged_tags
 ) -> None:
-    """The case the ceiling exists for, from the seat of a workspace already at it.
+    """A workspace at the ceiling hears the same refusal whether or not a newer release exists.
 
-    Created from 0.3.9, app on 0.3.9, 0.4.0 upstream. Tag selection alone resolves
-    0.3.9 -- the release the workspace *is* -- so without the refusal a whole
-    backup, worker and validation pass merges nothing. It has to name the app,
-    because updating the app is the one action that gets them 0.4.0.
+    Created from 0.3.9, app on 0.3.9. Tag selection resolves 0.3.9 -- the release
+    the workspace *is* -- so without the refusal a whole backup, worker and
+    validation pass merges nothing. A 0.4.0 upstream is above the ceiling, so it
+    is treated as absent: the refusal neither names it nor offers a way past the
+    app.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
-        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=unmerged_tags
     )
     _install_fake_latchkey(
         monkeypatch,
@@ -424,33 +424,12 @@ def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "already on minds-v0.3.9" in captured.err
-    assert "minds-v0.4.0 is available upstream but needs a newer app" in captured.err
-    assert "Traceback" not in captured.err
-
-
-def test_resolve_target_cli_refuses_when_already_on_the_newest_release(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    """Nothing newer exists, so the refusal must not blame the app for it."""
-    repo = tmp_path / "repo"
-    _init_workspace_repo(repo, merged_tags=("minds-v0.3.9",), unmerged_tags=())
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path / "bin",
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
-
     assert (
-        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
-        == 1
+        "error: this workspace is already on minds-v0.3.9; nothing to update"
+        in captured.err
     )
-
-    captured = capsys.readouterr()
-    assert "already on minds-v0.3.9" in captured.err
-    assert "nothing to update" in captured.err
-    assert "newer app" not in captured.err
+    assert "minds-v0.4.0" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
@@ -487,20 +466,6 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
     )
 
     assert json.loads(capsys.readouterr().out)["ref"] == "minds-v0.3.9"
-
-
-def test_already_current_message_only_blames_the_app_when_it_is_to_blame() -> None:
-    held_back = update_target.already_current_message(
-        "minds-v0.3.9", "minds-v0.4.0", "minds-v0.3.9", True
-    )
-    assert "minds-v0.3.9" in held_back and "minds-v0.4.0" in held_back
-    assert "needs a newer app" in held_back
-
-    current = update_target.already_current_message(
-        "minds-v0.3.9", "minds-v0.3.9", "minds-v0.3.9", False
-    )
-    assert "nothing to update" in current
-    assert "newer app" not in current
 
 
 def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
@@ -1133,78 +1098,6 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     # The staged copy is the local working-tree flow, present and runnable.
     assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
-
-
-# --- is_held_back_by_ceiling ------------------------------------------------
-
-
-def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> None:
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.3.9",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.3.9",
-            has_override=False,
-        )
-        is True
-    )
-    # Already on the newest release: nothing was held back.
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.4.0",
-            has_override=False,
-        )
-        is False
-    )
-
-
-def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -> None:
-    """The bug this flag exists to prevent: blaming the app for the user's choice.
-
-    `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
-    `latest_available`, so an eyeball comparison would tell the user their Mind
-    app held the update back when they picked the older tag themselves.
-    """
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.3.6",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.3.9",
-            has_override=True,
-        )
-        is False
-    )
-
-
-def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
-    """A dev app caps nothing, so a gap can never be the ceiling's doing.
-
-    A dev build reports a *branch*, not nothing, so `ceiling="main"` -- and not
-    `None` -- is the shape the CLI actually produces here. It reaches `False` by a
-    different route than a `None` ceiling does: the branch parses to no version, so
-    the selection was never bounded. Both routes are asserted.
-    """
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling="main",
-            has_override=False,
-        )
-        is False
-    )
-    # No ceiling supplied at all -- only a direct caller does this.
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling=None,
-            has_override=False,
-        )
-        is False
-    )
 
 
 # --- a prerelease ceiling ---------------------------------------------------

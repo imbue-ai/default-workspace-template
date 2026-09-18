@@ -118,14 +118,14 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling`, `exceeds_ceiling`, `latest_available` and
-`held_back_by_ceiling`; `main` resolves to `upstream/main`. Tell the user which
-version you are updating to.
+`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+Tell the user which version you are updating to, and never mention a release
+above `ceiling`: the Mind app announces its own updates.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
 Its single `error:` line says why no target could be chosen (the Mind app
-could not be reached or is too old to report its version; every release is
-newer than the app; the workspace is already on the release it may take).
+could not be reached or is too old to report its version; no release is at or
+below the app's version; the workspace is already on the release it may take).
 Relay that line in plain terms and offer the next step; never resolve a ref by
 hand. Record the verdict first: `run-status verdict ALREADY_CURRENT` when the
 error says the workspace is current, else `run-status verdict REFUSED --detail
