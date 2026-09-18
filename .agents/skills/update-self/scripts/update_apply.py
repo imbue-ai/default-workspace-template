@@ -1693,11 +1693,13 @@ def _run_rollback(
             check=False,
         )
         stderr = (getattr(reverted, "stderr", "") or "").strip()
-        _finish_rollback(
+        # The copies stay, as after every other failed rollback: the agent that
+        # finishes the revert by hand restores the previous version from them.
+        _settle_rollback_record(
             record,
             repo_root,
             f"The update could not be reverted, so nothing was changed: {stderr or 'git revert failed'}. "
-            "Ask your agent to look at it.",
+            "The previous version's copies are still kept. Ask your agent to look at it.",
         )
         return 1
     _commit_rollback(
