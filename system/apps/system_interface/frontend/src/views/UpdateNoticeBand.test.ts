@@ -97,6 +97,27 @@ describe("UpdateNoticeBand", () => {
     expect(root.querySelector(".update-notice-confirm")).not.toBeNull();
   });
 
+  it("drops a refusal once the notice moves on to the state that explains it", async () => {
+    // A second window's Roll back, refused because the first's rollback is already running: the
+    // refusal stands beside the open notice, and goes when that rollback's progress arrives.
+    stubFetch(409, "A rollback is already running.");
+    applyUpdateNotice(noticeWire(["chat"]));
+    const { root, redraw } = mountBand("chat");
+
+    click(root, ".update-notice-rollback");
+    redraw();
+    click(root, ".destroy-dialog-btn-destroy");
+    await settled();
+    redraw();
+    expect(root.querySelector(".update-notice-band-error")?.textContent).toContain("already running");
+
+    applyUpdateNotice(noticeWire(["chat"], { progress: "Reverting the update" }));
+    redraw();
+
+    expect(root.querySelector(".update-notice-band")?.textContent).toContain("Reverting the update");
+    expect(root.querySelector(".update-notice-band-error")).toBeNull();
+  });
+
   it("asks before rolling back, naming the apps and the programs, then posts the rollback", async () => {
     const fetchMock = stubFetch(202, "The rollback has started.");
     applyUpdateNotice(noticeWire(["chat", "system_interface"]));
