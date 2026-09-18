@@ -847,6 +847,7 @@ def launch(
     runtime_dir: Path,
     task_file: Path,
     state_dir: Path | None = None,
+    agent_type: str | None = None,
     runner: Runner | None = None,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
@@ -871,6 +872,16 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``agent_type`` pins the harness (``--type`` on ``mngr create``, e.g.
+    ``claude``). The ``worker`` role template deliberately never sets one (a
+    role says what the agent is for, not what runs it), so omitting this
+    leaves the harness to whatever ``mngr create`` resolves as its own
+    default -- which is workspace state, not something this script controls,
+    and can silently drift to a harness with no credentials configured (it
+    then falls back to whatever model that harness does have, which may not
+    be capable of the task). Pass it explicitly for any task that assumes a
+    specific harness's behavior.
     """
     runner = runner or Runner()
 
@@ -1024,6 +1035,8 @@ def launch(
         "--label",
         f"{_RUNTIME_DIR_LABEL}={_repo_relative_path(runtime_dir, toplevel)}",
     ]
+    if agent_type is not None:
+        create_argv += ["--type", agent_type]
     try:
         created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as exc:
@@ -2192,6 +2205,7 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         runtime_dir=args.runtime_dir,
         task_file=args.task_file,
         state_dir=state_dir,
+        agent_type=args.agent_type,
         runner=runner,
     )
 
@@ -2306,6 +2320,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--type",
+        dest="agent_type",
+        default=None,
+        help="Pin the worker's harness (mngr create --type, e.g. 'claude'). "
+        "The role template never sets one, so omitting this leaves it to "
+        "mngr's own default, which can silently drift to an uncredentialed "
+        "harness.",
     )
 
     await_parser = subparsers.add_parser(
