@@ -103,8 +103,8 @@ def test_confirm_runs_the_scripts_confirm_last_in_the_workspace(tmp_path: Path) 
 
 
 def test_confirm_is_refused_without_a_record_and_while_a_rollback_runs(tmp_path: Path) -> None:
-    """Confirming discards the copies, so a rollback in flight is restoring from what it would take
-    away -- and a settled record is exactly what the notice's Close button confirms."""
+    """A rollback in flight is writing its progress and outcome into the record a confirm would close,
+    so it is refused -- and a settled record is exactly what the notice's Close button confirms."""
     watch = _watch(tmp_path)
     write_stub_update_self_script(watch.repo_root)
     with pytest.raises(UpdateNoticeRefusedError, match="no update notice"):
