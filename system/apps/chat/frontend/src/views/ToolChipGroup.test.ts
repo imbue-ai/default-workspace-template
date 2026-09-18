@@ -111,6 +111,21 @@ describe("the tool chip row", () => {
     expect(root.querySelector(".tool-chip-detail")).toBeNull();
   });
 
+  it("puts the panel directly after the chip that opened it, inside the row", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const chips = [chip(read), chip(exec), chip(unlabelled)];
+    mount(chips);
+    click(1, chips);
+
+    // A long run wraps onto several lines, so a panel hung below the whole row
+    // would sit lines away from its own chip. Being the chip's next sibling --
+    // and full-width, which no line can share -- is what puts it directly
+    // underneath wherever the chip happens to have wrapped to.
+    const panel = root.querySelector(".tool-chip-detail");
+    expect(panel?.previousElementSibling).toBe(chipButtons()[1]);
+    expect(panel?.parentElement?.className).toContain("tool-chip-row");
+  });
+
   it("keeps a chip open across a remount, so virtualization does not collapse it", () => {
     mockDetailState.mockReturnValue(undefined);
     // Its own call id: the expansion store is module-global and session-scoped
