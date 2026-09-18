@@ -17,7 +17,7 @@ vi.mock("../models/Response", async (importOriginal) => ({
 import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { setBlockExpanded } from "./expansion-state";
-import { ToolChipGroup, type ChipCall } from "./ToolChipGroup";
+import { ToolChipGroup, formatToolInput, type ChipCall } from "./ToolChipGroup";
 
 function chip(call: ToolCall, eventId = "a-1"): ChipCall {
   return { call, eventId };
@@ -246,5 +246,75 @@ describe("the open chip's detail panel", () => {
     expect(root.querySelector(".tool-call-error-snippet")?.textContent).toContain("FileNotFoundError: no such file");
     // Still loading the real output, and the snippet did not wait for it.
     expect(detailText()).toContain("Loading");
+  });
+});
+
+describe("the input a panel shows", () => {
+  it("shows a lone remaining field bare -- for a shell call, just the command", () => {
+    const raw = JSON.stringify({ command: "rg -n 'font-size' src/style.css", description: "Sweep the stylesheet" });
+    // The note is already the chip; printing it again here is what made the panel
+    // a four-line JSON blob whose only real content was the command.
+    expect(formatToolInput(raw, "Sweep the stylesheet")).toBe("rg -n 'font-size' src/style.css");
+  });
+
+  it("keeps the note when it is not what the chip is showing", () => {
+    const raw = JSON.stringify({ command: "ls", description: "List files" });
+    expect(formatToolInput(raw, undefined)).toBe("command: ls\ndescription: List files");
+  });
+
+  it("lays several fields out as lines, dropping a multi-line value below its key", () => {
+    const raw = JSON.stringify({ file_path: "src/a.ts", old_string: "one\ntwo", new_string: "three" });
+    expect(formatToolInput(raw)).toBe("file_path: src/a.ts\nold_string:\none\ntwo\nnew_string: three");
+  });
+
+  it("leaves an input that is not a JSON object alone", () => {
+    // codex's code-mode input is a JavaScript program, not an object.
+    expect(formatToolInput("await tools.exec_command({ cmd: 'ls' })")).toBe("await tools.exec_command({ cmd: 'ls' })");
+  });
+
+  it("leads with the verb only where the chip is showing the note instead", () => {
+    const bash: ToolCall = {
+      tool_call_id: "pv-1",
+      tool_name: "Bash",
+      input_chars: 60,
+      action_verb: "ran",
+      action_target: "npm test",
+      action_note: "Run the chat frontend tests",
+    };
+    const edit: ToolCall = {
+      tool_call_id: "pv-2",
+      tool_name: "Edit",
+      input_chars: 60,
+      action_verb: "edited",
+      action_target: "src/a.ts",
+    };
+    mockDetailState.mockReturnValue({
+      state: "loaded",
+      detail: {
+        inputs_by_tool_call_id: {
+          "pv-1": JSON.stringify({ command: "npm test", description: "Run the chat frontend tests" }),
+          "pv-2": JSON.stringify({ file_path: "src/a.ts", new_string: "x" }),
+        },
+        output: null,
+        thinking: null,
+      },
+    });
+
+    setBlockExpanded("chip:pv-1", true);
+    mount([chip(bash)]);
+    // The chip says the note, so the pane supplies the missing half.
+    expect(root.querySelector(".tool-call-input .tool-call-verb")?.textContent).toBe("ran");
+    setBlockExpanded("chip:pv-1", false);
+
+    setBlockExpanded("chip:pv-2", true);
+    mount([chip(edit)]);
+    // The chip already reads "edited src/a.ts"; repeating it here is the doubling
+    // this pane exists to avoid.
+    expect(root.querySelector(".tool-call-input .tool-call-verb")).toBeNull();
+    setBlockExpanded("chip:pv-2", false);
+  });
+
+  it("renders nothing when the chip already said everything the input held", () => {
+    expect(formatToolInput(JSON.stringify({ description: "Only a note" }), "Only a note")).toBe("");
   });
 });

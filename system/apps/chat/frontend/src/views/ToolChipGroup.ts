@@ -139,16 +139,54 @@ const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-2 basis-[calc(100%-0.5rem)
 
 const PANE_CODE_CLASS = "font-mono text-(length:--font-size-helper) leading-normal break-all whitespace-pre-wrap";
 
-function renderPane(marker: string, text: string, extra = ""): m.Vnode {
-  return m(
-    "div",
-    { class: `${marker} py-0.5 ${extra}`.trim() },
+function renderPane(marker: string, text: string, extra = "", verb?: string): m.Vnode {
+  return m("div", { class: `${marker} py-0.5 ${extra}`.trim() }, [
+    // Prose, beside the machine text rather than above it, so a one-line input
+    // stays one line.
+    verb ? m("span", { class: "tool-call-verb mr-1.5 text-secondary" }, verb) : null,
     m(
       "pre",
-      { class: "m-0 overflow-x-auto border-0 bg-transparent p-0" },
+      { class: `m-0 overflow-x-auto border-0 bg-transparent p-0${verb ? " inline align-top" : ""}` },
       m("code", { class: PANE_CODE_CLASS }, text),
     ),
-  );
+  ]);
+}
+
+/**
+ * A tool's input as something a person reads, rather than the raw JSON object it
+ * arrives as.
+ *
+ * The object's braces and quoting are the wire's, not the reader's: a shell call
+ * came out as a four-line JSON blob whose only real content was one command. So a
+ * lone remaining field renders as its bare value -- which for a shell call is
+ * exactly the command -- and several render as `key: value` lines, with a
+ * multi-line value dropped below its key rather than run onto it.
+ *
+ * `omit` drops what the panel has already said. The chip is the agent's own note,
+ * and that note IS one of these fields (a shell call's `description`), so leaving
+ * it in would print it twice. Matched by value, so it only ever drops the field
+ * the note actually came from.
+ *
+ * An input that is not a JSON object at all -- codex's code-mode program, a bare
+ * string -- is shown verbatim; there is nothing to unpack.
+ */
+export function formatToolInput(raw: string, omit?: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
+
+  const entries = Object.entries(parsed as Record<string, unknown>)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .filter(([, value]) => !(omit !== undefined && omit !== "" && value === omit))
+    .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)] as const);
+
+  if (entries.length === 0) return "";
+  if (entries.length === 1) return entries[0][1];
+  return entries.map(([key, value]) => (value.includes("\n") ? `${key}:\n${value}` : `${key}: ${value}`)).join("\n");
 }
 
 /** A pane still fetching, or one whose payload the backend no longer holds. */
@@ -184,7 +222,13 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     sections.push(renderPane("tool-call-error-snippet", toolResult.error_snippet, "text-danger"));
   }
   if (inputState === "loaded") {
-    if (inputText) sections.push(renderPane("tool-call-input", inputText));
+    const input = formatToolInput(inputText, chip.call.action_note);
+    // The verb leads the input only when the chip is showing the agent's note
+    // instead: there it is the missing half, turning the pane into "ran <the
+    // command>". When the chip already reads "edited <file>", repeating the verb
+    // here would be the same doubling this pane just stopped doing.
+    const verb = chip.call.action_note ? chip.call.action_verb : undefined;
+    if (input) sections.push(renderPane("tool-call-input", input, "", verb));
   } else {
     sections.push(renderPaneNote("tool-call-input", inputState));
   }
