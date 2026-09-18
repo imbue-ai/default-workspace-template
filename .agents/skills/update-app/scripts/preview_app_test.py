@@ -151,6 +151,15 @@ def _flag_values(argv: Sequence[str], flag: str) -> list[str]:
     return [argv[index + 1] for index, part in enumerate(argv) if part == flag]
 
 
+def _shell_registry_copy(tmp_path: Path) -> Path:
+    return mod._registry_copy_path(tmp_path, "system_interface")
+
+
+def _shell_registry_rows(tmp_path: Path) -> dict[str, dict[str, object]]:
+    rows = tomllib.loads(_shell_registry_copy(tmp_path).read_text())["apps"]
+    return {row["name"]: row for row in rows}
+
+
 def _launch(argv: Sequence[str]) -> list[str]:
     return list(argv[list(argv).index("--") + 1 :])
 
@@ -283,13 +292,10 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
     assert code == 0
     assert runner.ups() == ["chat-preview", "system_interface-preview"]
     shell_argv = runner.up_argv("system_interface-preview")
-    registry_copy = (
-        tmp_path / mod.INSTANCES_ROOT / "system_interface-preview.registry.toml"
+    assert f"MINDS_APPS_FILE={_shell_registry_copy(tmp_path)}" in _flag_values(
+        shell_argv, "--env"
     )
-    assert f"MINDS_APPS_FILE={registry_copy}" in _flag_values(shell_argv, "--env")
-    rows = {
-        row["name"]: row for row in tomllib.loads(registry_copy.read_text())["apps"]
-    }
+    rows = _shell_registry_rows(tmp_path)
     # The chat's row points at its preview, under the preview's own origin label; the rest is live.
     assert rows["chat"]["url"] == "http://127.0.0.1:40001"
     assert rows["chat"]["instances_url"] == "http://127.0.0.1:40001"
@@ -375,9 +381,7 @@ def test_down_tears_down_the_siblings_it_booted_and_drops_the_registry_copy(
         )
         == 0
     )
-    registry_copy = (
-        tmp_path / mod.INSTANCES_ROOT / "system_interface-preview.registry.toml"
-    )
+    registry_copy = _shell_registry_copy(tmp_path)
     assert registry_copy.exists()
     runner.calls.clear()
 
@@ -525,15 +529,6 @@ def test_main_routes_the_verbs(tmp_path: Path) -> None:
         )
         == 1
     )
-
-
-def _shell_registry_rows(tmp_path: Path) -> dict[str, dict[str, object]]:
-    registry_copy = (
-        tmp_path / mod.INSTANCES_ROOT / "system_interface-preview.registry.toml"
-    )
-    return {
-        row["name"]: row for row in tomllib.loads(registry_copy.read_text())["apps"]
-    }
 
 
 def _up_shell_with_chat(
