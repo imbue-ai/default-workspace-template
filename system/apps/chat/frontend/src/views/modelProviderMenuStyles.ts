@@ -226,11 +226,13 @@ export const FAST_LIMIT_FIELD = "inline-flex w-[72px] shrink-0";
  *  text field: the one affordance saying "this is a number you can nudge" only appears once you
  *  have already gone looking. An author `opacity` outranks the UA sheet's.
  *
- *  Left padding only. The arrows sit at the content box's right edge, so the right padding is
- *  space between them and nothing. */
+ *  The gap either side of the arrows is the STEPPER's margin, not the field's padding. The
+ *  arrows are the last box in the content area and the number is right-aligned against them, so
+ *  padding can only move the pair together: the arrows' own margin is the one thing that puts
+ *  space between them and the digits. */
 export const FAST_LIMIT_INPUT_EXTRA =
-  "fast-limit-input h-6 pl-2 pr-0 py-0 text-right text-(length:--font-size-row) " +
-  "[&::-webkit-inner-spin-button]:opacity-100";
+  "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-row) " +
+  "[&::-webkit-inner-spin-button]:opacity-100 [&::-webkit-inner-spin-button]:ml-1.5";
 /** The default row: a label and the switch that makes this mode the one new chats start in. Laid
  *  out like the limit row above it, so the two settings under the modes read as a pair. */
 export const FAST_DEFAULT_ROW = `fast-mode-default ${ROW_STATIC}`;
