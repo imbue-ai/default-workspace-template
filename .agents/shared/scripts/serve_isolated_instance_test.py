@@ -16,8 +16,10 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import signal
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -109,6 +111,17 @@ class _SigtermProofRunner(_RecordingRunner):
         super().kill_process_group(pid, sig)
         if sig == signal.SIGKILL:
             self.alive_pids.discard(pid)
+
+
+class _SignalRecordingRealRunner(mod.Runner):
+    """The real process-group runner, recording which signals it sent."""
+
+    def __init__(self) -> None:
+        self.sent: list[int] = []
+
+    def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
+        self.sent.append(sig)
+        super().kill_process_group(pid, sig)
 
 
 class _FakeHttp(mod.HttpClient):
@@ -587,6 +600,40 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
     assert runner.signals_sent_to(4242) == [signal.SIGTERM, signal.SIGKILL]
     assert state_dir.exists()
     assert "4242" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "launch, has_exited_before_teardown",
+    [(["sleep", "30"], False), (["sh", "-c", "exit 1"], True)],
+    ids=["still-running", "crashed-during-boot"],
+)
+def test_a_server_this_process_spawned_reads_as_gone_once_killed(
+    tmp_path: Path, launch: list[str], has_exited_before_teardown: bool
+) -> None:
+    """A failed ``up`` tears down its own children, which linger as zombies until reaped.
+
+    Real processes, since the point is what the kernel answers for an exited but unreaped
+    child: the group must read as gone after SIGTERM, not as a survivor of SIGKILL -- both
+    for a server still running and for one that already crashed, the usual reason ``up``
+    fails.
+    """
+    pid = mod.Spawner().spawn_detached(
+        launch,
+        cwd=str(tmp_path),
+        env={"PATH": "/usr/bin:/bin"},
+        log_path=str(tmp_path / "server.log"),
+    )
+    if has_exited_before_teardown:
+        # WNOWAIT observes the exit without reaping it, so the child stays a zombie.
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+    runner = _SignalRecordingRealRunner()
+    try:
+        is_gone = mod._kill_process_group_and_wait(runner, pid, sleeper=time.sleep)
+    finally:
+        mod.Runner().kill_process_group(pid, signal.SIGKILL)
+
+    assert is_gone
+    assert runner.sent == [signal.SIGTERM]
 
 
 def test_up_refuses_to_boot_over_an_instance_it_could_not_clear(

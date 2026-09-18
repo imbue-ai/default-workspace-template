@@ -206,6 +206,22 @@ class InstanceError(Exception):
         self.log_path = log_path
 
 
+def _reap_if_exited_child(pid: int) -> None:
+    """Reap ``pid`` if it is this process's own child and has exited.
+
+    A failed ``up`` tears down servers it spawned itself, and ``Spawner`` never
+    waits on them. Until reaped, an exited one is a zombie that still holds its
+    process group: ``killpg`` then succeeds on Linux and raises EPERM on macOS,
+    so a dead server would read as alive -- and as a survivor of SIGKILL. A pid
+    that is not our child (``down`` and ``refresh`` act on an earlier run's
+    servers) is simply not ours to reap.
+    """
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
 class Runner:
     """Indirection over ``subprocess.run`` so tests can intercept commands."""
 
@@ -222,6 +238,7 @@ class Runner:
         which inside a container whose PID 1 traps SIGTERM restarts the whole
         container. ``os.killpg`` targets exactly the intended group.
         """
+        _reap_if_exited_child(pid)
         try:
             os.killpg(pid, sig)
         except ProcessLookupError:
@@ -235,6 +252,7 @@ class Runner:
         rebound (even with SO_REUSEADDR), so we must not respawn until the old
         process is gone. Signal 0 probes existence without delivering a signal.
         """
+        _reap_if_exited_child(pid)
         try:
             os.killpg(pid, 0)
             return True
