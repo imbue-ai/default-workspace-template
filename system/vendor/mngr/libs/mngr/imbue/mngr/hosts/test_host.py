@@ -2089,6 +2089,17 @@ def _create_minimal_agent(host: Host, temp_dir: Path, work_dir: Path | None = No
 # File Transfer Tests (create_agent_work_dir and helpers)
 
 
+def _branch_on_disk(path: Path) -> str:
+    """The branch ``path``'s checkout is on, as git reports it (``HEAD`` when detached)."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
 def _init_git_repo(path: Path, commit_message: str = "Initial commit") -> None:
     """Helper to initialize a git repo from pre-existing files.
 
@@ -2575,13 +2586,7 @@ def test_create_work_dir_reports_the_branch_it_checked_out_without_creating_one(
 
     assert result.created_branch_name is None
     assert result.checked_out_branch_name == "already/mine"
-    on_disk = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=result.path,
-        capture_output=True,
-        text=True,
-    )
-    assert on_disk.stdout.strip() == "already/mine"
+    assert _branch_on_disk(result.path) == "already/mine"
 
 
 def test_create_work_dir_reports_a_created_branch_as_both(
@@ -2645,13 +2650,7 @@ def test_git_transfer_records_the_branch_the_target_is_actually_on(
 
     assert created_branch_name is None
     assert checked_out_branch_name != _DETACHED_HEAD_REF
-    on_disk = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=target_path,
-        capture_output=True,
-        text=True,
-    )
-    assert checked_out_branch_name == on_disk.stdout.strip()
+    assert checked_out_branch_name == _branch_on_disk(target_path)
     # Whatever it is, it is a branch that exists -- which the request itself was not.
     branch_exists = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{checked_out_branch_name}"],
@@ -2698,13 +2697,7 @@ def test_git_transfer_records_no_branch_when_a_commit_ref_leaves_the_target_deta
 
     assert created_branch_name is None
     assert checked_out_branch_name is None
-    on_disk = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=target_path,
-        capture_output=True,
-        text=True,
-    )
-    assert on_disk.stdout.strip() == _DETACHED_HEAD_REF
+    assert _branch_on_disk(target_path) == _DETACHED_HEAD_REF
 
 
 def test_create_work_dir_records_no_branch_for_a_detached_worktree(
@@ -2735,13 +2728,7 @@ def test_create_work_dir_records_no_branch_for_a_detached_worktree(
 
     assert result.created_branch_name is None
     assert result.checked_out_branch_name is None
-    on_disk = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=result.path,
-        capture_output=True,
-        text=True,
-    )
-    assert on_disk.stdout.strip() == _DETACHED_HEAD_REF
+    assert _branch_on_disk(result.path) == _DETACHED_HEAD_REF
 
 
 @pytest.mark.rsync

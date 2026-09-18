@@ -359,10 +359,9 @@ def _is_full_state_line(line: str) -> bool:
 def find_last_full_state_offset(events_path: Path) -> int | None:
     """Byte offset of the last complete ``AGENTS_FULL_STATE`` line, or None if there is none.
 
-    Both readers of this file start here, for the same reason: a full snapshot is
-    the only line a whole-agent-set view can be rebuilt from. Replaying a lone
-    mid-stream ``AGENT_STATE`` first would collapse that view to the single agent
-    it names.
+    Where a reader that folds the whole agent set has to begin: a full snapshot is
+    the only line such a view can be rebuilt from. Replaying a lone mid-stream
+    ``AGENT_STATE`` first would collapse that view to the single agent it names.
 
     Scans the file once without retaining it, so a long-lived host's event history
     costs one sequential read and constant memory.
@@ -625,10 +624,10 @@ class ObserveEventFollower(MutableModel):
     (``require_writer``). A consumer attaching to an observer it expects to be up
     wants ``start`` to refuse when none is, since tailing a dormant file is the
     failure this class exists to prevent. A consumer booted beside the observer by
-    a supervisor, in no guaranteed order, cannot demand that: it starts in the
-    outage state instead, reports it, and seeds from the file at the first tick
-    that finds a writer -- never from a snapshot an unlocked file merely happens to
-    hold.
+    a supervisor, in no guaranteed order, cannot demand that: it starts anyway, and
+    its follow thread reports the outage from its first tick onward and seeds from
+    the file at the first tick that finds a writer -- never from a snapshot an
+    unlocked file merely happens to hold.
 
     A follower is single-use: ``start`` may be called once, and not again after
     ``stop``. Construct a new one to follow the stream again.
@@ -680,9 +679,10 @@ class ObserveEventFollower(MutableModel):
         Raises :class:`ObserveStreamUnavailableError` when ``require_writer`` is
         set and no observer holds the lock, because there is then no stream to
         follow and silently tailing a dormant file is the exact failure this class
-        exists to prevent. Without ``require_writer`` the follow thread starts in
-        the outage state (``failure_detail`` says no observer holds the lock) and
-        picks the stream up on the first tick that finds one.
+        exists to prevent. Without ``require_writer`` it starts anyway; the follow
+        thread's first tick records the outage (``failure_detail`` then says no
+        observer holds the lock), and it picks the stream up on the first tick that
+        finds one.
 
         Also raises once this follower has been started or stopped, since neither
         way of starting it again does what the caller means: a second thread would
@@ -903,8 +903,7 @@ class ObserveEventFollower(MutableModel):
             # size can land inside a line the writer is still appending, and the
             # remainder would then be read as though it were a whole line and logged
             # as corruption -- the one thing ``_is_full_state_line`` promises not to
-            # cry wolf about. Every other offset this class sets is already on a
-            # boundary, so this was the lone exception.
+            # cry wolf about.
             self._offset = boundary
             return
         self._offset = snapshot_offset
@@ -968,8 +967,8 @@ class ObserveEventFollower(MutableModel):
         """Note that no writer is reachable right now, refreshing the reason each tick.
 
         Logged only as the outage begins: it is re-recorded on every poll for as
-        long as it lasts, and an observer that stays down would otherwise fill the
-        log with one identical line per second.
+        long as it lasts, and an observer that stays down would otherwise write one
+        identical line per fallback poll for the whole outage.
         """
         with self._lock:
             is_new_outage = self._outage is None
