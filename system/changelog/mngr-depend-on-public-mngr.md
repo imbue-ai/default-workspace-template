@@ -26,9 +26,5 @@
   split vendored-mngr edits from workspace edits, and there is no vendored mngr to
   split. mngr changes are their own PR on the mngr repo.
 
-- The image build symlinks `mngr` into `/usr/local/bin` like `tk`, so non-login shells
-  (`ssh <workspace> mngr ...`, `mngr exec`) find it without a `PATH` prefix. A workspace
-  that updates onto this release keeps reaching `mngr` through `PATH` as before.
-
 - The root dev group depends on `imbue-common[testing]` (the extra that declares what
   `imbue_common.ratchet_testing` needs) instead of naming `import-linter` itself.
