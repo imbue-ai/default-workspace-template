@@ -2130,6 +2130,26 @@ def test_apply_frontend_only_builds_refreshes_and_restarts(
     assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
 
 
+def test_apply_restart_resolves_the_services_agent_by_type_when_renamed(
+    apply_repo: Path,
+) -> None:
+    """A user or the Minds app can rename the services agent away from
+    "system-services" at any time (its display name is not load-bearing); the
+    restart must still find it by its stable ``type`` ("main") rather than
+    failing the way a hardcoded name lookup did in practice."""
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("mngr", "list", "--include", 'type == "main"', "--ids"),
+        _Result(stdout="agent-renamed-services\n"),
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran("mngr", "start", "--restart", "agent-renamed-services")
+    assert not runner.ran(*_RESTART)
+
+
 def test_apply_backend_change_preflights_restarts_and_probes(
     apply_repo: Path,
 ) -> None:
@@ -6059,6 +6079,27 @@ def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
     assert not runner.ran("npm")
     assert runner.ran(*_RESTART)  # the apply had restarted, so recovery must
     assert not _marker_exists(apply_repo)
+
+
+def test_recover_restart_resolves_the_services_agent_by_type_when_renamed(
+    apply_repo: Path,
+) -> None:
+    """Same rename-resilience as the forward apply's restart (see
+    test_apply_restart_resolves_the_services_agent_by_type_when_renamed), for
+    recovery's own restart call."""
+    _plant_snapshotted_marker(apply_repo, live_service_restarted=True)
+    shutil.rmtree(apply_repo / update_layout.STATIC_DIR)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("mngr", "list", "--include", 'type == "main"', "--ids"),
+        _Result(stdout="agent-renamed-services\n"),
+    )
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
+
+    assert code == 0
+    assert runner.ran("mngr", "start", "--restart", "agent-renamed-services")
+    assert not runner.ran(*_RESTART)
 
 
 def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
