@@ -7,6 +7,9 @@ from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_fast_mode import ChatFastModeState
+from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
@@ -133,10 +136,16 @@ class PoweredByResponse(FrozenModel):
     label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
-class FastModePromptAnsweredResponse(FrozenModel):
-    """Response from POST /api/chats/<id>/fast-mode-answered."""
+class ChatSettingsResponse(FrozenModel):
+    """Response from GET and PUT /api/settings: the workspace-wide chat settings as they stand."""
 
-    status: str = Field(description="'ok' when the answered label was recorded")
+    settings: ChatSettings = Field(description="The settings")
+
+
+class FastModeStateResponse(FrozenModel):
+    """Response from GET and PUT /api/chats/<chat_id>/fast-mode: the chat's fast mode."""
+
+    state: ChatFastModeState = Field(description="The chat's fast mode")
 
 
 class AttachmentUploadResponse(FrozenModel):
@@ -544,6 +553,9 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
 
     # Minted with nothing signed in: the page shows the provider chooser, and the launch waits.
     AWAITING_ACCOUNT = auto()
+    # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
+    # user's first send is what picks the account (the chooser opens then) and launches it.
+    AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()
     # Its ``mngr create`` failed; ``error`` says how, and the page can try again.
@@ -564,6 +576,17 @@ class ProvisionalChat(FrozenModel):
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
+    is_seeded: bool = Field(
+        default=False,
+        description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
+    )
+
+
+class SeedChatRequest(FrozenModel):
+    """Request body for POST /api/chats/seed: the conversation the Mind app had before the workspace existed."""
+
+    title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
+    turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
 
 
 class CreatedChat(FrozenModel):

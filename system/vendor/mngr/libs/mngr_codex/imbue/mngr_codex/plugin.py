@@ -293,6 +293,15 @@ _HOOK_TRUST_PROMPT_MARKER: Final[str] = "Hooks need review"
 # A no-show within this window means there is nothing to clear (already trusted, or not that screen).
 _HOOK_TRUST_PROMPT_TIMEOUT_SECONDS: Final[float] = 15.0
 
+# The composer placeholder the ``--remote`` TUI renders once it has resumed the root thread. Absent
+# while the TUI is still on the hook-trust screen or mid-resume, so its presence is the signal that
+# the resume is over (``_wait_for_tui_attached``).
+_TUI_COMPOSER_MARKER: Final[str] = "Ask Codex to do anything"
+
+# How long to wait for the TUI to attach after the hook-trust prompt was cleared. The resume takes
+# well under a second; a no-show is logged, not fatal.
+_TUI_ATTACH_TIMEOUT_SECONDS: Final[float] = 15.0
+
 
 def _probe_app_server_ready(socket_path: Path) -> bool:
     """Return whether the daemon accepts a WebSocket connect + ``initialize`` handshake.
@@ -702,7 +711,9 @@ class CodexAgent(
         the workspace trust the user already granted (which is what gates the bypass flag), so mngr
         does not re-prompt. Best-effort: no screen within the timeout (already trusted, or the TUI
         never rendered it) is a no-op, and a re-check right before the keypress keeps a stray "2"
-        from ever landing in the composer as a message.
+        from ever landing in the composer as a message. Having pressed, this returns only once the
+        freed TUI has finished attaching (see :meth:`_wait_for_tui_attached`), so the create's
+        initial message does not race the TUI's resume.
         """
         if not self.host.is_local:
             return
@@ -718,11 +729,44 @@ class CodexAgent(
         if not self._is_on_hook_trust_prompt():
             return
         self._send_hook_trust_keypress()
+        self._wait_for_tui_attached()
+
+    def _wait_for_tui_attached(self, timeout: float = _TUI_ATTACH_TIMEOUT_SECONDS) -> None:
+        """Wait for the ``--remote`` TUI to finish resuming the root thread once the hook-trust screen is cleared.
+
+        Freed from the screen, the TUI sends ``thread/resume`` with its own config overrides, and
+        the app-server answers a resume whose overrides differ from the loaded thread's by shutting
+        that thread down and rebuilding it from the rollout, when the thread is idle and
+        unsubscribed at that instant. A ``turn/start`` that lands inside that window is aborted by
+        the shutdown (the turn ends "interrupted" a few ms in; verified live), so the initial
+        message must not go out until the resume is over. The composer placeholder appears only
+        once the TUI has attached, so the pane is the signal. A no-show within the timeout is
+        logged and not fatal: the send then proceeds as it did before.
+        """
+        try:
+            wait_for(
+                self._is_tui_attached,
+                timeout=timeout,
+                poll_interval=_READY_POLL_INTERVAL_SECONDS,
+                error_message="codex TUI did not attach",
+            )
+        except TimeoutError:
+            logger.warning(
+                "codex TUI for {} did not show its composer within {:.0f}s of the hook-trust prompt being "
+                "cleared; sending the initial message anyway",
+                self.name,
+                timeout,
+            )
 
     def _is_on_hook_trust_prompt(self) -> bool:
         """Whether the agent's primary (``--remote`` TUI) window is showing the hook-trust screen."""
         pane = self.capture_pane_content()
         return pane is not None and _HOOK_TRUST_PROMPT_MARKER in pane
+
+    def _is_tui_attached(self) -> bool:
+        """Whether the primary window shows the attached TUI's composer, with the hook-trust screen gone."""
+        pane = self.capture_pane_content()
+        return pane is not None and _HOOK_TRUST_PROMPT_MARKER not in pane and _TUI_COMPOSER_MARKER in pane
 
     def _send_hook_trust_keypress(self) -> None:
         """Select "Trust all and continue" on the hook-trust screen (a test seam).
@@ -1338,7 +1382,8 @@ class CodexAgent(
         merged = merge_project_trust(existing_config, canonical_source)
         if merged is not None:
             with log_span("Persisting trusted source repo {} in {}", canonical_source, user_config_path):
-                host.write_text_file(user_config_path, serialize_codex_config(merged))
+                # The user's own config: written in place so a dotfiles symlink stays one.
+                host.write_text_file(user_config_path, serialize_codex_config(merged), is_atomic=False)
 
     def _prompt_user_to_trust_workspace(self, source_path: Path, config_path: Path) -> bool:
         """Prompt to trust the source repo (and allow the codex hook-review bypass).

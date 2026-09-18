@@ -97,11 +97,12 @@ was opened; "Remove from project" unfiles it. Each client keeps its own
 arrangement of each view: the browser saves the user's gestures with a save
 id and the stamp it was based on (a save over a newer arrangement is refused
 with 409 and the window refetches), the shell writes the file for agent ops
-and its own pruning, and every write is announced as `layout_updated` so the
+and deletes, and every write is announced as `layout_updated` so the
 client's other windows mirror it. The active view lives on the client record.
-A saved tab whose address the machine no longer lists is pruned on the next
-observation; an instance whose record says `lifetime = "referenced"` is
-deleted through its app once nothing references it.
+A tab leaves its tab sets and layouts only when its instance is deleted through
+the shell; one whose app stops listing it stays, shown as unavailable, and
+reconnects when the app lists it again. An instance whose record says
+`lifetime = "referenced"` is deleted through its app once nothing references it.
 
 The rail shows the view's identity (the switcher; right-click for project
 settings), its shortcut rows (seeded from every app's `default_shortcut`;
@@ -357,6 +358,6 @@ constantly, the apply's own version-history commit lands after the restart, and
 a frontend-only apply rebuilds the served bundle without restarting -- so the
 check diffs the startup HEAD against the current one and reports only when a
 changed path is backend code this process imports, a manifest its environment
-was resolved from, or the vendored mngr. The banner
+was resolved from, or mngr. The banner
 informs only; acting on it stays with the agent.
 

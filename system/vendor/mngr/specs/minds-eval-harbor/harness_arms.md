@@ -145,7 +145,7 @@ The sequence in `_prepare_workspace` gains one branch and one step.
    The row's `lane` is read in the same pass and logged as a warning when it is not the lane the run asked for; the harness config keeps the requested lane, since the harness is what grading and the record need.
 5. Create the chat against the account and wait for it to reach `WAITING` and to answer its welcome (unchanged).
 6. **Apply the harness config.**
-   If the run names a `model`: `POST /api/agents/<chat_id>/model {model_id, effort, fast, axes: ["model", "effort", "fast"]}`.
+   If the run names a `model`: `POST /api/chats/<chat_id>/model {model_id, effort, fast, axes: ["model", "effort", "fast"]}`.
    All three axes are always sent, so the endpoint applies all three regardless of what the frontend's diffing rule would have considered changed.
    Then wait for the chat to be `WAITING` again, with the same poll the welcome wait uses; on claude the switch is three slash commands typed into the session and the agent is briefly busy answering them.
 7. Capture the pre-turn registrations and continue into the conversation (unchanged).
@@ -200,7 +200,7 @@ A 400 is a configuration error and never a workspace fault; the run should stop 
 
 `mngr_sha` and `dwt_sha` repeat the top-level keys of `state.json` and of the trial metadata, which keep their place; the block carries them so it names the whole treatment on its own, and a reader holding one arm block needs nothing else to say what it was.
 
-- `harness` comes from the accounts listing in step 4; `model_choice_switch` is `applied`, `skipped` (no `model`), or the failure that stopped the trial, and is named for the single call that sets model, effort and fast together (`POST /api/agents/<id>/model`).
+- `harness` comes from the accounts listing in step 4; `model_choice_switch` is `applied`, `skipped` (no `model`), or the failure that stopped the trial, and is named for the single call that sets model, effort and fast together (`POST /api/chats/<chat_id>/model`).
 - `observed_models` is the set of `model_name` values on the ATIF agent steps after the client's first turn, and `welcome_model` the one on the greeting step.
   A step filed under the `<synthetic>` pseudo-model counts towards neither: no inference answered it, and counting it would read a switched trial as one that ran on two models.
   The two halves are separated at the step carrying the driver's own first message: turn 1 is the first `user` step whose stripped message is that text, and everything before it belongs to the greeting, so the greeting falls on the greeting side whether the harness filed it as a `user` step (pi) or a `system` step (claude), without either harness's greeting text being spelled out anywhere.

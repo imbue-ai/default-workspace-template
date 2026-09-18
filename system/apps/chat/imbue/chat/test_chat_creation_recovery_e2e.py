@@ -172,6 +172,8 @@ def _serving_workspace(
         broadcaster,
         messenger=RecordingMngrMessenger(),
         mngr_binary=str(fake_mngr),
+        # A create writes the chat's fast mode under this root; the default is this package's own data/.
+        chat_files_root=tmp_path / "chats",
     )
     with manager._lock:
         manager._agents[_PRIMARY_AGENT_ID] = AgentStateItem(

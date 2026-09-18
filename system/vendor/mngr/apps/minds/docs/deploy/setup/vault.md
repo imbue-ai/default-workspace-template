@@ -21,8 +21,15 @@ through Vault; they stay as shell env vars on the operator's machine.
 ```bash
 export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200
 export VAULT_NAMESPACE=admin
-vault login -method=oidc   # or whatever your team is set up for
+vault login -method=oidc   # the default `employee` role: dev + ci
+vault login -method=oidc role=minds_staging      # staging
+vault login -method=oidc role=minds_production   # production
 ```
+
+The default `employee` role reads `secrets/minds/{dev,ci}/*` and signs
+operator SSH certificates on `minds-dev-ssh` / `minds-ci-ssh`; the per-tier
+roles are the only way onto `secrets/minds/{staging,production}/*` and
+their CA mounts, and are denied on dev and ci.
 
 ## Path layout
 
@@ -64,6 +71,16 @@ secrets/minds/<tier>/supertokens
 `pool-ssh` is the gen-1 slice fleet's static management key and goes away
 with the last gen-1 box (phase 6 of the gen-1 -> gen-2 cutover); gen-2
 boxes authorize no static key at all.
+
+On the dev and ci tiers the `neon` entry's `DATABASE_URL` is the tier's
+standing **box registry** (the `minds-dev-infra` / `minds-ci-infra` Neon
+project's `host_pool` DB, see "Box registry" in
+[host-pool-setup.md](../host-pool-setup.md)), not any env's runtime DSN:
+`minds-admin env deploy` reads it to copy the tier's registered boxes into
+the per-env `host_pool` DB, and the tier-addressed `minds-admin wireguard`
+commands read the fleet from it. The Modal secret a dev / ci deploy pushes
+overrides `DATABASE_URL` with the per-env Neon project's DSN, so the
+registry DSN never reaches an env's connector.
 
 The self-hosted Bugsink error tracker's own config lives in
 `secrets/minds/<tier>/bugsink` (every tier except ci; dev holds the SHARED

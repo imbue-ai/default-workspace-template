@@ -190,7 +190,7 @@ test-offload-minds-snapshot snapshot_image_id args="":
         cp test-results/junit.xml "$MAIN_WORKTREE/test-results/junit.xml"
     fi
 
-# === TMR (test map-reduce) variants ===
+# TMR (test map-reduce) variants
 # Canonical per-suite flag sets for `mngr tmr` (one agent per test, run + fix in
 # parallel). Each variant gets its own --name prefix so its agents, branches, and
 # PRs stay separate and reviewable on their own. The CI workflow
@@ -223,7 +223,7 @@ tmr-minds *args:
 witness-minds *args:
   uv run mngr witness --root apps/minds/behaviors {{args}}
 
-# === minds deployment / services test orchestrator ===
+# minds deployment / services test orchestrator
 # Wraps apps/minds_admin/scripts/test_deployments.py. See specs/minds-deployment-tests.md
 # and apps/minds/deployment_tests/README.md for the full design + usage.
 
@@ -298,8 +298,9 @@ minds-test-electron *args:
   xvfb-run -a uv run pytest apps/minds/test_snapshot_resume.py::test_create_workspace_and_sign_in_via_modal_then_chat_via_electron -v --no-cov --cov-fail-under=0 {{args}}
 
 # Drive the FULL Electron workspace lifecycle end-to-end (create local Docker
-# workspace -> send a chat message + await reply -> open a terminal -> navigate
-# home -> destroy via the v1 settings flow), wrapped in `xvfb-run` for headless
+# workspace -> message the welcome chat it opens on + await reply -> start a
+# second chat from the New Tab page -> open a terminal -> navigate home ->
+# destroy via the v1 settings flow), wrapped in `xvfb-run` for headless
 # Linux. Unlike `minds-test-electron` (create-only pytest acceptance test), this
 # is an operator/debug harness: it needs Docker + live AI creds, so activate an
 # env with a logged-in account first, e.g.
@@ -330,6 +331,105 @@ minds-test-electron-menu *args:
     . apps/minds/scripts/select_node_version.sh || exit 2
     cd apps/minds
     xvfb-run -a pnpm exec playwright test --config=test/e2e/playwright.config.js context-menu.spec.js {{args}}
+
+# Type-check and test apps/minds_evals. It is a standalone uv project, not a
+# workspace member (see the root [tool.uv.workspace].exclude), so it has its own
+# lock and venv: the root `uv sync --all-packages`, `just test-quick`, `just
+# test-offload` and the root `ty check` all skip it, and this recipe is the only
+# thing that runs its suite. `--locked` fails rather than silently re-resolving,
+# so a pyproject edit without a matching `uv lock` is caught here.
+#
+# CI caps each pytest session at 150 s, and the tests marked `chromium` (a real
+# headless Chromium each, seconds apiece) would take most of that budget on
+# their own. So a run with no args is two sessions: the rest of the suite, then
+# the chromium tests, each with its own budget; the second appends to the
+# first's coverage data, so its report covers the whole suite. Given args (a
+# path, a node id, a -m), the recipe runs the one session they select.
+#
+# The chromium session's budget is 300 s rather than CI's 150 s. Its time is
+# spent in waits the flow runner makes on purpose (a settle window, a fresh
+# process per step), which stretch with the runner's load rather than with the
+# code under test, and a session that overruns the cap fails with no failing
+# test to point at.
+[group("minds evals")]
+test-minds-evals args="":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  uv run ty check || exit 1
+  if [ -n {{quote(args)}} ]; then
+    exec uv run pytest {{_minds_evals_parallel}} {{args}}
+  fi
+  uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium"
+  rest_exit_code=$?
+  PYTEST_MAX_DURATION_SECONDS="${PYTEST_MAX_DURATION_SECONDS:-300}" uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append
+  chromium_exit_code=$?
+  [ "$rest_exit_code" -eq 0 ] && [ "$chromium_exit_code" -eq 0 ]
+
+# Run the minds_evals suite `passes` times, plus `stressed_passes` more with every core kept
+# busy, and merge the passes into test-results/junit.xml with one testcase per attempt -- the
+# shape an offload run with retries leaves behind. The suite has no retrying runner, so this is
+# what tells a flaky test (failed in some passes) from a broken one (failed in all of them); the
+# recipe fails only for the broken kind, and for a session that never produced a junit. The
+# stressed passes come last, so in the report a test's highest attempts are the starved ones:
+# a test that fails only there has a real-time budget a busy runner can use up.
+#
+# The sessions run under coverage like the PR job's, although nothing reads the data: the point is
+# to draw the flakes a PR would, and the tracer's weight is part of the timing a PR runs with.
+#
+# Each session gets a 15 minute budget in place of CI's 150 s cap: the cap polices how long the
+# suite takes on a PR, and here a slow pass is the point rather than a failure.
+[group("minds evals")]
+test-minds-evals-repeat passes="5" stressed_passes="1":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  repo_root="$PWD"
+  passes_dir="$repo_root/test-results/minds-evals-passes"
+  rm -rf "$passes_dir" "$repo_root/test-results/junit.xml"
+  mkdir -p "$passes_dir"
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  rm -f .test_output/flaky_tests_*.txt
+  export PYTEST_MAX_DURATION_SECONDS=900
+  total_passes=$(( {{passes}} + {{stressed_passes}} ))
+  hog_pids=()
+  # An interrupted stressed pass must not leave its busy loops spinning on a developer's machine.
+  trap 'for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do kill "$hog_pid" 2>/dev/null; done' EXIT
+  for pass in $(seq 1 "$total_passes"); do
+    hog_pids=()
+    if [ "$pass" -gt {{passes}} ]; then
+      for _ in $(seq 1 "$(getconf _NPROCESSORS_ONLN)"); do
+        ( while :; do :; done ) &
+        hog_pids+=("$!")
+      done
+    fi
+    label="$(printf 'pass-%02d' "$pass")"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium" --junitxml="$passes_dir/$label-rest.xml"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append --junitxml="$passes_dir/$label-chromium.xml"
+    for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do
+      kill "$hog_pid"
+    done
+  done
+  # The manifest names tests relative to this project; the merged junit names them from the repo
+  # root. They land beside the passes rather than in test-results/ directly: the reader's glob
+  # (test-results/**/flaky_tests_*.txt) reaches either way, and only this directory is cleared per
+  # run, so a previous run's manifest cannot report a test that is no longer marked flaky.
+  for manifest in .test_output/flaky_tests_*.txt; do
+    [ -f "$manifest" ] && sed "s|^|apps/minds_evals/|" "$manifest" > "$passes_dir/$(basename "$manifest")"
+  done
+  cd "$repo_root"
+  expected_junits=()
+  for pass in $(seq 1 "$total_passes"); do
+    label="$(printf 'pass-%02d' "$pass")"
+    expected_junits+=("$passes_dir/$label-rest.xml" "$passes_dir/$label-chromium.xml")
+  done
+  python3 scripts/junit_merge_passes.py --pass-junit "${expected_junits[@]}" --path-prefix apps/minds_evals --output test-results/junit.xml
+
+# Sized for CI's two-vCPU runner rather than taken from `_parallel`: workers
+# beyond the core count spend the session importing the suite in parallel and
+# starve each other's Chromium.
+_minds_evals_parallel := "-n 2 --dist=worksteal --max-worker-restart=0"
 
 # Generate a harbor task dataset from a minds eval config (one task per persona
 # case). Datasets default OUTSIDE the repo tree: each generated task embeds a
@@ -558,7 +658,7 @@ sync-vendor-mngr-live default_workspace_template="":
         --exclude=uv.lock \
         ./ "$vendor_mngr/"
 
-# === Modal deploy / minds iteration helpers ===
+# Modal deploy / minds iteration helpers
 #
 # Every recipe below requires an activated minds env. Activate first via
 # `eval "$(uv run minds-admin env activate <name>)"`, then run the recipe in
@@ -1505,7 +1605,7 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
     [ -n "$base_url" ] && printf 'export ANTHROPIC_BASE_URL=%s\n' "$base_url" >> "$env_file"
     echo "Wrote $env_file (mode 600)"
 
-# === minds pool hosts (leased mode) ===
+# minds pool hosts (leased mode)
 #
 # Thin wrappers around the env-aware `minds-admin pool {create,list,destroy}` CLI,
 # which resolves the pool SSH key AND (for staging / production) the host_pool
@@ -1517,7 +1617,7 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 # Pool hosts are baked as bare-metal SLICES (recipes below). List them with
 # `just pool-list` and remove them with `just pool-destroy`.
 
-# === minds bare-metal SLICES (carved on a pre-registered bare-metal box) ===
+# minds bare-metal SLICES (carved on a pre-registered bare-metal box)
 #
 # These bake "slices": lima/QEMU VMs carved on a bare-metal box you already
 # ordered, `minds-admin server register`ed, and `... prep`ped
@@ -1527,6 +1627,15 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 #
 # Prereqs: activate a minds env first (`eval "$(uv run minds-admin env activate <name>)"`)
 # AND `vault login -method=oidc` (the wrapper's Vault reads need a live token).
+#
+# Box commands (server-*, and `minds-admin cutover repave`) on the dev and ci
+# tiers must run from the tier's box REGISTRY, not a personal env: activate the
+# activation-only `<tier>-infra` root and export the registry DSN --
+#   eval "$(uv run minds-admin env activate --create dev-infra)"
+#   eval "$(just registry-dsn dev)"
+# -- so the box row lands where every env's `env deploy` imports from
+# (see "Box registry" in apps/minds/docs/deploy/host-pool-setup.md). Bakes stay
+# on the personal env (they write that env's pool_hosts rows).
 #
 # `region` is the lease-region LABEL stamped on each row (what the connector
 # region-matches at lease time, e.g. US-EAST-VA) -- NOT the box's raw
@@ -1621,6 +1730,33 @@ pool-bake region tag count="1" *extra_args:
         --region "{{region}}" \
         --from-tag "{{tag}}" \
         {{extra_args}}
+
+# Print the `export MINDS_HOST_POOL_DSN=...` line for a tier's box registry
+# (secrets/minds/<tier>/neon/DATABASE_URL; requires a vault login), to eval
+# after activating the tier's `<tier>-infra` root. stdout carries only the
+# export line; a failure (no `vault login`, missing leaf) is reported on stderr
+# and exits non-zero, so eval sees nothing.
+#
+#   eval "$(just registry-dsn dev)"
+[group("minds ops")]
+registry-dsn tier:
+    #!/bin/bash
+    set -ueo pipefail
+    dsn="$(uv run python - "{{tier}}" <<'PYEOF'
+    import sys
+
+    import click
+
+    from imbue.minds_admin.cli._tier_secrets import resolve_tier_pool_database_url
+
+    try:
+        print(resolve_tier_pool_database_url(sys.argv[1]))
+    except click.ClickException as exc:
+        exc.show()
+        sys.exit(exc.exit_code)
+    PYEOF
+    )"
+    printf 'export MINDS_HOST_POOL_DSN=%q\n' "$dsn"
 
 # Add a paid user to the activated minds env. Resolves the connector URL (from the
 # env's client.toml) and the paid-list admin key (from the tier's Vault) automatically,

@@ -241,6 +241,218 @@ bucket: 10 to 18 min; a first-of-version seed adds 8 to 15 min. Gen-1
 admin-start restore: 1m43s. Gen-2 stop: 1m40s; gen-2 cross-box restore: 1m39s.
 Repave: 17 to 22 min. Fresh 0.6.1 bake: 15 to 16 min.
 
+## Production tier (2026-09-15): services deployed
+
+Run from the `mngr/production-ssh-ca` branch (`main` at `af0b23b973`, the
+merge of PR #1043, plus `114214b880`, the production `[ssh_ca]` commit), with
+Josh present. Steps 2 and 3 of `next_deploy.md`'s production plan; boxes,
+bakes, migrations and channels had not started when this was written.
+
+- **SSH CA**: `[ssh_ca] public_key` committed for production (read from
+  `minds-production-ssh/config/ca`); the pinned loader test that kept the
+  tier CA-less removed. The connector AppRole `minds-connector-production`'s
+  role-id and a fresh secret-id minted into `secrets/minds/production/ssh-ca`.
+- **Services deploy**: deploy_id `20260915T154933Z`, RECREATE, 15:49Z-15:5xZ.
+  Applied pool-hosts migrations 034 through 042 (schema was at 033: the
+  2026-09-09 deploy `20260909T225715Z`, recorded nowhere, had not carried
+  them), pushed every per-env Modal Secret including the new
+  `ssh-ca-production`, deployed `llm-production` (Prisma migration clean),
+  `rsc-production` (custom domains `accounts.imbue.com` and
+  `minds.imbue.com`, Modal proxy `mind-connector-east` attached) and
+  `analytics-production` (no pending ops migrations); both health checks
+  green; Neon snapshot deleted; recover-target file removed.
+- **Verified**: `/version` advanced to `20260915T154933Z`, liveness ok, the
+  three web channel files still name `minds-v0.5.2` (30 `available` rows in
+  US-EAST-VA, 17 in US-WEST-OR at that tag), `modal container exec ... 'echo
+  $MODAL_REGION'` answers `westus2` / `westus3` / `us-central1` for the four
+  live `rsc-production` containers (all US; the broad `region="us"` pin spans
+  the three clouds' US regions, not only AWS `us-*` names), and
+  `minds-admin server list` reads the fleet again (18 gen-1 boxes: 17
+  `24sys032-us` and one `24sk602-v1-us`, all `ready`).
+- **First production gen-2 boxes** (16:0xZ-16:39Z, Josh's choice: one fresh
+  box per region rather than a drain-and-repave; the standard `24sys03-v1-us`
+  with 2x960 NVMe was not orderable in hil, so hil got the same plan with
+  2x1920 NVMe; `24sys052-us` was considered and rejected for its SATA-only
+  storage and the untested two-disk-group reinstall layout). Both orders
+  placed 16:0xZ, delivered within about 15 minutes, set up in about 12
+  minutes each:
+  - `8797d3ae-f77b-4a40-8b98-91e22ab98913` vin / US-EAST-VA, OVH order
+    8870934, `ns1011325.ip-135-148-169.us` (135.148.169.102), 128 GB,
+    2x960 NVMe, $160 due now ($100/mo), overlay 10.64.1.1, 14 slots.
+  - `3841df6d-a749-4f6b-988e-c7cb12b13589` hil / US-WEST-OR, OVH order
+    8870936, `ns107170.ip-147-135-97.us` (147.135.97.227), 128 GB, 2x1920
+    NVMe, $224 due now ($164/mo), overlay 10.64.1.2, 14 slots.
+  Each setup minted the operator's production management certificate
+  (identity created at `~/.mindsadmin/production/ssh_id`), recorded a fresh
+  LUKS recovery passphrase in Vault and uploaded the header backup to the
+  bucket, installed the observability collector, and landed the `:22`
+  lockdown. `just server-audit` afterwards: both boxes keys 0/0, CA correct,
+  encrypted, exclusive to the tier, no degraded arrays; the audit reached
+  them over the operator tunnel, so the lockdown and WireGuard path work
+  from the operator machine. The artifact mirror verified clean (14 present)
+  before the first prep. No row baked yet.
+- **First production 0.6.1 bakes** (17:0xZ-17:4xZ, one row per new box,
+  first-of-version seed on each, concurrent): vin `8797d3ae` row `4ef0efdb`
+  (`host-bd34706b923a4749a061a7c418b998a4`, ports 22000/22001); hil
+  `3841df6d` row `8697d85a` (`host-7cfbdbabc8894e73b0c3c24e08740378`, ports
+  22000/22001). Both `available` at `minds-v0.6.1`, 8 units / 44 GB, runsc.
+  Verified over the operator certificate with the runbook script:
+  `DEFERRED_INSTALL_OK`, `system-services` STOPPED, git identity
+  `minds-bootstrap`, `CONTENT_OK`, gVisor kernel, vendored version 0.6.1 on
+  both. Not yet leased from a desktop.
+- **Second box per region ordered** (17:2xZ, Josh: spare capacity): vin
+  `f763270e-a0b1-4c33-8d44-30a0e6c37263` (OVH order 8871197, $160) and hil
+  `149ac508-e492-4d83-9d3f-45fe9b771550` (OVH order 8871205, $224), same
+  configurations as the first pair. Delivered 17:38Z (both), set up gen-2
+  concurrently: vin `ns1011321.ip-135-148-169.us` (135.148.169.103) READY
+  17:5xZ, hil `ns1000320.ip-51-81-242.us` (51.81.242.68) READY 18:0xZ, 14
+  slots each, no rows baked on them yet. Fleet audit afterwards: all four
+  gen-2 boxes keys 0/0, CA correct, encrypted, exclusive; 27 servers,
+  294/393 slots used.
+- **Three more 0.6.1 rows per new box** (17:2xZ-17:5xZ, tar already on each
+  box, three concurrent carves per box, 3/3 succeeded on each): vin ports
+  22002/22003, 22004/22005, 22006/22007; hil the same ports. All six verified
+  with the runbook script (DEFERRED_INSTALL_OK, `system-services` STOPPED,
+  `minds-bootstrap`, CONTENT_OK, 0.6.1). Four `available` 0.6.1 rows per
+  region.
+- **Pre-0.3.10 workspaces are a different shape.** The first production
+  preflight (Josh's four boxes, 55 rows) found 19 rows baked at 0.3.5-0.3.8
+  with an empty version probe: those containers run as root with
+  `HOME=/root`, keep the template checkout at `/mngr-vol/host_dir/code`
+  (no `/home/user/workspace`, no vendored mngr, `git describe` there reads
+  their bake tag plus a few own commits), and are exactly the cohort the
+  0.3.10 floor excludes. Fleet-wide, 41 rows were baked below 0.3.10. The
+  probe should name this layout and report "below the floor" instead of a
+  parse error (follow-up). One 0.5.x row on the same boxes has the legacy
+  home layout (`repair-home-layout` first); the 7 `available` 0.5.2 rows
+  there are destroyable before a repave.
+- **First production migration** (Josh's `test-of-0-4-3`, row `3a536d11`,
+  0.4.3, `home/` layout, latchkey set up by Josh beforehand; the desktop and
+  its supervisor closed for the migration): `cutover migrate
+  --yes-i-mean-production --target-server-id 3841df6d --workspace 3a536d11`,
+  18:03Z-18:2xZ. Harvest FULL (8 disk files, 2 confs, 4 tmpfs secrets);
+  0.4.3 image seeded on the hil gen-2 box before the stop (seed-only slice,
+  torn down); maintenance stop, rollback copy, park, transplant, replay,
+  re-lease at `147.135.97.227:22008/22009`, disk 45 GB, gen-2, `stop_kind`
+  cleared. Verified on the VM: `latchkey-gateway` and `latchkey-tunnel`
+  RUNNING, all four tmpfs secrets and the store present, `:1989` bound;
+  in the container: 13 programs RUNNING, system_interface 200, `/home/user ->
+  /mngr-vol/home` with the 793 MB checkout at `minds-v0.4.3-3-g…`, gVisor.
+  Desktop relaunched afterwards: its health tracker saw the old port fail,
+  dispatched one unattended start-only recovery (a no-op on the leased row),
+  re-established the forwards at the new address within 25 s, adopted the
+  machine's permissions and provisioned the new VM's gateway within a minute.
+- **Fleet inventory at this point** (pool DB, SuperTokens for emails): 274
+  owned gen-1 rows across 127 owners (36 imbue.com owners hold 141, 91
+  external owners hold 133); US-WEST-OR 189 leased + 25 stopped, US-EAST-VA
+  47 leased + 13 stopped; all 38 stopped rows finalized on no box. Versions:
+  141 rows at 0.4.x, 92 at 0.3.x (41 of them below the 0.3.10 migrate
+  floor), 41 at 0.5.x. Release channels are not recorded server-side; the
+  connector access log's `X-Imbue-Client` header gives each active user's
+  desktop version instead (14 days: 28 on 0.4.2, 23 on 0.5.2, 16 on 0.5.0,
+  3 on 0.4.1, 3 on 0.6.x, 26 with no desktop header; 47 owners not seen).
+- **Migration 039 stamped `disk_gb = 44` on 38 gen-1 rows**, exactly the 38
+  `stopped` rows on no box at deploy time (324 gen-1 rows in all); the
+  migrate's F7 restamp covers them.
+
+- **First production box emptied and repaved: `462c56c0` (vin)** (Josh's
+  choice of a single box to prove the sequence; migrations stay within a
+  region, vin -> vin and hil -> hil, on his instruction). daniel@imbue.com's
+  `workspace-2` (row `93f13634`, `host-b4fe7c1c…`, 0.3.17, `home/` layout,
+  latchkey DISK_ONLY: 7 disk files, 2 supervisor confs, no tmpfs pair on the
+  origin) migrated with `cutover migrate --yes-i-mean-production
+  --target-server-id 8797d3ae --workspace 93f13634-…`, 20:17Z-20:37Z
+  (report `migrate-20260915T203731Z`): first-of-version 0.3.17 seed on the
+  vin gen-2 box before the stop (tolerant config path, seed slice torn down,
+  tar published to `cutover/images/`), maintenance stop, rollback copy,
+  park, transplant, replay, re-lease at `135.148.169.102:22008/22009` (gen-2,
+  8 units, 45 GB, region `US-EAST-VA` unchanged), origin VM destroyed.
+  Verified on the VM: container under runsc, 14 in-container programs
+  RUNNING/EXITED, `/home/user -> /mngr-vol/home` with the 1.1 GB checkout at
+  `minds-v0.3.17-2-g…`, system_interface 200, latchkey files replayed with
+  no tmpfs secrets (the gateway starts at daniel's next desktop provisioning
+  pass; he is on a 0.4.2 desktop, so one app restart is needed). The box then
+  held zero rows; `cutover repave --yes-i-mean-production --server-id
+  462c56c0-…` ran 20:38Z-20:51Z (report `repave-20260915T205114Z`): gen-2
+  `ready`, 14 slots, overlay `10.64.1.4`, storage partition 936 GB, LUKS
+  header backed up; the fleet audit afterwards read 27 boxes, 27 exclusive,
+  0 contaminated, keys 0/0 and CA correct on the new box. No row baked on it
+  yet.
+- **Overlay address collision found by that audit's follow-up:** the second
+  gen-2 pair, set up concurrently at 17:38Z, both carry `wireguard_address =
+  10.64.1.3` (`f763270e` vin and `149ac508` hil; each setup log says
+  "Assigned management overlay address 10.64.1.3"). `_ensure_box_wireguard_address`
+  in `cli/server.py` reads the assigned set and stamps the next free address
+  without a lock or a unique constraint, so two concurrent setups pick the
+  same one. The userspace onetun dial builds one tunnel per box from the
+  box's own key and endpoint, so operator commands still reach both (the
+  audit did); the rendered kernel-route operator config (`minds-admin
+  wireguard config`) would list two peers with the same `AllowedIPs` and
+  reach only one of them, and the connector never uses the overlay address.
+  Repaired 00:2xZ (2026-09-16) on `149ac508` (hil, empty): a first
+  `server prep` after restamping the row to `10.64.1.5` failed before
+  touching the box (the operator tunnel is built to the row's address, which
+  the box's wg0 did not carry yet, so the dial fell back to the locked-down
+  public `:22`), so the order that works is: row back to the box's current
+  address, `server ssh` to edit `Address` in `/etc/wireguard/wg0.conf` to
+  the new one and restart `wg-quick@wg0` from a detached `systemd-run`
+  timer, then the pinned restamp to `10.64.1.5`, then `server prep`
+  (converged in under a minute, WireGuard up with the same box key). The
+  duplicate query is empty, the box reads `10.64.1.5/11` on wg0, and the
+  audit is clean (27 exclusive). Tooling fix on this branch: the allocation
+  now runs under a transaction-scoped advisory lock in one transaction
+  (`allocate_box_wireguard_address`), and connector migration 043 adds a
+  partial unique index on `wireguard_address` (queued in `next_deploy.md`;
+  it refuses to apply on a tier still carrying a duplicate).
+
+- **Third box per region ordered and set up as migration buffer** (2026-09-16
+  00:5xZ-01:20Z, Josh: hold them empty rather than bake them): vin
+  `2b5cc1f7-38f7-413c-9d49-fdac1cc19f81` (OVH order 8872507, $160,
+  `ns1011322.ip-135-148-169.us` 135.148.169.104, overlay 10.64.1.6) and hil
+  `5f099257-3841-4665-ae2e-1ca906d9b564` (OVH order 8872509, $224,
+  `ns1000324.ip-51-81-242.us` 51.81.242.72, overlay 10.64.1.7), same
+  configurations as the earlier pairs, delivered in about 20 minutes, set up
+  concurrently through the locked allocation (distinct addresses, the first
+  live exercise of the fix above). Seven gen-2 boxes now: four vin, three hil.
+- **0.6.1 stock for the alpha/beta promotion** (01:55Z-01:27Z): 14 rows baked
+  on the repaved vin box `462c56c0` (`just pool-bake US-EAST-VA minds-v0.6.1
+  14 --server-id 462c56c0-…`, seed then fill, 14/14, ports 22000-22027) and 14
+  on hil `149ac508` (same, 14/14, ports 22000-22027), about 30 minutes each
+  with a first-of-tag seed on both boxes. All 28 verified with the runbook
+  script (`DEFERRED_INSTALL_OK`, `system-services` STOPPED, `minds-bootstrap`,
+  `CONTENT_OK`). The pool then held 18 `available` 0.6.1 rows in US-EAST-VA
+  and 17 in US-WEST-OR; the 0.5.2 gen-1 rows stay for stable.
+- **Promoted to beta and alpha, desktop and web** (PR #1057 from `main`,
+  merged 01:29:49Z; the release-channels run published within a minute):
+  `[channels.beta]` and `[channels.alpha]` at build `260915wjcyd06bp`
+  (0.6.1, 100%), `[web_channels.beta]` and `[web_channels.alpha]` at
+  `minds-v0.6.1`. Confirmed on the feed: `beta-mac.yml` and `alpha-mac.yml`
+  serve 0.6.1 at `stagingPercentage: 100`, `beta-web.json` and
+  `alpha-web.json` pin `minds-v0.6.1`; stable stays at 0.5.2 (desktop and
+  web), so the connector download fallback is untouched. Josh's plan: get
+  people onto 0.6.1 through these channels before the remaining box sweeps.
+
+- **Promoted to stable, desktop and web** (2026-09-16, PR #1076 from
+  `main`, merged 17:09:33Z; published within a minute): `[channels.stable]`
+  at build `260915wjcyd06bp` (0.6.1, 100%, Josh's call rather than a ramp)
+  and `[web_channels.stable]` at `minds-v0.6.1`; the connector's download
+  fallback (`_DEFAULT_TARGET_BY_PLATFORM`) bumped to the same build in the
+  same PR (it reaches production at the next connector deploy). Confirmed on
+  the feed: `stable-mac.yml` serves 0.6.1 at `stagingPercentage: 100` with
+  the `260915wjcyd06bp` arm64 dmg, `stable-web.json` pins `minds-v0.6.1`,
+  and `minds.imbue.com/download?platform=mac-arm64` redirects to that dmg.
+  Every channel now serves 0.6.1; the 0.5.2 gen-1 `available` rows are no
+  longer named by any web pin and can be retired when the gen-1 boxes are
+  swept.
+- **Two more hil boxes as migration buffer** (2026-09-16 16:5xZ-, same
+  `24sys03-v1-us` 2x1920 NVMe configuration, $224 each): `95bbc37c-7702-4d52-b970-e15ed09300b8`
+  (OVH order 8885505, `ns1000199.ip-147-135-97.us` 147.135.97.118, overlay
+  10.64.1.8) and `0172f93e-6d3f-4e0e-840d-73282aa8967e` (OVH order 8885509,
+  `ns1002929.ip-51-81-243.us` 51.81.243.47, overlay 10.64.1.9), delivered in
+  about 15 minutes, set up concurrently (distinct addresses again). The first
+  setup of `95bbc37c` died on a transient `deb.debian.org` fetch (OpenSSL
+  broken pipe, IPv6) during the prep; a plain `server setup` re-run resumed
+  it from `installing`. Both READY by 17:23Z (LUKS headers backed up, 14 slots each, left empty as buffer); no duplicate overlay address, and the fleet audit reads 31 boxes, 31 exclusive, 0 contaminated. Nine gen-2 boxes now: four vin, five hil.
 ## Deferred, deliberately (Josh)
 
 - The production gen-2 bring-up still listed in [../next_deploy.md](../next_deploy.md),

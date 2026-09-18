@@ -183,6 +183,19 @@ def test_read_job_environment_names_takes_exactly_what_the_jobs_own_trials_recor
     )
 
 
+def test_read_job_environment_names_reaches_a_stepped_trials_archived_state(tmp_path: Path) -> None:
+    """Harbor moves each step's `agent/` under `steps/<name>/` as the step ends, so a finished stepped
+    trial has no state at its root. Reading only the root would leak every environment a stepped case
+    ever made, and the age-based sweep is no backstop for the run that just made them."""
+    job_dir = tmp_path / "diagnose-fixture"
+    trial_dir = write_trial_dir(job_dir, "instrument__aaaaaaa", case_id="instrument")
+    archived = trial_dir / "steps" / "instrument"
+    archived.mkdir(parents=True)
+    (trial_dir / "agent").rename(archived / "agent")
+
+    assert read_job_environment_names(job_dir) == (expected_modal_environment_name("instrument__aaaaaaa"),)
+
+
 def test_read_job_environment_names_yields_nothing_for_a_job_that_never_got_a_trial(tmp_path: Path) -> None:
     """harbor makes the job directory before it makes any trial, so a run that died at task load
     leaves an empty one. The run gate refuses that directory; cleanup has nothing to do with it."""

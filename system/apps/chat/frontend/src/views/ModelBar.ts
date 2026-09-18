@@ -19,6 +19,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -38,6 +39,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { accountRow, emptyAccountRowState } from "./accountRow";
+import { FastModeModal } from "./FastModeModal";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -107,6 +109,8 @@ export function ModelBar(): m.Component<{ chatId: string }> {
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
+  // The fast-mode chooser is up (models/FastMode.ts); opened from the fast row, which closes the card.
+  let isFastModeModalOpen = false;
 
   // Recompute the offerable models for `chatId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
@@ -313,45 +317,39 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     ]);
   }
 
-  /** Fast mode: a switch.
+  /** Fast mode: the chat's mode (off, auto or on) as a row that opens the chooser.
    *
-   * A switch rather than a toggling icon, because a switch says on or off by its shape instead
-   * of by its fill.
+   * The row states the mode rather than a switch position, because auto is neither on nor off:
+   * a chat in auto reads "Auto" while fast, "Auto (off now)" once its fast turns have run. The
+   * chooser is a modal of its own so the card stays a list of one-line facts.
    */
-  function fastRow(opts: {
-    on: boolean;
-    interactive: boolean;
-    tooltip: string | null;
-    onToggle: () => void;
-  }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip) }, [
-      m("span", { class: css.ROW_LABEL }, "Fast Mode"),
-      m(
-        "span",
-        { class: css.ROW_VALUE_STATIC },
-        m(
-          "button",
-          {
-            type: "button",
-            role: "switch",
-            class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
-            "aria-label": "Fast Mode",
-            "aria-checked": opts.on ? "true" : "false",
-            disabled: !opts.interactive,
-            onclick: () => {
-              if (opts.interactive) opts.onToggle();
-            },
-          },
-          m(
-            "span",
-            { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
-            opts.on
-              ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
-              : null,
-          ),
-        ),
-      ),
-    ]);
+  function fastRow(opts: { chatId: string; interactive: boolean; tooltip: string | null }): m.Vnode {
+    const state = getFastModeState(opts.chatId);
+    if (state === null) void ensureFastModeState(opts.chatId);
+    return m(
+      "button",
+      {
+        type: "button",
+        class: opts.interactive ? css.ROW : css.ROW_INERT,
+        "data-card-row": "fast",
+        ...hoverTooltipAttrs(opts.tooltip),
+        disabled: !opts.interactive,
+        onclick: () => {
+          if (!opts.interactive) return;
+          closeCard();
+          isFastModeModalOpen = true;
+        },
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, "Fast Mode"),
+        m("span", { class: css.ROW_VALUE }, [
+          m("span", { class: css.ROW_TEXT }, state === null ? "..." : fastModeLabel(state)),
+          opts.interactive
+            ? m("span", { class: css.ROW_CHEVRON }, m.trust(icon("chevron-right", { size: 13 })))
+            : null,
+        ]),
+      ],
+    );
   }
 
   /** The card's viewport left, clamped so it cannot hang off either edge. */
@@ -688,7 +686,19 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             ],
       );
 
-      if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
+      // The fast-mode chooser outlives the card it was opened from (the row closes the card), so
+      // it portals on its own while the card is down.
+      const fastModeModal = isFastModeModalOpen
+        ? m(FastModeModal, {
+            chatId,
+            onClose: () => {
+              isFastModeModalOpen = false;
+            },
+          })
+        : null;
+      if (cardAnchor === null) {
+        return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [fastModeModal] })];
+      }
 
       const currentIdentity: ModelIdentity =
         matched === null
@@ -777,15 +787,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
               })
             : null,
           pending === null && matched !== null && matched.supports_fast
-            ? fastRow({
-                on: currentFast,
-                interactive,
-                tooltip: readOnlyTooltip,
-                onToggle: () => {
-                  const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
-                },
-              })
+            ? fastRow({ chatId, interactive, tooltip: readOnlyTooltip })
             : null,
           m("div", { class: css.DIVIDER }),
           stopAgentRow(chatId),
@@ -801,7 +803,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
 
       // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
       // clipping overlay, so a card that extends past the panel would be cut off at its edge.
-      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout, fastModeModal] })];
     },
   };
 }

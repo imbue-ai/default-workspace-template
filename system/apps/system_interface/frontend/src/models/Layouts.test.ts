@@ -3,22 +3,13 @@ import "../testing/dom";
 
 import {
   DockviewComponent,
-  Orientation,
   type GroupPanelPartInitParameters,
   type IContentRenderer,
   type PanelUpdateEvent,
-  type SerializedDockview,
 } from "dockview-core";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  isOwnSaveId,
-  mintSaveId,
-  mintTabId,
-  panelParamsInDocument,
-  panelsWithUnlistedAddresses,
-  parsePanelParams,
-} from "./Layouts";
+import { isOwnSaveId, mintSaveId, mintTabId, parsePanelParams } from "./Layouts";
 import type { PanelParams } from "./Layouts";
 
 describe("tab ids", () => {
@@ -65,39 +56,6 @@ describe("parsePanelParams", () => {
     expect(parsePanelParams({})).toBeNull();
     expect(parsePanelParams(undefined)).toBeNull();
     expect(parsePanelParams("app:files")).toBeNull();
-  });
-});
-
-describe("panelParamsInDocument", () => {
-  it("collects the readable params of every panel a document names", () => {
-    const serialized: SerializedDockview = {
-      grid: { root: { type: "branch", data: [] }, width: 1, height: 1, orientation: Orientation.HORIZONTAL },
-      panels: {
-        p1: { id: "p1", params: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001" } },
-        p2: { id: "p2", params: { kind: "launcher" } },
-        p3: { id: "p3" },
-      },
-    };
-    expect(panelParamsInDocument(serialized)).toEqual({
-      p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
-      p2: { kind: "launcher" },
-    });
-  });
-});
-
-describe("panelsWithUnlistedAddresses", () => {
-  it("names the panels whose address no app lists any more, never a launcher", () => {
-    const params: Record<string, PanelParams> = {
-      p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
-      p2: {
-        kind: "instance",
-        address: "app:terminal?instance=terminal-9",
-        tabId: "tab-0000000000000002",
-        lastFocusedMs: 0,
-      },
-      p3: { kind: "launcher" },
-    };
-    expect(panelsWithUnlistedAddresses(params, (address) => address === "app:files")).toEqual(["p2"]);
   });
 });
 
@@ -155,8 +113,9 @@ describe("dockview panel params", () => {
     const restored = buildDock((parameters) => restoredSeen.push(parameters.params));
     restored.fromJSON(saved);
     expect(restoredSeen).toEqual([{ ...params, lastFocusedMs: 7 }]);
-    expect(panelParamsInDocument(restored.toJSON())).toEqual({
-      "tab-0000000000000001": { ...params, lastFocusedMs: 7 },
+    expect(parsePanelParams(restored.toJSON().panels["tab-0000000000000001"].params)).toEqual({
+      ...params,
+      lastFocusedMs: 7,
     });
   });
 

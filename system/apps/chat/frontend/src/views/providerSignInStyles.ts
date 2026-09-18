@@ -159,6 +159,21 @@ export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-hel
  *  listed fact rather than somewhere to navigate. Its actions carry the interactivity. */
 export const ACCOUNT_ROW =
   "flex w-full items-center gap-2 rounded-lg border border-default bg-surface p-3 text-left shadow-raised";
+/** The same row when the chooser was opened to pick an account: the whole row picks it, as a
+ *  lane row walks into its lane, while its own actions stay on top and keep their clicks. */
+export const ACCOUNT_ROW_PICKABLE =
+  `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) ` +
+  "has-[.account-pick:enabled]:hover:border-accent " +
+  "has-[.account-pick:focus-visible]:outline-2 has-[.account-pick:focus-visible]:outline-offset-2 " +
+  "has-[.account-pick:focus-visible]:outline-accent";
+/** The pick target. Its `after` box stretches over the whole row, so a click anywhere on the
+ *  row that is not one of the actions lands here. */
+export const ACCOUNT_PICK =
+  "account-pick flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left outline-none " +
+  "after:absolute after:inset-0 after:rounded-lg after:content-[''] disabled:cursor-default";
+/** Raises an action above the pick target's stretched box. */
+export const ACCOUNT_ACTION = "relative";
+export const ACCOUNT_BROKEN_NOTE = "shrink-0 type-helper text-danger";
 
 // --- The API-key screen's provider dropdown ------------------------------------------------
 

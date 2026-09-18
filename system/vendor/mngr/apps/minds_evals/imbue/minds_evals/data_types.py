@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from collections.abc import Sequence
 from enum import auto
 from functools import cached_property
 from pathlib import Path
@@ -5,19 +7,29 @@ from typing import Annotated
 from typing import Any
 from typing import Final
 from typing import Self
+from typing import assert_never
 
 from pydantic import Field
+from pydantic import GetCoreSchemaHandler
+from pydantic import JsonValue
+from pydantic import StrictFloat
+from pydantic import StrictInt
 from pydantic import StringConstraints
 from pydantic import computed_field
 from pydantic import model_validator
+from pydantic_core import CoreSchema
+from pydantic_core import core_schema
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import InvalidPrimitiveValueError
 from imbue.imbue_common.primitives import PositiveInt
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import CapturedFileError
 from imbue.minds_evals.errors import EvalConfigError
+from imbue.minds_evals.errors import ExpectedFactsTableError
+from imbue.minds_evals.errors import ScriptedFlowActionError
 
 # A prompts entry equal to this sentinel is role-played by the decider model
 # instead of being sent verbatim. It cannot be the first prompt (there is no
@@ -50,8 +62,8 @@ DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 1800.0
 DEFAULT_MIN_REGISTERED_APPS: Final[int] = 1
 MINDS_APP_EXPECTED_HTTP_STATUS: Final[int] = 200
 
-# The http-check target that fans out to every delivered app rather than naming
-# one service.
+# The http-check target that fans out to every delivered or seeded app rather
+# than naming one service.
 REGISTERED_APPS_HTTP_TARGET: Final[str] = "registered-apps"
 
 
@@ -64,7 +76,7 @@ class DeliverableKind(UpperCaseStrEnum):
 class HttpExpectation(FrozenModel):
     """One authored HTTP probe: what to hit and what the response must look like."""
 
-    target: str = Field(description="'registered-apps' (fan out to every delivered app) or a service name")
+    target: str = Field(description="'registered-apps' (fan out to every delivered or seeded app) or a service name")
     expect_status: int = Field(description="The HTTP status the probe must observe")
     expect_body_regex: str = Field(description="Regex the captured body head must match (empty means unchecked)")
 
@@ -107,6 +119,135 @@ class FlowSurface(LowerCaseStrEnum):
 RESERVED_MINDS_UI_SURFACE: Final[str] = "minds-ui"
 
 
+class FlowStartPath(str):
+    """Where on its app's origin a UI flow opens: empty for the root, else a path or a query there."""
+
+    def __new__(cls, value: str) -> Self:
+        # Joined onto the origin a flow grades, so it must not be able to name another one. It opens
+        # with `/` or `?`, never `//`, which is a reference to another host. Browsers read a backslash
+        # as a slash and strip tabs and newlines inside a URL, either of which can make `//` out of
+        # something else, so every character is printable ASCII other than a backslash.
+        is_printable_ascii = all("!" <= character <= "~" and character != "\\" for character in value)
+        if value and (value[0] not in "/?" or value.startswith("//") or not is_printable_ascii):
+            raise InvalidPrimitiveValueError(
+                "{!r} is not a start path: it must be empty or begin with '/' or '?' (not '//'), and hold only "
+                "printable ASCII with no spaces or backslashes".format(value)
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema(), serialization=core_schema.to_string_ser_schema()
+        )
+
+
+class ScriptedFlowActionKind(LowerCaseStrEnum):
+    """What one action of a scripted UI flow does: the verification agent's own action vocabulary,
+    less `done`, which closes every script without being written."""
+
+    CLICK = auto()
+    INPUT = auto()
+    KEYS = auto()
+    SCROLL = auto()
+    OPEN = auto()
+    RELOAD = auto()
+    WAIT = auto()
+
+
+@pure
+def scripted_flow_action_fields(kind: ScriptedFlowActionKind) -> tuple[str, ...]:
+    """The fields an action of this kind needs set; every other field must be left empty or zero. A
+    `target` is the element's address, which an element with no accessible name gives by `beside`."""
+    match kind:
+        case ScriptedFlowActionKind.CLICK:
+            return ("role", "target")
+        case ScriptedFlowActionKind.INPUT:
+            return ("role", "target", "text")
+        case ScriptedFlowActionKind.KEYS | ScriptedFlowActionKind.OPEN:
+            return ("text",)
+        case ScriptedFlowActionKind.SCROLL:
+            return ("amount",)
+        case ScriptedFlowActionKind.RELOAD | ScriptedFlowActionKind.WAIT:
+            return ()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def scripted_flow_action_problem(
+    kind: ScriptedFlowActionKind, role: str, target: str, beside: str, text: str, amount: int
+) -> str:
+    """Why these fields do not make an action of this kind, or empty when they do.
+
+    A field the kind does not take is refused rather than ignored: a `text` on a click is an author
+    who meant `input`, and running the click would record a flow that never typed anything.
+    """
+    is_set_by_field = {
+        "role": bool(role.strip()),
+        "target": bool(target.strip()),
+        "beside": bool(beside.strip()),
+        "text": bool(text.strip()),
+        "amount": amount != 0,
+    }
+    needed_fields = scripted_flow_action_fields(kind)
+    is_element_action = "target" in needed_fields
+    if is_element_action and is_set_by_field["target"] and is_set_by_field["beside"]:
+        return "{!r} addresses its element by target or by beside, not both".format(kind.value)
+    is_needed_field_set = {**is_set_by_field, "target": is_set_by_field["target"] or is_set_by_field["beside"]}
+    missing_fields = [field for field in needed_fields if not is_needed_field_set[field]]
+    if missing_fields:
+        return "{!r} needs {}".format(
+            kind.value, " and ".join("target or beside" if field == "target" else field for field in missing_fields)
+        )
+    taken_fields = {*needed_fields, "beside"} if is_element_action else set(needed_fields)
+    unused_fields = [field for field, is_set in is_set_by_field.items() if is_set and field not in taken_fields]
+    if unused_fields:
+        return "{!r} does not take {}".format(kind.value, " or ".join(unused_fields))
+    if kind is ScriptedFlowActionKind.OPEN:
+        # A script cannot know the origin its app is forwarded at, so an open names a place on that
+        # origin, under the rule that keeps a flow's start path on the app it grades.
+        try:
+            FlowStartPath(text)
+        except InvalidPrimitiveValueError as error:
+            return "'open' takes a start path on the app's origin as its text: {}".format(error)
+    return ""
+
+
+class ScriptedFlowAction(FrozenModel):
+    """One action of a scripted UI flow, in the executor's own vocabulary, performed exactly as written."""
+
+    kind: ScriptedFlowActionKind = Field(description="Which browser operation to perform")
+    role: str = Field(default="", description="The target element's ARIA role, for a click or an input")
+    target: str = Field(default="", description="The target element's accessible name, for a click or an input")
+    # A snapshot ref is assigned when the page is read, so a script cannot carry one. An element the
+    # page gives no accessible name is located instead by text its parent element also holds, and its
+    # ref is read off the page state the step is decided on.
+    beside: str = Field(
+        default="",
+        description="For a click or an input on an element of `role` with no accessible name: text a line "
+        "under the same parent element holds",
+    )
+    text: str = Field(
+        default="", description="Text to type, keys to press, or the start path on the app's origin to open"
+    )
+    amount: int = Field(default=0, description="Scroll distance in pixels (negative scrolls up), for a scroll")
+
+    @model_validator(mode="after")
+    def _validate_fields_for_kind(self) -> Self:
+        problem = scripted_flow_action_problem(
+            kind=self.kind,
+            role=self.role,
+            target=self.target,
+            beside=self.beside,
+            text=self.text,
+            amount=self.amount,
+        )
+        if problem:
+            raise ScriptedFlowActionError(problem)
+        return self
+
+
 class UiFlow(FrozenModel):
     """One behavioral flow through the delivered UI, exactly as authored."""
 
@@ -114,9 +255,18 @@ class UiFlow(FrozenModel):
     actions: str = Field(
         description="What to do in the UI, in natural language (empty when the flow carries a script)"
     )
-    expect: str = Field(description="The verifiable end condition (empty when the flow carries a script)")
-    script: str = Field(description="Per-case script file for flows anchored in a known app (empty otherwise)")
+    expect: str = Field(description="The verifiable end condition")
+    script: tuple[ScriptedFlowAction, ...] = Field(
+        description="The actions a scripted flow performs, in order (empty for a model-driven flow)"
+    )
     surface: FlowSurface = Field(description="Where the flow enters the app; defaults to the forwarded origin")
+    start_path: FlowStartPath = Field(description="Where on the app's origin the flow opens; empty for its root")
+
+
+# The most flow screenshots a case may attach to its outcome judge request. The screenshots are that
+# request's only images, and the Anthropic Messages API refuses a request carrying more than 100. Past
+# 20 images it also limits each image to 2000 px a side, which only shrinks a frame larger than that.
+MAX_JUDGE_SCREENSHOTS_CEILING: Final[int] = 100
 
 
 # What a skill name may be, in a config and in the trajectory it is matched against: a plain name,
@@ -213,6 +363,10 @@ class Expectations(FrozenModel):
     ui_flows: tuple[UiFlow, ...] = Field(description="Behavioral flows the verification agent drives through the UI")
     test_commands: tuple[str, ...] = Field(description="Commands run in the delivered repo; recorded, never gated")
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
+    max_judge_screenshots: Annotated[int, Field(ge=1, le=MAX_JUDGE_SCREENSHOTS_CEILING)] | None = Field(
+        default=None,
+        description="How many flow screenshots in all the outcome judge is shown; None keeps the verifier's default",
+    )
     process: ProcessExpectation | None = Field(
         default=None, description="How the agent must work, when the case constrains that at all"
     )
@@ -230,7 +384,7 @@ class AppCheck(FrozenModel):
 
 
 class HttpCheck(FrozenModel):
-    """An expanded HTTP probe. A 'registered-apps' target fans out to one probe per delivered app."""
+    """An expanded HTTP probe. A 'registered-apps' target fans out to one probe per delivered or seeded app."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
     target: str = Field(description="'registered-apps' or a service name")
@@ -247,19 +401,25 @@ class FilesCheck(FrozenModel):
 
 
 class UiFlowCheck(FrozenModel):
-    """An expanded UI flow: one natural-language flow the verification agent drives at trial time.
+    """An expanded UI flow: one flow driven through the delivered app at trial time.
 
-    Only flows authored as `actions` + `expect` expand to a check; the reserved `script` and
-    `minds-ui` spellings are rejected at parse time and never reach here.
+    A model-driven flow is carried out by the verification agent from its `actions`; a scripted
+    flow performs its `script` exactly, and its `actions` are that script rendered as prose, so the
+    judge reads both kinds the same way. The reserved `minds-ui` surface is rejected at parse time
+    and never reaches here.
     """
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id")
     name: str = Field(description="The flow's name; names its evidence directory under flows/")
     actions: str = Field(
-        description="What to do in the UI, in natural language; the verification agent carries it out"
+        description="What to do in the UI, in natural language; for a scripted flow, its script rendered as prose"
+    )
+    script: tuple[ScriptedFlowAction, ...] = Field(
+        description="The actions a scripted flow performs, in order (empty for a model-driven flow)"
     )
     expect: str = Field(description="The verifiable end condition the agent judges the final state against")
     surface: FlowSurface = Field(description="Where the flow enters the app; the forwarded origin in v1")
+    start_path: FlowStartPath = Field(description="Where on the app's origin the flow opens; empty for its root")
 
 
 class ProcessCheckKind(LowerCaseStrEnum):
@@ -309,6 +469,11 @@ class ExpandedExpectations(FrozenModel):
         description="Flows driven through the UI; scored as ui_flows_completed"
     )
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
+    # Read by the verifier's render_flow_evidence.py, which keeps its own default when this is None.
+    max_judge_screenshots: Annotated[int, Field(ge=1, le=MAX_JUDGE_SCREENSHOTS_CEILING)] | None = Field(
+        default=None,
+        description="How many flow screenshots in all the outcome judge is shown; None keeps the verifier's default",
+    )
     # Defaulted because this object is re-validated out of instruction.md at trial time and out of
     # tests/case.json at grade time: a dataset whose case config carries no process checks must
     # still load.
@@ -349,6 +514,20 @@ class ManifestEntry(FrozenModel):
     reason: str = Field(description="Why the entry is not PASSED (e.g. 'timeout'); empty when it passed")
     detail: str = Field(description="Bounded human/judge-readable evidence for this entry")
     evidence_path: str = Field(description="Bundle-relative path to this entry's evidence file, if any")
+    # The structured readings a reader would otherwise have to parse out of `detail`. Each is set only
+    # on the entry kind it belongs to, and None wherever it was not measured.
+    exit_code: int | None = Field(
+        default=None, description="A test command's exit code; None on other entries and when none was reported"
+    )
+    status_code: int | None = Field(
+        default=None,
+        description="The HTTP status a probe observed (0 for a refused connection); None on other entries and "
+        "when no probe was taken",
+    )
+    matched_count: int | None = Field(
+        default=None,
+        description="How many inventory paths a files check's glob matched; None on other entries and when unmeasured",
+    )
     # Defaulted because the manifest is wire data between the collector and the verifier: a bundle
     # written before a class carried a measurement must still load. Most classes are pass/fail and
     # leave this None; a class scored on a curve carries its measurement here so that the collector
@@ -428,6 +607,99 @@ class WorkerListingEntry(FrozenModel):
     agent_type: str = Field(description="The agent type (claude, codex, ...)")
     state: WorkerState = Field(description="The lifecycle state, folded into what the capture cares about")
     work_dir: str = Field(description="The agent's work dir, which launch commands' paths are relative to")
+    # The launch-task flow stamps `agent_created=true` on every worker it creates, which is the only
+    # field that identifies a worker without reading the lead's command text.
+    labels: Mapping[str, str] = Field(description="The agent's mngr labels, as the listing reported them")
+
+    @property
+    def is_agent_created(self) -> bool:
+        """Whether mngr recorded this agent as created by another agent rather than by a person."""
+        return str(self.labels.get("agent_created", "")).lower() == "true"
+
+
+class TicketRecord(FrozenModel):
+    """One `tk` ticket as the workspace's `data/.tickets/<id>.md` file records it.
+
+    Serialized with the ticket file's own key names (`id`, `type`), which is the shape
+    `verification/tickets.jsonl` carries.
+    """
+
+    ticket_id: str = Field(serialization_alias="id", description="The ticket id; the file name's stem when unstated")
+    ticket_type: str = Field(serialization_alias="type", description="The ticket type (task, chore, ...)")
+    status: str = Field(description="open, in_progress or closed, as tk wrote it")
+    is_step: bool = Field(description="Whether the ticket is a turn-bound progress step (`step: true`)")
+    agent: str = Field(description="The mngr agent that created the ticket; empty outside an mngr agent")
+    title: str = Field(description="The `# ` heading's text")
+    summary: str = Field(description="The `## Summary` section's text, which tk writes on close; empty when absent")
+    created: str = Field(description="The creation timestamp as tk wrote it")
+    closed: str = Field(description="The close timestamp as tk wrote it; empty for a ticket still open")
+
+
+class TicketCapture(FrozenModel):
+    """What the evidence phase read out of the workspace's `tk` ticket directory."""
+
+    records: tuple[TicketRecord, ...] = Field(description="Every ticket file that parsed, in file-name order")
+    is_directory_present: bool = Field(description="Whether the tickets directory existed at all")
+    unparsed_file_names: tuple[str, ...] = Field(
+        description="Ticket files that could not be read or carry no frontmatter, left out of the records"
+    )
+    omitted_file_count: int = Field(description="Ticket files the capture's size bound left unread")
+    failure_reason: str = Field(description="Why the capture as a whole failed (e.g. 'bridge_failed'); empty when not")
+    failure_detail: str = Field(description="Bounded diagnostic for that failure; empty otherwise")
+
+
+class DiagnosticProbeCapture(FrozenModel):
+    """What the self-diagnostic probe printed at collection, kept raw: it is parsed only by
+    `diagnostic_probe.py`, which shares nothing with the collectors it is a second record for."""
+
+    output: str = Field(description="The probe's output exactly as the exec returned it; empty when it failed")
+    failure_reason: str = Field(description="Why the exec did not answer (e.g. 'bridge_failed'); empty when it did")
+
+
+class ProbeTicket(FrozenModel):
+    """One ticket file as the probe printed it."""
+
+    title: str = Field(description="The first `# ` heading's text")
+    status: str = Field(description="The frontmatter's status")
+    is_step: bool = Field(description="Whether the frontmatter says `step: true`")
+
+
+class ProbeAgent(FrozenModel):
+    """One agent as the probe's own `mngr list` printed it."""
+
+    name: str = Field(description="The agent name")
+    agent_type: str = Field(description="The agent type")
+    labels: Mapping[str, str] = Field(description="The agent's labels")
+
+
+class DiagnosticProbeReading(FrozenModel):
+    """The probe's output, parsed: the workspace's tickets, agents, worker reports and uploads."""
+
+    tickets: tuple[ProbeTicket, ...] = Field(description="Every ticket file with frontmatter, in path order")
+    agents: tuple[ProbeAgent, ...] | None = Field(
+        description="Every agent the listing named; None when the listing could not be read"
+    )
+    report_paths: tuple[str, ...] = Field(description="Every launch-task report.md, relative to the repo")
+    upload_paths: tuple[str, ...] = Field(description="Every file under the uploads directory, relative to the repo")
+
+
+class PreparationStage(LowerCaseStrEnum):
+    """The workspace-preparation stages a trial passes, in the order it passes them.
+
+    `seed_built` is the one stage reached before any workspace exists. A trial with no seed skips
+    `seed_built` and `seed_running`, one with no proxy skips `proxied`, and one whose harness config
+    names no model skips `switched`; `conversation` is reached once turn 1 has been sent.
+    """
+
+    SEED_BUILT = auto()
+    CREATED = auto()
+    SEED_RUNNING = auto()
+    PROXIED = auto()
+    SIGNED_IN = auto()
+    CHAT_CREATED = auto()
+    WELCOMED = auto()
+    SWITCHED = auto()
+    CONVERSATION = auto()
 
 
 class WorkerListing(FrozenModel):
@@ -443,6 +715,28 @@ class WorkerListing(FrozenModel):
         default=(), description="The agents the listing named, in the order it named them"
     )
     is_complete: bool = Field(default=False, description="Whether the listing reported every agent without error")
+
+
+class SeedBuildStatus(LowerCaseStrEnum):
+    """How building a case's seed onto the case base came out."""
+
+    CLEAN = auto()
+    # The merge left unmerged paths.
+    CONFLICT = auto()
+    # The merge was clean, but the merged supervisord config registers the seed on top of something.
+    COLLISION = auto()
+
+
+class SeedBuildRecord(FrozenModel):
+    """What the seed build did, as state.json carries it."""
+
+    app_name: str = Field(description="The seeded app's registry and program name")
+    build_status: SeedBuildStatus = Field(description="How the build came out")
+    seed_commit_sha: str = Field(description="The seed as a commit on the pinned template alone; empty if never made")
+    seeded_sha: str = Field(description="The case branch's head once the seed is merged in; empty unless clean")
+    conflicted_paths: tuple[str, ...] = Field(description="The paths a conflicting merge left unmerged")
+    collisions: tuple[str, ...] = Field(description="What the merged config registers the seed on top of")
+    impossible_reason: str = Field(description="Why the seed cannot be built, in prose; empty on a clean build")
 
 
 class WorkerCapture(FrozenModel):
@@ -500,6 +794,10 @@ class RegisteredApp(FrozenModel):
     # Measured from the workspace before the first turn, not matched against a hand-kept name list
     # (see `evidence_collection.resolve_preexisting_registrations` for how the set is read).
     is_preexisting: bool = Field(description="Whether the workspace already served this row before the agent ran")
+    # Declared by the case's seed rather than measured: nothing observes the workspace before the
+    # seed is in it, so the pre-existing measurement sees a seeded row too, and seeded wins. A
+    # seeded row is never pre-existing, so the two classes stay disjoint.
+    is_seeded: bool = Field(description="Whether the case seeded the workspace with this row before the agent ran")
     # The registry's own `internal = true` marker: machinery that forwards a port but has no page of
     # its own to show, so the workspace never offers it as an app to open.
     is_internal: bool = Field(description="Whether the registry marks this row as not an openable app")
@@ -519,7 +817,7 @@ class EvidenceManifest(FrozenModel):
     schema_version: int = Field(description="Bumped when the manifest shape changes incompatibly")
     case_id: str = Field(description="The case the evidence belongs to")
     # What the captured deliverable bundle is based on. A replay regenerates the base clone from the
-    # dwt tip, checks it reproduces base_sha, and unbundles the agent's commits onto it -- which only
+    # dwt tip, checks it reproduces base_sha, and unbundles the workspace's commits onto it -- which only
     # works because the eval-case commit is made with fixed dates and is therefore reproducible.
     base_sha: str = Field(description="HEAD of the prepared eval-case clone; the git bundle's base")
     dwt_tip_sha: str = Field(description="The workspace-template tip the base clone was made from")
@@ -529,6 +827,14 @@ class EvidenceManifest(FrozenModel):
     # otherwise carry the `preexisting_unknown` reason.
     preexisting_registrations: tuple[str, ...] | None = Field(
         description="Sorted registry names the workspace already served before the agent ran; None if unknown"
+    )
+    # Whether the registry file was read at all, which an empty capture cannot say on its own: an
+    # unreadable registry and a workspace that registered nothing both leave `apps.toml` empty.
+    is_registry_present: bool = Field(description="Whether the workspace's app registry could be read")
+    # The seeded rows are probed and driven like delivered ones but never counted as delivered; kept
+    # beside the pre-existing set so a reader can see both exclusions from the delivered count.
+    seeded_registrations: tuple[str, ...] = Field(
+        description="Sorted registry names the case seeded the workspace with; empty on an unseeded trial"
     )
     is_expectations_declared: bool = Field(description="Whether the case declared expectations at all")
     is_evidence_complete: bool = Field(description="True when no entry has status ERROR")
@@ -619,11 +925,10 @@ class HarnessLane(LowerCaseStrEnum):
     """A provider lane a workspace can be signed in on with nobody present.
 
     The lane decides the harness, because that is how the product itself decides it: a chat runs on
-    the harness of the lane its account was minted on. ANTHROPIC serves claude and OPENAI serves
-    codex; the rest serve pi-coding, differing in whose key they take. A lane is a member exactly
-    when it offers a pasted-key sign-in, because that is the only kind a run can drive; one whose
-    every method is a browser or device flow on a PTY needs a person at it, which is what leaves
-    `google` (antigravity) out.
+    the harness of the lane its account was minted on (`harness_for_lane`). A lane is a member
+    exactly when it offers a pasted-key sign-in, because that is the only kind a run can drive; one
+    whose every method is a browser or device flow on a PTY needs a person at it, which is what
+    leaves `google` (antigravity) out.
     """
 
     ANTHROPIC = auto()
@@ -638,6 +943,36 @@ def lane_id(lane: HarnessLane) -> str:
     """The lane as the workspace's accounts API and the command line spell it: dashes, not
     underscores (`--ak lane=api-key`)."""
     return lane.value.replace("_", "-")
+
+
+class HarnessName(LowerCaseStrEnum):
+    """A harness a workspace chat can run on, one for each kind of lane a run can sign in on."""
+
+    CLAUDE = auto()
+    CODEX = auto()
+    PI_CODING = auto()
+
+
+@pure
+def harness_id(harness: HarnessName) -> str:
+    """The harness as the workspace's accounts listing and agent types spell it: dashes, not
+    underscores (`pi-coding`)."""
+    return harness.value.replace("_", "-")
+
+
+@pure
+def harness_for_lane(lane: HarnessLane) -> HarnessName:
+    """The harness a chat on an account minted on this lane runs, as the workspace template assigns
+    it; the pi-coding lanes differ only in whose key they take."""
+    match lane:
+        case HarnessLane.ANTHROPIC:
+            return HarnessName.CLAUDE
+        case HarnessLane.OPENAI:
+            return HarnessName.CODEX
+        case HarnessLane.API_KEY | HarnessLane.OPENROUTER | HarnessLane.OPENCODE_GO:
+            return HarnessName.PI_CODING
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 # Lanes whose harness names no model on a transcript step, so a trial on one can never confirm the
@@ -717,7 +1052,7 @@ class HarnessConfigRecord(FrozenModel):
     effort: str = Field(default="", description="The effort level the run asked for")
     fast: bool = Field(default=False, description="The speed tier the run asked for")
     # Named for the product's own name for the call that sets model, effort and fast together
-    # (`POST /api/agents/<id>/model`), since one such call is what this field reports on.
+    # (`POST /api/chats/<chat_id>/model`), since one such call is what this field reports on.
     model_choice_switch: str = Field(
         default="",
         description="'applied', 'skipped' when the config named no model, the failure that stopped the trial, or "
@@ -884,6 +1219,21 @@ WORKSPACE_UPLOADS_DIR: Final[str] = "/home/user/workspace/data/uploads"
 # checkout the workspace's vendored copy is taken from and must stay exactly what the image shipped.
 BOX_STEP_FILES_DIR: Final[str] = "/work/step_files"
 
+# Where a step's seeded app waits in the box until the driver copies it into the seed commit, outside
+# the box's working directory for the same reason as the uploads.
+BOX_STEP_SEEDS_DIR: Final[str] = "/work/step_seeds"
+
+# The workspace template's app-name rule (`validate_service_name` in its
+# `system/scripts/forward_port.py`), which a seeded app's name must pass: the name becomes the leading
+# label of the app's origin hostname and the name of its supervisord program.
+SEED_APP_NAME_PATTERN: Final[str] = r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$"
+SEED_APP_NAME_MAX_LENGTH: Final[int] = 32
+SEED_APP_RESERVED_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
+SEED_APP_RESERVED_NAMES: Final[frozenset[str]] = frozenset({"localhost", "auth"})
+
+# The loopback ports the workspace template's own services bind, which a seeded app may not take.
+SEED_APP_RESERVED_PORTS: Final[frozenset[int]] = frozenset({7681, 7682, 8000, 8010, 8081, 8300, 8301})
+
 
 # The eval-config key that selects a stepped case's reward strategy, named so the parser and its
 # error messages cannot drift from each other.
@@ -919,6 +1269,28 @@ class StepBoxFile(FrozenModel):
 
     upload_id: str = Field(description="The directory name it takes under the workspace's data/uploads/")
     box_path: str = Field(description="The box directory holding this upload's contents")
+
+
+class SeedApp(FrozenModel):
+    """A fixed app a stepped case's workspace boots with, exactly as the eval author wrote it."""
+
+    source: str = Field(description="The app's directory, relative to the minds_evals project root")
+    name: str = Field(description="The app's registry name and supervisord program name")
+    port: int = Field(description="The loopback port the app's server binds")
+
+
+class CaseSeed(FrozenModel):
+    """What a stepped case's workspace is seeded with before it is created."""
+
+    app: SeedApp = Field(description="The app the seed adds to the workspace template")
+
+
+class StepBoxSeedApp(FrozenModel):
+    """Where a step's seeded app waits in the box, and the name and port the seed registers it under."""
+
+    name: str = Field(description="The app's registry name and supervisord program name")
+    port: int = Field(description="The loopback port the app's server binds")
+    box_path: str = Field(description="The box directory holding the app's files")
 
 
 class RewardDimension(LowerCaseStrEnum):
@@ -976,11 +1348,15 @@ class CaseStep(FrozenModel):
     name: str = Field(description="Stable step name; names the step directory and the harbor step")
     prompts: tuple[PromptEntry, ...] = Field(description="One entry per turn, exactly as a flat case's prompts")
     files: tuple[StepFile, ...] = Field(description="What the client 'uploaded' for this step")
+    seed: CaseSeed | None = Field(description="What the workspace is seeded with; only ever set on the first step")
     expectations: Expectations | None = Field(
         description="What this step is graded against; None grades it on gates and quality alone"
     )
     min_reward: StepMinReward | None = Field(
         description="The reward floor below which harbor aborts the remaining steps; None never aborts"
+    )
+    is_diagnostic_probe_run: bool = Field(
+        description="Whether the step's collection runs the self-diagnostic probe and reads the feed's tool inputs"
     )
 
 
@@ -1009,6 +1385,13 @@ class StepPosition(FrozenModel):
     # trial owes by the end of this step.
     entries_before: int = Field(description="How many prompts entries the earlier steps configured")
     files: tuple[StepBoxFile, ...] = Field(description="This step's uploads, and where the box holds them")
+    is_diagnostic_probe_run: bool = Field(
+        description="Whether this step's collection runs the self-diagnostic probe and the driver reads the "
+        "feed's tool inputs"
+    )
+    seed_app: StepBoxSeedApp | None = Field(
+        description="The app the workspace is seeded with, on the first step of a seeded case; None otherwise"
+    )
 
 
 @pure
@@ -1169,6 +1552,337 @@ class RunCheck(FrozenModel):
         return tuple(sorted({trial.modal_environment_name for trial in self.trials if trial.modal_environment_name}))
 
 
+class NotRecorded(FrozenModel):
+    """The one value that is not a reading: the record a fact reads was due on a step that ran and is
+    absent or unreadable.
+
+    Distinct from a recorded null, which is a record that is there and cannot answer, and from the
+    fact being absent from a block altogether, which is a record that was never due. `NOT_RECORDED`
+    is the singleton; it never reaches JSON, where a step's block carries its not-recorded facts as
+    a list of names beside the values.
+    """
+
+
+NOT_RECORDED: Final[NotRecorded] = NotRecorded()
+
+# What one fact of one step reads: a JSON value, or the not-recorded sentinel above.
+FactValue = JsonValue | NotRecorded
+
+# How a table names one fact of one step: `<fact name>` for the last step that ran, or
+# `<fact name>@<step name>` to pin it to one step.
+FACT_STEP_SEPARATOR: Final[str] = "@"
+
+
+@pure
+def split_fact_reference(reference: str) -> tuple[str, str]:
+    """A table key as (fact name, step name); the step name is empty when the key pins no step.
+
+    Raises ExpectedFactsTableError for a key that names a step twice or names nothing.
+    """
+    fact_name, separator, step_name = reference.partition(FACT_STEP_SEPARATOR)
+    if FACT_STEP_SEPARATOR in step_name:
+        raise ExpectedFactsTableError("{!r} names more than one step".format(reference))
+    if not fact_name or (separator and not step_name):
+        raise ExpectedFactsTableError("{!r} is not a <fact> or <fact>@<step> reference".format(reference))
+    return fact_name, step_name
+
+
+class FactMatcherKind(LowerCaseStrEnum):
+    """How an expected-facts table compares a recorded fact value with the value it states."""
+
+    EXPECTED = auto()
+    AT_LEAST = auto()
+    AT_MOST = auto()
+    CONTAINS = auto()
+
+
+class FactMatcher(FrozenModel):
+    """One comparison a table states for a fact: the kind of comparison and the value compared against."""
+
+    kind: FactMatcherKind = Field(description="Which comparison is made")
+    value: JsonValue = Field(description="The exact value, the bound, or what the recorded value must contain")
+
+
+class KnownFailure(FrozenModel):
+    """A known defect: the value the fact's matcher states is the one the defect records today.
+
+    Every known failure is strict, so a trial that stops recording the defect is a failure that says
+    the mark must come off. It names either the issue that tracks the defect or, for one no issue
+    tracks, the reason in prose.
+    """
+
+    issue: int | None = Field(default=None, gt=0, description="The GitHub issue that tracks the defect")
+    reason: str = Field(default="", description="Why the fact fails today, for a defect no issue tracks")
+
+    @model_validator(mode="after")
+    def _validate_one_name(self) -> Self:
+        if (self.issue is None) == (not self.reason):
+            raise ExpectedFactsTableError("a known failure names an issue or a reason, not both and not neither")
+        return self
+
+    @property
+    def label(self) -> str:
+        """How a report names the defect."""
+        return "#{}".format(self.issue) if self.issue is not None else self.reason
+
+
+class _FactMatcherFields(FrozenModel):
+    """The four matcher keys a table entry or an override may carry, at most one of them."""
+
+    expected: JsonValue = Field(default=None, description="The exact value; null matches only a recorded null")
+    at_least: StrictInt | StrictFloat | None = Field(default=None, description="The smallest number that matches")
+    at_most: StrictInt | StrictFloat | None = Field(default=None, description="The largest number that matches")
+    contains: JsonValue = Field(default=None, description="A member of a recorded list, or a substring of a string")
+
+    def declared_matcher(self) -> FactMatcher | None:
+        """The matcher the entry states, or None when it states none. Read off which keys were given
+        rather than off their values, because `expected: null` is a matcher."""
+        kinds = [kind for kind in FactMatcherKind if kind.value in self.model_fields_set]
+        if not kinds:
+            return None
+        match kinds[0]:
+            case FactMatcherKind.EXPECTED:
+                return FactMatcher(kind=FactMatcherKind.EXPECTED, value=self.expected)
+            case FactMatcherKind.AT_LEAST:
+                return FactMatcher(kind=FactMatcherKind.AT_LEAST, value=self.at_least)
+            case FactMatcherKind.AT_MOST:
+                return FactMatcher(kind=FactMatcherKind.AT_MOST, value=self.at_most)
+            case FactMatcherKind.CONTAINS:
+                return FactMatcher(kind=FactMatcherKind.CONTAINS, value=self.contains)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    @property
+    def is_unobservable_declared(self) -> bool:
+        """Whether this entry states `expected: null`, which claims the fact cannot be observed."""
+        return FactMatcherKind.EXPECTED.value in self.model_fields_set and self.expected is None
+
+    @model_validator(mode="after")
+    def _validate_at_most_one_matcher(self) -> Self:
+        given_keys = [kind.value for kind in FactMatcherKind if kind.value in self.model_fields_set]
+        if len(given_keys) > 1:
+            raise ExpectedFactsTableError("give one matcher, not {}".format(" and ".join(given_keys)))
+        # A bound of null would compare nothing, so it is refused rather than read as no bound.
+        for bound_key, bound in (
+            (FactMatcherKind.AT_LEAST.value, self.at_least),
+            (FactMatcherKind.AT_MOST.value, self.at_most),
+        ):
+            if bound_key in self.model_fields_set and bound is None:
+                raise ExpectedFactsTableError("{} needs a number, not null".format(bound_key))
+        return self
+
+
+class FactOverride(_FactMatcherFields):
+    """What one harness changes about a fact's expectation: its matcher, its known failure, or both.
+    Whatever it leaves out is the fact's own."""
+
+    known_failure: KnownFailure | None = Field(default=None, description="The known failure this override declares")
+
+
+class FactExpectation(_FactMatcherFields):
+    """One fact's entry in an expected-facts table, under the key that names the fact and its step."""
+
+    by_harness: dict[str, FactOverride] = Field(
+        default_factory=dict, description="Overrides for a trial on one harness, by harness name"
+    )
+    known_failure: KnownFailure | None = Field(
+        default=None, description="The defect whose recorded value the fact's matcher states"
+    )
+    is_compliance: bool = Field(
+        default=False,
+        alias="compliance",
+        description="Whether the fact says the agent did what the prompt asked, rather than how the instrument read it",
+    )
+    is_health: bool = Field(
+        default=False,
+        alias="health",
+        description="Whether the fact says a compliance source could be read at all",
+    )
+    requires: tuple[str, ...] = Field(
+        default=(), description="The compliance and health facts that must pass for this fact to be asserted at all"
+    )
+
+    @property
+    def is_agent_reading(self) -> bool:
+        """Whether the fact reads the agent's compliance or the health of a source that reads it.
+
+        Both are the same thing to the checker in one respect: an instrument that could not read one
+        is broken, so a null or unrecorded value fails rather than reading as the agent's doing.
+        """
+        return self.is_compliance or self.is_health
+
+    @model_validator(mode="after")
+    def _validate_expectation(self) -> Self:
+        if self.declared_matcher() is None:
+            raise ExpectedFactsTableError(
+                "give exactly one of {}".format(", ".join(kind.value for kind in FactMatcherKind))
+            )
+        if self.is_compliance and self.is_health:
+            raise ExpectedFactsTableError("a fact is a compliance fact or a health fact, not both")
+        overrides = list(self.by_harness.values())
+        if self.is_agent_reading and (
+            self.known_failure is not None or any(override.known_failure is not None for override in overrides)
+        ):
+            # A compliance miss is the agent's and a health miss is the instrument's, so neither has
+            # an instrument defect to be known as.
+            raise ExpectedFactsTableError("a compliance or health fact cannot declare a known failure")
+        # A fact declared unobservable is a defect with a name, never a permanent exemption. An
+        # override inherits the fact's own mark, so only a mark on neither is a refusal.
+        if self.is_unobservable_declared and self.known_failure is None:
+            raise ExpectedFactsTableError("`expected: null` needs a known_failure mark")
+        for override in overrides:
+            if override.is_unobservable_declared and override.known_failure is None and self.known_failure is None:
+                raise ExpectedFactsTableError("`expected: null` needs a known_failure mark")
+        return self
+
+
+class ExpectedFactsTable(FrozenModel):
+    """A self-diagnostic family's expectations: which facts a trial is asserted on, and how."""
+
+    case_id: str = Field(
+        default="", description="The case the table grades; empty applies it to any case, as live invariants do"
+    )
+    requires: tuple[str, ...] = Field(
+        default=(), description="Facts that must pass for any fact of this table to be asserted"
+    )
+    facts: dict[str, FactExpectation] = Field(
+        description="Every asserted fact's expectation, by `<fact>` or `<fact>@<step>` reference"
+    )
+
+    @model_validator(mode="after")
+    def _validate_fact_references(self) -> Self:
+        for reference in (*self.facts, *self.requires):
+            split_fact_reference(reference)
+        agent_reading_references = {
+            reference for reference, expectation in self.facts.items() if expectation.is_agent_reading
+        }
+        for reference in self.requires:
+            if reference not in self.facts:
+                raise ExpectedFactsTableError("the table requires {}, which it does not assert".format(reference))
+        for reference, expectation in self.facts.items():
+            for required in expectation.requires:
+                if required not in agent_reading_references:
+                    raise ExpectedFactsTableError(
+                        "{} requires {}, which is not a compliance or health fact of this table".format(
+                            reference, required
+                        )
+                    )
+        _validate_no_requirement_cycle(self.facts, self.requires)
+        return self
+
+
+@pure
+def fact_requirements(
+    facts: Mapping[str, FactExpectation], table_requires: Sequence[str], reference: str
+) -> tuple[str, ...]:
+    """What one fact of a table waits on: its own requirements, and the table's unless it is one of
+    them -- two facts the whole table requires would otherwise wait on each other."""
+    inherited = () if reference in table_requires else tuple(table_requires)
+    return (*inherited, *facts[reference].requires)
+
+
+@pure
+def _walked_requirements(
+    facts: Mapping[str, FactExpectation], table_requires: Sequence[str], reference: str, path: tuple[str, ...]
+) -> frozenset[str]:
+    """The references reachable from `reference`, proven acyclic.
+
+    Raises ExpectedFactsTableError when it requires its way back to something on `path`.
+    """
+    if reference in path:
+        raise ExpectedFactsTableError("the requirements form a cycle: {}".format(" -> ".join((*path, reference))))
+    reached = frozenset({reference})
+    for required in fact_requirements(facts, table_requires, reference):
+        reached |= _walked_requirements(facts, table_requires, required, (*path, reference))
+    return reached
+
+
+@pure
+def _validate_no_requirement_cycle(facts: Mapping[str, FactExpectation], table_requires: Sequence[str]) -> None:
+    """Raises ExpectedFactsTableError when the requirements name each other in a loop, which would
+    leave every fact of the loop waiting on the others.
+
+    Walked over the same edges the checker resolves the outcomes in, the table-level requirement
+    included, so a loop that only forms through it is refused here rather than met at check time.
+    """
+    for reference in facts:
+        _walked_requirements(facts, table_requires, reference, ())
+
+
+class DiagnosticVerdict(LowerCaseStrEnum):
+    """What one self-diagnostic trial says about the instrument. Only FAILED is the instrument's fault."""
+
+    NOT_MEASURED = auto()
+    FAILED = auto()
+    NOT_FOLLOWED = auto()
+    KNOWN = auto()
+    PASSED = auto()
+
+
+class FactStatus(LowerCaseStrEnum):
+    """How one asserted fact came out on one trial."""
+
+    PASSED = auto()
+    FAILED = auto()
+    NOT_FOLLOWED = auto()
+    PRECONDITION_NOT_MET = auto()
+    # The record the fact reads was due and is absent or unreadable, whatever the table expected.
+    NOT_RECORDED = auto()
+    # A known failure whose defect this trial recorded.
+    KNOWN = auto()
+    # A known failure whose defect this trial did not record, so the mark must come off.
+    UNEXPECTEDLY_PASSING = auto()
+
+
+class FactOutcome(FrozenModel):
+    """One asserted fact on one trial: what was recorded, what the table expected, and how that came out."""
+
+    fact_name: str = Field(description="The dotted fact name")
+    step_name: str = Field(description="The step whose block the fact was read from; empty for a flat trial")
+    status: FactStatus = Field(description="How the fact came out")
+    is_compliance: bool = Field(description="Whether the fact is a compliance fact")
+    is_health: bool = Field(description="Whether the fact is a health fact")
+    recorded: JsonValue = Field(description="The recorded value; null where the step recorded none")
+    expected: FactMatcher = Field(description="The matcher the table applied, after the trial's overrides")
+    known_failure: KnownFailure | None = Field(description="The known failure the table applied, if any")
+    unmet_requirements: tuple[str, ...] = Field(description="The required compliance and health facts that missed")
+
+
+class DiagnosticTrialCheck(FrozenModel):
+    """How one trial of a self-diagnostic job came out against its family's expected table."""
+
+    trial_name: str = Field(description="The trial directory's name")
+    case_id: str = Field(description="The case the trial ran; empty when it cannot be read")
+    harness: str = Field(description="The harness the trial's arm records; empty when it records none")
+    verdict: DiagnosticVerdict = Field(description="The trial's verdict")
+    not_measured_reason: str = Field(description="Why no workspace was measured; empty unless the verdict says so")
+    failed_facts: tuple[FactOutcome, ...] = Field(description="Instrument and health facts that missed")
+    not_recorded_facts: tuple[FactOutcome, ...] = Field(
+        description="Asserted facts whose record was due and is absent or unreadable"
+    )
+    known_facts: tuple[FactOutcome, ...] = Field(description="Known failures whose defect was recorded")
+    not_followed_facts: tuple[FactOutcome, ...] = Field(description="Compliance facts that read false")
+    unmet_preconditions: tuple[FactOutcome, ...] = Field(
+        description="Facts not asserted because a fact they require missed"
+    )
+    unexpectedly_passing_facts: tuple[FactOutcome, ...] = Field(
+        description="Known failures whose defect was not recorded"
+    )
+
+
+class DiagnosticRunCheck(FrozenModel):
+    """Every trial of a self-diagnostic job, checked against one expected table."""
+
+    job_name: str = Field(description="The job directory's name")
+    trials: tuple[DiagnosticTrialCheck, ...] = Field(description="One entry per trial directory, in name order")
+
+    @computed_field
+    @cached_property
+    def is_failed(self) -> bool:
+        """Whether any trial's verdict is failed; the check-diagnostics exit code follows this alone."""
+        return any(trial.verdict is DiagnosticVerdict.FAILED for trial in self.trials)
+
+
 class ModalDeletionOutcome(UpperCaseStrEnum):
     """How one Modal environment deletion came out.
 
@@ -1212,6 +1926,35 @@ class HarnessConfigsFile(FrozenModel):
     """The shape of `configs/harness_configs.json`."""
 
     harness_configs: tuple[HarnessConfigEntry, ...] = Field(description="Every named config, nightly or not")
+
+
+class DiagnosticHarnessEntry(FrozenModel):
+    """What a self-diagnostic family runs on, as `configs/diagnostics/` spells it: the `--ak` values a
+    diagnose job appends to its run line, each the text an operator would type.
+
+    The fields are `HarnessConfigEntry`'s kwargs, minus the name and the nightly flag: a family's file
+    is keyed by family or harness, and a diagnostic runs every night whatever the green markers say.
+    Validation is the driver's `parse_harness_config`, not anything here; this model only holds the
+    file's shape.
+    """
+
+    lane: str = Field(default="", description="The provider lane to sign in on; empty means anthropic")
+    key_provider: str = Field(default="", description="Which provider the key belongs to, on the api-key lane only")
+    key_env: str = Field(default="", description="The variable holding the lane's key; empty derives it from the lane")
+    model: str = Field(default="", description="The catalog id to switch the chat to before turn 1; empty means none")
+    effort: str = Field(default="", description="The effort level set with the model; empty means none")
+    fast: str = Field(
+        default="", description="The speed tier set with the model, as a boolean kwarg; empty means unset"
+    )
+
+
+class BehaviourHarnessEntry(DiagnosticHarnessEntry):
+    """One harness's behaviour cell, as `configs/diagnostics/behaviour_harness_configs.json` spells it."""
+
+    unsupported_pairs: tuple[str, ...] = Field(
+        default=(),
+        description="Pairs whose workspace template offers this lane no pasted-key sign-in, so the cell is left out",
+    )
 
 
 class NightlySuiteArm(FrozenModel):
@@ -1338,6 +2081,35 @@ class MatrixCell(FrozenModel):
     decision: CellDecision = Field(description="Whether the cell runs or its green marker already holds")
 
 
+class FixtureDiagnosticCell(FrozenPair):
+    """One resolved pair's `diagnose-fixture` job: the pair, and the run line its fixture trial takes.
+
+    A GitHub Actions matrix entry, so every field is a string and `harbor_args` is JSON-encoded, as a
+    live cell's is. It carries no decision: a diagnostic writes no green marker and reads none.
+    """
+
+    lane_key_env: str = Field(description="The environment variable the driver reads the lane's key from")
+    harbor_args: str = Field(description="JSON-encoded list of the `--ak` arguments appended to the run line")
+
+
+class BehaviourDiagnosticCell(FixtureDiagnosticCell):
+    """One `diagnose-behaviour` job: a resolved pair times one harness of the nightly set."""
+
+    harness: str = Field(description="The harness the cell measures, as the workspace spells it (`pi-coding`)")
+
+
+class UnsupportedDiagnosticCell(FrozenModel):
+    """A behaviour cell the run does not schedule, because its harness config says the pair cannot run it.
+
+    No box is spent to produce a dark cell, so the report names it instead: a night that measured one
+    harness less must not read as a night that measured them all.
+    """
+
+    pair: str = Field(description="The pair the cell would have run on")
+    harness: str = Field(description="The harness the cell would have measured")
+    reason: str = Field(description="Why it cannot run there, in the words the report prints")
+
+
 class OraclePass(FrozenPair):
     """One oracle pass of a scheduled run: a frozen pair times one eval config.
 
@@ -1353,12 +2125,22 @@ class OraclePass(FrozenPair):
 
 class CiMatrix(FrozenModel):
     """What the scheduled run's resolve job decided, for the jobs after it: the pairs and cells it
-    considered, and the two matrices (oracle passes per running pair and config, live passes per
-    running cell) read straight out of the serialized form."""
+    considered, the diagnose jobs of every resolved pair, and the job matrices (oracle passes
+    per running pair and config, live passes per running cell) read straight out of the
+    serialized form."""
 
     configs: tuple[str, ...] = Field(description="The repo-relative eval configs the run's suites named, in order")
     pairs: tuple[DecidedPair, ...] = Field(description="Every pair considered, skipped and unresolved ones included")
     cells: tuple[MatrixCell, ...] = Field(description="Every cell of every resolved pair, skipped ones included")
+    fixture_diagnostics: tuple[FixtureDiagnosticCell, ...] = Field(
+        description="One fixture diagnostic per resolved pair, whatever its cells decided"
+    )
+    behaviour_diagnostics: tuple[BehaviourDiagnosticCell, ...] = Field(
+        description="One behaviour diagnostic per resolved pair and supported nightly harness"
+    )
+    unsupported_diagnostics: tuple[UnsupportedDiagnosticCell, ...] = Field(
+        description="Every behaviour cell left out because its harness config cannot run on that pair"
+    )
 
     @computed_field
     @cached_property
@@ -1404,6 +2186,32 @@ class CiMatrix(FrozenModel):
     def is_any_cell_running(self) -> bool:
         return any(cell.decision is CellDecision.RUN for cell in self.cells)
 
+    @computed_field
+    @cached_property
+    def diagnose_fixture_matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `diagnose-fixture` job's matrix: one entry per resolved pair."""
+        return {"include": [cell.model_dump(mode="json") for cell in self.fixture_diagnostics]}
+
+    @computed_field
+    @cached_property
+    def diagnose_behaviour_matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `diagnose-behaviour` job's matrix: one entry per resolved pair and supported nightly harness."""
+        return {"include": [cell.model_dump(mode="json") for cell in self.behaviour_diagnostics]}
+
+    @computed_field
+    @cached_property
+    def diagnose_unsupported(self) -> list[dict[str, Any]]:
+        """The behaviour cells no job runs, for the report to name."""
+        return [cell.model_dump(mode="json") for cell in self.unsupported_diagnostics]
+
+    @computed_field
+    @cached_property
+    def is_any_pair_diagnosed(self) -> bool:
+        """Whether the diagnose jobs have anything to fan out over. GitHub refuses a matrix with no
+        entries, so a run whose every pair failed to resolve must skip both jobs rather than hand one
+        an empty matrix."""
+        return bool(self.fixture_diagnostics) or bool(self.behaviour_diagnostics)
+
 
 class CiReportContext(FrozenModel):
     """What the Slack report of a scheduled run knows about the run beyond its summaries: where it
@@ -1418,6 +2226,12 @@ class CiReportContext(FrozenModel):
     resolve_result: str = Field(description="The resolve job's result: success, failure, cancelled, or skipped")
     oracle_result: str = Field(description="The oracle job's result, or empty when GitHub reported none")
     evaluate_result: str = Field(description="The evaluate job's result, or empty when GitHub reported none")
+    diagnose_fixture_result: str = Field(
+        description="The diagnose-fixture job's result, or empty when GitHub reported none"
+    )
+    diagnose_behaviour_result: str = Field(
+        description="The diagnose-behaviour job's result, or empty when GitHub reported none"
+    )
 
 
 class GoalDecision(FrozenModel):

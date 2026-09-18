@@ -526,8 +526,8 @@ harmless.
 Clients only offer a channel beyond stable when the tier's `client.toml` sets
 `update_feed_base_url`; a tier that sets none is stable-only and still auto-updates.
 Production sets it (`https://updates.imbueminds.com`), so builds cut from here offer
-stable and alpha; beta is in the machinery but listed for nobody until an audience
-for it is decided. That URL is compiled in at build time, so installs shipped before it was
+all three channels: stable, beta and alpha, each a user's own choice in the
+app's Settings. That URL is compiled in at build time, so installs shipped before it was
 committed stay stable-only for good. See `specs/minds-release-channels/spec.md`.
 
 The same feed carries the web create pins (`<channel>-web.json`, from the file's

@@ -37,11 +37,13 @@ def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
-# Every hit is inside `templates/`, which runs as standalone scripts in the verifier container:
-# stdout and stderr are the only channel a grading failure has to a harbor log, and loguru is not
-# installed there.
+# Every hit is code that runs somewhere loguru is not: the standalone scripts under `templates/` (the
+# verifier container and the box probe), the box-side scripts under `resources/` that answer their
+# caller on stdout, and the python programs `evidence_collection.py`, `diagnostic_probe.py` and
+# `minds_bridge.py` ship into the workspace as strings, whose printed output is the exec's reply. Any
+# hit in code the host process runs is new.
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(7))
+    rc.check_bare_print(_DIR, snapshot(14))
 
 
 # --- Exception handling ---
@@ -135,25 +137,29 @@ def test_prevent_exit_stack() -> None:
 # harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
 # every call that reaches the box or the workspace has to be async too. `driver.py`,
 # `minds_bridge.py` and `evidence_collection.py` are that forced surface, and `driver_test.py`,
-# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it. The UI-flow loop
-# in `flow_runner.py` is async because the collector drives it, and `flow_lab.py` and
-# `test_flow_lab.py` implement and drive that loop's executor interface, so all of them are
-# excluded: their hits track how many trials the tests exercise rather than how much async the
-# project chooses. Within those files, keep new async to what harbor's interfaces force.
-# What remains counted is the async that is optional. Today that is two LiteLLM proxy callbacks in
+# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it. `clock.py` is the
+# wait those files' poll loops call, and `mock_clock_test.py` is the double that makes their budgets
+# testable, so both are async for the same reason. The UI-flow loop in `flow_runner.py` is async
+# because the collector drives it, and `flow_lab.py` and `test_flow_lab.py` implement and drive that
+# loop's executor interface, so all of them are excluded: their hits track how many trials the tests
+# exercise rather than how much async the project chooses. Within those files, keep new async to
+# what harbor's interfaces force.
+# What remains counted is the async that is optional. Today that is three LiteLLM proxy callbacks in
 # `resources/box_proxy_hooks.py`, whose signatures the proxy fixes, plus three test strings naming
 # the `create_worker.py await` subcommand, which the regex reads as the keyword. Any increase is
 # new optional async, which belongs in blocking code instead.
 def test_prevent_async_await() -> None:
     rc.check_async_await(
         _DIR,
-        snapshot(5),
+        snapshot(6),
         (
+            "clock.py",
             "driver.py",
             "driver_test.py",
             "minds_bridge.py",
             "minds_bridge_test.py",
             "evidence_collection.py",
+            "mock_clock_test.py",
             "mock_environment_test.py",
             "flow_runner.py",
             "flow_lab.py",

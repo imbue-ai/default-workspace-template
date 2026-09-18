@@ -18,6 +18,9 @@ renders:
   detail: the live in-flight attempt or the record-backed interrupted/failed
   view (both carrying the attempt's persisted request so the page can restate
   the chosen settings after a reload), or "gone".
+- ``POST /ui/api/create/attempts/<create_attempt_id>/welcome-chat`` -- once the
+  attempt is done, hands the onboarding conversation to the new workspace as
+  its first chat (``welcome_chat.py``), answering the chat's id.
 
 Some small derivations here (suggested color, locked emails, destroy statuses)
 mirror private helpers in ``app.py``; importing them would be circular
@@ -26,16 +29,23 @@ logic is re-derived from the same underlying modules. When the legacy SSE
 surface is deleted, those helpers should collapse into one shared home.
 """
 
+from collections.abc import Mapping
+
 from flask import Blueprint
 from flask import Response
 from flask import request
+from loguru import logger
 from pydantic import Field
+from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.ids import InvalidRandomIdError
 from imbue.minds.bootstrap import MindsRoot
+from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptStatus
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.create_status import expected_create_attempt_duration_seconds
+from imbue.minds.desktop_client.destroying import DestroyingRecord
+from imbue.minds.desktop_client.destroying import DestroyingStatus
 from imbue.minds.desktop_client.destroying import is_host_still_active
 from imbue.minds.desktop_client.destroying import list_destroying
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptRecord
@@ -45,8 +55,12 @@ from imbue.minds.desktop_client.provider_display import friendly_provider_label
 from imbue.minds.desktop_client.region_preference import IMBUE_CLOUD_PROVIDER_KEY
 from imbue.minds.desktop_client.region_preference import VULTR_PROVIDER_KEY
 from imbue.minds.desktop_client.region_preference import known_regions_for_provider
+from imbue.minds.desktop_client.responses import make_json_error_response
+from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.ui_auth import is_ui_request_authenticated
+from imbue.minds.desktop_client.welcome_chat import WelcomeChatRequest
+from imbue.minds.desktop_client.welcome_chat import seed_welcome_chat
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
 from imbue.minds.desktop_client.workspace_color import pick_unused_create_color
 from imbue.minds.desktop_client.workspace_create import default_region_for_provider_with_config
@@ -71,6 +85,8 @@ from imbue.minds.primitives import DEFAULT_GCP_ZONE
 from imbue.minds.primitives import DockerRuntime
 from imbue.minds.primitives import LaunchMode
 from imbue.minds.primitives import default_docker_runtime
+from imbue.minds.utils.mngr_caller import get_default_mngr_caller
+from imbue.mngr.primitives import AgentId
 
 # The cloud modes are bring-your-own-key-account only; they never appear as
 # plain compute options in the form (each configured account is its own row).
@@ -137,10 +153,21 @@ class CreateFormDefaultsResponse(FrozenModel):
     prefill: CreateRetryPrefill | None = Field(default=None, description="Retry pre-fill, when ?retry named a record")
 
 
+class OrphanedFailedDestroy(FrozenModel):
+    """A failed destroy whose workspace no longer has a row of its own on the landing list."""
+
+    agent_id: str = Field(description="The workspace agent id the destroy was for")
+    name: str = Field(description="The workspace's display name")
+    accent: str = Field(description="The workspace's accent color hex")
+
+
 class LandingExtrasResponse(FrozenModel):
     """Landing-page facts that do not ride the ``workspaces`` channel message."""
 
     destroying_status_by_agent_id: dict[str, str] = Field(description="agent id -> running | failed destroys")
+    orphaned_failed_destroys: tuple[OrphanedFailedDestroy, ...] = Field(
+        description="Failed destroys whose host is already gone, so no live row carries their status"
+    )
     locked_account_emails: tuple[str, ...] = Field(description="Accounts with synced secrets but no local key")
     is_discovery_complete: bool = Field(description="Whether initial discovery has completed")
     has_restorable_workspaces: bool = Field(description="Whether the last-good topology knows any workspace")
@@ -179,6 +206,12 @@ class RecordCreateAttemptDetail(FrozenModel):
     log_tail: tuple[str, ...] = Field(default=(), description="Persisted tail of the create log")
     provider_label: str = Field(default="", description="Friendly compute-provider label")
     request: CreateAttemptRequestSummary = Field(description="The settings the attempt was submitted with")
+
+
+class WelcomeChatResponse(FrozenModel):
+    """Response for POST /ui/api/create/attempts/<id>/welcome-chat: the seeded chat's id."""
+
+    chat_id: str = Field(description="The id of the chat the conversation continues in")
 
 
 class CreateAttemptDetailResponse(FrozenModel):
@@ -312,28 +345,58 @@ def _handle_create_form_defaults() -> Response:
     return _json_response(response)
 
 
-def _destroying_statuses(backend_resolver: BackendResolverInterface) -> dict[str, str]:
+def _destroying_statuses(records: Mapping[AgentId, DestroyingRecord]) -> dict[str, str]:
     """Read-only run/failed status per in-flight destroy record.
 
     The publisher's derive tick owns finalizing DONE records; this view only
-    labels what exists right now: a dead wrapper PID with the host still up is
-    a failed destroy, anything else still running.
+    labels what exists right now. A DONE record reads as running until that
+    tick finalizes and drops it, which avoids a spurious failed-flash.
     """
-    paths = get_state().api_v1_paths
-    if paths is None:
-        return {}
-    records = list_destroying(paths, lambda agent_id: is_host_still_active(backend_resolver, paths, agent_id))
-    statuses: dict[str, str] = {}
+    return {
+        str(agent_id): "failed" if record.status == DestroyingStatus.FAILED else "running"
+        for agent_id, record in records.items()
+    }
+
+
+def _orphaned_failed_destroys(
+    records: Mapping[AgentId, DestroyingRecord],
+    backend_resolver: BackendResolverInterface,
+    session_store: MultiAccountSessionStore | None,
+) -> tuple[OrphanedFailedDestroy, ...]:
+    """The failed destroys whose workspace is no longer active, named from discovery or the synced record.
+
+    The record may already be tombstoned (this device retires a record once
+    discovery stops listing its host), and still carries the name and color.
+
+    A destroy can fail after its host already reads DESTROYED (a non-zero exit
+    during cleanup); the landing list drops such a workspace, so without this
+    the failure would have nowhere to show.
+    """
+    active_ids = set(backend_resolver.list_active_workspace_ids())
+    orphans: list[OrphanedFailedDestroy] = []
     for agent_id, record in records.items():
-        if not record.is_host_still_active:
-            # Host already gone: the next derive tick finalizes and drops the
-            # record; "running" until then avoids a spurious failed-flash.
-            statuses[str(agent_id)] = "running"
-        elif record.pid_alive:
-            statuses[str(agent_id)] = "running"
-        else:
-            statuses[str(agent_id)] = "failed"
-    return statuses
+        if record.status != DestroyingStatus.FAILED or agent_id in active_ids:
+            continue
+        found = (
+            session_store.record_store.find_record_any_state(str(agent_id))
+            if session_store is not None and session_store.record_store is not None
+            else None
+        )
+        synced_record = found[1] if found is not None else None
+        name = backend_resolver.get_workspace_name(agent_id) or (
+            synced_record.display_name if synced_record is not None else ""
+        )
+        accent = backend_resolver.get_workspace_color(agent_id) or (
+            synced_record.color if synced_record is not None else None
+        )
+        orphans.append(
+            OrphanedFailedDestroy(
+                agent_id=str(agent_id),
+                name=name or str(agent_id),
+                accent=accent or DEFAULT_WORKSPACE_COLOR,
+            )
+        )
+    return tuple(orphans)
 
 
 def _handle_landing_extras() -> Response:
@@ -349,8 +412,15 @@ def _handle_landing_extras() -> Response:
             session_store.record_store.locked_account_user_ids([str(account.user_id) for account in accounts])
         )
         locked_emails = tuple(str(account.email) for account in accounts if str(account.user_id) in locked_user_ids)
+    paths = state.api_v1_paths
+    records = (
+        list_destroying(paths, lambda agent_id: is_host_still_active(backend_resolver, paths, agent_id))
+        if paths is not None
+        else {}
+    )
     response = LandingExtrasResponse(
-        destroying_status_by_agent_id=_destroying_statuses(backend_resolver),
+        destroying_status_by_agent_id=_destroying_statuses(records),
+        orphaned_failed_destroys=_orphaned_failed_destroys(records, backend_resolver, session_store),
         locked_account_emails=locked_emails,
         is_discovery_complete=backend_resolver.has_completed_initial_discovery(),
         has_restorable_workspaces=bool(backend_resolver.list_restorable_workspace_ids()),
@@ -423,8 +493,59 @@ def _handle_create_attempt_detail(create_attempt_id: str) -> Response:
     return _json_response(CreateAttemptDetailResponse(kind="record", record=record_detail))
 
 
+def _done_workspace_agent_id(create_attempt_id: str) -> AgentId | None:
+    """The agent id of a finished attempt's workspace: from the live thread, else its DONE record; None until then."""
+    agent_creator = get_state().agent_creator
+    try:
+        parsed_id = CreateAttemptId(create_attempt_id)
+    except InvalidRandomIdError:
+        return None
+    info = agent_creator.get_create_attempt_info(parsed_id) if agent_creator is not None else None
+    if info is not None and info.status is AgentCreateAttemptStatus.DONE and info.agent_id is not None:
+        return info.agent_id
+    record = _read_pending_record(create_attempt_id)
+    if record is not None and record.state is PendingCreateAttemptState.DONE and record.agent_id:
+        return AgentId(record.agent_id)
+    return None
+
+
+def _handle_seed_welcome_chat(create_attempt_id: str) -> Response:
+    """Hand the onboarding conversation to the finished attempt's workspace as its first chat.
+
+    The body is a :class:`WelcomeChatRequest`. Answers 200 with the chat's id; 409 while the
+    attempt has no workspace yet (the page posts after DONE, so this is a race or a stale
+    tab), and 502 with the script's own words when the workspace refused or could not be
+    reached, in which case the page enters the workspace without the chat.
+    """
+    if not is_ui_request_authenticated():
+        return _unauthenticated_response()
+    body = request.get_json(silent=True, force=True)
+    if not isinstance(body, dict):
+        return make_json_error_response("Invalid JSON body", 400)
+    try:
+        welcome_chat = WelcomeChatRequest.model_validate(body)
+    except ValidationError as e:
+        logger.debug("Rejected a malformed welcome-chat body: {}", e)
+        return make_json_error_response("Invalid JSON body", 400)
+    workspace_agent_id = _done_workspace_agent_id(create_attempt_id)
+    if workspace_agent_id is None:
+        return make_json_error_response("The workspace is not ready yet", 409)
+    mngr_caller = get_state().mngr_caller or get_default_mngr_caller()
+    outcome = seed_welcome_chat(mngr_caller, workspace_agent_id, welcome_chat)
+    if not outcome.is_seeded:
+        return make_json_error_response(
+            "Couldn't open the welcome chat in the workspace.", 502, detail=outcome.failure_detail
+        )
+    return _json_response(WelcomeChatResponse(chat_id=outcome.chat_id))
+
+
 def register_create_routes(blueprint: Blueprint) -> None:
     """Register this area's /ui/api routes on the shared /ui blueprint."""
+    blueprint.add_url_rule(
+        "/api/create/attempts/<create_attempt_id>/welcome-chat",
+        view_func=_handle_seed_welcome_chat,
+        methods=["POST"],
+    )
     blueprint.add_url_rule("/api/create/form-defaults", view_func=_handle_create_form_defaults)
     blueprint.add_url_rule("/api/create/landing-extras", view_func=_handle_landing_extras)
     blueprint.add_url_rule(

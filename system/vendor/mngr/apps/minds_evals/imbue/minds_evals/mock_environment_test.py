@@ -17,6 +17,7 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.testing import hermetic_git_environment
 
 
 class ScriptedExecRule:
@@ -135,6 +136,12 @@ class ConversationModel:
         # The 1-based client message the message endpoint refuses to accept, if any. The driver
         # retries a send until its deadline, so this is how a send that never lands is exercised.
         self.refused_send_index: int | None = None
+        # The 1-based client message after which every events poll answers unparseably, the way a
+        # transient bridge failure does. The driver gives up on a reply after a run of those, so
+        # this is how a message that went out and was never answered is exercised without a
+        # wall-clock budget in play.
+        self.events_poll_failing_after_message: int | None = None
+        self._sent_message_count = 0
         self.signed_in_account_ids: list[str] = []
         # The lane the workspace was signed in on, which decides the harness it lists the minted
         # account under. Empty until a sign-in has happened.
@@ -216,7 +223,7 @@ class ConversationModel:
         if self._is_first_create_answer_lost:
             self._is_first_create_answer_lost = False
             return mngr_exec_json("")
-        created = {"agent_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
+        created = {"chat_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
         return curl_stdout(json.dumps(created), status=201)
 
     def _handle_accounts_call(self, command: str) -> str:
@@ -266,20 +273,20 @@ class ConversationModel:
                 # No status line at all is what the bridge sees while the endpoint is still coming up.
                 return mngr_exec_json("")
             return curl_stdout(json.dumps({"logged_in": False, "auth_mode": "none"}))
-        if "/api/agents" in command and not self.is_agents_endpoint_up:
+        if ("/api/agents" in command or "/api/chats" in command) and not self.is_agents_endpoint_up:
             # No status line at all: the bridged call reached nothing that could answer it.
             return mngr_exec_json("")
-        if "/api/agents/create-chat" in command:
+        if "/api/chats/create" in command:
             return self._handle_create_chat(command)
-        if "/api/agents/{}/model".format(self.chat_agent_id) in command:
+        if "/api/chats/{}/model".format(self.chat_agent_id) in command:
             self.model_choice_commands.append(command)
             if self.model_choice_status != 200:
                 return curl_stdout(json.dumps({"detail": self.model_choice_detail}), status=self.model_choice_status)
             if self.chat_state_after_model_choice:
                 self.chat_state = self.chat_state_after_model_choice
             return curl_stdout(json.dumps({"status": "ok"}))
-        if "/api/agents/{}/message".format(self.chat_agent_id) in command:
-            if self.refused_send_index == self._turn_index + 1:
+        if "/api/chats/{}/message".format(self.chat_agent_id) in command:
+            if self.refused_send_index == self._sent_message_count + 1:
                 # An unparseable body is what the bridge sees when a send does not land.
                 return mngr_exec_json("")
             # The welcome turn is queued ahead of anything sent afterwards, so a send that beats it
@@ -289,11 +296,17 @@ class ConversationModel:
             if self._turn_index < len(self._turn_reply_events):
                 self.events.extend(self._turn_reply_events[self._turn_index])
                 self._turn_index += 1
+            self._sent_message_count += 1
             return curl_stdout(json.dumps({"ok": True}))
         events_match = re.search(
-            r"/api/agents/{}/events\?offset=(\d+)&limit=(\d+)".format(re.escape(self.chat_agent_id)), command
+            r"/api/chats/{}/events\?offset=(\d+)&limit=(\d+)".format(re.escape(self.chat_agent_id)), command
         )
         if events_match:
+            if (
+                self.events_poll_failing_after_message is not None
+                and self._sent_message_count >= self.events_poll_failing_after_message
+            ):
+                return mngr_exec_json("")
             self._deliver_welcome_if_due()
             offset, limit = int(events_match.group(1)), int(events_match.group(2))
             served = self.events[offset : offset + limit]
@@ -348,6 +361,8 @@ class MockBoxEnvironment(BaseEnvironment):
         # Every upload in order. The mapping above keeps only the latest write to each path, which
         # cannot say whether a later step wrote its own copy of a file an earlier one already had.
         self.uploaded_targets: list[str] = []
+        # What each of those uploads carried, in the same order.
+        self.uploaded_contents: list[str] = []
         # What a `download_file` of a box path yields; a path not listed here is a missing file.
         self.downloadable_content_by_source: dict[str, str] = {}
         # An upload whose content contains this fails the way a transport hiccup does; empty means
@@ -373,6 +388,7 @@ class MockBoxEnvironment(BaseEnvironment):
             raise RuntimeError("upload of {} failed".format(target_path))
         self.uploaded_content_by_target[target_path] = content
         self.uploaded_targets.append(target_path)
+        self.uploaded_contents.append(content)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         pass
@@ -420,3 +436,70 @@ class MockBoxEnvironment(BaseEnvironment):
             if rule.substring in command:
                 return rule.next_result()
         return ok_result()
+
+
+class LocalShellEnvironment(BaseEnvironment):
+    """A box environment whose exec runs each command in a local bash, for tests that need a box
+    command's real effect on a local repository rather than a canned answer."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        trial_dir = tmp_path / "local-shell-trial"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        environment_dir = tmp_path / "local-shell-environment"
+        environment_dir.mkdir(parents=True, exist_ok=True)
+        super().__init__(
+            environment_dir=environment_dir,
+            environment_name="local-shell",
+            session_id="local-shell__test__env",
+            trial_paths=TrialPaths(trial_dir=trial_dir),
+            task_env_config=EnvironmentConfig(),
+        )
+
+    @staticmethod
+    def type() -> str:
+        return "local-shell"
+
+    def _validate_definition(self) -> None:
+        pass
+
+    async def start(self, force_build: bool) -> None:
+        pass
+
+    async def stop(self, delete: bool) -> None:
+        pass
+
+    async def upload_file(self, source_path: Path | str, target_path: str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def download_file(self, source_path: str, target_path: Path | str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
+        raise NotImplementedError("a local shell environment runs commands only")
+
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
+            command,
+            cwd=cwd,
+            # Hermetic, so none of the developer's git configuration -- a commit-signing setting, a
+            # hooks path -- and none of the GIT_* a hook exports can change what a box command does
+            # to a test repository. The box env the caller passes still wins over it.
+            env={**hermetic_git_environment(), **(env or {})},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
+        assert process.returncode is not None, "a process that has been communicated with has exited"
+        return ExecResult(stdout=stdout.decode(), stderr=stderr.decode(), return_code=process.returncode)

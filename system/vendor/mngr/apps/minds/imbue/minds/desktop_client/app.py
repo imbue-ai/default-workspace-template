@@ -67,6 +67,8 @@ from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import SleepTracker
+from imbue.minds.desktop_client.folder_sync import FolderSyncManager
+from imbue.minds.desktop_client.folder_sync_store import FolderSyncStore
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
@@ -446,6 +448,11 @@ def _handle_sync_unlock() -> Response:
     key bundle (fetched from the connector when no local mirror exists);
     whichever accounts it unwraps get their DEK installed. Reports which
     accounts remain locked -- they may need an older password.
+
+    Succeeds only when this device ends up holding a key. An account whose
+    encrypted material has not reached this device yet does not read as
+    locked, so the loop below has nothing to try -- an unlock that acted on
+    nothing is reported as a failure, not a success.
     """
     if not _is_request_authenticated():
         return make_response(status_code=403, content='{"error":"Not authenticated"}', media_type="application/json")
@@ -484,22 +491,23 @@ def _handle_sync_unlock() -> Response:
         scheduler.kick()
     if is_ssh_material_written:
         bounce_latchkey_forward_supervisor(get_state().latchkey_forward_supervisor)
-    if not unlocked and still_locked:
+    is_any_account_unlocked = any(
+        is_account_unlocked(record_store.paths, str(account.user_id)) for account in accounts
+    )
+    if unlocked or (not still_locked and is_any_account_unlocked):
         return make_response(
             status_code=200,
-            content=json.dumps(
-                {
-                    "ok": False,
-                    "unlocked": unlocked,
-                    "still_locked": still_locked,
-                    "error": "That password did not unlock any account.",
-                }
-            ),
+            content=json.dumps({"ok": True, "unlocked": unlocked, "still_locked": still_locked}),
             media_type="application/json",
         )
+    error = (
+        "That password did not unlock any account."
+        if still_locked
+        else "No account on this device is waiting to be unlocked yet. Try again in a moment."
+    )
     return make_response(
         status_code=200,
-        content=json.dumps({"ok": True, "unlocked": unlocked, "still_locked": still_locked}),
+        content=json.dumps({"ok": False, "unlocked": unlocked, "still_locked": still_locked, "error": error}),
         media_type="application/json",
     )
 
@@ -1276,6 +1284,8 @@ def _build_workspace_list(
             "id": tile.agent_id,
             "name": tile.name,
             "accent": tile.accent,
+            # The row's remove-from-list control posts this id.
+            "host_id": tile.host_id,
             "is_remote": "true",
             "remote_kind": tile.kind.value,
             "location": tile.location,
@@ -1762,6 +1772,9 @@ def _derive_ui_workspaces_message(
         return UiWorkspacesMessage(
             workspaces=tuple(_ui_workspace_entry_from_legacy_dict(row) for row in rows),
             destroying_agent_ids=tuple(destroying_marker),
+            failed_destroy_agent_ids=tuple(
+                agent_id for agent_id, marker_status in destroying_marker.items() if marker_status == "failed"
+            ),
             restorable_workspace_ids=tuple(restorable_ids),
             remote_workspace_states=_build_remote_tile_states(backend_resolver, session_store),
         )
@@ -2024,6 +2037,29 @@ def _wire_workspace_updates(
     service.state_store.add_on_change_callback(ui_publisher.notify_change)
 
 
+def start_folder_syncs(app: Flask, root_concurrency_group: ConcurrencyGroup) -> None:
+    """Bring back the folder syncs this computer was running when it last quit.
+
+    Off the startup path itself: each sync costs a round trip to its machine,
+    and a handful of them would otherwise be the difference between the window
+    appearing and the window appearing late. Every sync starts in STARTING and
+    settles on its own row, which is exactly what the panel already shows for a
+    sync turned on by hand.
+
+    Kept out of ``create_desktop_client`` (like the update loops) so test-built
+    apps get routes and state without threads.
+    """
+    manager = get_state(app).folder_sync_manager
+    if manager is None:
+        return
+    root_concurrency_group.start_new_thread(
+        target=manager.restore_all,
+        name="folder-sync-restore",
+        daemon=True,
+        is_checked=False,
+    )
+
+
 def start_workspace_update_loops(app: Flask, root_concurrency_group: ConcurrencyGroup) -> None:
     """Start the update machinery's background loops.
 
@@ -2239,6 +2275,8 @@ def create_desktop_client(
     sync_scheduler: WorkspaceSyncScheduler | None = None,
     connectivity_detector: ConnectivityDetector | None = None,
     sleep_tracker: SleepTracker | None = None,
+    folder_sync_manager: FolderSyncManager | None = None,
+    device_id: str = "",
 ) -> Flask:
     """Create the bare-origin minds Flask application.
 
@@ -2381,6 +2419,20 @@ def create_desktop_client(
         ),
     )
 
+    # Folder syncs shell out to long-lived ``mngr pair`` subprocesses, which
+    # the root concurrency group owns; without one there is nowhere to run
+    # them, and the pane says folder sync is unavailable. A manager passed in
+    # is used as-is (tests supply one over a temporary directory).
+    if folder_sync_manager is None and root_concurrency_group is not None:
+        folder_sync_manager = FolderSyncManager(
+            concurrency_group=root_concurrency_group,
+            mngr_binary=mngr_binary,
+            mngr_host_dir=mngr_host_dir if mngr_host_dir is not None else Path.home() / ".mngr",
+            device_id=device_id,
+            backend_resolver=backend_resolver,
+            store=(None if paths is None else FolderSyncStore(records_dir=paths.data_dir / "folder_syncs")),
+        )
+
     state = DesktopClientState(
         auth_store=auth_store,
         backend_resolver=backend_resolver,
@@ -2411,6 +2463,7 @@ def create_desktop_client(
         connectivity_detector=connectivity_detector,
         mngr_caller=mngr_caller,
         sync_scheduler=sync_scheduler,
+        folder_sync_manager=folder_sync_manager,
         ui_channel_broadcaster=ui_channel_broadcaster,
         ui_publisher=ui_publisher,
         machine_stop_kind_tracker=machine_stop_kind_tracker,

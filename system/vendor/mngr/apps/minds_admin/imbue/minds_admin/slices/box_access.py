@@ -164,20 +164,25 @@ def match_operator_identity_or_none(
     return None
 
 
+def activated_management_tier_or_none() -> str | None:
+    """The tier of the activated minds env, or None when no env is activated."""
+    env_name = active_env_name_or_none()
+    return tier_for_env_name(env_name) if env_name is not None else None
+
+
 @lru_cache(maxsize=None)
-def _operator_identity_or_none() -> OperatorWireguardIdentity | None:
-    """The local operator's tunnel material, resolved once per process (None = no userspace path).
+def _operator_identity_or_none(tier: str | None) -> OperatorWireguardIdentity | None:
+    """The local operator's tunnel material for ``tier``, resolved once per process (None = no userspace path).
 
     The private key lives in the operator's per-tier identity directory
     (``~/.mindsadmin/<tier>/wireguard.key``, see ``operator_identity``); its
     derived public key must match a committed
-    ``[[management_plane.wireguard.operators]]`` entry of the activated
-    tier's ``deploy.toml``.
+    ``[[management_plane.wireguard.operators]]`` entry of the tier's
+    ``deploy.toml``. A None tier (no explicit tier and no activated env) has
+    no committed operator list to match against.
     """
-    env_name = active_env_name_or_none()
-    if env_name is None:
+    if tier is None:
         return None
-    tier = tier_for_env_name(env_name)
     management_plane_config = load_deploy_config(tier).management_plane
     if management_plane_config is None or not management_plane_config.wireguard.operators:
         return None
@@ -197,12 +202,13 @@ def _operator_identity_or_none() -> OperatorWireguardIdentity | None:
 
 
 @lru_cache(maxsize=None)
-def _onetun_path_or_none() -> str | None:
+def _onetun_path_or_none(tier: str | None) -> str | None:
     """The onetun binary (MNGR_ONETUN_PATH override, else PATH, else the pinned install), or None when absent.
 
-    Absence is logged once per process: at warning level when the operator's
-    WireGuard key is in place (they clearly intend to use the transport), else
-    at debug (a machine without tunnel material is the normal fallback case).
+    Absence is logged once per tier per process: at warning level when the
+    operator's WireGuard key for ``tier`` is in place (they clearly intend to
+    use the transport), else at debug (a machine without tunnel material is
+    the normal fallback case).
     """
     override = os.environ.get("MNGR_ONETUN_PATH")
     if override:
@@ -213,7 +219,7 @@ def _onetun_path_or_none() -> str | None:
     well_known = well_known_onetun_path()
     if well_known.is_file():
         return str(well_known)
-    if _operator_identity_or_none() is not None:
+    if _operator_identity_or_none(tier) is not None:
         logger.warning(
             "Found the operator WireGuard key but no onetun binary, so box-management SSH cannot take "
             "the userspace tunnel path; run `uv run minds-admin wireguard install-onetun` to install "
@@ -270,18 +276,32 @@ def _pick_free_local_port() -> int:
 _SPAWNED_TUNNEL_PROCESSES: Final[list[RunningProcess]] = []
 
 
+# Guards the first-use creation below: dials to different boxes resolve in
+# parallel, and two of them racing through a cold ``lru_cache`` would each
+# enter their own group and leak one.
+_TUNNEL_GROUP_LOCK: Final[threading.Lock] = threading.Lock()
+
+
 @lru_cache(maxsize=None)
-def _tunnel_concurrency_group() -> ConcurrencyGroup:
-    """The process-lifetime ConcurrencyGroup owning every spawned tunnel.
+def _enter_tunnel_concurrency_group_once() -> ConcurrencyGroup:
+    """Enter the process-lifetime ConcurrencyGroup owning every spawned tunnel.
 
     Tunnels must outlive any single command (the memoized dial resolver hands
     them out for the rest of the process), so the group cannot live in a
     ``with`` block: it is entered here on first use and closed at interpreter
-    exit (terminating any still-running tunnel processes).
+    exit (terminating any still-running tunnel processes). Only call this with
+    ``_TUNNEL_GROUP_LOCK`` held; :func:`_tunnel_concurrency_group` is the
+    accessor for everything else.
     """
     concurrency_group = ConcurrencyGroup(name="box-management-tunnels").__enter__()
     atexit.register(close_box_management_tunnels)
     return concurrency_group
+
+
+def _tunnel_concurrency_group() -> ConcurrencyGroup:
+    """The tunnel-owning ConcurrencyGroup, entered on first use; safe from any thread."""
+    with _TUNNEL_GROUP_LOCK:
+        return _enter_tunnel_concurrency_group_once()
 
 
 def close_box_management_tunnels() -> None:
@@ -291,17 +311,19 @@ def close_box_management_tunnels() -> None:
     must not leak child processes past their own scope (tests, long-lived
     embedders) close them explicitly. Idempotent; later dials simply re-spawn.
     """
-    if _tunnel_concurrency_group.cache_info().currsize:
-        # Terminate before exiting the group: the group's exit waits for its
-        # strands (long-running processes are the caller's to stop).
-        for process in _SPAWNED_TUNNEL_PROCESSES:
-            if process.poll() is None:
-                process.terminate()
-        _tunnel_concurrency_group().__exit__(None, None, None)
-    _SPAWNED_TUNNEL_PROCESSES.clear()
-    _tunnel_concurrency_group.cache_clear()
+    with _TUNNEL_GROUP_LOCK:
+        if _enter_tunnel_concurrency_group_once.cache_info().currsize:
+            # Terminate before exiting the group: the group's exit waits for its
+            # strands (long-running processes are the caller's to stop).
+            for process in _SPAWNED_TUNNEL_PROCESSES:
+                if process.poll() is None:
+                    process.terminate()
+            _enter_tunnel_concurrency_group_once().__exit__(None, None, None)
+        _SPAWNED_TUNNEL_PROCESSES.clear()
+        _enter_tunnel_concurrency_group_once.cache_clear()
     with _DIAL_CACHE_LOCK:
         _DIAL_BY_BOX_KEY.clear()
+        _DIAL_LOCK_BY_BOX_KEY.clear()
 
 
 def _check_tunnel_banner(process: RunningProcess, local_port: int) -> bool | None:
@@ -369,55 +391,82 @@ def _spawn_verified_tunnel_or_none(
     return None
 
 
-# Memoized per process under a single-flight lock: a multi-slice bake, destroy
-# or drain dials the same box from many threads at once, and exactly one probe
-# (or one tunnel) per box per command is what the box tolerates -- concurrent
-# misses each spawning their own onetun would all present the same operator
-# WireGuard identity, and the box's wg0 keeps one session per peer, so every
-# fresh handshake would drop the other tunnels' SSH sessions. CLI invocations
-# are short-lived, so reachability cannot meaningfully change mid-run.
+# Memoized per process, single-flight per box: a multi-slice bake, destroy,
+# drain or peer sync dials the same box from many threads at once, and exactly
+# one probe (or one tunnel) per box per command is what the box tolerates --
+# concurrent misses each spawning their own onetun would all present the same
+# operator WireGuard identity, and the box's wg0 keeps one session per peer, so
+# every fresh handshake would drop the other tunnels' SSH sessions. Different
+# boxes resolve concurrently (each key has its own lock), so a fleet-wide
+# fan-out brings its tunnels up in parallel. CLI invocations are short-lived,
+# so reachability cannot meaningfully change mid-run.
+_DialCacheKey = tuple[str, str | None, str | None, str | None]
 _DIAL_CACHE_LOCK: Final[threading.Lock] = threading.Lock()
-_DIAL_BY_BOX_KEY: Final[dict[tuple[str, str | None, str | None], BoxManagementDial]] = {}
+_DIAL_BY_BOX_KEY: Final[dict[_DialCacheKey, BoxManagementDial]] = {}
+_DIAL_LOCK_BY_BOX_KEY: Final[dict[_DialCacheKey, threading.Lock]] = {}
 
 
 def _resolve_single_flight(
-    cache: dict[tuple[str, str | None, str | None], BoxManagementDial],
+    cache: dict[_DialCacheKey, BoxManagementDial],
+    # Guards ``cache`` and ``lock_by_key``; never held while resolving.
     lock: threading.Lock,
-    key: tuple[str, str | None, str | None],
+    # One lock per key, so concurrent misses on the same key resolve exactly
+    # once while misses on different keys resolve in parallel.
+    lock_by_key: dict[_DialCacheKey, threading.Lock],
+    key: _DialCacheKey,
     resolve: Callable[[], BoxManagementDial],
 ) -> BoxManagementDial:
-    """Return the cached dial for ``key``, computing it under ``lock`` so concurrent misses resolve exactly once."""
+    """Return the cached dial for ``key``, computing it at most once even under concurrent misses."""
     with lock:
         cached = cache.get(key)
         if cached is not None:
             return cached
+        key_lock = lock_by_key.setdefault(key, threading.Lock())
+    with key_lock:
+        with lock:
+            cached = cache.get(key)
+        if cached is not None:
+            return cached
         resolved = resolve()
-        cache[key] = resolved
+        with lock:
+            cache[key] = resolved
         return resolved
 
 
 def resolve_box_management_dial(
-    *, public_address: str, wireguard_address: str | None, wireguard_public_key: str | None
+    *,
+    public_address: str,
+    wireguard_address: str | None,
+    wireguard_public_key: str | None,
+    # The tier whose committed operator list the local WireGuard key is matched
+    # against; None means the activated env's tier.
+    tier: str | None = None,
 ) -> BoxManagementDial:
     """The dial for a box's management SSH: userspace tunnel, else overlay route, else public ``:22``."""
+    # Key the cache on the resolved tier so the activated tier named implicitly
+    # (None) and explicitly share one entry -- one tunnel per box per process.
+    if tier is None:
+        tier = activated_management_tier_or_none()
     return _resolve_single_flight(
         _DIAL_BY_BOX_KEY,
         _DIAL_CACHE_LOCK,
-        (public_address, wireguard_address, wireguard_public_key),
+        _DIAL_LOCK_BY_BOX_KEY,
+        (public_address, wireguard_address, wireguard_public_key, tier),
         lambda: _resolve_box_management_dial_uncached(
             public_address=public_address,
             wireguard_address=wireguard_address,
             wireguard_public_key=wireguard_public_key,
+            tier=tier,
         ),
     )
 
 
 def _resolve_box_management_dial_uncached(
-    *, public_address: str, wireguard_address: str | None, wireguard_public_key: str | None
+    *, public_address: str, wireguard_address: str | None, wireguard_public_key: str | None, tier: str | None
 ) -> BoxManagementDial:
     if wireguard_address and wireguard_public_key:
-        identity = _operator_identity_or_none()
-        onetun_path = _onetun_path_or_none()
+        identity = _operator_identity_or_none(tier)
+        onetun_path = _onetun_path_or_none(tier)
         if identity is not None and onetun_path is not None:
             tunneled = _spawn_verified_tunnel_or_none(
                 onetun_path=onetun_path,
