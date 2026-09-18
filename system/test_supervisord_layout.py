@@ -83,7 +83,7 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
 # workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite runs that
 # shell against a local workspace instead.
 _READER_PATHS: dict[str, Path] = {
-    "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
+    "scaffolder": _REPO_ROOT / ".agents/shared/build-app/scripts/scaffold_flask_lib.py",
     "migrate_workspace": _REPO_ROOT / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
     "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
     "oom_bands": _REPO_ROOT / "system/services/oom_priority/bin/oom_tag_service_test.py",

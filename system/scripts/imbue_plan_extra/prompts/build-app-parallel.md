@@ -11,7 +11,7 @@ You have read-only tools and a single turn, so work from what you can read.
 
 ## Step 1: read the work you are routing
 
-Start with `.agents/skills/build-app/SKILL.md`. That is the flow this request
+Start with `.agents/shared/build-app/README.md`. That is the flow this request
 will be built through, and your plan is a routing of that work.
 
 Then read `.agents/skills/build-app-parallel/references/worker-node.md`. Every

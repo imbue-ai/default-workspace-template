@@ -27,7 +27,7 @@ show up as a dirty file in the tree, so it is not accurate to say a scaffold
 touches nothing shared.
 
 Usage:
-    uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
+    uv run .agents/shared/build-app/scripts/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
         --icon-file icon.svg [--display-name "Inbox status"] \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
