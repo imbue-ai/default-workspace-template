@@ -87,8 +87,13 @@ const CHIP_BASE =
   "text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) hover:bg-fill-hover";
 
 /** The detail panel: a bordered box with no fill of its own, so it reads as an
- *  annotation on the row rather than as another block in the transcript. */
-const DETAIL_CLASS = "tool-chip-detail mt-1 rounded-md border px-3 py-1.5";
+ *  annotation on the row rather than as another block in the transcript.
+ *
+ *  It is a flex item of the chip row. `basis-full` is what forces the wrap
+ *  break, since an item that wants the whole width cannot share a line. `ml-2`
+ *  and the matching narrower basis put it back in line with the prose, undoing
+ *  the row's own `-ml-2` for this one child. */
+const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-2 basis-[calc(100%-0.5rem)] rounded-md border px-3 py-1.5";
 
 const PANE_CODE_CLASS = "font-mono text-(length:--font-size-helper) leading-normal break-all whitespace-pre-wrap";
 
@@ -164,7 +169,9 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   // rule pinned to one pair: which of the three exist depends on the call.
   return m(
     "div",
-    { class: DETAIL_CLASS },
+    // Keyed because its siblings in the row are: mithril rejects a fragment
+    // that mixes keyed and unkeyed children.
+    { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
     sections.map((section, i) => (i === 0 ? section : m("div", { class: "mt-1.5 border-t pt-1.5" }, section))),
   );
 }
@@ -180,11 +187,18 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
     const { chips, toolResults, chatId } = vnode.attrs;
     const open = chips.find((chip) => isBlockExpanded(chipKey(chip.call))) ?? null;
 
+    // The panel goes INSIDE the row, immediately after the chip that opened it.
+    // A long run wraps onto several lines, and a panel hung below the whole row
+    // ends up lines away from the chip it belongs to -- with unrelated chips in
+    // between, so the reader loses which one they opened. As a full-width flex
+    // item it cannot share a line, which breaks the wrap exactly where it sits:
+    // the chip it belongs to ends its line, the panel spans the width directly
+    // underneath, and the rest of the run resumes below it.
     return m("div", { class: "tool-chip-group my-1.5" }, [
       m(
         "div",
         { class: ROW_CLASS },
-        chips.map((chip) => {
+        chips.flatMap((chip) => {
           const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
           const failed = toolResults.get(chip.call.tool_call_id)?.is_error === true;
           // Colour says two different things at once, so they are ordered: a
@@ -192,7 +206,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
           // failure matters more than the selection.
           const tone = failed ? "text-danger" : isOpen ? "text-primary" : "text-faint";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
-          return m(
+          const button = m(
             "button",
             {
               type: "button",
@@ -217,9 +231,10 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               m("span", { class: "tool-chip-label whitespace-nowrap" }, chipLabel(chip.call)),
             ],
           );
+          if (!isOpen) return [button];
+          return [button, renderDetail(chip, toolResults.get(chip.call.tool_call_id) ?? null, chatId)];
         }),
       ),
-      open === null ? null : renderDetail(open, toolResults.get(open.call.tool_call_id) ?? null, chatId),
     ]);
   },
 };
