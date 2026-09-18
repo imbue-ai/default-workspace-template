@@ -7,7 +7,7 @@
  * One tile is the exception: "Start from a template" has its answer further down the same page,
  * so it scrolls there instead of opening anything (``prompt`` is null).
  *
- * Each tile has a hue from the Minds brand palette (the sheet the workspace accents come from).
+ * Each tile has a hue from the Mind brand palette (the sheet the workspace accents come from).
  * The tile itself stays a white card; the hue shows in the glyph, drawn duotone off it: the hue
  * darkened for the stroke, a wash of it for the fill of whatever shapes the glyph closes.
  *
@@ -102,26 +102,26 @@ export const START_OPTIONS: readonly StartOption[] = [
   {
     key: "learn",
     hue: "#f5d6a0", // comfort
-    title: "Learn about Minds",
-    description: "Have Minds teach you about all of its different capabilities and features.",
+    title: "Learn about Mind",
+    description: "Have Mind teach you about all of its different capabilities and features.",
     glyphPaths:
       '<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/>' +
       '<path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
     prompt:
-      "Teach me about Minds: walk me through its different capabilities and features, and show me what " +
+      "Teach me about Mind: walk me through its different capabilities and features, and show me what " +
       "I can do from here.",
   },
   {
     key: "edit-minds",
     hue: "#0b292b", // confusion
-    title: "Edit Minds itself",
-    description: "Change the interface, theme, chats, etc--Minds can modify itself!",
+    title: "Edit Mind itself",
+    description: "Change the interface, theme, chats, etc--Mind can modify itself!",
     glyphPaths:
       '<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/>' +
       '<path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/>' +
       '<path d="M21 16h-4"/><path d="M11 3H9"/>',
     prompt:
-      "I want to change Minds itself: the interface, the theme, how chats look or behave, or anything " +
+      "I want to change Mind itself: the interface, the theme, how chats look or behave, or anything " +
       "else about it. Show me what can be changed and help me make the change.",
   },
 ];

@@ -1,3 +1,4 @@
+import { asRecord } from "~/components/trajectory/json";
 import type { Step } from "~/lib/types";
 
 /**
@@ -16,12 +17,6 @@ const STEP_BOUNDARY = "step_boundary";
 export interface HarnessAnnotation {
   kind: string;
   stepName: string | null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 /** The harness annotation on a step, or null for every step the run itself produced. */

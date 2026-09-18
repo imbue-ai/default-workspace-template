@@ -416,12 +416,14 @@ export function findInstance(address: string): ResolvedInstance | null {
 
 /**
  * Whether the inventory says ``address`` is gone: its app is not registered, or the app's list
- * has arrived and does not carry it. False while the app's list is still pending, so a restored
- * tab is kept until the shell can actually say (an empty seed list is not an answer).
+ * has arrived and does not carry it. False while the inventory itself, or the app's list, is
+ * still pending, so a restored tab is kept until the shell can actually say (an empty seed list
+ * is not an answer).
  */
 export function isAddressUnlisted(address: string): boolean {
   const parsed = parseAddress(address);
   if (parsed === null) return true;
+  if (!appsLoaded) return false;
   const app = getApp(parsed.app);
   if (app === undefined) return true;
   if (!app.is_listed) return false;

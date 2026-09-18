@@ -2,17 +2,20 @@
 eval-config JSON schema unchanged and emits one harbor task directory per persona case.
 
 Each task directory carries a byte-identical environment/ (the adapted box Dockerfile, entrypoint,
-and a staged shallow clone of mngr-internal at the resolved SHA), so Modal's image-layer cache
-builds the box image once per mngr SHA. Per-case data lives only in instruction.md, tests/case.json,
-and solution/solve.sh -- never in environment/, or the cache key diverges.
+and a staged shallow clone of mngr-internal at the resolved SHA), so the whole dataset shares ONE
+Modal image, keyed on the mngr SHA and the Dockerfile and cached as a whole (about two and a half
+minutes to build cold). Per-case data lives only in instruction.md, tests/case.json, and
+solution/solve.sh -- never in environment/, or the cache key diverges.
 """
 
 import json
 import re
+import shlex
 import shutil
 import string
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Mapping
 from collections.abc import Sequence
 from importlib import resources
@@ -22,22 +25,21 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
-import click
 from loguru import logger
 from pydantic import ValidationError
 
-from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import trajectory
 from imbue.minds_evals.data_types import BOX_STEP_FILES_DIR
+from imbue.minds_evals.data_types import BOX_STEP_SEEDS_DIR
 from imbue.minds_evals.data_types import CaseConfig
+from imbue.minds_evals.data_types import CaseSeed
 from imbue.minds_evals.data_types import CaseStep
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
-from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_BRANCH
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_TIMEOUT_SECONDS
@@ -52,8 +54,15 @@ from imbue.minds_evals.data_types import REWARD_STRATEGY_KEY
 from imbue.minds_evals.data_types import RewardDimension
 from imbue.minds_evals.data_types import RewardFloor
 from imbue.minds_evals.data_types import RewardStrategy
+from imbue.minds_evals.data_types import SEED_APP_NAME_MAX_LENGTH
+from imbue.minds_evals.data_types import SEED_APP_NAME_PATTERN
+from imbue.minds_evals.data_types import SEED_APP_RESERVED_NAMES
+from imbue.minds_evals.data_types import SEED_APP_RESERVED_NAME_PREFIXES
+from imbue.minds_evals.data_types import SEED_APP_RESERVED_PORTS
 from imbue.minds_evals.data_types import STEP_NAME_PATTERN
+from imbue.minds_evals.data_types import SeedApp
 from imbue.minds_evals.data_types import StepBoxFile
+from imbue.minds_evals.data_types import StepBoxSeedApp
 from imbue.minds_evals.data_types import StepFile
 from imbue.minds_evals.data_types import StepMinReward
 from imbue.minds_evals.data_types import StepPosition
@@ -71,6 +80,15 @@ from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.usage import summarize_workspace_usage
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
+
+# The minds_evals project directory (`apps/minds_evals/`), which a seed's `source` is resolved against.
+MINDS_EVALS_PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+
+# A full commit SHA, which git resolves without a remote lookup -- as opposed to a branch or tag
+# name, which only the remote can turn into a commit. Matched with fullmatch, never `$`: `$` also
+# matches before a trailing newline, so a SHA read off a file would be taken at its word and handed
+# to `git fetch` with the newline still on it.
+_FULL_SHA_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}")
 
 _TEMPLATES = resources.files("imbue.minds_evals") / "templates"
 
@@ -209,8 +227,18 @@ def _normalize_prompts(raw_prompts: object, case_id: str, is_opening_ask_require
     return tuple(prompts)
 
 
-_STEP_KEYS: Final[frozenset[str]] = frozenset({"name", "prompts", "files", "expectations", "min_reward"})
+_DIAGNOSTIC_PROBE_KEY: Final[str] = "diagnostic_probe"
+_STEP_KEYS: Final[frozenset[str]] = frozenset(
+    {"name", "prompts", "files", "seed", "expectations", "min_reward", _DIAGNOSTIC_PROBE_KEY}
+)
 _STEP_FILE_KEYS: Final[frozenset[str]] = frozenset({"source", "upload_id"})
+_SEED_KEY: Final[str] = "seed"
+_SEED_KEYS: Final[frozenset[str]] = frozenset({"app"})
+_SEED_APP_KEYS: Final[frozenset[str]] = frozenset({"source", "name", "port"})
+_SEED_APP_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(SEED_APP_NAME_PATTERN)
+_MAX_PORT: Final[int] = 65535
+# The manifest a seeded app's directory carries, whose `name` the seed's program registers under.
+SEED_MANIFEST_FILENAME: Final[str] = "app.toml"
 _STEP_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(STEP_NAME_PATTERN)
 _UPLOAD_ID_PATTERN: Final[re.Pattern[str]] = re.compile(UPLOAD_ID_PATTERN)
 _REWARD_DIMENSIONS: Final[tuple[str, ...]] = tuple(dimension.value for dimension in RewardDimension)
@@ -246,6 +274,80 @@ def parse_step_file(raw_entry: object, case_id: str, step_name: str, index: int)
             "workspace and in the box)".format(case_id, step_name, what, upload_id, UPLOAD_ID_PATTERN)
         )
     return StepFile(source=source, upload_id=upload_id)
+
+
+@pure
+def seed_app_name_problem(name: str) -> str:
+    """Why a seeded app's name fails the workspace template's app-name rule; empty when it passes."""
+    if not _SEED_APP_NAME_PATTERN.fullmatch(name):
+        return "must be lowercase letters, digits and underscores in hyphen-separated runs"
+    elif len(name) > SEED_APP_NAME_MAX_LENGTH:
+        return "must be at most {} characters".format(SEED_APP_NAME_MAX_LENGTH)
+    elif name.startswith(SEED_APP_RESERVED_NAME_PREFIXES):
+        return "must not start with {}".format(" or ".join(repr(prefix) for prefix in SEED_APP_RESERVED_NAME_PREFIXES))
+    elif name in SEED_APP_RESERVED_NAMES:
+        return "is reserved by the workspace template"
+    else:
+        return ""
+
+
+@pure
+def _parse_seed_app(raw_value: object, case_id: str, step_name: str) -> SeedApp:
+    if not isinstance(raw_value, dict):
+        raise EvalConfigError("case {!r} step {!r}: 'seed.app' must be an object".format(case_id, step_name))
+    raw_app: dict[str, Any] = {str(key): value for key, value in raw_value.items()}
+    unknown_keys = sorted(set(raw_app) - _SEED_APP_KEYS)
+    if unknown_keys:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed.app' has unknown key(s): {}".format(
+                case_id, step_name, ", ".join(unknown_keys)
+            )
+        )
+    raw_source = raw_app.get("source")
+    source = raw_source.strip() if isinstance(raw_source, str) else ""
+    source_parts = PurePosixPath(source)
+    if not source or source_parts.is_absolute() or ".." in source_parts.parts:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed.app.source' {!r} must be a relative path inside the minds_evals "
+            "project".format(case_id, step_name, raw_source)
+        )
+    raw_name = raw_app.get("name")
+    name = raw_name if isinstance(raw_name, str) else ""
+    name_problem = seed_app_name_problem(name)
+    if name_problem:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed.app.name' {!r} {} (it names the app's registry row, its origin and "
+            "its supervisord program)".format(case_id, step_name, raw_name, name_problem)
+        )
+    raw_port = raw_app.get("port")
+    # A bool is an int to Python, and `"port": true` would otherwise bind port 1.
+    if not isinstance(raw_port, int) or isinstance(raw_port, bool) or not 1 <= raw_port <= _MAX_PORT:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed.app.port' must be a port number, got {!r}".format(case_id, step_name, raw_port)
+        )
+    if raw_port in SEED_APP_RESERVED_PORTS:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed.app.port' {} is one the workspace template's own services bind ({})".format(
+                case_id, step_name, raw_port, ", ".join(str(port) for port in sorted(SEED_APP_RESERVED_PORTS))
+            )
+        )
+    return SeedApp(source=source, name=name, port=raw_port)
+
+
+@pure
+def parse_step_seed(raw_value: object, case_id: str, step_name: str) -> CaseSeed:
+    """A first step's `seed`, as the eval author wrote it."""
+    if not isinstance(raw_value, dict):
+        raise EvalConfigError("case {!r} step {!r}: 'seed' must be an object".format(case_id, step_name))
+    raw_seed: dict[str, Any] = {str(key): value for key, value in raw_value.items()}
+    unknown_keys = sorted(set(raw_seed) - _SEED_KEYS)
+    if unknown_keys:
+        raise EvalConfigError(
+            "case {!r} step {!r}: 'seed' has unknown key(s): {}".format(case_id, step_name, ", ".join(unknown_keys))
+        )
+    if "app" not in raw_seed:
+        raise EvalConfigError("case {!r} step {!r}: 'seed' needs an 'app'".format(case_id, step_name))
+    return CaseSeed(app=_parse_seed_app(raw_seed["app"], case_id, step_name))
 
 
 @pure
@@ -289,12 +391,16 @@ def _reject_ungradeable_reward_floors(
 ) -> None:
     """Refuse a floor on a dimension this step's own verifier will not emit.
 
-    Only the outcome dimension is conditional: `gates` and `quality` ship in every verifier
-    build context and `reward` is what finalize.py composes. `outcome` is the exception -- the
-    criteria directory is written only for a step that declares expectations, so that rewardkit
-    does not score a step with nothing to score. Harbor reads a threshold on a key the verifier
-    never wrote as -inf, so such a floor fails on every run and aborts the trial there regardless
-    of what the agent did.
+    `gates` and `quality` ship in every verifier build context and `reward` is what finalize.py
+    composes. `outcome` is the one dimension generation can decide about -- the criteria directory
+    is written only for a step that declares expectations, so that rewardkit does not score a step
+    with nothing to score. Harbor reads a threshold on a key the verifier never wrote as -inf, so
+    such a floor fails on every run and aborts the trial there regardless of what the agent did.
+
+    `harness_quality` is conditional too, but on the run's harness config rather than on the eval
+    config: the verifier's pre-step drops it on any harness but claude, and a dataset is
+    arm-agnostic, so nothing here can tell whether a floor on it will be gradeable. A floor on it is
+    therefore left to the author, and holds only for a dataset run on the claude harness.
     """
     if expectations is not None or not isinstance(min_reward, PerDimensionRewardFloors):
         return
@@ -344,6 +450,17 @@ def _parse_step(raw_entry: object, case_id: str, index: int, is_last: bool) -> C
     raw_files = [] if raw_files is None else raw_files
     if not isinstance(raw_files, list):
         raise EvalConfigError("case {!r} step {!r}: 'files' must be a list".format(case_id, name))
+    is_diagnostic_probe_run = raw_step.get(_DIAGNOSTIC_PROBE_KEY, False)
+    if not isinstance(is_diagnostic_probe_run, bool):
+        raise EvalConfigError(
+            "case {!r} step {!r}: '{}' must be true or false".format(case_id, name, _DIAGNOSTIC_PROBE_KEY)
+        )
+    raw_seed = raw_step.get(_SEED_KEY)
+    if raw_seed is not None and index != 0:
+        raise EvalConfigError(
+            "case {!r} step {!r}: only a case's first step may declare a 'seed', since that is the step "
+            "the workspace is created on".format(case_id, name)
+        )
     raw_expectations = raw_step.get("expectations")
     # Named for the step, not the case: a stepped case's prompt errors are counted within one step,
     # so a message saying only the case leaves the author looking through all of them.
@@ -357,8 +474,10 @@ def _parse_step(raw_entry: object, case_id: str, index: int, is_last: bool) -> C
         files=tuple(
             parse_step_file(raw_file, case_id, name, file_index) for file_index, raw_file in enumerate(raw_files)
         ),
+        seed=parse_step_seed(raw_seed, case_id, name) if raw_seed is not None else None,
         expectations=expectations,
         min_reward=min_reward,
+        is_diagnostic_probe_run=is_diagnostic_probe_run,
     )
 
 
@@ -426,6 +545,14 @@ def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
         # "what does this case say next", and nothing to decide between them.
         if raw_steps is not None and raw_case.get("prompts") is not None:
             raise EvalConfigError("case {!r} declares both 'prompts' and 'steps'; pick one".format(case_id))
+        if raw_case.get(_SEED_KEY) is not None:
+            # Harbor carries per-task files into the box only through a step's workdir/, so a seed rides
+            # the first step of a stepped case, one step long if need be.
+            raise EvalConfigError(
+                "case {!r} declares a case-level 'seed'; a seed is a key of a stepped case's first step".format(
+                    case_id
+                )
+            )
         steps = _normalize_steps(raw_steps, case_id) if raw_steps is not None else None
         prompts = (
             tuple(entry for step in steps for entry in step.prompts)
@@ -440,13 +567,29 @@ def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
                 "case {!r} declares 'steps' and a case-level 'expectations'; a stepped case states "
                 "its expectations per step".format(case_id)
             )
+        expectations = parse_expectations(raw_expectations, case_id) if raw_expectations is not None else None
+        # A timing block measures the time to a goal-holding client's satisfaction, so a flat case
+        # with no goal entry has nothing that can ever satisfy one and would score zero however
+        # fast the agent was. A stepped case is exempt: the entry records accumulate, so a step's
+        # time can be closed by a goal an earlier step held.
+        if (
+            steps is None
+            and expectations is not None
+            and expectations.timing is not None
+            and not any(isinstance(entry, GoalEntry) for entry in prompts)
+        ):
+            raise EvalConfigError(
+                "case {!r}: expectations.timing measures the time to a goal entry's client being "
+                "satisfied, but the case declares no goal entry, so the time could never be "
+                "measured".format(case_id)
+            )
         cases.append(
             PersonaCase(
                 case_id=case_id,
                 persona=str(raw_case.get("persona", "")).strip(),
                 prompts=prompts,
                 steps=steps,
-                expectations=parse_expectations(raw_expectations, case_id) if raw_expectations is not None else None,
+                expectations=expectations,
                 reward_strategy=_parse_reward_strategy(
                     raw_case.get(REWARD_STRATEGY_KEY), case_id, is_stepped=steps is not None
                 ),
@@ -484,6 +627,48 @@ def _validate_step_file_sources(config: EvalConfig, config_dir: Path) -> None:
                     )
 
 
+@pure
+def seed_source_path(project_root: Path, seed_app: SeedApp) -> Path:
+    """Where a seeded app lives on disk: its `source`, taken relative to the minds_evals project root.
+
+    Not the eval config's directory, which is what a step's `files` resolve against: a config lives
+    under `configs/`, from where it could never name the flow lab's fixtures without `..`, and the flow
+    lab and a trial must drive one copy of a fixture rather than two that drift apart.
+    """
+    return project_root / seed_app.source
+
+
+def _validate_seed_sources(config: EvalConfig, project_root: Path) -> None:
+    """Every declared seed must be an app directory whose manifest names the app the seed registers.
+
+    The manifest's name is what the seeded program registers under, so a mismatch would boot a
+    workspace whose seeded row carries a different name from the one the trial waits for.
+    """
+    for case in config.cases:
+        for step in case.steps or ():
+            if step.seed is None:
+                continue
+            label = "case {!r} step {!r}: seed app {!r}".format(case.case_id, step.name, step.seed.app.name)
+            source = seed_source_path(project_root, step.seed.app)
+            if not source.is_dir():
+                raise EvalConfigError("{} has no source directory at {}".format(label, source))
+            manifest_path = source / SEED_MANIFEST_FILENAME
+            if not manifest_path.is_file():
+                raise EvalConfigError("{} has no {} in {}".format(label, SEED_MANIFEST_FILENAME, source))
+            try:
+                manifest = tomllib.loads(manifest_path.read_text())
+            except tomllib.TOMLDecodeError as exc:
+                raise EvalConfigError("{}: {} is not valid TOML: {}".format(label, manifest_path, exc)) from exc
+            if manifest.get("name") != step.seed.app.name:
+                raise EvalConfigError(
+                    "{}: {} names the app {!r}, not the seed's name".format(label, manifest_path, manifest.get("name"))
+                )
+            # The template refuses to register a new app without an icon, resolved beside the manifest.
+            icon = manifest.get("icon")
+            if not isinstance(icon, str) or not (source / icon).is_file():
+                raise EvalConfigError("{}: {} names no icon file beside it".format(label, manifest_path))
+
+
 def load_eval_config(config_path: Path) -> EvalConfig:
     """Read and validate an eval config json file (the old harness's schema, unchanged)."""
     if not config_path.is_file():
@@ -504,20 +689,44 @@ def load_eval_config(config_path: Path) -> EvalConfig:
         verification_timeout_seconds=float(
             raw_config.get("verification_timeout_seconds") or DEFAULT_VERIFICATION_TIMEOUT_SECONDS
         ),
-        avg_word_count_baseline=float(raw_config.get("avg_word_count_baseline") or DEFAULT_AVG_WORD_COUNT_BASELINE),
         cases=_normalize_cases(raw_config.get("personas")),
     )
     _validate_step_file_sources(config, config_path.parent)
+    _validate_seed_sources(config, MINDS_EVALS_PROJECT_ROOT)
     return config
 
 
-def resolve_remote_tip(repo: str, branch: str) -> str:
-    """The branch's current tip SHA on the remote, via plain `git ls-remote` -- git uses your own
+@pure
+def _parse_ls_remote(output: str) -> dict[str, str]:
+    """`git ls-remote`'s tab-separated `<sha> <ref name>` lines, as a mapping of ref name to sha."""
+    entries: dict[str, str] = {}
+    for line in output.splitlines():
+        sha, _, ref_name = line.partition("\t")
+        if sha.strip() and ref_name.strip():
+            entries[ref_name.strip()] = sha.strip()
+    return entries
+
+
+def resolve_remote_ref(repo: str, ref: str) -> str:
+    """The commit SHA a ref names on the remote, via plain `git ls-remote` -- git uses your own
     credentials, and a real auth/network failure surfaces as-is. Every pinned input goes through
-    here (mngr and the workspace template alike), so the messages name the repo they are about."""
+    here (mngr and the workspace template alike), so the messages name the repo they are about.
+
+    A branch name, a tag name, or a full 40-hex commit SHA is accepted. A SHA is taken verbatim and
+    costs no remote round trip. An annotated tag is peeled to the commit it points at, so what comes
+    back is always something a later clone can check out -- never a tag object. A name carried by
+    both a tag and a branch resolves to the TAG (a release tag is the more deliberate pin), which is
+    logged so the choice is visible in the generation log.
+    """
+    if _FULL_SHA_PATTERN.fullmatch(ref):
+        return ref
+    peeled_tag_ref = "refs/tags/{}^{{}}".format(ref)
+    tag_ref = "refs/tags/{}".format(ref)
+    branch_ref = "refs/heads/{}".format(ref)
     try:
         result = subprocess.run(
-            ["git", "ls-remote", repo, "refs/heads/{}".format(branch)],
+            # All three candidates in one round trip; which one wins is decided below, not by git.
+            ["git", "ls-remote", repo, peeled_tag_ref, tag_ref, branch_ref],
             capture_output=True,
             text=True,
             timeout=60,
@@ -525,15 +734,25 @@ def resolve_remote_tip(repo: str, branch: str) -> str:
     except subprocess.TimeoutExpired:
         raise GitSourceError("timed out reaching the remote {} -- check your network/VPN".format(repo)) from None
     if result.returncode != 0:
-        # A failed ls-remote (offline, auth, DNS) is NOT a missing branch -- surface the real reason.
+        # A failed ls-remote (offline, auth, DNS) is NOT a missing ref -- surface the real reason.
         detail = (result.stderr or "").strip() or "git ls-remote failed"
         raise GitSourceError(
             "could not reach the remote {} -- check your network + git auth ({})".format(repo, detail[:200])
         )
-    ref = (result.stdout or "").split("\t")[0].strip()
-    if not ref:
-        raise GitSourceError("branch {!r} not found on the remote {}".format(branch, repo))
-    return ref
+    sha_by_ref = _parse_ls_remote(result.stdout or "")
+    # The peeled entry exists only for an annotated tag; a lightweight tag has the bare ref alone.
+    tag_sha = sha_by_ref.get(peeled_tag_ref) or sha_by_ref.get(tag_ref)
+    branch_sha = sha_by_ref.get(branch_ref)
+    if tag_sha is not None and branch_sha is not None:
+        logger.info("{} carries both a tag and a branch named {!r} -- using the tag", repo, ref)
+    resolved_sha = tag_sha if tag_sha is not None else branch_sha
+    if resolved_sha is None:
+        raise GitSourceError(
+            "ref {!r} not found on the remote {} -- no such tag or branch (a full 40-hex SHA also works)".format(
+                ref, repo
+            )
+        )
+    return resolved_sha
 
 
 def _run_git(*args: str) -> None:
@@ -545,14 +764,20 @@ def _run_git(*args: str) -> None:
 def fetch_mngr_source(repo: str, ref: str, dest: Path) -> None:
     """A FRESH shallow clone of the exact mngr ref into `dest`, via plain git (your own credentials).
     Pulled straight from the remote into a throwaway dir -- independent of any on-device checkout, so
-    your local working-tree state never reaches the box."""
+    your local working-tree state never reaches the box. A ref the remote does not have (a SHA that
+    was never pushed, say) fails here rather than producing an empty clone."""
     _run_git("init", "-q", str(dest))
     _run_git("-C", str(dest), "fetch", "--depth", "1", repo, ref)
     _run_git("-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD")
 
 
 @pure
-def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_sha: str) -> CaseConfig:
+def build_case_config(
+    config: EvalConfig, case: PersonaCase, *, mngr_ref: str, mngr_sha: str, dwt_ref: str, dwt_sha: str
+) -> CaseConfig:
+    # The refs are passed in rather than read off `config` because a generation may override them;
+    # what lands in the task metadata must be the ref the recorded SHA was actually resolved from.
+    #
     # The deliverable kind is expanded into its explicit check list exactly once, here, so the
     # collector and the verifier can never disagree about what was being checked.
     return CaseConfig(
@@ -562,12 +787,11 @@ def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_
         step=None,
         timeout_seconds=config.timeout_seconds,
         verification_timeout_seconds=config.verification_timeout_seconds,
-        mngr_branch=config.mngr_branch,
+        mngr_branch=mngr_ref,
         mngr_sha=mngr_sha,
         dwt_repo=config.dwt_repo,
-        dwt_branch=config.dwt_branch,
+        dwt_branch=dwt_ref,
         dwt_sha=dwt_sha,
-        avg_word_count_baseline=config.avg_word_count_baseline,
         expectations=expand_expectations(case.expectations) if case.expectations is not None else None,
         authored_expectations=case.expectations,
     )
@@ -697,12 +921,28 @@ def render_task_toml(
 # box's working directory. The step setup script moves it by this name, and is given the name rather
 # than repeating it, since a script that moves a directory nothing staged fails inside the box.
 STEP_FILES_DIRNAME: Final[str] = "step_files"
+# The directory a step's seeded app travels in, the same way.
+SEED_APP_DIRNAME: Final[str] = "seed_app"
 
 
 @pure
 def step_files_box_dir(step_name: str) -> str:
     """Where the box holds one step's uploads once its setup script has relocated them."""
     return "{}/{}".format(BOX_STEP_FILES_DIR, step_name)
+
+
+@pure
+def step_seed_app_box_dir(step_name: str) -> str:
+    """Where the box holds a step's seeded app once its setup script has relocated it."""
+    return "{}/{}".format(BOX_STEP_SEEDS_DIR, step_name)
+
+
+@pure
+def step_box_seed_app(step: CaseStep) -> StepBoxSeedApp | None:
+    """Where a step's seeded app waits in the box, for the driver to build the seed commit from."""
+    if step.seed is None:
+        return None
+    return StepBoxSeedApp(name=step.seed.app.name, port=step.seed.app.port, box_path=step_seed_app_box_dir(step.name))
 
 
 @pure
@@ -745,6 +985,8 @@ def build_step_case_config(case_config: CaseConfig, steps: Sequence[CaseStep], i
                 ),
                 entries_before=sum(len(earlier.prompts) for earlier in steps[:index]),
                 files=step_box_files(step),
+                is_diagnostic_probe_run=step.is_diagnostic_probe_run,
+                seed_app=step_box_seed_app(step),
             ),
         ),
     )
@@ -819,6 +1061,21 @@ def _step_files_prose(step: StepPosition) -> str:
 
 
 @pure
+def _step_seed_prose(step: StepPosition) -> str:
+    """What a reader of a step's instruction is told about the app the workspace is seeded with."""
+    seed_app = step.seed_app
+    if seed_app is None:
+        return "This step seeds no app into the workspace."
+    return (
+        "The workspace is created with the app `{name}` seeded in: before it exists, the driver commits "
+        "`{box_path}` to `system/fixtures/{name}/` on the pinned template, with a supervisord program "
+        "serving it on loopback port {port}, and merges that commit onto the case base. A seed that "
+        "conflicts with the case base, or registers on top of something the template runs, ends the trial "
+        "before any workspace is created.".format(name=seed_app.name, box_path=seed_app.box_path, port=seed_app.port)
+    )
+
+
+@pure
 def _step_expectations_prose(step_case_config: CaseConfig) -> str:
     """What a reader of a step's instruction is told about how the step is graded."""
     expectations = step_case_config.authored_expectations
@@ -849,6 +1106,7 @@ def render_step_instruction(template_text: str, step_case_config: CaseConfig) ->
             "step_number": str(step.index + 1),
             "step_total": str(step.total),
             "persona_prose": step_case_config.persona or "(none)",
+            "seed_prose": _step_seed_prose(step),
             "files_prose": _step_files_prose(step),
             "prompts_prose": _prompts_prose(step_case_config),
             "expectations_prose": _step_expectations_prose(step_case_config),
@@ -858,19 +1116,26 @@ def render_step_instruction(template_text: str, step_case_config: CaseConfig) ->
 
 
 @pure
-def render_step_setup_script(template_text: str, step_name: str) -> str:
-    """The script harbor runs in the box before a step's agent, to relocate that step's uploads."""
-    destination = step_files_box_dir(step_name)
-    return _substitute_template(
-        template_text,
-        {
-            "destination": destination,
-            "destination_parent": str(PurePosixPath(destination).parent),
-            # The name write_step_workdir staged the uploads under, so the two cannot drift into a
-            # script that moves a directory nothing wrote.
-            "staged_dirname": STEP_FILES_DIRNAME,
-        },
-    )
+def _relocation_lines(staged_dirname: str, destination: str) -> list[str]:
+    return [
+        "rm -rf {}".format(shlex.quote(destination)),
+        "mkdir -p {}".format(shlex.quote(str(PurePosixPath(destination).parent))),
+        "mv {} {}".format(shlex.quote(staged_dirname), shlex.quote(destination)),
+    ]
+
+
+@pure
+def render_step_setup_script(template_text: str, step_name: str, is_files_staged: bool, is_seed_staged: bool) -> str:
+    """The script harbor runs in the box before a step's agent, to relocate what that step staged.
+
+    Only what `write_step_workdir` staged is moved, by the directory names it staged them under, since
+    a script that moves a directory nothing wrote fails inside the box.
+    """
+    relocations = [
+        *(_relocation_lines(STEP_FILES_DIRNAME, step_files_box_dir(step_name)) if is_files_staged else []),
+        *(_relocation_lines(SEED_APP_DIRNAME, step_seed_app_box_dir(step_name)) if is_seed_staged else []),
+    ]
+    return _substitute_template(template_text, {"relocations": "\n".join(relocations)})
 
 
 @pure
@@ -908,6 +1173,10 @@ def oracle_entry_records(case_config: CaseConfig) -> list[dict[str, Any]]:
             "exchange_count": 1,
             "outcome": (TurnOutcome.SATISFIED if isinstance(entry, GoalEntry) else TurnOutcome.COMPLETED).value,
             "detail": "",
+            # One message per entry in the canned conversation, so a goal entry is satisfied by the
+            # reply to its own message; every other entry satisfied nobody.
+            "satisfied_at": _ORACLE_TIMESTAMP if isinstance(entry, GoalEntry) else "",
+            "satisfied_at_turn": index + 1 if isinstance(entry, GoalEntry) else None,
         }
         for index, entry in enumerate(case_config.prompts)
     ]
@@ -1127,14 +1396,14 @@ def write_solution_dir(solution_dir: Path, case_config: CaseConfig) -> None:
     solve_path.chmod(0o755)
 
 
-def write_step_workdir(workdir: Path, step: CaseStep, config_dir: Path) -> None:
+def write_step_workdir(workdir: Path, step: CaseStep, config_dir: Path, project_root: Path) -> None:
     """The directory harbor merges into the box before this step runs.
 
-    It carries the step's uploads and the script that moves them somewhere the box's working
-    directory is not, since that directory is the mngr checkout every workspace is vendored from.
-    A step that introduces nothing writes no workdir at all, which harbor treats as nothing to do.
+    It carries the step's uploads, its seeded app, and the script that moves them somewhere the box's
+    working directory is not, since that directory is the mngr checkout every workspace is vendored
+    from. A step that introduces nothing writes no workdir at all, which harbor treats as nothing to do.
     """
-    if not step.files:
+    if not step.files and step.seed is None:
         return
     for step_file in step.files:
         source = step_file_source_path(config_dir, step_file)
@@ -1147,12 +1416,24 @@ def write_step_workdir(workdir: Path, step: CaseStep, config_dir: Path) -> None:
             shutil.copytree(source, destination, dirs_exist_ok=True)
         else:
             shutil.copy2(source, destination / source.name)
+    if step.seed is not None:
+        # Nothing goes into environment/, whose bytes key the image cache every case shares.
+        shutil.copytree(seed_source_path(project_root, step.seed.app), workdir / SEED_APP_DIRNAME)
     setup_path = workdir / "setup.sh"
-    setup_path.write_text(render_step_setup_script(_read_template("step_setup.sh"), step.name))
+    setup_path.write_text(
+        render_step_setup_script(
+            _read_template("step_setup.sh"),
+            step.name,
+            is_files_staged=bool(step.files),
+            is_seed_staged=step.seed is not None,
+        )
+    )
     setup_path.chmod(0o755)
 
 
-def write_steps_dir(task_dir: Path, case_config: CaseConfig, steps: Sequence[CaseStep], config_dir: Path) -> None:
+def write_steps_dir(
+    task_dir: Path, case_config: CaseConfig, steps: Sequence[CaseStep], config_dir: Path, project_root: Path
+) -> None:
     """Write `steps/<name>/` for every step of a stepped case.
 
     Every step carries the whole task in miniature: its own instruction.md, since a multi-step task
@@ -1169,11 +1450,16 @@ def write_steps_dir(task_dir: Path, case_config: CaseConfig, steps: Sequence[Cas
         (step_dir / "instruction.md").write_text(render_step_instruction(step_instruction_template, step_case_config))
         write_verifier_dir(step_dir / "tests", step_case_config)
         write_solution_dir(step_dir / "solution", build_step_oracle_case_config(case_config, steps, index))
-        write_step_workdir(step_dir / "workdir", step, config_dir)
+        write_step_workdir(step_dir / "workdir", step, config_dir, project_root)
 
 
 def write_task_dir(
-    task_dir: Path, case_config: CaseConfig, case: PersonaCase, config_dir: Path, mngr_source: Path
+    task_dir: Path,
+    case_config: CaseConfig,
+    case: PersonaCase,
+    config_dir: Path,
+    project_root: Path,
+    mngr_source: Path,
 ) -> None:
     """Write one complete harbor task directory for a case."""
     task_dir.mkdir(parents=True)
@@ -1187,10 +1473,12 @@ def write_task_dir(
         write_verifier_dir(task_dir / "tests", case_config)
         write_solution_dir(task_dir / "solution", case_config)
     else:
-        write_steps_dir(task_dir, case_config, case.steps, config_dir)
+        write_steps_dir(task_dir, case_config, case.steps, config_dir, project_root)
 
-    # environment/: identical across all tasks in the dataset (Modal layer-cache
-    # builds the box image once per mngr SHA). Per-case data must never land here.
+    # environment/: identical across all tasks in the dataset, so the dataset builds ONE Modal
+    # image -- keyed on the mngr SHA and the Dockerfile together, and cached as a whole rather
+    # than per instruction. Per-case data must never land here, or every task pays its own
+    # two-and-a-half-minute cold build.
     # The clone is staged WITHOUT .git: Modal's build-context upload drops .git
     # anyway, so nothing in the box may depend on it; the exact SHA travels as a
     # plain file instead (COPYed to /work/mngr_sha, read by the driver).
@@ -1299,8 +1587,22 @@ def _warn_about_step_shapes(case: PersonaCase) -> None:
             )
 
 
-def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> list[Path]:
-    """Generate one harbor task directory per persona case; returns the task directories."""
+def generate_dataset(
+    config_path: Path,
+    output_dir: Path,
+    mngr_repo: str,
+    *,
+    mngr_ref: str | None,
+    dwt_ref: str | None,
+) -> list[Path]:
+    """Generate one harbor task directory per persona case; returns the task directories.
+
+    `mngr_ref` and `dwt_ref` override the config's `mngr_branch` and `dwt_branch` for this
+    generation, so a caller can pin a known-good pair (a release tag, say) without editing the
+    config file. Whichever ref is used is what the task metadata records next to its SHA. Passing
+    None for either takes the config's own ref -- which every caller has to say out loud, so that
+    "generate what the config says" is a decision rather than what happens by omission.
+    """
     config = load_eval_config(config_path)
     # Warned before any network work, since the config alone decides it: an author with a
     # mis-sized budget or an odd step shape should not first wait through two ls-remotes and a
@@ -1309,13 +1611,15 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
         _warn_if_timeout_is_implausible(case, config.timeout_seconds)
         _warn_if_trial_outlives_the_workspace(case, config)
         _warn_about_step_shapes(case)
-    mngr_sha = resolve_remote_tip(mngr_repo, config.mngr_branch)
-    logger.info("Resolved mngr {}@{}", config.mngr_branch, mngr_sha[:12])
+    chosen_mngr_ref = mngr_ref or config.mngr_branch
+    chosen_dwt_ref = dwt_ref or config.dwt_branch
+    mngr_sha = resolve_remote_ref(mngr_repo, chosen_mngr_ref)
+    logger.info("Resolved mngr {}@{}", chosen_mngr_ref, mngr_sha[:12])
     # The workspace template is pinned the same way as mngr: the dataset records the
     # exact SHA and the box clones that, so the same dataset builds the same
     # workspaces however long after generation it is run.
-    dwt_sha = resolve_remote_tip(config.dwt_repo, config.dwt_branch)
-    logger.info("Resolved dwt {}@{}", config.dwt_branch, dwt_sha[:12])
+    dwt_sha = resolve_remote_ref(config.dwt_repo, chosen_dwt_ref)
+    logger.info("Resolved dwt {}@{}", chosen_dwt_ref, dwt_sha[:12])
 
     if output_dir.exists() and any(output_dir.iterdir()):
         raise EvalConfigError(
@@ -1331,54 +1635,16 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
         logger.info("Fetching mngr source at {} (shallow clone)", mngr_sha[:12])
         fetch_mngr_source(mngr_repo, mngr_sha, mngr_source)
         for case in config.cases:
-            case_config = build_case_config(config, case, mngr_sha, dwt_sha)
+            case_config = build_case_config(
+                config,
+                case,
+                mngr_ref=chosen_mngr_ref,
+                mngr_sha=mngr_sha,
+                dwt_ref=chosen_dwt_ref,
+                dwt_sha=dwt_sha,
+            )
             task_dir = output_dir / case.case_id
             logger.info("Writing task {}", task_dir)
-            write_task_dir(task_dir, case_config, case, config_path.parent, mngr_source)
+            write_task_dir(task_dir, case_config, case, config_path.parent, MINDS_EVALS_PROJECT_ROOT, mngr_source)
             task_dirs.append(task_dir)
     return task_dirs
-
-
-@click.group()
-def main() -> None:
-    """Generate harbor task datasets for the Minds persona evals."""
-    setup_logging(level="INFO")
-
-
-@main.command()
-@click.option(
-    "--config",
-    "config_path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help=(
-        "Eval config json: {mngr_branch, dwt_repo?, dwt_branch?, timeout_seconds?, "
-        "verification_timeout_seconds?, avg_word_count_baseline?, personas:[...]}"
-    ),
-)
-@click.option(
-    "--output",
-    "output_dir",
-    required=True,
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Dataset directory to create (one harbor task subdirectory per persona case)",
-)
-@click.option(
-    "--mngr-repo",
-    default=MNGR_REPO,
-    show_default=True,
-    help="The mngr remote the box source is fetched from",
-)
-def generate(config_path: Path, output_dir: Path, mngr_repo: str) -> None:
-    """Generate one harbor task per persona case from an eval config."""
-    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=mngr_repo)
-    logger.info("Generated {} task(s) in {}", len(task_dirs), output_dir)
-    logger.info(
-        "Run them from the monorepo root with: uv run --project apps/minds_evals harbor run "
-        "-p {} -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -y",
-        output_dir,
-    )
-
-
-if __name__ == "__main__":
-    main()

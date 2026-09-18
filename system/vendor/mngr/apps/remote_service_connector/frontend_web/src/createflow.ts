@@ -12,6 +12,7 @@ import {
   rollBucketKey,
   shareStatus,
 } from "./api";
+import { readWebChannel } from "./channel";
 import {
   type Ed25519Keypair,
   generateKeypair,
@@ -253,7 +254,11 @@ export async function provisionBackupsOverExec(
   // Address the inner owner-exec by its host-id-scoped audience. The daemon
   // also accepts the share domain, but container:<host-id> is the going-forward
   // default and works whether or not the workspace is shared.
-  const exec = new ExecClient(execOrigin, `container:${claim.host_id}`, keypair);
+  const exec = new ExecClient(
+    execOrigin,
+    `container:${claim.host_id}`,
+    keypair,
+  );
   onProgress({ step: "backups", message: "Creating the backup bucket..." });
   const resticEnv = await mintBackupResticEnv(claim.host_id);
   onProgress({ step: "backups", message: "Writing backup credentials..." });
@@ -302,6 +307,7 @@ export async function runCreateFlow(
     sshPublicKey: publicKeyLine,
     hostName: sanitizeHostName(displayName),
     displayName,
+    channel: readWebChannel(),
   });
 
   const pending: PendingCreate = {

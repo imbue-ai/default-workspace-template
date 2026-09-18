@@ -1,0 +1,46 @@
+[USER]
+/welcome
+
+[AGENT · message 1]
+### Welcome to Mind
+
+I'm an AI operating system built to extend *you* — so you can do your best work.
+
+I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
+
+**Let's get started**
+
+Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+
+[USER]
+This is an automated harness self-check. Carry out these items in order, exactly as written, one separate tool call per numbered item, and do nothing else. Do not use the Agent or Task tool, and create no ticket or step other than the ones below.
+1. Run: tk create --step "DIAG alpha 7f3a"
+2. Run: tk create --step "DIAG beta 7f3a"
+3. Run: tk start <the id tk printed for DIAG alpha 7f3a>
+4. Run: echo DIAG-7f3a-one
+5. Run: diag-missing-command-7f3a
+6. Run: tk close <the id of DIAG alpha 7f3a> "alpha done 7f3a"
+7. Run: tk create "DIAG regular ticket 7f3a" -t chore
+8. Run: tk start <the id of DIAG beta 7f3a>
+9. Run exactly this, as one command: mkdir -p data/.tasks/launch-task/diag-worker-7f3a && printf '%s\n' '---' 'finish_report_path: data/.tasks/launch-task/diag-worker-7f3a/reports/report.md' '---' '' '# Task: diagnostic worker 7f3a' '' 'Write a finish report whose body is the single word ok, following .agents/shared/references/worker-reporting.md with name: done, then stop.' > data/.tasks/launch-task/diag-worker-7f3a/task.md
+10. Run exactly this, as one command: uv run .agents/skills/launch-task/scripts/create_worker.py launch --name diag-worker-7f3a --template worker --runtime-dir data/.tasks/launch-task/diag-worker-7f3a/ --task-file data/.tasks/launch-task/diag-worker-7f3a/task.md
+11. Run: tk close <the id of DIAG beta 7f3a> "beta done 7f3a"
+12. If you have a Skill tool, invoke the skill named build-app with it and stop as soon as it has loaded; otherwise run: cat .agents/skills/build-app/SKILL.md
+When all twelve items are done, reply with the single word: done.
+
+[PROGRESS · step declared]
+DIAG alpha 7f3a
+
+[PROGRESS · step declared]
+DIAG beta 7f3a
+
+[PROGRESS · step done]
+DIAG alpha 7f3a
+alpha done 7f3a
+
+[PROGRESS · step done]
+DIAG beta 7f3a
+beta done 7f3a
+
+[AGENT · message 2]
+done

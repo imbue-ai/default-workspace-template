@@ -8,6 +8,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
+
 from imbue.minds_evals.testing import atif_document
 
 
@@ -251,26 +253,38 @@ def test_harness_score_keeps_discriminating_past_the_half_mark_and_never_reaches
     assert three > ten > 0.0
 
 
-def test_a_turn_ended_by_a_stop_sequence_or_an_output_limit_is_still_the_turns_answer(
-    message_length_guard: ModuleType, tmp_path: Path
+@pytest.mark.parametrize(
+    ("interim_reason", "terminal_reason"),
+    [
+        ("tool_use", "end_turn"),
+        ("tool_use", "stop_sequence"),
+        ("tool_use", "max_tokens"),
+        ("toolUse", "stop"),
+        ("toolUse", "length"),
+    ],
+)
+def test_a_turn_ended_on_any_terminal_stop_reason_is_the_turns_answer(
+    message_length_guard: ModuleType, tmp_path: Path, interim_reason: str, terminal_reason: str
 ) -> None:
-    # A delivery message truncated at max_tokens ended the turn just as surely as one that stopped on
-    # end_turn. Reading only end_turn as terminal holds that long answer to the interim limit and fails
-    # the turn for being long, which inverts what the criterion is for.
+    # Each harness records the end of a turn in its own vocabulary (Anthropic's end_turn, stop_sequence
+    # and max_tokens; pi's stop and length), and a message truncated at the output limit ended the turn
+    # as surely as one that stopped on its own. A reason missing from the terminal set holds that long
+    # answer to the interim limit and fails the turn for being long, which inverts what the criterion
+    # is for.
     long_answer = " ".join(["word"] * 250)
     trajectory_path = _write_trajectory(
         tmp_path,
         [
             {"step_id": 1, "source": "user", "message": "Build it"},
-            {"step_id": 2, "source": "agent", "message": "On it.", "extra": {"finish_reason": "tool_use"}},
-            {"step_id": 3, "source": "agent", "message": long_answer, "extra": {"finish_reason": "max_tokens"}},
+            {"step_id": 2, "source": "agent", "message": "On it.", "extra": {"finish_reason": interim_reason}},
+            {"step_id": 3, "source": "agent", "message": long_answer, "extra": {"finish_reason": terminal_reason}},
         ],
     )
 
-    turns, _records_endings = message_length_guard._agent_turn_messages(trajectory_path)
+    turns, does_document_record_endings = message_length_guard._agent_turn_messages(trajectory_path)
 
     assert turns == [[(2, False), (250, True)]]
-    assert message_length_guard.is_turn_within_limits(turns[0], True)
+    assert message_length_guard.is_turn_within_limits(turns[0], does_document_record_endings)
 
 
 def test_the_criterion_reports_the_fraction_of_turns_that_kept_their_limits(
@@ -299,3 +313,167 @@ def test_the_criterion_reports_the_fraction_of_turns_that_kept_their_limits(
 
     assert scored == [False, True]
     assert sum(scored) / len(scored) == 0.5
+
+
+def test_the_judge_is_told_which_skills_and_how_many_workers_the_case_expected(
+    expectations_renderer: ModuleType,
+) -> None:
+    case = {
+        "case_id": "mock-only",
+        "expectations": {
+            "outcome": "A throwaway mock.",
+            "process_checks": [
+                {"check_id": "skill_required_build_app", "kind": "required_skill", "skill": "build-app"},
+                {
+                    "check_id": "skill_forbidden_crystallize_creation",
+                    "kind": "forbidden_skill",
+                    "skill": "crystallize-creation",
+                },
+                {"check_id": "worker_launches", "kind": "max_worker_launches", "max_worker_launches": 0},
+            ],
+        },
+    }
+
+    rendered = expectations_renderer.render_expectations(case)
+
+    assert "- The `build-app` skill was to be invoked." in rendered
+    assert "- The `crystallize-creation` skill was not to be invoked." in rendered
+    assert "- At most 0 background worker(s) were to be launched." in rendered
+
+
+def test_the_judge_is_told_nothing_about_process_for_a_case_that_asked_for_none(
+    expectations_renderer: ModuleType,
+) -> None:
+    rendered = expectations_renderer.render_expectations(
+        {"case_id": "todo-app", "expectations": {"outcome": "A working to-do app."}}
+    )
+
+    assert "worker" not in rendered
+    assert "skill" not in rendered
+
+
+def test_the_judge_is_told_how_quickly_the_case_wanted_its_goal_met(
+    expectations_renderer: ModuleType,
+) -> None:
+    case = {
+        "case_id": "todo-mock",
+        "expectations": {
+            "outcome": "A mockup, fast.",
+            "timing_checks": [
+                {
+                    "check_id": "time_to_goal",
+                    "fast_seconds": 150.0,
+                    "slow_seconds": 600.0,
+                    "requires_no_failures": ["app"],
+                }
+            ],
+        },
+    }
+
+    rendered = expectations_renderer.render_expectations(case)
+
+    # Anchors travel as floats and are authored as whole seconds, so the judge reads them whole.
+    assert "- The client's goal was to be met within 150 second(s), and no later than 600 second(s)" in rendered
+    assert "the time only counts if nothing failed in: `app`" in rendered
+
+
+def test_the_judge_is_told_nothing_about_timing_for_a_case_that_did_not_measure_it(
+    expectations_renderer: ModuleType,
+) -> None:
+    rendered = expectations_renderer.render_expectations(
+        {"case_id": "todo-app", "expectations": {"outcome": "A working to-do app."}}
+    )
+
+    assert "second(s)" not in rendered
+
+
+def test_the_timing_curve_gives_full_marks_at_and_under_the_fast_anchor(outcome_checks: ModuleType) -> None:
+    assert outcome_checks.timing_score(150.0, 150.0, 600.0) == 1.0
+    assert outcome_checks.timing_score(20.0, 150.0, 600.0) == 1.0
+
+
+def test_the_timing_curve_gives_nothing_at_and_over_the_slow_anchor(outcome_checks: ModuleType) -> None:
+    assert outcome_checks.timing_score(600.0, 150.0, 600.0) == 0.0
+    assert outcome_checks.timing_score(4000.0, 150.0, 600.0) == 0.0
+
+
+def test_the_timing_curve_is_linear_in_log_time_between_the_anchors(outcome_checks: ModuleType) -> None:
+    # The geometric mean of the two anchors scores exactly half, which is what "linear in log time"
+    # buys: the ramp is scale-free, so halving a slow trial's time is worth what halving a fast
+    # one's is, and per-case anchors stay comparable across cases.
+    assert outcome_checks.timing_score(300.0, 150.0, 600.0) == pytest.approx(0.5)
+    assert outcome_checks.timing_score(440.0, 220.0, 880.0) == pytest.approx(0.5)
+    # And it is monotone: slower always scores less.
+    assert outcome_checks.timing_score(200.0, 150.0, 600.0) > outcome_checks.timing_score(400.0, 150.0, 600.0)
+
+
+def test_the_timing_curve_scores_zero_for_a_time_that_was_never_measured(outcome_checks: ModuleType) -> None:
+    # A client that was never satisfied took unboundedly long. That is the agent's, not the
+    # harness's, so it is a legitimate zero rather than a grading failure.
+    assert outcome_checks.timing_score(None, 150.0, 600.0) == 0.0
+
+
+@pytest.mark.parametrize(("fast_seconds", "slow_seconds"), [(0.0, 600.0), (-1.0, 600.0), (600.0, 600.0)])
+def test_the_timing_curve_scores_zero_for_anchors_that_define_no_curve(
+    outcome_checks: ModuleType, fast_seconds: float, slow_seconds: float
+) -> None:
+    # A criterion in that file must never raise -- it would abort the whole grade, every dimension
+    # with it -- so unusable anchors degrade here and are diagnosed at generation time instead.
+    assert outcome_checks.timing_score(200.0, fast_seconds, slow_seconds) == 0.0
+
+
+def _timing_check(prerequisites: list[str]) -> dict[str, Any]:
+    return {
+        "check_id": "time_to_goal",
+        "fast_seconds": 150.0,
+        "slow_seconds": 600.0,
+        "requires_no_failures": prerequisites,
+    }
+
+
+def _timing_manifest_entries(seconds: float | None, app_status: str) -> list[dict[str, Any]]:
+    return [
+        {"entry_id": "app_registered", "check_class": "app", "status": app_status},
+        {"entry_id": "time_to_goal", "check_class": "timing", "status": "passed", "value": seconds},
+    ]
+
+
+def test_the_timing_class_scores_the_seconds_the_collector_recorded(outcome_checks: ModuleType) -> None:
+    score = outcome_checks.timing_class_score([_timing_check(["app"])], _timing_manifest_entries(300.0, "passed"))
+
+    assert score == pytest.approx(0.5)
+
+
+def test_a_failed_prerequisite_zeroes_even_the_fastest_time(outcome_checks: ModuleType) -> None:
+    # Being fast at something other than what the case commissioned is not what the class measures.
+    score = outcome_checks.timing_class_score([_timing_check(["app"])], _timing_manifest_entries(10.0, "failed"))
+
+    assert score == 0.0
+
+
+def test_a_class_the_case_did_not_name_does_not_zero_the_time(outcome_checks: ModuleType) -> None:
+    score = outcome_checks.timing_class_score([_timing_check([])], _timing_manifest_entries(10.0, "failed"))
+
+    assert score == 1.0
+
+
+def test_an_errored_prerequisite_class_does_not_zero_the_time(outcome_checks: ModuleType) -> None:
+    # An error is the harness failing to find out; charging the clock for it would hold a broken
+    # instrument against the agent.
+    score = outcome_checks.timing_class_score([_timing_check(["app"])], _timing_manifest_entries(10.0, "error"))
+
+    assert score == 1.0
+
+
+def test_the_timing_class_scores_zero_when_no_entry_carries_a_measurement(outcome_checks: ModuleType) -> None:
+    score = outcome_checks.timing_class_score([_timing_check(["app"])], _timing_manifest_entries(None, "passed"))
+
+    assert score == 0.0
+
+
+def test_the_timing_class_scores_zero_when_its_entry_is_missing_altogether(outcome_checks: ModuleType) -> None:
+    score = outcome_checks.timing_class_score(
+        [_timing_check(["app"])], [{"entry_id": "app_registered", "check_class": "app", "status": "passed"}]
+    )
+
+    assert score == 0.0

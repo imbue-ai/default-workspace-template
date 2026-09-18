@@ -41,7 +41,10 @@ export interface LifecycleDeps {
   /** GET returning parsed JSON, or null on any failure/non-2xx. */
   getJson(url: string): Promise<unknown | null>;
   /** POST returning {status, json} (json null when unparseable). */
-  postJson(url: string, body: unknown): Promise<{ status: number; json: unknown | null }>;
+  postJson(
+    url: string,
+    body: unknown,
+  ): Promise<{ status: number; json: unknown | null }>;
   /** DELETE returning the HTTP status. */
   deleteResource(url: string): Promise<number>;
   openEventSource(url: string): EventSourceLike;
@@ -67,7 +70,9 @@ export function formatRelativeAgo(iso: string, nowMs: number): string {
 }
 
 /** The "Restored from <time>" row label, or null when the snapshot is not a restore result. */
-export function restoredFromLabel(tags: readonly string[] | undefined): string | null {
+export function restoredFromLabel(
+  tags: readonly string[] | undefined,
+): string | null {
   const allTags = tags ?? [];
   if (!allTags.includes("restored")) return null;
   const lineage = allTags.find((tag) => tag.startsWith("restored-from:"));
@@ -83,7 +88,10 @@ export function isSafetySnapshotFailure(message: string | null): boolean {
 
 export function isChatGateFailure(message: string | null): boolean {
   const text = message ?? "";
-  return text.includes("cannot determine running chats") || text.includes("Could not probe the machine");
+  return (
+    text.includes("cannot determine running chats") ||
+    text.includes("Could not probe the machine")
+  );
 }
 
 export interface RestoreOptions {
@@ -169,10 +177,17 @@ export class BackupOperationController {
   }
 
   successMessageFor(kind: string): string {
-    return OPERATION_SUCCESS_MESSAGES[kind] ?? "The operation completed successfully.";
+    return (
+      OPERATION_SUCCESS_MESSAGES[kind] ??
+      "The operation completed successfully."
+    );
   }
 
-  startRestore(snapshot: BackupSnapshot, timeText: string, options: RestoreOptions): void {
+  startRestore(
+    snapshot: BackupSnapshot,
+    timeText: string,
+    options: RestoreOptions,
+  ): void {
     const body = {
       stop_chats: options.stopChats === true,
       update_after: options.updateAfter !== false,
@@ -189,9 +204,58 @@ export class BackupOperationController {
         successMessage: timeText
           ? `Machine restored to the backup from ${timeText}. A safety backup of your previous state was saved first.`
           : OPERATION_SUCCESS_MESSAGES.backup_restore,
-        retryWithStopChats: () => this.startRestore(snapshot, timeText, { ...options, stopChats: true }),
-        retrySkipSafety: () => this.startRestore(snapshot, timeText, { ...options, skipSafetySnapshot: true }),
-        retryForce: () => this.startRestore(snapshot, timeText, { ...options, skipChatGate: true }),
+        retryWithStopChats: () =>
+          this.startRestore(snapshot, timeText, {
+            ...options,
+            stopChats: true,
+          }),
+        retrySkipSafety: () =>
+          this.startRestore(snapshot, timeText, {
+            ...options,
+            skipSafetySnapshot: true,
+          }),
+        retryForce: () =>
+          this.startRestore(snapshot, timeText, {
+            ...options,
+            skipChatGate: true,
+          }),
+      },
+    );
+  }
+
+  /** The idempotent "Update backup software" converge. */
+  startUpdate(options: { stopChats?: boolean } = {}): void {
+    this.dispatch(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backup-service/update`,
+      { stop_chats: options.stopChats === true },
+      {
+        isCancellable: true,
+        label: OPERATION_RUNNING_LABELS.backup_update,
+        successMessage: OPERATION_SUCCESS_MESSAGES.backup_update,
+        retryWithStopChats: () => this.startUpdate({ stopChats: true }),
+      },
+    );
+  }
+
+  /** Enable backups, move where they go, or (provider "NONE") turn them off. */
+  startStorageChange(provider: string, apiKeyEnv: string): void {
+    if (provider === "NONE") {
+      this.dispatch(
+        `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backup-service/disable`,
+        {},
+        {
+          label: "Turning backups off...",
+          successMessage: "Backups are now turned off for this machine.",
+        },
+      );
+      return;
+    }
+    this.dispatch(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backup-service/configure`,
+      { backup_provider: provider, api_key_env: apiKeyEnv },
+      {
+        label: OPERATION_RUNNING_LABELS.backup_configure,
+        successMessage: OPERATION_SUCCESS_MESSAGES.backup_configure,
       },
     );
   }
@@ -214,7 +278,9 @@ export class BackupOperationController {
   /** Attach to an operation started elsewhere (another window / a reload). */
   async reattach(): Promise<void> {
     if (this.isRunning || this.isStopped) return;
-    const payload = (await this.deps.getJson(this.operationUrl())) as OperationStatusPayload | null;
+    const payload = (await this.deps.getJson(
+      this.operationUrl(),
+    )) as OperationStatusPayload | null;
     if (this.isRunning || this.isStopped) return;
     if (payload === null || payload.status !== "RUNNING") return;
     // This page did not dispatch the running operation: no retry closures,
@@ -225,7 +291,11 @@ export class BackupOperationController {
     this.retryForce = null;
     this.isRestore = payload.kind === "backup_restore";
     this.restoringSnapshotId = payload.snapshot_id ?? null;
-    this.setRunning(true, payload.is_cancellable === true, OPERATION_RUNNING_LABELS[payload.kind ?? ""] ?? "Working...");
+    this.setRunning(
+      true,
+      payload.is_cancellable === true,
+      OPERATION_RUNNING_LABELS[payload.kind ?? ""] ?? "Working...",
+    );
     this.consecutivePollFailures = 0;
     this.streamLogs();
     this.pollSoon();
@@ -238,7 +308,9 @@ export class BackupOperationController {
     );
     if (result.status >= 400) {
       const detail = result.json as { error?: string; message?: string } | null;
-      this.showError(detail?.error ?? detail?.message ?? "Could not cancel the operation.");
+      this.showError(
+        detail?.error ?? detail?.message ?? "Could not cancel the operation.",
+      );
     }
     this.deps.redraw();
   }
@@ -267,7 +339,11 @@ export class BackupOperationController {
     this.retryWithStopChats = opts.retryWithStopChats ?? null;
     this.retrySkipSafety = opts.retrySkipSafety ?? null;
     this.retryForce = opts.retryForce ?? null;
-    this.setRunning(true, opts.isCancellable === true, opts.label ?? "Working...");
+    this.setRunning(
+      true,
+      opts.isCancellable === true,
+      opts.label ?? "Working...",
+    );
     this.consecutivePollFailures = 0;
     void this.deps.postJson(url, body).then((result) => {
       if (result.status === 202) {
@@ -277,7 +353,11 @@ export class BackupOperationController {
       }
       this.setRunning(false, false, "");
       const detail = result.json as { error?: string; message?: string } | null;
-      this.showError(detail?.error ?? detail?.message ?? `Request failed (HTTP ${result.status})`);
+      this.showError(
+        detail?.error ??
+          detail?.message ??
+          `Request failed (HTTP ${result.status})`,
+      );
       this.deps.redraw();
     });
   }
@@ -293,7 +373,9 @@ export class BackupOperationController {
   /** One status-poll tick; reschedules itself while the operation runs. */
   async pollOnce(): Promise<void> {
     if (this.isStopped) return;
-    const payload = (await this.deps.getJson(this.operationUrl())) as OperationStatusPayload | null;
+    const payload = (await this.deps.getJson(
+      this.operationUrl(),
+    )) as OperationStatusPayload | null;
     if (this.isStopped) return;
     if (payload === null) {
       // Transient fetch failure: keep polling rather than ending the
@@ -322,19 +404,24 @@ export class BackupOperationController {
     this.setRunning(false, false, "");
     if (payload.status === "CANCELLED") {
       this.cancelledMessage =
-        OPERATION_CANCELLED_MESSAGES[payload.kind ?? ""] ?? "The operation was cancelled. Nothing was changed.";
+        OPERATION_CANCELLED_MESSAGES[payload.kind ?? ""] ??
+        "The operation was cancelled. Nothing was changed.";
       this.deps.redraw();
       return;
     }
     if (payload.is_done === true) {
       this.successMessage =
-        this.pendingSuccessMessage ?? this.successMessageFor(payload.kind ?? "");
+        this.pendingSuccessMessage ??
+        this.successMessageFor(payload.kind ?? "");
       this.warningMessage = payload.warning ?? null;
       this.onSuccess?.();
       this.deps.redraw();
       return;
     }
-    if (payload.blocked_chats !== undefined && payload.blocked_chats.length > 0) {
+    if (
+      payload.blocked_chats !== undefined &&
+      payload.blocked_chats.length > 0
+    ) {
       this.showError(
         `Chats are running in this machine (${payload.blocked_chats.join(", ")}). ` +
           "Stop them before continuing; they resume on your next message.",
@@ -344,8 +431,11 @@ export class BackupOperationController {
       return;
     }
     this.showError(payload.error ?? "The backup operation failed.");
-    this.isSkipSafetyRetryOffered = this.retrySkipSafety !== null && isSafetySnapshotFailure(payload.error ?? null);
-    this.isForceRetryOffered = this.retryForce !== null && isChatGateFailure(payload.error ?? null);
+    this.isSkipSafetyRetryOffered =
+      this.retrySkipSafety !== null &&
+      isSafetySnapshotFailure(payload.error ?? null);
+    this.isForceRetryOffered =
+      this.retryForce !== null && isChatGateFailure(payload.error ?? null);
     this.deps.redraw();
   }
 
@@ -379,7 +469,11 @@ export class BackupOperationController {
     this.logSource = null;
   }
 
-  private setRunning(isRunning: boolean, isCancellable: boolean, label: string): void {
+  private setRunning(
+    isRunning: boolean,
+    isCancellable: boolean,
+    label: string,
+  ): void {
     this.isRunning = isRunning;
     this.isCancellable = isRunning && isCancellable;
     this.runningLabel = label;
@@ -407,6 +501,7 @@ export class BackupOperationController {
 
 interface BackupsListingPayload {
   is_configured?: boolean;
+  is_backing_up?: boolean;
   snapshots?: BackupSnapshot[];
   snapshots_total?: number;
   snapshots_error?: string | null;
@@ -458,7 +553,9 @@ export class BackupHistoryModel {
     const url =
       `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backups` +
       `?limit=${BACKUP_HISTORY_PAGE_SIZE}&offset=${this.offset}`;
-    const payload = (await this.deps.getJson(url)) as BackupsListingPayload | null;
+    const payload = (await this.deps.getJson(
+      url,
+    )) as BackupsListingPayload | null;
     if (payload === null) {
       this.statusMessage = "Could not load backup history.";
       this.deps.redraw();
@@ -477,8 +574,14 @@ export class BackupHistoryModel {
     this.snapshots = payload.snapshots ?? [];
     // Fall back to the returned rows if the count is absent (older backend)
     // so a present page never collapses to the empty state.
-    this.total = typeof payload.snapshots_total === "number" ? payload.snapshots_total : this.offset + this.snapshots.length;
-    this.statusMessage = this.total === 0 ? "No backups yet. The first backup runs within the hour." : null;
+    this.total =
+      typeof payload.snapshots_total === "number"
+        ? payload.snapshots_total
+        : this.offset + this.snapshots.length;
+    this.statusMessage =
+      this.total === 0
+        ? "No backups yet. The first backup runs within the hour."
+        : null;
     this.deps.redraw();
   }
 
@@ -500,6 +603,234 @@ export class BackupHistoryModel {
   goOlder(): void {
     this.offset += BACKUP_HISTORY_PAGE_SIZE;
     void this.loadPage();
+  }
+}
+
+/** How many recent backups the settings group lists before linking to the full history. */
+export const BACKUP_SETTINGS_RECENT_LIMIT = 5;
+
+/** Each backup-service problem in the words the person reading it needs.
+ *
+ * Every one of these points at the same idempotent converge, which is the only
+ * action available for any of them -- so the label's job is to say what is
+ * wrong, and that the one button fixes it.
+ */
+const BACKUP_PROBLEM_LABELS: Record<string, string> = {
+  NOT_CONFIGURED:
+    'Backups are turned off for this machine. Use "Change storage location" to turn them on.',
+  CODE_OUTDATED:
+    'The backup software in this machine is out of date. Click "Update backup software" to fix this.',
+  ENV_MISSING:
+    'This machine has lost its backup storage settings. Click "Update backup software" to restore them.',
+  ENV_MISMATCH:
+    'This machine is set up to back up somewhere different than expected. Click "Update backup software" to fix this.',
+  SERVICE_NOT_RUNNING:
+    'The backup software in this machine is not running. Click "Update backup software" to restart it.',
+  UNVERIFIABLE:
+    'Mind could not check on this machine\'s backups. Click "Update backup software" to reset them.',
+  BACKUPS_STALE:
+    'This machine has not backed up recently even though it is running. Click "Update backup software" to fix this.',
+};
+
+interface BackupCheckPayload {
+  check_state?: string;
+  problems?: string[];
+  installed_version?: string | null;
+  minimum_version?: string | null;
+  update_target_version?: string | null;
+  check_detail?: string;
+  is_verification_enabled?: boolean;
+}
+
+/**
+ * The Backup group in Machine settings: the snapshot summary and the recent
+ * rows (fast, restic runs on this machine) plus the backup-service verdict
+ * (slow, it execs into the machine), loaded independently so the slow half
+ * never gates the fast one.
+ */
+export class BackupSettingsModel {
+  readonly agentId: string;
+  isConfigured = false;
+  isBackingUp = false;
+  snapshots: BackupSnapshot[] = [];
+  snapshotsTotal = 0;
+  /** Whether the listing failed, which reads as "unknown" rather than "none". */
+  isSnapshotsErrored = false;
+  isSnapshotsLoaded = false;
+  check: BackupCheckPayload | null = null;
+  isCheckLoading = true;
+  isVerificationPending = false;
+  /** A failed verification write, which has no operation strip of its own. */
+  verificationError: string | null = null;
+
+  private readonly deps: LifecycleDeps;
+  private isStopped = false;
+
+  constructor(agentId: string, deps: LifecycleDeps) {
+    this.agentId = agentId;
+    this.deps = deps;
+  }
+
+  /** Stop adopting responses; the group was closed while reads were in flight. */
+  stop(): void {
+    this.isStopped = true;
+  }
+
+  async load(): Promise<void> {
+    await Promise.all([this.loadSnapshots(), this.loadCheck()]);
+  }
+
+  async loadSnapshots(): Promise<void> {
+    const payload = (await this.deps.getJson(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backups?limit=${BACKUP_SETTINGS_RECENT_LIMIT}`,
+    )) as BackupsListingPayload | null;
+    if (this.isStopped) return;
+    this.isSnapshotsLoaded = true;
+    if (payload === null) {
+      // The route itself did not answer, which says nothing about the backups.
+      this.isSnapshotsErrored = true;
+      this.deps.redraw();
+      return;
+    }
+    this.isConfigured = payload.is_configured === true;
+    this.isBackingUp = payload.is_backing_up === true;
+    this.isSnapshotsErrored = Boolean(payload.snapshots_error);
+    this.snapshots = payload.snapshots ?? [];
+    this.snapshotsTotal =
+      typeof payload.snapshots_total === "number"
+        ? payload.snapshots_total
+        : this.snapshots.length;
+    this.deps.redraw();
+  }
+
+  async loadCheck(): Promise<void> {
+    this.isCheckLoading = true;
+    const payload = (await this.deps.getJson(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backup-check`,
+    )) as BackupCheckPayload | null;
+    if (this.isStopped) return;
+    this.isCheckLoading = false;
+    // A verdict that did not arrive leaves `check` null, which the group reads
+    // as "no verdict" -- never as a clean bill of health.
+    this.check = payload;
+    this.deps.redraw();
+  }
+
+  get statusLine(): string {
+    if (!this.isSnapshotsLoaded) return "Loading backup status...";
+    if (this.isBackingUp) return "Backing up now...";
+    const newest = this.snapshots.length > 0 ? this.snapshots[0].time : null;
+    if (newest !== null)
+      return `Last backup: ${new Date(newest).toLocaleString()}`;
+    if (this.isSnapshotsErrored) return "Backup status unknown.";
+    if (!this.isConfigured) return "Backups are turned off for this machine.";
+    return "No successful backup yet.";
+  }
+
+  /** What the service check concluded, or "" when it reached no verdict. */
+  get checkLine(): string {
+    const state = this.check?.check_state;
+    if (state === "DISABLED")
+      return "Backup service verification is disabled for this machine.";
+    if (state === "OFFLINE")
+      return "This machine is offline; its backups will be checked when it is back online.";
+    if (state === "OK") return "The backup service is up to date.";
+    return "";
+  }
+
+  /** Why the recent-backups table is empty, or null when there are rows to show. */
+  get emptyHistoryMessage(): string | null {
+    if (!this.isSnapshotsLoaded) return "Loading backup history...";
+    // Before the configured check, and in the order `statusLine` uses: a route
+    // that did not answer leaves `isConfigured` at its default, which is not a
+    // reading of anything.
+    if (this.isSnapshotsErrored)
+      return "Couldn't load your backup history right now.";
+    if (!this.isConfigured) return BACKUP_PROBLEM_LABELS.NOT_CONFIGURED;
+    if (this.snapshots.length > 0) return null;
+    return this.isBackingUp
+      ? "Backing up now... the first backup will appear shortly."
+      : "No backups yet. The first backup runs within the hour.";
+  }
+
+  get isViewAllShown(): boolean {
+    return this.snapshotsTotal > BACKUP_SETTINGS_RECENT_LIMIT;
+  }
+
+  /** The installed / required / would-install versions, or "" when none are known. */
+  get versionLine(): string {
+    const check = this.check;
+    if (check === null) return "";
+    const parts: string[] = [];
+    if (check.installed_version)
+      parts.push(`Installed backup service: ${check.installed_version}`);
+    if (check.minimum_version)
+      parts.push(`minimum required: ${check.minimum_version}`);
+    if (
+      check.update_target_version &&
+      check.update_target_version !== check.minimum_version
+    ) {
+      parts.push(`update installs: ${check.update_target_version}`);
+    }
+    return parts.join(" / ");
+  }
+
+  /** Every problem the check found, in plain words, plus its own detail line. */
+  get problemLines(): string[] {
+    const check = this.check;
+    if (check === null || check.check_state !== "PROBLEMS") return [];
+    const lines = (check.problems ?? []).map(
+      (problem) => BACKUP_PROBLEM_LABELS[problem] ?? problem,
+    );
+    if (check.check_detail) lines.push(check.check_detail);
+    return lines;
+  }
+
+  /** Whether the update is offered at all.
+   *
+   * It is an idempotent converge, so it stays on offer even for a machine that
+   * reports no problems -- resetting a wedged backup service is exactly what it
+   * is for. The two exceptions are a machine that cannot be reached to run it,
+   * and one the server would refuse anyway for being too old.
+   */
+  isUpdateOffered(isRecreationRequired: boolean): boolean {
+    if (isRecreationRequired) return false;
+    return this.check?.check_state !== "OFFLINE";
+  }
+
+  get isRestoreDisabledByCheck(): boolean {
+    return this.check?.check_state === "OFFLINE";
+  }
+
+  /** Verification defaults to on, so an unread verdict must not read as off. */
+  get isVerificationEnabled(): boolean {
+    return this.check?.is_verification_enabled !== false;
+  }
+
+  async toggleVerification(): Promise<void> {
+    const target = !this.isVerificationEnabled;
+    this.isVerificationPending = true;
+    this.verificationError = null;
+    this.deps.redraw();
+    const result = await this.deps.postJson(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/backup-service/verification`,
+      { enabled: target },
+    );
+    if (this.isStopped) return;
+    if (result.status >= 400 || result.status === 0) {
+      this.isVerificationPending = false;
+      this.verificationError =
+        "Could not change the verification setting. Try again.";
+      this.deps.redraw();
+      return;
+    }
+    // Re-reading also re-runs the (slow) service check, so the pending flag
+    // stays up until the fresh verdict lands rather than snapping back to a
+    // stale one.
+    await this.loadCheck();
+    if (this.isStopped) return;
+    this.isVerificationPending = false;
+    this.deps.redraw();
   }
 }
 
@@ -539,7 +870,9 @@ export class DestroyedWorkspacesModel {
   }
 
   async load(): Promise<void> {
-    const payload = (await this.deps.getJson("/ui/api/destroyed-workspaces")) as DestroyedWorkspacesPayload | null;
+    const payload = (await this.deps.getJson(
+      "/ui/api/destroyed-workspaces",
+    )) as DestroyedWorkspacesPayload | null;
     if (payload === null) {
       this.errorMessage = "Could not load recently destroyed machines.";
       this.isLoaded = true;
@@ -563,7 +896,9 @@ export class DestroyedWorkspacesModel {
     this.deletingAgentIds.delete(agentId);
     if (result.status >= 400) {
       const detail = result.json as { error?: string } | null;
-      this.errorMessage = detail?.error ?? "Could not delete the backup; see the logs and try again.";
+      this.errorMessage =
+        detail?.error ??
+        "Could not delete the backup; see the logs and try again.";
       this.deps.redraw();
       return;
     }
@@ -607,7 +942,10 @@ export class DestroyingModel {
 
   async retry(): Promise<void> {
     this.retryErrorMessage = null;
-    const result = await this.deps.postJson(`/api/v1/workspaces/${encodeURIComponent(this.agentId)}/destroy`, {});
+    const result = await this.deps.postJson(
+      `/api/v1/workspaces/${encodeURIComponent(this.agentId)}/destroy`,
+      {},
+    );
     // Status 0 is the browser deps' network-failure sentinel.
     if (result.status >= 400 || result.status === 0) {
       const detail = result.json as { error?: string; message?: string } | null;
@@ -627,7 +965,9 @@ export class DestroyingModel {
   }
 
   async dismiss(): Promise<void> {
-    await this.deps.deleteResource(`/api/v1/workspaces/operations/destroy/${encodeURIComponent(this.agentId)}`);
+    await this.deps.deleteResource(
+      `/api/v1/workspaces/operations/destroy/${encodeURIComponent(this.agentId)}`,
+    );
     this.onDone?.();
   }
 
@@ -656,7 +996,8 @@ export class DestroyingModel {
 
   applyStatus(status: string): void {
     if (this.isStopped && status !== "done") return;
-    if (status !== "running" && status !== "failed" && status !== "done") return;
+    if (status !== "running" && status !== "failed" && status !== "done")
+      return;
     if (status === this.status) return;
     this.status = status;
     this.deps.redraw();
@@ -678,7 +1019,11 @@ export class DestroyingModel {
     source.onmessage = (event) => {
       let frame: { log?: string; done?: boolean; status?: string };
       try {
-        frame = JSON.parse(event.data) as { log?: string; done?: boolean; status?: string };
+        frame = JSON.parse(event.data) as {
+          log?: string;
+          done?: boolean;
+          status?: string;
+        };
       } catch {
         return;
       }
@@ -688,7 +1033,8 @@ export class DestroyingModel {
       }
       if (frame.done === true) {
         this.closeSource();
-        if (frame.status !== undefined) this.applyStatus(frame.status.toLowerCase());
+        if (frame.status !== undefined)
+          this.applyStatus(frame.status.toLowerCase());
       }
     };
     source.onerror = () => this.closeSource();
@@ -723,7 +1069,12 @@ interface RecoveryStatusPayload {
   status?: string;
   is_done?: boolean;
   error?: string | null;
+  warning?: string | null;
 }
+
+/** What a declined start says when the app reported no reason of its own. */
+const RECOVERY_DECLINED_FALLBACK_MESSAGE =
+  "The machine could not be started right now. Nothing was changed.";
 
 /**
  * The recovery card's driver: follow the machine's recovery state, dispatch a
@@ -749,6 +1100,10 @@ export class RecoveryModel {
    * as good as what the tracker publishes about it. */
   dispatchedRecoveryKind: RecoveryKind | null = null;
   recoveryError: string | null = null;
+  /** The reason a start was refused before it changed anything (an operator
+   * holds the machine): an outcome that is neither a success -- the machine is
+   * not answering -- nor a failure of the machine or this device. */
+  recoveryNotice: string | null = null;
   isRecoverySucceeded = false;
   logLines: string[] = [];
 
@@ -822,17 +1177,27 @@ export class RecoveryModel {
    */
   private applyInfo(payload: RecoveryInfo): void {
     this.info = payload;
+    // A declined start's notice describes a machine that is not answering;
+    // once it is (the operator's start landed), the notice is stale.
+    if (payload.health === "healthy" && !payload.is_host_offline)
+      this.recoveryNotice = null;
     if (payload.health !== "recovering") {
       this.isRecoveryFollowAbandoned = false;
       return;
     }
-    if (this.isRecoveryRunning || this.isRecoveryFollowAbandoned || this.isStopped) return;
+    if (
+      this.isRecoveryRunning ||
+      this.isRecoveryFollowAbandoned ||
+      this.isStopped
+    )
+      return;
     this.isRecoveryRunning = true;
     // Attached, not dispatched: this model has no first-hand account of what
     // was run, so a surface must take the tracker's word for which it was.
     this.dispatchedRecoveryKind = null;
     this.isRecoverySucceeded = false;
     this.recoveryError = null;
+    this.recoveryNotice = null;
     this.logLines = [];
     this.consecutiveRecoveryPollFailures = 0;
     this.streamRecoveryLogs(payload.agent_id);
@@ -840,7 +1205,10 @@ export class RecoveryModel {
   }
 
   private pollInfoSoon(): void {
-    this.deps.schedule(() => void this.pollInfoOnce(), OPERATION_POLL_INTERVAL_MS);
+    this.deps.schedule(
+      () => void this.pollInfoOnce(),
+      OPERATION_POLL_INTERVAL_MS,
+    );
   }
 
   async pollInfoOnce(): Promise<void> {
@@ -890,23 +1258,29 @@ export class RecoveryModel {
     this.isRecoveryRunning = true;
     this.dispatchedRecoveryKind = kind;
     this.recoveryError = null;
+    this.recoveryNotice = null;
     this.isRecoverySucceeded = false;
     this.consecutiveRecoveryPollFailures = 0;
     this.isRecoveryFollowAbandoned = false;
     this.logLines = [];
     this.deps.redraw();
-    const result = await this.deps.postJson(`/api/v1/workspaces/${encodeURIComponent(agentId)}/restart`, {
-      scope: "host",
-      // The body field keeps its wire name: agents inside workspaces post it.
-      start_only: kind === "start",
-    });
+    const result = await this.deps.postJson(
+      `/api/v1/workspaces/${encodeURIComponent(agentId)}/restart`,
+      {
+        scope: "host",
+        // The body field keeps its wire name: agents inside workspaces post it.
+        start_only: kind === "start",
+      },
+    );
     // The card may have gone away while the POST was in flight; a stopped model
     // must not open a log stream nothing will ever close.
     if (this.isStopped) return;
     if (result.status >= 400) {
       this.isRecoveryRunning = false;
       const detail = result.json as { error?: string } | null;
-      this.recoveryError = detail?.error ?? `Could not start the recovery (HTTP ${result.status}).`;
+      this.recoveryError =
+        detail?.error ??
+        `Could not start the recovery (HTTP ${result.status}).`;
       this.deps.redraw();
       return;
     }
@@ -915,7 +1289,10 @@ export class RecoveryModel {
   }
 
   private pollRecoverySoon(agentId: string): void {
-    this.deps.schedule(() => void this.pollRecoveryOnce(agentId), OPERATION_POLL_INTERVAL_MS);
+    this.deps.schedule(
+      () => void this.pollRecoveryOnce(agentId),
+      OPERATION_POLL_INTERVAL_MS,
+    );
   }
 
   async pollRecoveryOnce(agentId: string): Promise<void> {
@@ -929,7 +1306,9 @@ export class RecoveryModel {
       // the backup/lifecycle pollers -- a permanent failure must not pin the
       // card on its in-flight state forever.
       this.consecutiveRecoveryPollFailures += 1;
-      if (this.consecutiveRecoveryPollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+      if (
+        this.consecutiveRecoveryPollFailures >= MAX_CONSECUTIVE_POLL_FAILURES
+      ) {
         this.isRecoveryRunning = false;
         // The tracker still calls this recovery running, and will until it
         // ends. Marking it abandoned is what keeps the recovery-info poll from
@@ -954,7 +1333,12 @@ export class RecoveryModel {
     }
     this.isRecoveryRunning = false;
     this.recoveryOutcomeCount += 1;
-    if (payload.is_done === true) {
+    if (payload.status === "DECLINED") {
+      // Refused before anything changed: the machine is no more answering
+      // than before, so this is not a success the page may leave on.
+      this.recoveryNotice =
+        payload.warning ?? RECOVERY_DECLINED_FALLBACK_MESSAGE;
+    } else if (payload.is_done === true) {
       this.isRecoverySucceeded = true;
     } else {
       this.recoveryError = payload.error ?? "The recovery failed.";
@@ -999,7 +1383,10 @@ export function browserLifecycleDeps(redraw: () => void): LifecycleDeps {
         return null;
       }
     },
-    async postJson(url: string, body: unknown): Promise<{ status: number; json: unknown | null }> {
+    async postJson(
+      url: string,
+      body: unknown,
+    ): Promise<{ status: number; json: unknown | null }> {
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -1020,7 +1407,10 @@ export function browserLifecycleDeps(redraw: () => void): LifecycleDeps {
     },
     async deleteResource(url: string): Promise<number> {
       try {
-        const response = await fetch(url, { method: "DELETE", credentials: "same-origin" });
+        const response = await fetch(url, {
+          method: "DELETE",
+          credentials: "same-origin",
+        });
         return response.status;
       } catch {
         return 0;
@@ -1030,8 +1420,13 @@ export function browserLifecycleDeps(redraw: () => void): LifecycleDeps {
       // Adapter over the browser EventSource so the model-facing surface
       // stays the minimal string-data shape tests can fake.
       const source = new EventSource(url);
-      const wrapper: EventSourceLike = { close: () => source.close(), onmessage: null, onerror: null };
-      source.onmessage = (event) => wrapper.onmessage?.({ data: String(event.data) });
+      const wrapper: EventSourceLike = {
+        close: () => source.close(),
+        onmessage: null,
+        onerror: null,
+      };
+      source.onmessage = (event) =>
+        wrapper.onmessage?.({ data: String(event.data) });
       source.onerror = (event) => wrapper.onerror?.(event);
       return wrapper;
     },
@@ -1043,7 +1438,10 @@ export function browserLifecycleDeps(redraw: () => void): LifecycleDeps {
 }
 
 /** Download one snapshot export as a browser file-save (the route is POST-only). */
-export async function downloadSnapshotExport(agentId: string, snapshotId: string): Promise<boolean> {
+export async function downloadSnapshotExport(
+  agentId: string,
+  snapshotId: string,
+): Promise<boolean> {
   let response: Response;
   try {
     response = await fetch(

@@ -123,19 +123,22 @@ second gateway URL or a different agent skill.
    5. On success, appends a `GRANTED` response event to
       `~/.minds/events/requests/events.jsonl`. (A `FAILED` approval writes
       no response event and leaves the request pending; see step 6.2.)
-   6. On a `GRANTED` outcome, sends the agent a plain-English `mngr message`
+   6. On a `GRANTED` outcome, sends the request's chat a plain-English notice
       describing the decision (with the request's id embedded, so the chat
       harness can pair the notice with the right card); the agent wakes up
-      and decides whether to retry. Delivery is retried with backoff for as
-      long as the app runs, so a nudge for a stopped workspace lands when
-      that workspace next comes up; the in-chat card does not depend on it
-      (see step 8). A `FAILED` or manual-credentials outcome leaves the
-      request pending and notifies only the user (in the dialog), not the
-      agent.
+      and decides whether to retry. The notice goes through the workspace's
+      chat app, so a chat that has moved to a new agent still hears it; a
+      direct `mngr message` to the agent is the backoff for a workspace
+      whose template has no chat-messaging script. Delivery is retried with
+      backoff for as long as the app runs, so a nudge for a stopped
+      workspace lands when that workspace next comes up; the in-chat card
+      does not depend on it (see step 8). A `FAILED` or manual-credentials
+      outcome leaves the request pending and notifies only the user (in the
+      dialog), not the agent.
 7. **User denies.** The desktop client appends a `DENIED` response event
-   and sends the agent a plain-English denial message (same id embedding
-   and retrying as the grant nudge). `latchkey_permissions.json` is not
-   touched.
+   and sends the request's chat a plain-English denial notice, by the same
+   route as the grant nudge in step 6.6 and with the same id embedding and
+   retrying. `latchkey_permissions.json` is not touched.
 8. **The asking workspace hears the verdict at once.** Either resolution
    also sends the workspace a one-entry `minds:permission-resolutions`
    embed contract message (see `docs/embed-contract.md`), so its in-chat
@@ -149,6 +152,130 @@ second gateway URL or a different agent skill.
    a frame it pushes that workspace's recent verdicts, read from the
    response event log via `/ui/api/inbox/resolutions`. Once the
    transcript's own classified resolution lands, it takes over.
+
+## Creating a connection an agent asks for
+
+Most third-party services come from Minds' shipped catalog. When an agent needs
+a domain that catalog has no entry for, it can ask for the connection to be
+*created*: it submits a `custom-service` permission request naming the domain
+and, optionally, how the service signs in through a browser. One Approve both creates
+the connection and grants the asking machine access to it.
+
+The dialog is the simplest of the kinds, and deliberately so:
+
+* It is headed by a globe and "Storing credentials for **the origin**" -- there is no display-name field
+  on the request, here or on the wire. A custom service is labelled by its
+  domain everywhere it is named, because that is the one string that cannot
+  misdescribe what the connection reaches. The agent's rationale is the only
+  agent-authored text on screen, and it appears under **Reason** as the agent's
+  claim rather than as the app's description of the service.
+* There is **no account picker**: the workspace's machine has no account for
+  the service yet, whether the service is being created or this computer
+  already has it, and the sign-in (or the typed credentials) establishes the
+  one the grant rides on.
+* There is **no permission editor and no "Adjust" link**: the grant is
+  all-or-nothing on a scope already pinned to a single domain, so there is
+  nothing to narrow.
+* When the request carries a browser sign-in, the dialog names the URL the
+  browser will open, and Approve reads "Sign in & approve".
+* When it does not, credentials still have to be established -- "no sign-in
+  flow" does not mean "no credentials", since Latchkey refuses a request to a
+  registered service with nothing stored, so a domain with genuinely no
+  authentication is not reachable this way. Unlike a catalog service, the form
+  cannot be part of the first render: the service does not exist yet, so it has
+  no credential command to build inputs from. The first Approve therefore
+  registers it and comes back asking, and the second supplies the values -- the
+  same two-step a catalog service falls into when its credentials turn out to
+  need typing (see [Manual credential entry](#manual-credential-entry)). A
+  rejected value re-shows the form with the reason, rather than failing the
+  request.
+
+Approving registers the service in Latchkey's own `config.json` unless this
+computer already has it, connects an account on the workspace's machine, and
+then writes the grant -- the account-scoped rule plus the scope's own
+definition, since a custom scope is not a Detent builtin -- into the agent's
+per-host permissions file through `POST /permissions/rules`, the same write a
+predefined grant makes, and drops the gateway's pending record. The gateway's
+`permission-requests` extension decides nothing about a custom service beyond
+the shape of the request. A failure at any step leaves the request
+**pending** with no response event, exactly as a failed predefined approval
+does, so the user can fix the problem and click Approve again and the agent is
+never told it was denied. Denying registers nothing and leaves no trace of the
+proposed service.
+
+A second workspace asking for an origin some earlier one connected is the
+common case, not an error: its own gateway has no service for the origin, so
+`custom-service` is the only request it can make. The dialog then says the
+connection already exists on this computer and names the sign-in of the
+registration this computer has -- the request's `login` counts only for a
+service being created -- and approving connects that workspace to the service
+as it is.
+
+What the request may name is deliberately wide: a private network may call
+its services whatever it likes, and the dialog shows exactly which origin is
+being approved. The domain is a bare ASCII hostname -- dot-separated labels of
+letters, digits and hyphens, so a single label, a private suffix or an IPv4
+address are all fine, and a non-ASCII name arrives as its punycode -- with
+three refusals: anything beyond a bare host (a scheme, port, path, underscore
+or wildcard), a name longer than DNS allows, and the gateway's own address. The
+request names the scheme, `https` or `http` -- the latter for a service on
+a private network with no certificate; the dialog shows the resulting origin rather than the bare domain,
+and says outright when it is plain http, since that is the difference between
+credentials sent encrypted and in the clear. The grant pins both the domain and
+the scheme, so it covers exactly the origin the dialog showed.
+
+A browser sign-in is a `login` object described the way `latchkey services
+register` takes it: `url`, `flow` (`cookie-capture` or `token-capture`) and
+`flow_params`, the flow's own parameters keyed as latchkey keys them
+(`cookieKeys`/`cookieUrl`, `tokenUrl`/`tokenField`/`header`); all three are
+required inside it, and the object is omitted for a service with no browser
+sign-in. It is not passed through blind: the gateway and the
+desktop both deserialize the parameters against the flow's schema and refuse
+an unknown key, and every URL among them -- the login page, `cookieUrl`,
+`tokenUrl` -- may use either scheme but must be on the approved domain or a
+subdomain of it, so where the browser goes and where the captured credentials
+apply is always what the dialog named. What passes is registered exactly as
+the agent sent it.
+
+Some valid names still get a warning line in the dialog, in place of the old
+hard refusals: a reserved name nothing answers to (`.invalid`, `.test`,
+`.example`, `example.com` and its siblings, `.onion`), a name the workspace
+machine's own network resolves (`localhost`, a single label, `.local`,
+`.internal`, `.lan`, `.corp`, `.home`, `.home.arpa`), any IP address, and a
+punycode label that could look like another site. The classification lives in
+`custom_services.domain_warning` and is advisory: nothing is blocked, and the
+line is worded as "make sure you know what this is", since a private network
+calls its services what it likes.
+
+An agent is not supposed to ask for a domain some *other* service already
+covers, and does not need Minds to stop it: Latchkey answers that question
+first. A request to a domain no service covers fails with `No service matches
+URL`, and that is the only error the workspace's latchkey skill treats as
+grounds for asking to create a connection; an error naming a service sends it
+to an ordinary permission request instead. Were one to slip through anyway, the
+duplicate is inert rather than dangerous -- Detent takes the first rule whose
+scope matches, so the second never applies.
+
+Once created, a custom service is an ordinary connection: it appears in the
+Permissions tab and on the Connectors page with its account, and its access can
+be revoked there. Latchkey re-reads its registrations on every request, so the
+new service is usable immediately, with no gateway restart.
+
+A remote workspace's machine keeps its own `config.json`, seeded from this
+computer's when the machine was provisioned and never read back -- so a service
+created afterwards exists only here until something carries it over. Every
+connect does, the way the policy travels: the single script that merges the
+credential into the machine's store first installs this computer's projection of
+that file -- the hidden built-in services and every registered service, bundled
+and custom -- as a whole snapshot, ahead of the credential, because a gateway
+with no entry for a service cannot route a request to it. Nothing else on a
+machine writes that file (upstream latchkey touches it only from `services
+register` and from browser discovery, neither of which runs on a VPS), so the
+newest snapshot is always right, and a service deregistered here disappears from
+the machine on its next connect. The snapshot never includes this computer's own
+browser or keyring settings. A custom service this computer has no registration
+for is refused rather than pushed, since the machine could never use its
+credentials.
 
 ## Manual credential entry
 
@@ -524,10 +651,23 @@ shows afterwards is what the machine holds -- and a change the machine will
 not take is reported where the user clicked, immediately, rather than as a
 notification about a click they have long since forgotten.
 
-The provider set is loaded once, lazily, and kept for the life of the app;
-loading it imports every installed provider plugin, so it is started on a
-background thread at startup and the first Permissions tab open normally finds
-it done.
+The provider set is loaded lazily and kept across operations; loading it
+imports every installed provider plugin, so it is started on a background
+thread at startup and the first Permissions tab open normally finds it done.
+What is kept is dropped and reloaded whenever mngr's settings change on disk,
+because the app writes them itself: signing an account in registers a provider
+instance for it, and a set loaded before that would know the provider only as a
+name, leaving every machine operation on that account's workspaces failing
+until the app restarted.
+
+Those settings are the whole `mngr` CLI's, but the plugins are only the ones
+this app ships, so a `[providers.<name>]` block naming a backend it has no
+plugin for is skipped with a warning rather than failing the load. Every
+workspace on a provider the app does ship keeps its machine; only a workspace
+on the skipped provider reports its machine unreachable, and it says which
+backend is missing. A malformed value inside a block whose backend *is*
+installed is still fatal, because that block is one the app would otherwise
+use.
 
 The desktop keeps each remote machine's credentials in that host's *machine
 store* (`~/.minds/latchkey/mngr_latchkey/hosts/<host_id>/`), a
@@ -679,6 +819,174 @@ that cannot be reached shows as "permissions can't be loaded" rather than
 an empty, misleading "nothing granted", and does not take Share machine or
 Machine settings down with it.
 
+### Keeping a copy on the machine
+
+The three routes behind this half live under
+`/api/workspaces/<agent_id>/folder-syncs`, not under `permissions/`: `toggle`
+turns syncing on or off, `discard-copy` removes a copy the machine set aside,
+and a `GET` on the collection itself answers the pane's poll. They are served
+by the same module as the permissions routes, because one card draws both and
+they answer with the same refreshed payload -- but a sync is not a permission,
+none of the three touch latchkey, and a URL saying otherwise would be wrong
+about who owns them.
+
+
+Each shared path is one card, drawn as bands: the path, then one band per
+setting, divided by rules that reach both edges of the card.
+
+The **access** band is the WebDAV file server, reachable only while this
+computer is awake and Minds is running. Its dropdown completes the sentence
+"Agents on this machine may": *Read only*, or *Read and write*. There is no
+write-without-read, because `WRITE` is a strict superset of `READ` in the
+gateway's own model. The card's remove button revokes this grant, and names
+what else it will take -- *Revoke access*, or *Revoke access and remove copy*
+when the machine is holding one.
+
+The **sync** band is a checkbox, "Keep a synchronized copy on the machine", and
+an `mngr pair` sync behind it. The machine gets its own copy, so agents can
+still reach it while this computer is asleep or offline; changes only move
+between the two while Minds is running, since the sync is a process it owns. A
+checkbox rather than the other arm of a radio, because it is additive: ticking
+it revokes nothing, and the on-demand grant above stays exactly where it was.
+
+Everything the checkbox has to say hangs off a short rule under it, so there is
+one left edge rather than an indent to keep in step with the checkbox's width.
+
+Only folders can be synced. unison, which `mngr pair` drives, has no native
+single-file sync; a shared file says so in place of the option.
+
+**Which way changes travel is not a question.** It is the access, said again:
+read-only access means this computer to the machine, read and write means both
+ways. The band states which, in the same words the dropdown above uses --
+"Since agents on this machine may both **read and write** the folder, Minds
+synchronizes changes between your computer and this machine in both
+directions." Changing the access moves a running sync onto it.
+
+The one question a sync does raise is **which side wins when both changed the
+same thing**, and only a two-way sync can face it -- so the clash dropdown
+appears exactly when the access above makes it real. Changing it restarts the
+running sync onto the new setting.
+
+**Where it lands.** `~/synced_folders/<device id>/<whole local path>` on the
+machine, so `/Users/me/notes` synced from device `host-abc` becomes
+`~/synced_folders/host-abc/Users/me/notes`. Each part earns its place. Under the
+*home* directory rather than the working directory, because the latter is a git
+checkout and files synced in from a desktop have no business turning up as
+untracked changes in it. Under the device id, because one workspace can be
+synced with from more than one computer, and the same absolute path on two of
+them names different directories. And the whole local path rather than the
+folder's name, so two same-named folders cannot collide. The device id is this
+install's own, from `<data_dir>/device_id` -- the same identity that stamps
+workspace records.
+
+**Status.** A sync spends nearly all its life up but idle, so "running" and
+"moving bytes right now" are shown as different things: turning arrows and
+*Syncing* while `mngr pair` reports a transfer in flight, a check and *Synced*
+once it settles. Both come from `mngr pair`'s `pair_transferring` event, which
+tracks unison's own narration of what it is doing.
+
+Turning sync on returns immediately, with the row in *Starting*. Bringing one
+up means an `mngr exec` round trip to the machine and then waiting on `mngr
+pair` -- seconds, which is long enough that doing it on the request would
+freeze the pane on the click that asked for it. Anything that goes wrong lands
+on the row as *Failed* with the reason. The pane re-reads once a second while
+any sync is alive, which is how every later transition shows up too; with
+nothing live on screen it does not poll at all. Once a second because that is
+how often `mngr pair` reports a transfer's progress, and the endpoint it polls
+(`folder-syncs`) answers from the desktop process alone -- the full
+permissions read, which crosses to the machine over SSH, is not on that path.
+
+**Add file** / **Add folder**, at the foot of the list, open the native picker
+and share what it returns, read-only to begin with -- the row's dropdown widens
+it, and starting narrow is the safer default for a path the user has just
+pointed at. Outside the desktop app there is no picker, so the buttons are
+replaced by the line that names the other route.
+
+Adding a path, and changing one's access, both go through the gateway rather
+than being computed here: Minds files a file-sharing permission request and
+approves it in the same breath. The gateway owns how a path becomes a
+permission -- the URL pattern over a percent-encoded WebDAV path, the verb set,
+the traversal and mount-root checks -- and a second copy of that in Python
+would be a security decision free to drift.
+
+Doing so needs the request to name its **target**: the gateway otherwise writes
+an approved effect into whichever permissions file the *caller's* extension
+context names, which for Minds is its own admin file. A file-sharing grant
+landing there wedges the gateway, because that file declares no
+`latchkey-self` scope schema and every later request against it then fails the
+permission check. `POST /permission-requests` therefore accepts an optional
+absolute `target`, honoured only when the caller's own context is the desktop
+client's admin file -- an agent's context names its workspace's file and never
+matches, which is what stops one workspace granting itself access through
+another's.
+
+Four more constraints are worth knowing:
+
+* Starting a sync checks only what the next step needs: an absolute path that
+  is a directory and exists. It is deliberately **not** the check a share path
+  goes through. Running that here read as a boundary and was not one -- the
+  caller with the strongest claim to be policed is the restore at launch,
+  reading `<data_dir>/folder_syncs/*.json`, which sits beside this app's own
+  signing key and latchkey credentials. Anything able to edit that file can
+  read those and reach the workspace directly, so checking the path on the way
+  out defends against an attacker who has already won.
+* Two workspaces may each keep their own copy of one folder: the copies land
+  under different machines' home directories and unison keys each pairing's
+  archive by both roots, so the two cannot see each other. What is refused is
+  two *overlapping* folders in the **same** workspace, where the copies nest.
+* A sync runs only while Minds does, but the choice to keep a folder synced is
+  remembered in `<data_dir>/folder_syncs/<agent_id>.json` and started again at
+  launch. Restoring never starts a stopped machine: a sync whose machine is off
+  lands on its row saying so.
+* Every change of destination is asynchronous, in both directions. A click
+  records where the user wants the folder (`activity`: ACTIVE / INACTIVE /
+  DISCARDED) and returns; the row then reports how far the app has got
+  (`state`: *Starting*, *Restarting*, *Stopping*, *Removing*, ...) until it
+  settles. So the checkbox always shows what was asked for and the status
+  beside it shows what is true. A sync that fails on its own keeps its
+  checkbox ticked -- the user still wants it -- with the reason beside it. A
+  settled STOPPED sync shows no status at all: the unticked checkbox already
+  says it is off.
+* *Starting* and *Restarting* are the same work told apart. A restart is what a
+  changed setting needs, and the files are already on the machine, so the user
+  is waiting on a handshake rather than on a folder being copied across.
+* Turning sync off does not throw the machine's copy away. It is renamed from
+  `~/synced_folders/<device id>/...` to `~/inactive_synced_folders/<device id>/...`
+  -- a rename, so it costs no copying however large the folder is -- and the
+  record is kept, saying so. Turning sync on again moves it back, which is what
+  makes resuming pick up the files that were already there instead of
+  re-fetching them. So a remembered sync is in one of three states: **ACTIVE**
+  (running), **INACTIVE** (not running, copy set aside), **DISCARDED** (not
+  running, copy deleted on request). Only ACTIVE ones restart at launch.
+* Removing the set-aside copy is its own action (`folder-syncs/discard-copy`), offered
+  on the row once syncing is off. Turning syncing off never folds it in: the
+  point of setting a copy aside is that turning syncing back on resumes from
+  it.
+* Anything already sitting where a copy is being set aside is deleted first.
+  Nothing but Minds writes under `~/inactive_synced_folders`, so something
+  there is a mistake rather than a file to preserve, and refusing instead would
+  strand the copy being set aside. The agent-facing `file-sharing` skill says
+  so, in default-workspace-template.
+* The last two states are what Minds last did, not what is certainly on the
+  machine: an agent owns its own filesystem and may have deleted the copy
+  itself. Every path that acts on one tolerates finding the opposite -- turning
+  sync on with the copy gone just creates an empty directory and re-fetches,
+  and deleting a copy that is already gone is not an error.
+* Unsharing a path stops its sync, deletes the machine's copy, and forgets the
+  record. The copy goes because nothing would be left to offer it from: the
+  pane draws its rows from the shared paths, so a copy whose path is gone has
+  no row, no button, and nothing that would ever mention it again -- it would
+  simply sit on the machine's disk. This is a destination like any other, so
+  the same converger walks to it, stopping a running sync on the way; a copy
+  that only a store record knows about (a sync turned off before Minds last
+  quit) is reached from that record.
+* Pairing always runs with `--no-require-git`, so syncing never checks out a
+  branch, fetches, or stashes on either side.
+
+The sync half touches no latchkey state, so it works and its status shows even
+when the gateway is unreachable. A build with no root concurrency group offers
+no sync option at all rather than one that cannot work.
+
 ## Agent-side responsibilities
 
 Agents are expected to:
@@ -686,9 +994,12 @@ Agents are expected to:
 * Detect the three blocked outcomes from the gateway response.
 * POST a permission request to the gateway's `permission-requests`
   extension (`POST /permission-requests` with `scope`, `permissions`,
-  and `rationale`).
-* Stop the turn and wait. The agent will receive an `mngr message` from
-  the desktop with the decision and can decide whether to retry.
+  and `rationale`) -- or, for a domain the catalog has no service for, a
+  `custom-service` request naming the domain (see [Creating a connection an
+  agent asks for](#creating-a-connection-an-agent-asks-for)).
+* Stop the turn and wait. The agent will receive a message from the
+  desktop (through the workspace's chat app) with the decision and can
+  decide whether to retry.
 
 The detection-and-wait logic for Claude Code lives in the
 `default-workspace-template` repository's latchkey skill, not in this

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.minds_evals.template_loading import load_template_module
 
 _RENDERER = load_template_module("tests/verifier/render_flow_evidence.py", "minds_evals_flow_evidence_renderer")
@@ -57,22 +59,48 @@ def _flow_entry(name: str, status: str, reason: str = "", detail: str = "") -> d
     }
 
 
-def _write_case(tmp_path: Path, checks: list[dict[str, Any]]) -> Path:
-    """The expanded case, which is where a flow's declared steps and its `expect` come from."""
+def _write_case(tmp_path: Path, checks: list[dict[str, Any]], max_judge_screenshots: int | None) -> Path:
+    """The expanded case, which is where a flow's declared actions, its `expect` and the case's own
+    screenshot ceiling come from."""
     case_path = tmp_path / "case.json"
-    case_path.write_text(json.dumps({"expectations": {"ui_flow_checks": checks}}))
+    case_path.write_text(
+        json.dumps({"expectations": {"ui_flow_checks": checks, "max_judge_screenshots": max_judge_screenshots}})
+    )
     return case_path
 
 
-def _flow_check(name: str, steps: str = "Open the app.", expect: str = "it survives") -> dict[str, Any]:
-    return {"check_id": "ui_flow_0_{}".format(name), "name": name, "steps": steps, "expect": expect}
+def _flow_check(name: str, actions: str = "Open the app.", expect: str = "it survives") -> dict[str, Any]:
+    return {"check_id": "ui_flow_0_{}".format(name), "name": name, "actions": actions, "expect": expect}
 
 
-def _collect(tmp_path: Path, checks: list[dict[str, Any]] | None = None) -> tuple[str, list[str]]:
+def test_a_case_generated_before_the_rename_still_shows_the_judge_what_the_flow_declared(tmp_path: Path) -> None:
+    # A regrade reads the dataset the trial was generated from, whose case still spells the field
+    # `steps`; the digest must carry the flow's declared actions all the same.
+    verification_dir = tmp_path / "verification"
+    _write_flow(verification_dir, "persistence", step_count=1)
+    _write_manifest(verification_dir, [_flow_entry("persistence", "passed")])
+    check = {
+        "check_id": "ui_flow_0_persistence",
+        "name": "persistence",
+        "steps": "Add 'persist me'. Reload.",
+        "expect": "it survives",
+    }
+
+    digest, _attached = _collect(tmp_path, [check])
+
+    assert "declared actions: Add 'persist me'. Reload." in digest
+
+
+def _collect(
+    tmp_path: Path, checks: list[dict[str, Any]] | None = None, max_judge_screenshots: int | None = None
+) -> tuple[str, list[str]]:
     digest_path = tmp_path / "judge_flows_digest.txt"
     screenshots_dir = tmp_path / "judge_screenshots"
     _RENDERER.collect_flow_evidence(
-        tmp_path / "verification", digest_path, screenshots_dir, _write_case(tmp_path, checks or [])
+        tmp_path / "verification",
+        digest_path,
+        screenshots_dir,
+        _write_case(tmp_path, checks or [], max_judge_screenshots),
     )
     return digest_path.read_text(), sorted(path.name for path in screenshots_dir.iterdir())
 
@@ -116,17 +144,20 @@ def test_renderer_puts_the_open_question_in_front_of_the_judge(tmp_path: Path) -
 
     digest, _screenshots = _collect(
         tmp_path,
-        [_flow_check("persistence", steps="Add 'persist me'. Reload.", expect="'persist me' is still visible")],
+        [_flow_check("persistence", actions="Add 'persist me'. Reload.", expect="'persist me' is still visible")],
     )
 
-    assert "declared steps: Add 'persist me'. Reload." in digest
+    assert "declared actions: Add 'persist me'. Reload." in digest
     assert "expect (YOU decide whether this holds): 'persist me' is still visible" in digest
     assert "completion: completed (-)" in digest
     assert "reading of the final state, as evidence rather than a verdict: the list shows one task" in digest
+    # The judge sees the declared actions, so it can tell a reload they called for from one the
+    # agent fell back on; the digest says how to read the latter.
+    assert "A 'reload the page' step that the declared actions did not call for" in digest
 
 
 def test_renderer_says_a_flow_that_ran_out_of_steps_is_incomplete(tmp_path: Path) -> None:
-    # "incomplete" says the flow never got to the end of its declared steps. It must not read as a
+    # "incomplete" says the flow never got to the end of its declared actions. It must not read as a
     # ruling that the app fell short -- that ruling is the judge's, and it needs the distinction.
     verification_dir = tmp_path / "verification"
     _write_flow(verification_dir, "persistence", step_count=1)
@@ -146,6 +177,7 @@ def test_renderer_says_so_when_the_case_declared_no_flows(tmp_path: Path) -> Non
 
     assert "No UI flows were declared for this trial." in digest
     assert "[not found]" not in digest
+    assert "reload" not in digest
     assert screenshots == []
     assert (tmp_path / "judge_screenshots").is_dir()
 
@@ -188,6 +220,43 @@ def test_renderer_marks_a_step_whose_action_never_ran(tmp_path: Path) -> None:
     digest, _screenshots = _collect(tmp_path)
 
     assert "THIS ACTION DID NOT RUN: no element 7" in digest
+
+
+def test_renderer_tells_the_judge_a_control_had_no_name_without_counting_it(tmp_path: Path) -> None:
+    verification_dir = tmp_path / "verification"
+    flow_dir = verification_dir / "flows" / "add_complete_delete"
+    flow_dir.mkdir(parents=True)
+    (flow_dir / "log.jsonl").write_text(
+        json.dumps(
+            {
+                "step_index": 3,
+                "action": "click the checkbox that has no accessible name (ref e9)",
+                "target_ref": "e9",
+                "reasoning": "the checkbox has no name",
+                "state": "- checkbox [ref=e9]",
+            }
+        )
+        + "\n"
+    )
+    _write_manifest(verification_dir, [_flow_entry("add_complete_delete", "passed")])
+
+    digest, _screenshots = _collect(tmp_path)
+
+    # The step is marked where the judge reads it, and the note says what the mark means and that
+    # it is not what this flow measures.
+    assert "step 3: click the checkbox that has no accessible name (ref e9)" in digest
+    assert "addressed by ref: the page gives this control no accessible name" in digest
+    assert "Note on unnamed controls" in digest and "on its own it is not meant to lower the score" in digest
+
+
+def test_renderer_leaves_the_unnamed_control_note_out_when_every_control_was_named(tmp_path: Path) -> None:
+    verification_dir = tmp_path / "verification"
+    _write_flow(verification_dir, "persistence", step_count=2)
+    _write_manifest(verification_dir, [_flow_entry("persistence", "passed")])
+
+    digest, _screenshots = _collect(tmp_path, [_flow_check("persistence")])
+
+    assert "unnamed controls" not in digest and "addressed by ref" not in digest
 
 
 def test_renderer_still_produces_both_inputs_when_the_evidence_is_unreadable(tmp_path: Path) -> None:
@@ -268,6 +337,49 @@ def test_renderer_says_so_when_the_attachment_ceiling_drops_frames(tmp_path: Pat
     )
     # The frames that survive are the LATER flows': the earliest give way first.
     assert not any(name.endswith("flow00_step_000.png") for name in screenshots)
+
+
+def test_renderer_attaches_every_flows_frames_under_the_ceiling_the_case_sets(tmp_path: Path) -> None:
+    # A case's flows are judged in one request, so a case whose flows ask for more frames than the
+    # default ceiling sets its own, and its earliest flow keeps its frames.
+    verification_dir = tmp_path / "verification"
+    flow_count = 1 + _RENDERER.MAX_SCREENSHOTS_TOTAL // _RENDERER.MAX_SCREENSHOTS_PER_FLOW
+    entries = []
+    for index in range(flow_count):
+        name = "flow{:02d}".format(index)
+        _write_flow(verification_dir, name, step_count=_RENDERER.MAX_SCREENSHOTS_PER_FLOW)
+        entries.append(_flow_entry(name, "passed"))
+    _write_manifest(verification_dir, entries)
+    frame_count = flow_count * _RENDERER.MAX_SCREENSHOTS_PER_FLOW
+
+    digest, screenshots = _collect(tmp_path, max_judge_screenshots=frame_count)
+
+    assert len(screenshots) == frame_count
+    assert screenshots[0] == "01_flow00_step_000.png"
+    assert "{} screenshot(s) from these flows are attached".format(frame_count) in digest
+
+
+@pytest.mark.parametrize(
+    ("expectations", "expected_total"),
+    [
+        pytest.param({"ui_flow_checks": []}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="not-set"),
+        pytest.param({"max_judge_screenshots": None}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="null"),
+        pytest.param({"max_judge_screenshots": 0}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="zero"),
+        pytest.param({"max_judge_screenshots": True}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="bool"),
+        pytest.param({"max_judge_screenshots": "32"}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="string"),
+        pytest.param(None, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="no-expectations"),
+        pytest.param({"max_judge_screenshots": 32}, 32, id="above-the-default"),
+        pytest.param({"max_judge_screenshots": 8}, 8, id="below-the-default"),
+    ],
+)
+def test_the_screenshot_ceiling_is_the_cases_own_only_when_it_sets_a_usable_one(
+    tmp_path: Path, expectations: object, expected_total: int
+) -> None:
+    # A regrade reads a dataset generated before cases could set a ceiling, which carries none.
+    case_path = tmp_path / "case.json"
+    case_path.write_text(json.dumps({"expectations": expectations}))
+
+    assert _RENDERER.max_screenshots_total(case_path) == expected_total
 
 
 def test_renderer_drops_a_screenshot_rewardkit_would_refuse(tmp_path: Path) -> None:

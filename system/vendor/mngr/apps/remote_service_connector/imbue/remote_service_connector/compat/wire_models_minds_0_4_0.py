@@ -74,7 +74,24 @@ RELEASE_DATE = date(2026, 8, 18)
 # this tag, and no new strict-parse call sites were added client-side. The
 # release moves credential and permission-policy ownership onto each machine,
 # none of which crosses the connector wire.
-SUPPORT_ENDS = date(2026, 10, 8)
+# Also covers minds 0.5.2 (released 2026-09-09): the strictly-parsed surface is
+# still identical -- wire_types.py is byte-unchanged between minds-v0.5.1 and
+# this tag, and no new strict-parse call sites were added client-side.
+# Also covers minds 0.6.0 (released 2026-09-13, the gen-2 slice-fleet release):
+# the strictly-parsed surface is still identical -- every wire_types.py change
+# between minds-v0.5.2 and this tag is an additive optional field with a default
+# (box_generation, the machine-sizing units/disk fields and their pending
+# targets, the machine-unit entitlement and usage fields), which adds no
+# required field, and the one new client route (POST /machines/{id}/resize) is
+# parsed tolerantly.
+# Also covers minds 0.6.1 (released 2026-09-14): the only wire_types.py change
+# since minds-v0.6.0 is the optional ``stop_kind`` field on the workspace entry
+# (defaulting to None) and the ``WorkspaceStopKind`` WireEnum it carries, which
+# adds no required field.
+# Also covers minds 0.6.2 (released 2026-09-16): wire_types.py is byte-unchanged
+# between minds-v0.6.1 and this tag, and no new strict-parse call sites were
+# added client-side. Its support window ends 2026-10-16.
+SUPPORT_ENDS = date(2026, 10, 16)
 
 
 class _TolerantModel(BaseModel):

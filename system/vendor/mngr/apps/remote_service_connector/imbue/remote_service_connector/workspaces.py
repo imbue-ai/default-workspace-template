@@ -12,6 +12,15 @@ a ``pool_hosts`` row leased to the caller, in one of:
 * ``starting`` -- a supervisor is restoring/booting it
 * ``crashed``  -- operator-abandoned (recover from the workspace backup)
 
+Beside the status, ``stop_kind`` records why the current stop happened and so
+who may start the workspace again (specs/workspace-stop-kinds.md): ``owner``
+(the user's own stop, from any device), ``maintenance`` (an operator hold such
+as the gen-1 -> gen-2 migration; only an operator start brings it back),
+``idle`` (an operator stop to free capacity; the user may start it) or
+``suspension`` (the suspend fan-out; rewritten to ``idle`` at unsuspend).
+Every stop stamps it and every start clears it; NULL (a row stopped before the
+column existed) reads as ``owner``.
+
 Stop/start are asynchronous: they CAS the row into the transition status
 (minting the fencing ``transition_id`` the spawned supervisor owns), spawn a
 supervisor, and return 202; clients poll ``GET /workspaces/{id}``. Transitions
@@ -21,8 +30,10 @@ current status so the caller re-reads state and retries when it settles.
 """
 
 import logging
+from enum import Enum
 from typing import Any
 from typing import Final
+from typing import NoReturn
 from uuid import UUID
 from uuid import uuid4
 
@@ -40,6 +51,7 @@ from imbue.remote_service_connector import storage
 from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.hosts import COUNT_RUNNING_WORKSPACES_SQL
+from imbue.remote_service_connector.hosts import sum_active_machine_units_with_cursor
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -61,19 +73,126 @@ _WORKSPACE_STATUSES_SQL: Final[str] = "('leased', 'stopping', 'stopped', 'starti
 _WORKSPACE_SELECT_COLUMNS: Final[str] = (
     "id, status, vps_address, ssh_port, ssh_user, container_ssh_port, agent_id, host_id, host_name, "
     "attributes, leased_at, stop_requested_at, stopped_at, transition_error, "
-    "outer_host_public_key, container_host_public_key"
+    "outer_host_public_key, container_host_public_key, box_generation, "
+    "memory_units, target_memory_units, disk_gb, target_disk_gb, stop_kind"
 )
+
+# The stop kinds (specs/workspace-stop-kinds.md).
+STOP_KIND_OWNER: Final[str] = "owner"
+STOP_KIND_MAINTENANCE: Final[str] = "maintenance"
+STOP_KIND_IDLE: Final[str] = "idle"
+STOP_KIND_SUSPENSION: Final[str] = "suspension"
+# NULL is a stop recorded before the column existed, which reads as ``owner``.
+OWNER_STARTABLE_STOP_KINDS: Final[frozenset[str | None]] = frozenset((None, STOP_KIND_OWNER, STOP_KIND_IDLE))
+
+
+class OperatorStopKind(str, Enum):
+    """The kinds an operator stop (or a kind change) may stamp; ``owner`` is the owner route's alone."""
+
+    MAINTENANCE = STOP_KIND_MAINTENANCE
+    IDLE = STOP_KIND_IDLE
+    SUSPENSION = STOP_KIND_SUSPENSION
+
 
 # The stop CAS, shared by the owner route, the operator route, and the account
 # suspension fan-out so all three run the exact same transition. Parameters:
-# (transition_id, host_db_id) -- the minted transition id fences out any
-# supervisor from an earlier transition.
+# (transition_id, stop_kind, host_db_id) -- the minted transition id fences out
+# any supervisor from an earlier transition.
 _STOP_LEASED_WORKSPACE_SQL: Final[str] = (
     "UPDATE pool_hosts SET status = 'stopping', stop_requested_at = NOW(), "
     "transition_error = NULL, transition_failure_count = 0, transition_id = %s, "
-    "transition_heartbeat_at = NOW() "
+    "transition_heartbeat_at = NOW(), stop_kind = %s "
     "WHERE id = %s AND status = 'leased'"
 )
+
+# Re-stamp the kind of a stop that is already under way or finished: the
+# operator route on an already-stopped row (an owner-stopped workspace the
+# migrate takes must carry its hold), and the explicit kind route. Parameters:
+# (stop_kind, host_db_id).
+_RESTAMP_STOP_KIND_SQL: Final[str] = (
+    "UPDATE pool_hosts SET stop_kind = %s WHERE id = %s AND status IN ('stopping', 'stopped')"
+)
+
+# The unsuspend fan-out's workspace step: every stop the suspension made
+# becomes an ordinary operator stop the user may start. Parameters:
+# (to_kind, user_id_prefix, from_kind).
+_RESTAMP_USER_STOP_KIND_SQL: Final[str] = (
+    "UPDATE pool_hosts SET stop_kind = %s WHERE leased_to_user = %s AND stop_kind = %s "
+    "AND status IN ('stopping', 'stopped')"
+)
+
+# The start CAS: only a stopped row starts, and the start clears the stop's
+# kind. Parameters: (transition_id, host_db_id). The admin start runs it as is
+# (it is how a held row comes back); the owner start adds the hold predicate,
+# so a re-stamp that lands between the route's read and its CAS (the migrate
+# taking an owner-stopped row) is refused by the CAS itself rather than
+# overwritten with NULL.
+_ADMIN_START_STOPPED_WORKSPACE_SQL: Final[str] = (
+    "UPDATE pool_hosts SET status = 'starting', transition_error = NULL, "
+    "transition_failure_count = 0, transition_id = %s, transition_heartbeat_at = NOW(), stop_kind = NULL "
+    "WHERE id = %s AND status = 'stopped'"
+)
+_OWNER_STARTABLE_STOP_KINDS_SQL_LIST: Final[str] = ", ".join(
+    f"'{kind}'" for kind in sorted(kind for kind in OWNER_STARTABLE_STOP_KINDS if kind is not None)
+)
+_OWNER_START_STOPPED_WORKSPACE_SQL: Final[str] = (
+    f"{_ADMIN_START_STOPPED_WORKSPACE_SQL} "
+    f"AND (stop_kind IS NULL OR stop_kind IN ({_OWNER_STARTABLE_STOP_KINDS_SQL_LIST}))"
+)
+
+WORKSPACE_UNDER_MAINTENANCE_CODE: Final[str] = "workspace_under_maintenance"
+WORKSPACE_UNDER_MAINTENANCE_MESSAGE: Final[str] = "This machine is undergoing maintenance and will be back shortly."
+
+
+def _raise_workspace_under_maintenance() -> NoReturn:
+    raise HTTPException(
+        status_code=409,
+        detail={"code": WORKSPACE_UNDER_MAINTENANCE_CODE, "message": WORKSPACE_UNDER_MAINTENANCE_MESSAGE},
+    )
+
+
+def _raise_if_workspace_held(current_db_status: str, stop_kind: str | None) -> None:
+    """Refuse (409 ``workspace_under_maintenance``) an owner start of a row an operator holds.
+
+    Runs before the status precondition so a held row that is still
+    ``stopping`` answers the hold rather than "wait and retry". The kind
+    describes a stop, so only a stopping or stopped row can be held: a
+    ``crashed`` row that kept its kind gets the crashed refusal instead.
+    """
+    if current_db_status in ("stopping", "stopped") and stop_kind not in OWNER_STARTABLE_STOP_KINDS:
+        _raise_workspace_under_maintenance()
+
+
+# CLEANUP: delete this guard (and its tests) in phase 6 of
+# blueprint/slice-fleet-cutover, once no gen-1 row exists on any tier.
+#
+# A gen-1 row the cutover has PARKED: placement cleared and the artifact
+# manifest cleared too. Only the cutover's park clears the manifest -- the
+# connector's own stop records it in the same UPDATE that lands the row on
+# ``stopped`` and the retention finalize never touches it -- so a gen-1 row
+# with NULL placement but a manifest is an ordinary finalized stop, which
+# keeps starting normally through the release window.
+_MIGRATING_GEN1_ROW_SQL: Final[str] = (
+    "SELECT box_generation, vps_address, artifact_manifest FROM pool_hosts WHERE id = %s"
+)
+
+
+def _raise_if_workspace_is_migrating(conn: Any, host_db_id: UUID, current_db_status: str) -> None:
+    """Refuse (409 ``workspace_under_maintenance``) a start of a gen-1 row the cutover has parked.
+
+    The parked row also carries ``stop_kind = 'maintenance'`` once the migrate
+    stops with a kind; this shape check covers rows parked by an older migrate.
+    """
+    if current_db_status != "stopped":
+        return
+    with conn.cursor() as cur:
+        cur.execute(_MIGRATING_GEN1_ROW_SQL, (str(host_db_id),))
+        row = cur.fetchone()
+    if row is None:
+        return
+    box_generation, vps_address, artifact_manifest = row
+    if int(box_generation or 1) == 1 and vps_address is None and artifact_manifest is None:
+        _raise_workspace_under_maintenance()
 
 
 class WorkspaceInfo(BaseModel):
@@ -104,6 +223,28 @@ class WorkspaceInfo(BaseModel):
     transition_error: str | None = Field(default=None, description="Last stop/start failure, if any")
     outer_host_public_key: str | None = Field(default=None, description="Pinned VM-root sshd host key")
     container_host_public_key: str | None = Field(default=None, description="Pinned container sshd host key")
+    box_generation: int = Field(
+        description="Slice-fleet generation of the workspace's placement (selects per-generation client behavior)"
+    )
+    memory_units: int = Field(
+        description="The machine's current size in units (1 unit = 1GiB guest RAM; specs/slice-fleet)"
+    )
+    target_memory_units: int | None = Field(
+        default=None,
+        description="A pending resize's unit target, applied at the next start; None when nothing is pending.",
+    )
+    disk_gb: int = Field(description="The machine's data-disk size in GB (grow-only)")
+    target_disk_gb: int | None = Field(
+        default=None,
+        description="A pending disk grow's GB target, applied at the next start; None when nothing is pending.",
+    )
+    stop_kind: str | None = Field(
+        default=None,
+        description=(
+            "Why the current stop happened (owner / maintenance / idle / suspension); None while running "
+            "or for a stop recorded before the column existed (read as owner)"
+        ),
+    )
 
 
 class TransitionResponse(BaseModel):
@@ -111,10 +252,21 @@ class TransitionResponse(BaseModel):
 
     host_db_id: UUID = Field(description="The workspace the transition applies to")
     status: str = Field(description="Wire lifecycle status after the request")
+    stop_kind: str | None = Field(default=None, description="The stop's kind, when the row is stopping or stopped")
 
 
 class AbandonWorkspaceRequest(BaseModel):
     reason: str = Field(description="Operator-facing reason recorded on the row")
+
+
+class OperatorStopRequest(BaseModel):
+    """The operator stop's body: which kind of stop this is (absent means ``idle``)."""
+
+    kind: OperatorStopKind = Field(default=OperatorStopKind.IDLE, description="maintenance / idle / suspension")
+
+
+class SetStopKindRequest(BaseModel):
+    kind: OperatorStopKind = Field(description="The kind the stopped row's stop becomes")
 
 
 def _workspace_info_from_row(row: tuple[Any, ...]) -> WorkspaceInfo:
@@ -135,6 +287,12 @@ def _workspace_info_from_row(row: tuple[Any, ...]) -> WorkspaceInfo:
         transition_error=row[13],
         outer_host_public_key=row[14],
         container_host_public_key=row[15],
+        box_generation=int(row[16] or 1),
+        memory_units=int(row[17]),
+        target_memory_units=int(row[18]) if row[18] is not None else None,
+        disk_gb=int(row[19]),
+        target_disk_gb=int(row[20]) if row[20] is not None else None,
+        stop_kind=row[21],
     )
 
 
@@ -170,6 +328,16 @@ def _read_owned_workspace(conn: Any, host_db_id: UUID, user_id_prefix: str) -> t
     return row[1:]
 
 
+def _read_workspace_status(conn: Any, host_db_id: UUID) -> str:
+    """Read one workspace row's DB status regardless of owner (404 unknown); the operator routes' prologue."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM pool_hosts WHERE id = %s", (str(host_db_id),))
+        status_row = cur.fetchone()
+    if status_row is None:
+        raise HTTPException(status_code=404, detail="No such workspace")
+    return str(status_row[0])
+
+
 @router.get("/workspaces/{host_db_id}")
 def get_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
     """One workspace's full lifecycle view (the poll target during stop/start)."""
@@ -180,7 +348,22 @@ def get_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
         return _workspace_info_from_row(row).model_dump(mode="json")
 
 
-def _apply_stop_preconditions(host_db_id: UUID, current_db_status: str) -> dict[str, object] | None:
+def _machine_units_counted_at_start(workspace_row: tuple[Any, ...]) -> int:
+    """The units a starting machine re-enters the active sum with.
+
+    The pending target (when stamped) is what the start applies, so it wins;
+    otherwise the current size. The row is an ``_WORKSPACE_SELECT_COLUMNS``
+    tuple.
+    """
+    target_memory_units = workspace_row[18]
+    if target_memory_units is not None:
+        return int(target_memory_units)
+    return int(workspace_row[17])
+
+
+def _apply_stop_preconditions(
+    host_db_id: UUID, current_db_status: str, stop_kind: str | None
+) -> dict[str, object] | None:
     """Apply the stop preconditions shared by the owner and operator stop routes.
 
     Returns the idempotent response payload for a workspace that is already
@@ -190,7 +373,7 @@ def _apply_stop_preconditions(host_db_id: UUID, current_db_status: str) -> dict[
     """
     if current_db_status in ("stopping", "stopped"):
         return TransitionResponse(
-            host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status]
+            host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status], stop_kind=stop_kind
         ).model_dump(mode="json")
     if current_db_status != "leased":
         raise HTTPException(
@@ -218,18 +401,20 @@ def stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
         transition_id = str(uuid4())
         with db.pooled_db_connection() as conn:
             row = _read_owned_workspace(conn, host_db_id, user.user_id_prefix)
-            already_stopped_response = _apply_stop_preconditions(host_db_id, str(row[1]))
+            already_stopped_response = _apply_stop_preconditions(host_db_id, str(row[1]), row[21])
             if already_stopped_response is not None:
                 return already_stopped_response
             with conn.cursor() as cur:
-                cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
+                cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, STOP_KIND_OWNER, str(host_db_id)))
                 updated = cur.rowcount
             conn.commit()
         if updated == 0:
             # Lost a race with another request; report whatever won.
             return get_workspace(request, host_db_id)
         stop_start.spawn_supervisor(str(host_db_id), transition_id)
-        return TransitionResponse(host_db_id=host_db_id, status="stopping").model_dump(mode="json")
+        return TransitionResponse(host_db_id=host_db_id, status="stopping", stop_kind=STOP_KIND_OWNER).model_dump(
+            mode="json"
+        )
 
 
 @router.post("/workspaces/{host_db_id}/start", status_code=202)
@@ -244,10 +429,14 @@ def start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
     ``max_remote_workspaces`` under the same per-user lock the lease path
     uses.
 
-    Only ``stopped`` rows are startable: a still-``stopping`` row is
-    mid-upload with its own supervisor driving it, so a start is refused
-    (409) -- the caller waits for ``stopped`` and retries, keeping stop and
-    start supervisors from ever running concurrently.
+    A row an operator holds (``stop_kind`` ``maintenance`` or ``suspension``)
+    is refused first, from ``stopping`` onwards, with the structured 409
+    ``workspace_under_maintenance`` detail: only an operator start ends the
+    hold, so there is nothing for the caller to retry. Otherwise only
+    ``stopped`` rows are startable: a still-``stopping`` row is mid-upload
+    with its own supervisor driving it, so a start is refused (409) -- the
+    caller waits for ``stopped`` and retries, keeping stop and start
+    supervisors from ever running concurrently.
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
@@ -261,15 +450,9 @@ def start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
                 return TransitionResponse(
                     host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status]
                 ).model_dump(mode="json")
-            if current_db_status != "stopped":
-                # Waiting only helps mid-stop: a crashed or removing row will
-                # never reach stopped, so it gets the plain refusal.
-                retry_advice = "; wait for it to reach stopped and retry" if current_db_status == "stopping" else ""
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Workspace is {_WIRE_STATUS_BY_DB_STATUS.get(current_db_status, current_db_status)}"
-                    f" and cannot be started right now{retry_advice}",
-                )
+            _raise_if_workspace_held(current_db_status, row[21])
+            _raise_if_start_precondition_unmet(current_db_status)
+            _raise_if_workspace_is_migrating(conn, host_db_id, current_db_status)
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (user.user_id_prefix,))
@@ -283,50 +466,177 @@ def start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
                             running_count,
                             "running workspaces",
                         )
-                    cur.execute(
-                        "UPDATE pool_hosts SET status = 'starting', transition_error = NULL, "
-                        "transition_failure_count = 0, transition_id = %s, transition_heartbeat_at = NOW() "
-                        "WHERE id = %s AND status = 'stopped'",
-                        (transition_id, str(host_db_id)),
+                    # A start re-enters the machine's units into the active sum
+                    # (at its pending target when one is stamped -- the start is
+                    # what applies it), so the units quota is re-checked here
+                    # under the same lock. Stopped machines' disk was already
+                    # granted at resize time, so no disk re-check is needed.
+                    # Re-read under the lock: resizes stamp targets under this
+                    # same lock, so only a locked read counts the target this
+                    # start will actually apply.
+                    starting_units = _machine_units_counted_at_start(
+                        _read_owned_workspace(conn, host_db_id, user.user_id_prefix)
                     )
+                    active_units = sum_active_machine_units_with_cursor(cur, user.user_id_prefix)
+                    if active_units + starting_units > entitlements.max_active_machine_units:
+                        raise_quota_exceeded(
+                            "max_active_machine_units",
+                            entitlements.max_active_machine_units,
+                            active_units,
+                            "active machine units",
+                        )
+                    cur.execute(_OWNER_START_STOPPED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
                     updated = cur.rowcount
         if updated == 0:
+            # Lost a race: another start, or an operator hold stamped since the
+            # read above. Report whatever the row says now.
             return get_workspace(request, host_db_id)
         stop_start.spawn_supervisor(str(host_db_id), transition_id)
         return TransitionResponse(host_db_id=host_db_id, status="starting").model_dump(mode="json")
 
 
-@router.post("/admin/workspaces/{host_db_id}/stop", status_code=202)
-def admin_stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
-    """Operator force-stop of one workspace, regardless of owner.
+def _raise_if_start_precondition_unmet(current_db_status: str) -> None:
+    """409 for every status a start cannot begin from (``stopped`` is the only startable one).
 
-    The same transition the owner's ``POST /workspaces/{id}/stop`` runs (halt
-    the VM, upload the artifact, free the slot -- data-preserving and
-    restartable), minus the ownership check: used by account suspension,
-    migrations, and future idle shutdown. Idempotent like the owner route.
+    Waiting only helps mid-stop: a crashed or removing row will never reach
+    stopped, so it gets the plain refusal. Idempotent statuses (``leased`` /
+    ``starting``) are the caller's to short-circuit before calling this.
+    """
+    if current_db_status == "stopped":
+        return
+    retry_advice = "; wait for it to reach stopped and retry" if current_db_status == "stopping" else ""
+    raise HTTPException(
+        status_code=409,
+        detail=f"Workspace is {_WIRE_STATUS_BY_DB_STATUS.get(current_db_status, current_db_status)}"
+        f" and cannot be started right now{retry_advice}",
+    )
+
+
+@router.post("/admin/workspaces/{host_db_id}/start", status_code=202)
+def admin_start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
+    """Operator start of one stopped workspace, regardless of owner.
+
+    The owner's ``POST /workspaces/{id}/start`` CAS without the ownership and
+    quota checks: the operator is restarting a workspace its user already had
+    running (the pre-cutover step that brings ``stopped`` gen-1 rows back so
+    the drain can harvest them live). Same preconditions otherwise: only a
+    ``stopped`` row starts, a parked gen-1 row is refused as under
+    maintenance, and a row already ``leased``/``starting`` reports its
+    status. The operator start ignores the row's ``stop_kind`` (it is how a
+    held row comes back) and clears it.
     """
     with handle_endpoint_errors():
         require_admin_key(request)
         storage.read_storage_config()
         transition_id = str(uuid4())
         with db.pooled_db_connection() as conn:
+            current_db_status = _read_workspace_status(conn, host_db_id)
+            if current_db_status in ("leased", "starting"):
+                return TransitionResponse(
+                    host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status]
+                ).model_dump(mode="json")
+            _raise_if_start_precondition_unmet(current_db_status)
+            _raise_if_workspace_is_migrating(conn, host_db_id, current_db_status)
             with conn.cursor() as cur:
-                cur.execute("SELECT status FROM pool_hosts WHERE id = %s", (str(host_db_id),))
-                status_row = cur.fetchone()
-            if status_row is None:
-                raise HTTPException(status_code=404, detail="No such workspace")
-            already_stopped_response = _apply_stop_preconditions(host_db_id, str(status_row[0]))
-            if already_stopped_response is not None:
-                return already_stopped_response
-            with conn.cursor() as cur:
-                cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
+                cur.execute(_ADMIN_START_STOPPED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
                 updated = cur.rowcount
             conn.commit()
         if updated == 0:
             raise HTTPException(status_code=409, detail="Workspace changed state concurrently; retry")
         stop_start.spawn_supervisor(str(host_db_id), transition_id)
-        logger.info("Workspace %s force-stopped by operator", host_db_id)
-        return TransitionResponse(host_db_id=host_db_id, status="stopping").model_dump(mode="json")
+        logger.info("Workspace %s started by operator", host_db_id)
+        return TransitionResponse(host_db_id=host_db_id, status="starting").model_dump(mode="json")
+
+
+@router.post("/admin/workspaces/{host_db_id}/stop", status_code=202)
+def admin_stop_workspace(
+    request: Request, host_db_id: UUID, body: OperatorStopRequest | None = None
+) -> dict[str, object]:
+    """Operator force-stop of one workspace, regardless of owner.
+
+    The same transition the owner's ``POST /workspaces/{id}/stop`` runs (halt
+    the VM, upload the artifact, free the slot -- data-preserving and
+    restartable), minus the ownership check: used by migrations and box
+    drains (the suspend fan-out runs the same CAS directly, stamped
+    ``suspension``). The body names the stop's kind (an absent
+    body means ``idle``, the user-startable kind an operator checkout from
+    before stop kinds gets). Idempotent on the transition like the owner
+    route, but the kind is always stamped: a row that is already stopping or
+    stopped takes the requested kind without a new transition, so an
+    owner-stopped workspace the migrate takes carries its hold.
+    """
+    with handle_endpoint_errors():
+        require_admin_key(request)
+        storage.read_storage_config()
+        kind = body.kind.value if body is not None else STOP_KIND_IDLE
+        transition_id = str(uuid4())
+        with db.pooled_db_connection() as conn:
+            current_db_status = _read_workspace_status(conn, host_db_id)
+            if current_db_status in ("stopping", "stopped"):
+                with conn.cursor() as cur:
+                    cur.execute(_RESTAMP_STOP_KIND_SQL, (kind, str(host_db_id)))
+                    restamped = cur.rowcount
+                conn.commit()
+                if restamped == 0:
+                    # The row left stopping/stopped between the read and the CAS
+                    # (an owner start raced this stop); nothing was stamped.
+                    raise HTTPException(status_code=409, detail="Workspace changed state concurrently; retry")
+                logger.info("Workspace %s already %s; its stop is now %s", host_db_id, current_db_status, kind)
+            already_stopped_response = _apply_stop_preconditions(host_db_id, current_db_status, kind)
+            if already_stopped_response is not None:
+                return already_stopped_response
+            with conn.cursor() as cur:
+                cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, kind, str(host_db_id)))
+                updated = cur.rowcount
+            conn.commit()
+        if updated == 0:
+            raise HTTPException(status_code=409, detail="Workspace changed state concurrently; retry")
+        stop_start.spawn_supervisor(str(host_db_id), transition_id)
+        logger.info("Workspace %s force-stopped by operator (%s)", host_db_id, kind)
+        return TransitionResponse(host_db_id=host_db_id, status="stopping", stop_kind=kind).model_dump(mode="json")
+
+
+@router.post("/admin/workspaces/{host_db_id}/stop-kind")
+def admin_set_workspace_stop_kind(request: Request, host_db_id: UUID, body: SetStopKindRequest) -> dict[str, object]:
+    """Change the kind of a stopping or stopped workspace's stop.
+
+    How an operator hands a held workspace back without a rollback (``idle``;
+    a row the cutover has parked stays refused by the parked-shape guard), or
+    holds a row the owner stopped (``maintenance``). A row that is not
+    stopping or stopped has no stop to describe and answers 409 -- which also
+    tells an operator checkout that this connector carries stop kinds (an
+    older one answers 404 for the unknown route).
+    """
+    with handle_endpoint_errors():
+        require_admin_key(request)
+        with db.pooled_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_RESTAMP_STOP_KIND_SQL, (body.kind.value, str(host_db_id)))
+                updated = cur.rowcount
+            # Read after the CAS so the answer describes the row the CAS saw
+            # (a 404 for an unknown row, the status that refused or took the kind).
+            current_db_status = _read_workspace_status(conn, host_db_id)
+            conn.commit()
+        if updated == 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Workspace is {_WIRE_STATUS_BY_DB_STATUS.get(current_db_status, current_db_status)}"
+                " and has no stop to describe",
+            )
+        logger.info("Workspace %s stop kind set to %s by operator", host_db_id, body.kind.value)
+        return TransitionResponse(
+            host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status], stop_kind=body.kind.value
+        ).model_dump(mode="json")
+
+
+def restamp_user_stop_kind(user_id_prefix: str, from_kind: str, to_kind: str) -> dict[str, object]:
+    """Rewrite every ``from_kind`` stop of one user's workspaces to ``to_kind`` (the unsuspend fan-out's step)."""
+    with db.pooled_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_RESTAMP_USER_STOP_KIND_SQL, (to_kind, user_id_prefix, from_kind))
+            updated = cur.rowcount
+        conn.commit()
+    return {"restamped_count": updated, "from_kind": from_kind, "to_kind": to_kind}
 
 
 def begin_stopping_all_leased_workspaces(user_id_prefix: str) -> dict[str, object]:
@@ -358,7 +668,7 @@ def begin_stopping_all_leased_workspaces(user_id_prefix: str) -> dict[str, objec
             if row_status == "leased":
                 transition_id = str(uuid4())
                 with conn.cursor() as cur:
-                    cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, host_db_id))
+                    cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, STOP_KIND_SUSPENSION, host_db_id))
                     if cur.rowcount:
                         stopping_transitions.append((host_db_id, transition_id))
                 conn.commit()

@@ -72,6 +72,7 @@ from update_environment import (
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
+    remove_shadowing_mngr_installs,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
@@ -91,6 +92,7 @@ from update_layout import (
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
     SUPERVISORD_CONF,
+    SUPERVISORD_DROPIN_DIR,
     FrontendBundle,
 )
 from update_ledger import LedgerCommitError, write_version_history_entry
@@ -631,7 +633,7 @@ def _recover_running_state(
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
@@ -797,11 +799,15 @@ def apply_update(
     today: str | None = None,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
     expend: ExpendWrapper = as_expendable,
+    sweep_homes: Sequence[Path],
     keep_rollback_point: bool = False,
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
+
+    ``sweep_homes`` are the homes swept for a stale mngr install after the
+    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -1033,6 +1039,10 @@ def apply_update(
                 expend,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
+        for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
+            sys.stderr.write(
+                f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
+            )
         _advance(PHASE_REFRESHED)
 
         # The provisioner runs before any restart, so nothing boots into a
@@ -1117,7 +1127,7 @@ def apply_update(
             )
 
         # Every apply restarts the services agent, whatever the diff: the
-        # running chat app imports the vendored mngr in-process, the shell and
+        # running chat app imports mngr in-process, the shell and
         # the chat both import the workspace libraries and re-read
         # ``.mngr/settings.toml`` per request, and every other supervisord program runs whatever
         # code was on disk when it started -- so a restart is the only way
@@ -1591,7 +1601,10 @@ def _run_rollback(
     changed = git_out(
         runner, repo_root, ["diff", "--name-only", record.rollback_to, record.merge_sha]
     ).splitlines()
-    if SUPERVISORD_CONF in changed:
+    if any(
+        path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)
+        for path in changed
+    ):
         for argv in (["supervisorctl", "reread"], ["supervisorctl", "update"]):
             runner.run(
                 argv, cwd=str(repo_root), capture_output=True, text=True, check=False
@@ -1766,7 +1779,7 @@ def recover(
         failed = restore_snapshots(marker.snapshots)
         _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
         if marker.provisioner_ran:
-            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "

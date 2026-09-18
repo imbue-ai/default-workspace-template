@@ -1,0 +1,1 @@
+Bump the pinned Claude Code CLI version from 2.1.227 to 2.1.269 in the CI workflows (`release-tests.yml`, `flake-sweep-scheduled.yml`, the `tmr-setup` action) and the minds e2e snapshot script, matching the new workspace pin that makes Claude Fable 5.1 selectable.

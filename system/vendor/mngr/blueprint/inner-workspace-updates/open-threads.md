@@ -10,7 +10,11 @@ holds only that side's spec and points here for anything unresolved.
 
 Resolved items are dropped rather than struck through; the decisions worth
 remembering are in the last two sections. Claims about the code were checked
-against both branches on 2026-08-28.
+against both branches on 2026-08-28, and 1g was added on 2026-09-10 from
+workspaces created from published templates. 1g's fix was then built on
+2026-09-11; it stays in §1 because two pieces of it are still open -- the
+create-time label, and the publish-side tag push that would retire the fetch
+for later-published templates -- and the entry says which part is which.
 
 Some items carry a transcript pointer for the conversation that raised them,
 relative to two Claude Code project directories on the author's machine:
@@ -113,6 +117,119 @@ update-time lockout persists for those. No such change is on this branch.
 
 > `$SAFETY/e2c6f899-5a71-402f-9556-872ac5f1158d.jsonl`, agent
 > `tsk_01m0tcbfryf599fcwp70e30tdm`, `2026-08-24T19:28:44Z`.
+
+### 1g. Workspaces created from a published template never get a readable version (minds + template)
+
+Built app-side on 2026-09-11, folded into the existing version read
+(`workspace_version.py`): when both of the read's sources come up empty, the
+same one-shot shell command ensures minds' `official` remote, fetches
+`refs/tags/minds-v*` from the official template under a time limit, and
+describes again. The rest of this entry is the state that led there, why this
+side of it, and what it does not cover.
+
+A workspace created from a published template (the `/create/template?git_url=`
+deeplink, formerly "inspirations") on imbue_cloud badged "Version unknown" and
+stayed that way; one created locally is stamped with the app's own pin and reads
+up to date, which is the same gap wearing a different label. `_detect_one`
+(`workspace_update_state.py`) reads git first, then the create-time label, and
+`derive_update_detection` reports `NO_MACHINE_VERSION` for anything that does
+not parse as `minds-v*`. Neither source names the template's real base:
+
+- **Git** (`workspace_version.py`): the newest `update-self:` marker, else `git
+  describe --tags --match 'minds-v*'`. A published template is the base's
+  history plus one snapshot commit parented on `BASE_REF` (publish-template
+  §8), pushed as `<sha>:refs/heads/main` with no tags; the publishing mind's
+  own history, markers included, never leaves. The clone has neither.
+- **Label**: the create route stamps `original_minds_version=(branch_or_tag or
+  branch or FALLBACK_BRANCH)` (`api_v1.py`), and the deeplink leaves `branch`
+  blank. For imbue_cloud, `resolve_template_version` runs `git ls-remote
+  --tags` on the template repo, whose `v\d+\.\d+\.\d+` pattern matches nothing
+  there, and falls back to `"main"`: the label is `main`. For docker/lima the
+  label is `FALLBACK_BRANCH`, the app's own pin, whatever base the template was
+  cut from: a false positive that reads up to date rather than unknown. A link
+  carrying `&branch=main` gives `main` on every mode.
+
+Why neither cleared on its own: a workspace gets a `minds-v*` tag only when
+something fetches tags into it, and until this change nothing in a
+template-derived workspace's life did. An `update-self` run does (its §2 `git
+fetch upstream --tags` lands the tags, and the landing commit names one), and
+so does the backup check script, which fetches `--tags` from its own `official`
+remote when the minimum backup tag is missing locally -- but that runs from the
+per-workspace backups route, only for a workspace with backups enabled.
+Bootstrap touches neither remote. Meanwhile an UNKNOWN row is never offered
+(`is_update_offered`), is excluded from "update all" (`updatableAgentIds`), and
+is not scheduled by the app, so the only exit was the user pressing update on a
+row that says it cannot tell; the local row is not offered one either, because
+it reads current.
+
+The base is knowable: the snapshot sits on the mind's `Initial workspace
+commit`, whose parent is the tagged base commit, so `git describe` answers the
+moment the base's tags are in the clone (publish-template §8 step 4 relies on
+exactly that), and `system/config/parent.toml` in the published tree still
+names default-workspace-template. So the fetch is all that was missing.
+
+Why the app side, over the two other places it could have gone: fetching the
+base's tags from bootstrap (`git fetch upstream --tags` against `parent.toml`'s
+remote), or pushing the `minds-v*` tags with `main` from publish-template (or
+recording the base tag in `template.toml` or the snapshot subject, which today
+names `BASE_REF` as a sha), both only reach workspaces created from templates
+published after the change. The version read reaches every workspace the app
+can exec into, the ones already out there included, and because git outranks
+the create-time label it also corrects the local path's false "up to date".
+It reuses the `official` remote and URL the backup scripts already own
+(`OFFICIAL_REMOTE_URL`), deliberately ignoring `parent.toml`, so a workspace
+published from a private clone still describes against the official releases,
+and it leaves the `upstream` name to update-self.
+
+Three costs, accepted. A workspace that stays tagless -- no marker, no
+reachable tag -- re-runs the fetch on every 300s detection sweep, because only
+a successful read is cached and the sweep keeps no failure memory (no backoff
+was built). The first read writes the `official` remote into the workspace's
+git config, the same write the backup scripts already make, and the objects it
+fetches are inside the backup root, so a workspace with backups on stores them
+too (once: restic deduplicates, and `_DEFAULT_SNAPSHOT_EXCLUDES` has no `.git`
+entry to drop them, nor should it -- the history is the point of backing a
+workspace up). And the fetch is
+not small: the refspec takes every `minds-v*` tag, including releases newer
+than the workspace's base, whose commits the clone does not hold. Measured
+against the real template: **17 MB** (1.7s on a fast link) into a clone
+published from `minds-v0.5.0`, and **70 MB** into a repo that shares no history
+with the template at all. A read-only `git ls-remote --tags` plus a local `git
+tag` per already-present commit would cost 3 KB, at the price of shell that
+picks the nearest tag itself; the fetch was kept because it reuses the remote
+and the `describe` already there.
+
+Those numbers bought two guards, because the 70 MB case is not the one this
+fixes. The fetch runs only when `parent.toml` is in the tree (`system/config/`
+since minds-v0.3.10, the repo root before that) -- the template's own record of
+where the tree came from, which a published template keeps, and which a
+workspace created from a user's own repo does not have. Without it such a
+workspace paid the 70 MB and `describe` still answered nothing. The fetch is
+also skipped in a *shallow* clone, where the tags land but `describe` cannot
+relate them to HEAD, measured; real workspaces are cloned non-shallow on
+purpose (`agent_creator.py` says why: a shallow source breaks the mirror push
+into the container), so this guard is about trees like the snapshot e2e's
+`--depth 1` template materialization rather than anything a user has.
+
+The fetch's own ceiling is 120s inside a 150s exec for the version read (the
+history read keeps 30s): a read killed mid-fetch keeps none of the transfer, so
+a ceiling too small for it turns the one-time cost into one paid every sweep,
+and both bounds stay under the sweep's 300s interval so a read can never
+overlap its own next pass and have two fetches writing one workspace's refs.
+
+Still open, and narrower: the create-time label itself stays dishonest.
+`resolve_template_version` reports `main` for a template repo with no semver
+tags, and a non-default `git_url` is still stamped with `FALLBACK_BRANCH` on
+docker/lima. It shows through wherever the git read cannot answer: a workspace
+the app cannot exec into, and now also one the guards skip, where a user's own
+repo reads as the app's own pin rather than as unknown.
+
+Also still worth doing, for a different reason than when it was a candidate:
+push the `minds-v*` tags alongside `main` in publish-template (§8). It cannot
+help any workspace that exists today, which is why the app side was built
+first, but every template published after it would read its version with no
+remote, no fetch and no network from inside the workspace -- retiring this code
+path for everything published from then on, rather than duplicating it.
 
 ---
 

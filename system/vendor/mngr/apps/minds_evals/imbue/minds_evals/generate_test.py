@@ -2,6 +2,7 @@ import hashlib
 import json
 import shutil
 import tomllib
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -13,9 +14,10 @@ from inline_snapshot import snapshot
 from pydantic import ValidationError
 from rewardkit.runner import discover
 
+from imbue.minds_evals.data_types import CaseSeed
+from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
-from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_MAX_EXCHANGES
 from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
@@ -23,16 +25,23 @@ from imbue.minds_evals.data_types import EvalConfig
 from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import MAX_EXCHANGES_CAP
 from imbue.minds_evals.data_types import PerDimensionRewardFloors
+from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import RewardDimension
 from imbue.minds_evals.data_types import RewardFloor
 from imbue.minds_evals.data_types import RewardStrategy
+from imbue.minds_evals.data_types import SeedApp
+from imbue.minds_evals.data_types import StepBoxSeedApp
 from imbue.minds_evals.data_types import StepFile
 from imbue.minds_evals.data_types import StepMinReward
 from imbue.minds_evals.data_types import is_final_step
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
+from imbue.minds_evals.expectations import expand_expectations
+from imbue.minds_evals.expectations import slugify
 from imbue.minds_evals.generate import AGENT_TIMEOUT_GRACE_SECONDS
+from imbue.minds_evals.generate import MINDS_EVALS_PROJECT_ROOT
+from imbue.minds_evals.generate import SEED_APP_DIRNAME
 from imbue.minds_evals.generate import STEP_FILES_DIRNAME
 from imbue.minds_evals.generate import TYPICAL_EXCHANGE_SECONDS
 from imbue.minds_evals.generate import VERIFIER_CRITERIA_DIRNAME
@@ -45,12 +54,15 @@ from imbue.minds_evals.generate import load_eval_config
 from imbue.minds_evals.generate import render_min_reward_toml
 from imbue.minds_evals.generate import render_oracle_trajectory_json
 from imbue.minds_evals.generate import render_prompt_entry_prose
-from imbue.minds_evals.generate import resolve_remote_tip
+from imbue.minds_evals.generate import resolve_remote_ref
 from imbue.minds_evals.generate import step_files_box_dir
+from imbue.minds_evals.generate import step_seed_app_box_dir
 from imbue.minds_evals.generate import worst_case_exchange_count
 from imbue.minds_evals.minds_bridge import EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
 from imbue.minds_evals.template_loading import load_template_module
+from imbue.minds_evals.testing import create_branch
 from imbue.minds_evals.testing import make_local_git_repo
+from imbue.minds_evals.testing import tag_commit
 
 _RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_generate_test_renderer")
 
@@ -84,7 +96,6 @@ def test_load_eval_config_parses_cases_and_defaults(tmp_path: Path) -> None:
     assert config.mngr_branch == "main"
     assert config.dwt_repo == DEFAULT_DWT_REPO
     assert config.timeout_seconds == 1800.0
-    assert config.avg_word_count_baseline == DEFAULT_AVG_WORD_COUNT_BASELINE
     assert [case.case_id for case in config.cases] == ["todo-app", "case-2"]
     assert config.cases[1].persona == ""
 
@@ -266,6 +277,8 @@ def test_generate_dataset_renders_a_goal_entry_into_both_case_copies_and_the_ora
         config_path=_write_config(tmp_path, config),
         output_dir=tmp_path / "dataset",
         mngr_repo=str(mngr_repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
     )
 
     task_dir = task_dirs[0]
@@ -291,17 +304,58 @@ def test_derive_case_id_prefers_explicit_id_and_falls_back_to_position() -> None
     assert derive_case_id({}, 2) == "case-3"
 
 
-def test_resolve_remote_tip_returns_the_branch_tip(tmp_path: Path) -> None:
+def test_resolve_remote_ref_returns_the_branch_tip(tmp_path: Path) -> None:
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
 
-    assert resolve_remote_tip(str(repo.repo_dir), "main") == repo.commit_shas[-1]
+    assert resolve_remote_ref(str(repo.repo_dir), "main") == repo.commit_shas[-1]
 
 
-def test_resolve_remote_tip_raises_for_missing_branch(tmp_path: Path) -> None:
+def test_resolve_remote_ref_returns_a_lightweight_tags_commit(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    tag_commit(repo.repo_dir, "minds-v0.0.1", repo.commit_shas[0])
+
+    assert resolve_remote_ref(str(repo.repo_dir), "minds-v0.0.1") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_peels_an_annotated_tag_to_its_commit(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    tag_commit(repo.repo_dir, "minds-v0.0.2", repo.commit_shas[0], is_annotated=True)
+
+    # An annotated tag's own sha is a tag object nothing can be checked out at, so resolving to it
+    # would produce a dataset whose recorded SHA no clone can reach.
+    assert resolve_remote_ref(str(repo.repo_dir), "minds-v0.0.2") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_prefers_a_tag_over_a_branch_of_the_same_name(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    create_branch(repo.repo_dir, "ambiguous", repo.commit_shas[-1])
+    tag_commit(repo.repo_dir, "ambiguous", repo.commit_shas[0])
+
+    assert resolve_remote_ref(str(repo.repo_dir), "ambiguous") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_takes_a_full_sha_without_reaching_the_remote() -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+
+    # The repo does not exist, so anything that consulted the remote would fail here.
+    assert resolve_remote_ref("/nonexistent/repo-4712.git", sha) == sha
+
+
+def test_resolve_remote_ref_does_not_take_a_sha_with_a_trailing_newline_at_its_word(tmp_path: Path) -> None:
+    """A SHA read out of a file keeps its newline, and a pattern anchored with `$` would accept it
+    and hand it to `git fetch` intact -- failing deep in the clone rather than where the shape is
+    decided."""
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
 
     with pytest.raises(GitSourceError, match="not found"):
-        resolve_remote_tip(str(repo.repo_dir), "no-such-branch-8471")
+        resolve_remote_ref(str(repo.repo_dir), repo.commit_shas[0] + "\n")
+
+
+def test_resolve_remote_ref_raises_for_missing_ref(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+
+    with pytest.raises(GitSourceError, match="not found"):
+        resolve_remote_ref(str(repo.repo_dir), "no-such-branch-8471")
 
 
 def _dir_content_digest(root: Path) -> str:
@@ -319,7 +373,9 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
     config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
     output_dir = tmp_path / "dataset"
 
-    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    task_dirs = generate_dataset(
+        config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir), mngr_ref=None, dwt_ref=None
+    )
 
     assert [task_dir.name for task_dir in task_dirs] == ["todo-app", "case-2"]
     expected_sha = repo.commit_shas[-1]
@@ -412,7 +468,13 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     # rewardkit turns every immediate tests/ subdirectory into a scoring dimension, so a case with
     # nothing to score must not get the directory at all -- otherwise it would emit a partial
@@ -447,7 +509,13 @@ def test_generate_dataset_expands_expectations_identically_into_both_copies(tmp_
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     task_dir = output_dir / "todo-app"
     tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
@@ -480,7 +548,13 @@ def test_generate_dataset_fabricates_a_green_oracle_bundle_for_expectation_cases
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     solve_text = (output_dir / "todo-app" / "solution" / "solve.sh").read_text()
     assert "/logs/agent/verification/manifest.json" in solve_text
@@ -511,7 +585,37 @@ def test_generate_dataset_rejects_nonempty_output_dir(tmp_path: Path) -> None:
     (output_dir / "leftover.txt").write_text("stale")
 
     with pytest.raises(EvalConfigError, match="not empty"):
-        generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+        generate_dataset(
+            config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir), mngr_ref=None, dwt_ref=None
+        )
+
+
+def test_generate_dataset_pins_the_overriding_refs_instead_of_the_configs(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=2)
+    # Tags on the FIRST commit of each repo, so resolving them to the branch tip would be visible.
+    tag_commit(repo.repo_dir, "minds-v9.9.9", repo.commit_shas[0], is_annotated=True)
+    tag_commit(dwt_repo.repo_dir, "minds-v9.9.9", dwt_repo.commit_shas[0])
+    config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
+    output_dir = tmp_path / "dataset"
+
+    task_dirs = generate_dataset(
+        config_path=config_path,
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref="minds-v9.9.9",
+        dwt_ref="minds-v9.9.9",
+    )
+
+    task_config = tomllib.loads((task_dirs[0] / "task.toml").read_text())
+    assert task_config["metadata"]["mngr_sha"] == repo.commit_shas[0]
+    assert task_config["metadata"]["dwt_sha"] == dwt_repo.commit_shas[0]
+    # The metadata's ref fields name what was actually used, not what the config file said.
+    assert task_config["metadata"]["mngr_branch"] == "minds-v9.9.9"
+    assert task_config["metadata"]["dwt_branch"] == "minds-v9.9.9"
+    # The staged clone is the tagged commit's tree, not the branch tip's.
+    staged_readme = (task_dirs[0] / "environment" / "mngr" / "README.md").read_text()
+    assert staged_readme == "fake-mngr revision 0\n"
 
 
 def _stepped_config() -> dict[str, Any]:
@@ -559,7 +663,7 @@ def _stepped_config() -> dict[str, Any]:
                             "ui_flows": [
                                 {
                                     "name": "updated-content",
-                                    "steps": "Open the roadmap.",
+                                    "actions": "Open the roadmap.",
                                     "expect": "The updated export's milestones are shown.",
                                 }
                             ],
@@ -588,6 +692,8 @@ def _generate_one_task(tmp_path: Path, config: dict[str, Any]) -> Path:
         config_path=_write_config(tmp_path, config),
         output_dir=tmp_path / "dataset",
         mngr_repo=str(mngr_repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
     )
     return task_dirs[0]
 
@@ -891,6 +997,41 @@ def test_generate_dataset_tells_each_step_how_many_entries_precede_it(tmp_path: 
     assert [config.step.entries_before for config in configs if config.step is not None] == [0, 2, 4]
 
 
+def test_generate_dataset_carries_a_steps_diagnostic_probe_flag_into_that_steps_config_alone(tmp_path: Path) -> None:
+    config = _stepped_config()
+    config["personas"][0]["steps"][0]["diagnostic_probe"] = False
+    config["personas"][0]["steps"][1]["diagnostic_probe"] = True
+    task_dir = _generate_stepped_task(tmp_path, config)
+
+    step_configs = [
+        parse_case_config((task_dir / "steps" / name / "instruction.md").read_text())
+        for name in ("build-from-data", "adjust-requirements", "updated-dataset")
+    ]
+
+    # The last step leaves the key out, which runs no probe, the same as the first step's explicit false.
+    assert [
+        step_config.step.is_diagnostic_probe_run for step_config in step_configs if step_config.step is not None
+    ] == [
+        False,
+        True,
+        False,
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw_flag",
+    [pytest.param("yes", id="string"), pytest.param(1, id="integer"), pytest.param(None, id="null")],
+)
+def test_load_eval_config_rejects_a_diagnostic_probe_flag_that_is_not_a_boolean(
+    tmp_path: Path, raw_flag: object
+) -> None:
+    config = _stepped_config()
+    config["personas"][0]["steps"][1]["diagnostic_probe"] = raw_flag
+
+    with pytest.raises(EvalConfigError, match="step 'adjust-requirements': 'diagnostic_probe' must be true or false"):
+        _load_stepped_config(tmp_path, config)
+
+
 def test_generate_dataset_ships_every_step_the_whole_verifier(tmp_path: Path) -> None:
     """In separate mode harbor REPLACES the verifier build context with a step's tests rather than
     overlaying it, so every step has to carry the complete verifier -- with its own case.json."""
@@ -1028,24 +1169,24 @@ def test_a_stepped_case_can_outlast_the_one_workspace_its_steps_share() -> None:
 
 
 def test_generate_dataset_warns_before_it_builds_a_stepped_case_too_long_for_its_workspace(
-    tmp_path: Path, logged_warnings: list[str]
+    tmp_path: Path, captured_log_messages: list[str]
 ) -> None:
     config = _stepped_config()
     config["timeout_seconds"] = EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
 
     _generate_stepped_task(tmp_path, config)
 
-    assert any("the one workspace they share is capped at" in message for message in logged_warnings)
+    assert any("the one workspace they share is capped at" in message for message in captured_log_messages)
 
 
 def test_generate_dataset_never_holds_a_flat_case_to_the_cross_step_lifetime(
-    tmp_path: Path, logged_warnings: list[str]
+    tmp_path: Path, captured_log_messages: list[str]
 ) -> None:
     """A flat case's one `run()` creates the workspace and tears it down, so there is no lifetime
     spanning steps to exceed however long its budget is."""
     _generate_one_task(tmp_path, _valid_config(timeout_seconds=10 * EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS))
 
-    assert not any("workspace they share" in message for message in logged_warnings)
+    assert not any("workspace they share" in message for message in captured_log_messages)
 
 
 def test_generate_dataset_passes_each_steps_reward_floor_through_to_harbor(tmp_path: Path) -> None:
@@ -1079,6 +1220,13 @@ def test_a_reward_floor_mapping_cannot_be_empty() -> None:
     other two shapes that would render TOML the eval config did not ask for."""
     with pytest.raises(ValidationError):
         PerDimensionRewardFloors(floors=())
+
+
+def _oracle_evidence_manifest(solve_text: str) -> dict[str, Any]:
+    """The evidence manifest one generated oracle script fabricates, read back out of its heredoc."""
+    marker = "MINDS_EVALS_EVIDENCE_MANIFEST_JSON_EOF"
+    body = solve_text.split("<< '{}'\n".format(marker), 1)[1]
+    return json.loads(body.split("\n{}".format(marker), 1)[0])
 
 
 def _oracle_state(solve_text: str) -> dict[str, Any]:
@@ -1171,3 +1319,361 @@ def test_the_shipped_stepped_eval_config_fits_the_workspace_its_steps_share(tmp_
     # And the conversation budget is still plausible for the messages the case can send, which is
     # the warning that pulling the budget down far enough would trip instead.
     assert not is_exchange_budget_implausible(case.prompts, config.timeout_seconds)
+
+
+def test_the_diagnostic_fixture_config_declares_exactly_the_checks_its_table_asserts(tmp_path: Path) -> None:
+    """The fixture case and `fixture_expected_facts.json` are two halves of one measurement: a check
+    added to the case with no entry in the table goes unasserted, and a table entry naming a check
+    the case dropped can only ever read as not recorded."""
+    config_dir = Path(__file__).parents[2] / "configs"
+    config = json.loads((config_dir / "eval-config-diagnostics-fixture.json").read_text())
+    table = json.loads((config_dir / "diagnostics" / "fixture_expected_facts.json").read_text())
+
+    task_dir = _generate_one_task(tmp_path, config)
+
+    case = parse_case_config((task_dir / "steps" / "instrument" / "instruction.md").read_text())
+    expectations = case.expectations
+    assert expectations is not None
+    asserted = set(table["facts"])
+    assert table["case_id"] == case.case_id
+    # An HTTP fact is keyed by the manifest entry's id, which for a check that fans out over the
+    # probeable apps carries the app as well, so the check id is read back off the fact's key.
+    http_check_ids = {check.check_id for check in expectations.http_checks}
+    asserted_http_check_ids = {
+        next(check_id for check_id in http_check_ids if name.startswith("http.{}.".format(check_id)))
+        for name in asserted
+        if name.startswith("http.")
+    }
+    assert asserted_http_check_ids == http_check_ids
+    assert {name for name in asserted if name.startswith("files.")} == {
+        "files.{}.matched".format(check.check_id) for check in expectations.files_checks
+    }
+    assert ("test_commands.exit_codes" in asserted) == bool(expectations.test_commands)
+    assert {name.split(".")[1] for name in asserted if name.startswith("flow.")} == {
+        slugify(check.name) for check in expectations.ui_flow_checks
+    }
+    # Every flow is asserted on the three facts the table pins for all of them, whatever else it
+    # says about the one reading only that flow's knob produces.
+    for check in expectations.ui_flow_checks:
+        slug = slugify(check.name)
+        assert {"flow.{}.{}".format(slug, suffix) for suffix in ("status", "record_kinds", "png_count")} <= asserted
+
+
+# --- seeded cases ---
+
+_TODO_FIXTURE_SOURCE = "flow_lab_apps/todo"
+
+
+def _seed_block() -> dict[str, Any]:
+    return {"app": {"source": _TODO_FIXTURE_SOURCE, "name": "todo-fixture", "port": 8090}}
+
+
+def _seeded_config(seed: object) -> dict[str, Any]:
+    """A one-step case seeded with the flow lab's to-do fixture, shaped as the diagnostic fixture case is."""
+    return {
+        "mngr_branch": "main",
+        "timeout_seconds": 1800,
+        "personas": [
+            {
+                "id": "instrument",
+                "persona": "A client who only wants an acknowledgement.",
+                "steps": [
+                    {
+                        "name": "instrument",
+                        "seed": seed,
+                        "prompts": ["Reply with the single word: acknowledged. Do not do anything else."],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_load_eval_config_parses_a_first_steps_seed(tmp_path: Path) -> None:
+    case = load_eval_config(_write_config(tmp_path, _seeded_config(_seed_block()))).cases[0]
+
+    assert case.steps is not None
+    assert case.steps[0].seed == CaseSeed(app=SeedApp(source=_TODO_FIXTURE_SOURCE, name="todo-fixture", port=8090))
+
+
+@pytest.mark.parametrize(
+    ("app_override", "expected_message"),
+    [
+        pytest.param({"icon": "icon.svg"}, "'seed.app' has unknown key", id="unknown-key"),
+        pytest.param(
+            {"source": "/work/todo"}, "must be a relative path inside the minds_evals project", id="absolute"
+        ),
+        pytest.param(
+            {"source": "../minds_evals/flow_lab_apps/todo"},
+            "must be a relative path inside the minds_evals project",
+            id="climbs-out",
+        ),
+        pytest.param({"source": "flow_lab_apps/missing"}, "has no source directory", id="missing-source"),
+        pytest.param({"source": "flow_lab_apps"}, "has no app.toml", id="no-manifest"),
+        pytest.param({"name": "Todo-Fixture"}, "must be lowercase", id="uppercase-name"),
+        pytest.param({"name": "todo--fixture"}, "must be lowercase", id="doubled-hyphen"),
+        pytest.param({"name": "host-todo"}, "must not start with", id="reserved-prefix"),
+        pytest.param({"name": "auth"}, "is reserved by the workspace template", id="reserved-name"),
+        pytest.param({"name": "a" * 33}, "must be at most 32 characters", id="long-name"),
+        pytest.param({"name": "other-fixture"}, "names the app 'todo-fixture'", id="manifest-name-mismatch"),
+        pytest.param({"port": 8010}, "own services bind", id="reserved-port"),
+        pytest.param({"port": True}, "must be a port number", id="bool-port"),
+        pytest.param({"port": "8090"}, "must be a port number", id="string-port"),
+        pytest.param({"port": 70_000}, "must be a port number", id="out-of-range-port"),
+    ],
+)
+def test_load_eval_config_rejects_a_seed_app_that_cannot_be_seeded(
+    tmp_path: Path, app_override: dict[str, object], expected_message: str
+) -> None:
+    seed = _seed_block()
+    seed["app"].update(app_override)
+
+    with pytest.raises(EvalConfigError, match=expected_message):
+        load_eval_config(_write_config(tmp_path, _seeded_config(seed)))
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected_message"),
+    [
+        pytest.param(_TODO_FIXTURE_SOURCE, "'seed' must be an object", id="not-an-object"),
+        pytest.param({}, "'seed' needs an 'app'", id="no-app"),
+        pytest.param({**_seed_block(), "bundle": "trial.bundle"}, "'seed' has unknown key", id="unknown-key"),
+        pytest.param({"app": _TODO_FIXTURE_SOURCE}, "'seed.app' must be an object", id="app-not-an-object"),
+    ],
+)
+def test_load_eval_config_rejects_a_malformed_seed(tmp_path: Path, seed: object, expected_message: str) -> None:
+    with pytest.raises(EvalConfigError, match=expected_message):
+        load_eval_config(_write_config(tmp_path, _seeded_config(seed)))
+
+
+def test_load_eval_config_rejects_a_seed_on_a_later_step(tmp_path: Path) -> None:
+    """The workspace is created, and so seeded, on the first step."""
+    config = _seeded_config(None)
+    config["personas"][0]["steps"].append({"name": "later", "seed": _seed_block(), "prompts": ["And now?"]})
+
+    with pytest.raises(EvalConfigError, match="only a case's first step may declare a 'seed'"):
+        load_eval_config(_write_config(tmp_path, config))
+
+
+def test_load_eval_config_rejects_a_seed_on_a_flat_case(tmp_path: Path) -> None:
+    config = _valid_config(personas=[{"id": "flat", "prompts": ["Build it"], "seed": _seed_block()}])
+
+    with pytest.raises(EvalConfigError, match="case-level 'seed'"):
+        load_eval_config(_write_config(tmp_path, config))
+
+
+def test_generate_dataset_stages_a_seeded_app_for_harbor_to_upload(tmp_path: Path) -> None:
+    """A seed travels the way a step's uploads do: into the step's workdir, then out of the box's
+    working directory by the step's setup script, even on a step that uploads nothing."""
+    task_dir = _generate_one_task(tmp_path, _seeded_config(_seed_block()))
+
+    fixture_dir = MINDS_EVALS_PROJECT_ROOT / _TODO_FIXTURE_SOURCE
+    workdir = task_dir / "steps" / "instrument" / "workdir"
+    staged_dir = workdir / SEED_APP_DIRNAME
+    assert sorted(path.name for path in staged_dir.iterdir()) == sorted(path.name for path in fixture_dir.iterdir())
+    assert (staged_dir / "index.html").read_bytes() == (fixture_dir / "index.html").read_bytes()
+    setup_text = (workdir / "setup.sh").read_text()
+    assert "mv {} {}".format(SEED_APP_DIRNAME, step_seed_app_box_dir("instrument")) in setup_text
+    assert STEP_FILES_DIRNAME not in setup_text
+    assert "rm -f setup.sh" in setup_text
+
+    instruction = (task_dir / "steps" / "instrument" / "instruction.md").read_text()
+    step_config = parse_case_config(instruction)
+    assert step_config.step is not None
+    assert step_config.step.seed_app == StepBoxSeedApp(
+        name="todo-fixture", port=8090, box_path=step_seed_app_box_dir("instrument")
+    )
+    assert "with the app `todo-fixture` seeded in" in instruction
+    # Nothing of the seed reaches environment/, whose bytes key the image every case shares.
+    assert not list((task_dir / "environment").rglob("icon.svg"))
+
+
+def test_generate_dataset_relocates_both_the_uploads_and_the_seed_of_a_first_step_with_both(tmp_path: Path) -> None:
+    _write_upload_sources(tmp_path)
+    config = _seeded_config(_seed_block())
+    config["personas"][0]["steps"][0]["files"] = [{"source": "uploads/v1", "upload_id": "pull-one"}]
+
+    task_dir = _generate_one_task(tmp_path, config)
+
+    setup_text = (task_dir / "steps" / "instrument" / "workdir" / "setup.sh").read_text()
+    assert "mv {} {}".format(STEP_FILES_DIRNAME, step_files_box_dir("instrument")) in setup_text
+    assert "mv {} {}".format(SEED_APP_DIRNAME, step_seed_app_box_dir("instrument")) in setup_text
+
+
+def test_an_unseeded_steps_config_carries_no_seed_app(tmp_path: Path) -> None:
+    task_dir = _generate_stepped_task(tmp_path)
+
+    instruction = (task_dir / "steps" / "build-from-data" / "instruction.md").read_text()
+    step_config = parse_case_config(instruction)
+
+    assert step_config.step is not None
+    assert step_config.step.seed_app is None
+    assert "This step seeds no app into the workspace." in instruction
+
+
+def test_the_todo_fixture_carries_a_manifest_and_icon_the_workspace_template_registers() -> None:
+    """The template refuses to register a new app with no icon, and stores only an icon that is one
+    `<svg>` element with no script, style, embedded HTML or outside reference."""
+    fixture_dir = MINDS_EVALS_PROJECT_ROOT / _TODO_FIXTURE_SOURCE
+    manifest = tomllib.loads((fixture_dir / "app.toml").read_text())
+    icon = ElementTree.fromstring((fixture_dir / manifest["icon"]).read_text())
+
+    assert (manifest["name"], manifest["program"], manifest["instances"], manifest["priority"]) == (
+        "todo-fixture",
+        "todo-fixture",
+        False,
+        "user",
+    )
+    assert icon.tag == "{http://www.w3.org/2000/svg}svg"
+    element_names = {element.tag.rpartition("}")[2].lower() for element in icon.iter()}
+    assert not element_names & {"script", "style", "foreignobject"}
+    attribute_names = {name.rpartition("}")[2].lower() for element in icon.iter() for name in element.attrib}
+    assert not {name for name in attribute_names if name.startswith("on") or name in ("href", "src")}
+
+
+def test_the_shipped_time_to_mock_eval_config_stays_generatable(tmp_path: Path) -> None:
+    """The config an author copies a process block from must keep loading as the schema moves: its
+    skill names have to stay spellable, its two lists non-contradictory, and its budgets ones the
+    generator does not warn about."""
+    config_dir = Path(__file__).parents[2] / "configs"
+    shutil.copy(config_dir / "eval-config-time-to-mock.json", tmp_path / "eval-config-time-to-mock.json")
+
+    config = load_eval_config(tmp_path / "eval-config-time-to-mock.json")
+
+    assert [case.case_id for case in config.cases] == ["todo-mock", "recipe-box-mock", "habit-tracker-mock"]
+    assert not is_trial_longer_than_the_workspace(config.timeout_seconds, config.verification_timeout_seconds, 1)
+    for case in config.cases:
+        assert not is_exchange_budget_implausible(case.prompts, config.timeout_seconds)
+        assert case.expectations is not None
+        # Every case measures the same route: the skill the mock should come from, the three that
+        # would mean the build went ahead, and the cap that says nothing was handed off. Only
+        # build-app is required, because a design skill that exists as a claude plugin cannot be
+        # invoked on the other lanes at all.
+        assert [(check.check_id, check.kind) for check in expand_expectations(case.expectations).process_checks] == [
+            ("skill_required_build_app", ProcessCheckKind.REQUIRED_SKILL),
+            ("skill_forbidden_crystallize_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("skill_forbidden_update_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("skill_forbidden_heal_creation", ProcessCheckKind.FORBIDDEN_SKILL),
+            ("worker_launches", ProcessCheckKind.MAX_WORKER_LAUNCHES),
+        ]
+        # The clock the cases exist to measure, gated on the app the case commissions: being fast at
+        # something other than the delivered app is not what the class scores.
+        timing_checks = expand_expectations(case.expectations).timing_checks
+        assert [check.requires_no_failures for check in timing_checks] == [(CheckClass.APP,)]
+        assert all(check.fast_seconds < check.slow_seconds for check in timing_checks)
+
+
+def test_generate_dataset_writes_process_checks_into_both_copies_and_the_oracle(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    expectations = {
+        "outcome": "A throwaway mock, with nothing hardened.",
+        "process": {
+            "required_skills": ["build-app"],
+            "forbidden_skills": ["crystallize-creation"],
+            "max_worker_launches": 0,
+        },
+    }
+    config = _valid_config(
+        dwt_repo=str(dwt_repo.repo_dir),
+        personas=[{"id": "mock-only", "prompts": ["Sketch me a mock"], "expectations": expectations}],
+    )
+    output_dir = tmp_path / "dataset"
+
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
+
+    task_dir = output_dir / "mock-only"
+    tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
+    instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
+    assert tests_case == instruction_case.model_dump(mode="json")
+    assert [(check["check_id"], check["kind"]) for check in tests_case["expectations"]["process_checks"]] == [
+        ("skill_required_build_app", "required_skill"),
+        ("skill_forbidden_crystallize_creation", "forbidden_skill"),
+        ("worker_launches", "max_worker_launches"),
+    ]
+    # The oracle fabricates a green entry per check, so `-a oracle` exercises the process criterion.
+    manifest = _oracle_evidence_manifest((task_dir / "solution" / "solve.sh").read_text())
+    process_entries = [entry for entry in manifest["entries"] if entry["check_class"] == "process"]
+    assert [(entry["entry_id"], entry["status"]) for entry in process_entries] == [
+        ("skill_required_build_app", "passed"),
+        ("skill_forbidden_crystallize_creation", "passed"),
+        ("worker_launches", "passed"),
+    ]
+
+
+def test_generate_dataset_writes_timing_checks_into_both_copies_and_the_oracle(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    expectations = {
+        "outcome": "A throwaway mock, fast.",
+        "deliverable": {"kind": "minds-app"},
+        "timing": {"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]},
+    }
+    config = _valid_config(
+        dwt_repo=str(dwt_repo.repo_dir),
+        personas=[
+            {
+                "id": "mock-only",
+                "prompts": ["Sketch me a mock", {"goal": "See the mock", "max_exchanges": 2}],
+                "expectations": expectations,
+            }
+        ],
+    )
+    output_dir = tmp_path / "dataset"
+
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
+
+    task_dir = output_dir / "mock-only"
+    tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
+    instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
+    assert tests_case == instruction_case.model_dump(mode="json")
+    assert tests_case["expectations"]["timing_checks"] == [
+        {
+            "check_id": "time_to_goal",
+            "fast_seconds": 150.0,
+            "slow_seconds": 600.0,
+            "requires_no_failures": ["app"],
+        }
+    ]
+    # The oracle fabricates a green entry at the fast anchor, so `-a oracle` scores the criterion
+    # rather than reporting a trial that took unboundedly long.
+    manifest = _oracle_evidence_manifest((task_dir / "solution" / "solve.sh").read_text())
+    timing_entries = [entry for entry in manifest["entries"] if entry["check_class"] == "timing"]
+    assert [(entry["entry_id"], entry["status"], entry["value"]) for entry in timing_entries] == [
+        ("time_to_goal", "passed", 150.0)
+    ]
+
+
+def test_load_eval_config_rejects_a_flat_case_that_times_a_goal_it_never_holds(tmp_path: Path) -> None:
+    # Only a goal-holding client can ever declare itself satisfied, so such a case would score zero
+    # on the curve however fast the agent was, with nothing in the record saying why.
+    config = _valid_config(
+        personas=[
+            {
+                "id": "mock-only",
+                "prompts": ["Sketch me a mock", "Sounds good."],
+                "expectations": {
+                    "outcome": "A throwaway mock, fast.",
+                    "deliverable": {"kind": "minds-app"},
+                    "timing": {"fast_seconds": 150, "slow_seconds": 600, "requires_no_failures": ["app"]},
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(EvalConfigError, match="declares no goal entry"):
+        load_eval_config(_write_config(tmp_path, config))

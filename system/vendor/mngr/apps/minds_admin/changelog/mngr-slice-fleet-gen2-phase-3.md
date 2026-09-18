@@ -1,0 +1,9 @@
+Slice-fleet-gen2 phase 3 (management-plane lockdown machinery):
+
+- `minds-admin server prep` / `setup` now dispatch on the box's recorded generation. The new gen-2 prep builder installs the raw-qemu stack (qemu/OVMF/nftables/genisoimage/wireguard-tools/xfsprogs), the 64 pre-created per-slice users, and the three plugin-rendered prep artifacts (template unit / root helper / scoped sudoers, content-converged with `visudo -c` validation), verifies the XFS storage partition, and stages the pinned trixie guest image with an os-release-derived docker pin. Gen-2 `setup` defaults its OS reinstall template to `debian13_64` and reinstalls with the custom partition layout (md-mirrored ext4 root plus a fill-remaining XFS storage partition), so the box comes out of the reinstall already satisfying the prep's storage check -- no hand-provisioned partition needed.
+
+- Gen-2 prep also brings up the box's management WireGuard (keypair generated on-box, overlay address assigned sequentially from `10.202.0.0/16` and stamped on the row, public key read back into the new `wg_public_key` column (since renamed `wireguard_public_key`)) and, when the tier's `management_plane.toml` names a Modal Proxy, installs the box `:22` lockdown (default-drop except the proxy's static IPs and the WireGuard overlay, boot-persistent, rollback by clearing the config and re-prepping).
+
+- New `minds-admin wg` command group (since renamed `minds-admin wireguard`, with `wg` kept as a hidden alias): `wg config` emits an operator's wg-quick client config for the tier's prepped gen-2 fleet; `wg sync-peers` converges every box's peers on the tier's committed operator list (`--via-wg` -- since renamed `--via-wireguard`, then removed once the automatic dial resolver made it redundant -- for post-lockdown syncs).
+
+- `minds-admin env deploy` threads the tier's Modal Proxy name (from `management_plane.toml`) into the connector deploy as `MINDS_CONNECTOR_MODAL_PROXY_NAME`.

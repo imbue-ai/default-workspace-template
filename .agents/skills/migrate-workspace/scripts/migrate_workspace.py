@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Deterministic helpers for pulling an old Minds workspace into this one.
+"""Deterministic helpers for pulling an old Mind workspace into this one.
 
 The migration is mostly agent judgement -- deciding what a user-authored file
 *means* in the new tree, whether a migrated app actually shows the user's own
@@ -20,11 +20,12 @@ so all of these take the ``--ssh-*`` options):
     has no version marker on disk at all.
 
 ``baseline-diff``
-    Resolve the source's own template base -- the NEWEST first-parent
-    template-state marker (``update-self:`` or ``Initial workspace commit``) --
-    and diff the source's checked-out tree against it. That yields what the user
-    authored in that workspace and excludes template-version drift by
-    construction. No resolvable base means no automation.
+    Resolve the source's own template base -- named by the NEWEST first-parent
+    template-state marker (an ``update-self:`` merge's upstream parent, or the
+    ``Initial workspace commit``) -- and diff the source's checked-out tree
+    against it. That yields what the user authored in that workspace and
+    excludes template-version drift by construction. No resolvable base means no
+    automation.
 
 ``list-agents``
     Enumerate the source's agents from ``<host_dir>/agents/*/data.json`` and
@@ -73,6 +74,7 @@ below, which carry all the logic and are covered by ``migrate_workspace_test.py`
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import subprocess
@@ -384,38 +386,22 @@ def rewrite_legacy_references(text: str) -> tuple[str, list[Substitution]]:
 
 # --- Template base resolution ----------------------------------------------
 
-# The subjects that mark a commit as a *template state*: bootstrap writes
-# ``Initial workspace commit`` on top of the cloned template, and update-self
-# writes an ``update-self:`` merge. Both versions of the template write these, so
-# the marker set is layout-independent.
-_TEMPLATE_BASE_SUBJECT = "Initial workspace commit"
-_TEMPLATE_BASE_PREFIX = "update-self:"
-
-
-def find_template_base(first_parent_log: Sequence[str]) -> str | None:
-    """Return the NEWEST template-state marker commit in a first-parent log.
-
-    ``first_parent_log`` is ``git log --first-parent --format='%H %s'`` output,
-    newest first. The newest marker is the template state the source last
-    updated itself to, so diffing the working tree against it yields what the
-    user authored *since* that state -- and excludes template-version drift by
-    construction. (The update apply's origin seed -- ``_origin_line`` in
-    ``update-self``'s ``scripts/update_self.py`` -- walks the same markers but
-    takes the OLDEST, because it wants where the mind started; the difference
-    is load-bearing.) Returns ``None`` when no marker exists, which means the source
-    cannot be migrated automatically.
-    """
-    for line in first_parent_log:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        sha, _, subject = stripped.partition(" ")
-        subject = subject.strip()
-        if subject == _TEMPLATE_BASE_SUBJECT or subject.startswith(
-            _TEMPLATE_BASE_PREFIX
-        ):
-            return sha
-    return None
+# The template-base rule is shared with publish-template and
+# update-published-template, so it lives in one stdlib-only script; this module
+# applies it to the source's log, which it reads over SSH.
+_RESOLVE_TEMPLATE_BASE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "shared"
+    / "scripts"
+    / "resolve_template_base.py"
+)
+_resolve_template_base_spec = importlib.util.spec_from_file_location(
+    "resolve_template_base", _RESOLVE_TEMPLATE_BASE_PATH
+)
+assert _resolve_template_base_spec is not None
+assert _resolve_template_base_spec.loader is not None
+_resolve_template_base = importlib.util.module_from_spec(_resolve_template_base_spec)
+_resolve_template_base_spec.loader.exec_module(_resolve_template_base)
 
 
 class BaselineEntry(NamedTuple):
@@ -1055,6 +1041,27 @@ def _read_file_command(path: str) -> str:
     )
 
 
+def _supervisord_dropin_listing_command(supervisord_conf: str) -> str:
+    """Shell that prints, one per line, every regular file in ``<supervisord_conf>.d/``.
+
+    That directory is the template's convention for where every program lives (pinned by
+    ``system/test_supervisord_layout.py``), so it is assumed rather than read out of the config.
+    The glob is the shell's own, against the quoted path, so a source path holding a space stays
+    one path and a source with no drop-in directory prints nothing.
+
+    A builder rather than an inline argument so it can be run against a real shell without an SSH
+    target, the way :func:`_read_file_command` is.
+    """
+    quoted = _shell_quote(supervisord_conf)
+    return f"for path in {quoted}.d/*.conf; do [ -f \"$path\" ] || continue; printf '%s\\n' \"$path\"; done"
+
+
+def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+    """The SOURCE's drop-in paths, or [] when it has none (a source predating the split)."""
+    listing = run_remote(target, _supervisord_dropin_listing_command(supervisord_conf))
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
     """Read many remote files in as few round trips as possible, keyed by path.
 
@@ -1181,9 +1188,13 @@ def _cmd_baseline_diff(args: argparse.Namespace) -> int:
         return 0
     target = _ssh_target(args)
     log_lines = _remote_git(
-        target, args.repo_root, "log --first-parent --format='%H %s' HEAD"
+        target,
+        args.repo_root,
+        " ".join(
+            _shell_quote(arg) for arg in _resolve_template_base.FIRST_PARENT_LOG_ARGS
+        ),
     ).splitlines()
-    base = find_template_base(log_lines)
+    base = _resolve_template_base.find_template_base(log_lines)
     if base is None:
         print(
             json.dumps(
@@ -1361,6 +1372,13 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
             "runtime/applications.toml",
         )
     ]
+    # The source's programs live one per file under system/supervisord.conf.d/, so the fixed
+    # list above would find none of them. Enumerate the drop-ins first (one extra round trip)
+    # and read them in the same batched pass; a source predating the split declares its
+    # programs in the main config, which is already listed.
+    remote_paths.extend(
+        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf")
+    )
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
     for path, text in sorted(remote_files.items()):
@@ -1387,13 +1405,32 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    supervisord = Path("system/supervisord.conf")
-    if supervisord.is_file():
-        ports.extend(parse_supervisord_ports(supervisord.read_text(encoding="utf-8")))
+    # Every program lives in its own drop-in, so scanning only the main config would see
+    # no ports at all and report every real app as free -- collisions would surface as two
+    # programs bound to the same port after the migration, not here.
+    for conf in _local_supervisord_configs(Path()):
+        ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
         ports.extend(parse_apps_registry(registry.read_text(encoding="utf-8")))
     return ports
+
+
+def _local_supervisord_configs(repo_root: Path) -> list[Path]:
+    """This workspace's supervisord config files: the main one plus every drop-in beside it.
+
+    The drop-in directory is ``system/supervisord.conf.d/`` by convention (pinned by
+    ``system/test_supervisord_layout.py``), the same directory the source-side listing assumes.
+    """
+    main = repo_root / "system/supervisord.conf"
+    if not main.is_file():
+        return []
+    dropins = sorted(
+        path
+        for path in (repo_root / "system/supervisord.conf.d").glob("*.conf")
+        if path.is_file()
+    )
+    return [main] + dropins
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> int:

@@ -99,7 +99,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           (isStopped ? "project-rail-app-stopped text-faint " : "text-primary ") +
           "transition-all duration-(--dur-base) " +
           (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
-        ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(row.app)}`) : {}),
+        ...hoverTooltipAttrs(isStopped && !isFadingOut ? `${label} — ${appStoppedDetail(row.app)}` : null),
         // A preview shell creates nothing; pinning stays, since it edits the preview's own copy.
         onclick: isFadingOut || isPreviewShell() ? undefined : () => attrs.onRunAction(row.app, row.action),
       },
@@ -158,7 +158,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         all.length === 0
           ? [
               m("p", "No apps are running on this machine."),
-              m("p", { class: "mt-2" }, "Tell Minds to create one via chat!"),
+              m("p", { class: "mt-2" }, "Tell Mind to create one via chat!"),
             ]
           : matching.length === 0
             ? `No apps match "${query}".`

@@ -26,8 +26,9 @@ from imbue.minds.desktop_client.backup_workspace_scripts import GATE_RESULT_MARK
 from imbue.minds.desktop_client.backup_workspace_scripts import build_workspace_script_command
 from imbue.minds.desktop_client.backup_workspace_scripts import extract_marker_json
 from imbue.minds.desktop_client.skill_chat import SkillSupport
-from imbue.minds.desktop_client.skill_chat import check_skill_support
 from imbue.minds.desktop_client.skill_chat import generate_chat_name
+from imbue.minds.desktop_client.skill_chat import probe_skill
+from imbue.minds.desktop_client.skill_chat import resolve_legacy_account_args
 from imbue.minds.desktop_client.skill_chat import spawn_skill_chat
 from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdate
 from imbue.minds.desktop_client.update_apply_window import UpdateAgentLiveness
@@ -187,17 +188,20 @@ class WorkspaceUpdateService(MutableModel):
         # than gated on a possibly-stale discovery answer.
         if not self.start_workspace(agent_id):
             return UpdateDispatch(outcome=UpdateDispatchOutcome.UNREACHABLE)
-        support = check_skill_support(self.mngr_caller, agent_id, UPDATE_SKILL_NAME)
-        match support:
+        probe = probe_skill(self.mngr_caller, agent_id, UPDATE_SKILL_NAME)
+        match probe.support:
             case SkillSupport.UNSUPPORTED:
                 return UpdateDispatch(outcome=UpdateDispatchOutcome.UNSUPPORTED)
             case SkillSupport.UNREACHABLE:
                 return UpdateDispatch(outcome=UpdateDispatchOutcome.UNREACHABLE)
             case SkillSupport.SUPPORTED:
                 pass
+        # Which account the chat runs on is the workspace's own default; a workspace with none
+        # signed in refuses the create in its own words, which the spawn carries back.
         spawn = spawn_skill_chat(
             self.mngr_caller,
             agent_id,
+            account_args=resolve_legacy_account_args(self.mngr_caller, agent_id, probe),
             chat_name=chat_name,
             # Read here rather than carried from the press: a schedule armed days ago is not
             # evidence about the backups this run is actually about to go without.

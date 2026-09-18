@@ -14,6 +14,7 @@ zero because the measuring instrument broke.
 
 import asyncio
 import base64
+import fnmatch
 import json
 import posixpath
 import re
@@ -24,7 +25,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
-from datetime import timezone
+from functools import cached_property
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -34,10 +35,16 @@ from loguru import logger
 from modal.exception import Error as ModalError
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import JsonValue
 from pydantic import SecretStr
+from pydantic import computed_field
 
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals import diagnostic_probe
+from imbue.minds_evals import flow_runner
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
@@ -45,23 +52,41 @@ from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import DiagnosticProbeCapture
+from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import EvidenceEnv
 from imbue.minds_evals.data_types import EvidenceManifest
 from imbue.minds_evals.data_types import ExpandedExpectations
+from imbue.minds_evals.data_types import FilesCheck
+from imbue.minds_evals.data_types import GoalEntry
+from imbue.minds_evals.data_types import GoalSatisfactionTiming
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import PhaseTiming
+from imbue.minds_evals.data_types import ProcessCheck
+from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RegisteredApp
+from imbue.minds_evals.data_types import SkillInvocation
+from imbue.minds_evals.data_types import TicketCapture
+from imbue.minds_evals.data_types import TicketRecord
+from imbue.minds_evals.data_types import TimingCheck
 from imbue.minds_evals.data_types import TraceRecord
 from imbue.minds_evals.data_types import TranscriptCapture
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
+from imbue.minds_evals.data_types import WorkerListing
 from imbue.minds_evals.data_types import WorkerListingEntry
 from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.data_types import is_same_skill
+from imbue.minds_evals.errors import TrajectoryDocumentError
 from imbue.minds_evals.expectations import slugify
+from imbue.minds_evals.resources.flow_step_protocol import StepReaction
 from imbue.minds_evals.trajectory import parse_transcript_jsonl
+from imbue.minds_evals.trajectory import parse_worker_document
+from imbue.minds_evals.trajectory import scan_skill_invocations
 from imbue.minds_evals.trajectory import scan_worker_launches
 from imbue.mngr.primitives import AgentLifecycleState
 
@@ -74,8 +99,21 @@ TRACE_FILENAME: Final[str] = "trace.jsonl"
 FILE_INVENTORY_FILENAME: Final[str] = "file_inventory.jsonl"
 APPS_REGISTRY_FILENAME: Final[str] = "apps.toml"
 SERVICES_FILENAME: Final[str] = "services.txt"
+# The two texts the delivered-app set is resolved against, kept verbatim beside the services listing:
+# what the registry rows are joined to their programs through, and what a preview server's rows are
+# excluded by. Without them a reader of the bundle can see the answer but not the working.
+SUPERVISORD_CONF_FILENAME: Final[str] = "supervisord.conf"
+ISOLATED_INSTANCE_SERVICES_FILENAME: Final[str] = "isolated_instance_services.txt"
 REPO_STATE_FILENAME: Final[str] = "repo_state.json"
 DELIVERABLE_BUNDLE_FILENAME: Final[str] = "deliverable.bundle"
+# The commit the workspace template's first boot makes (dwt's `bootstrap/manager.py`,
+# `_initialize_workspace_main_branch`): `git add -A` and `git commit --allow-empty`, so it exists even
+# over a clean tree, under the identity the bootstrap gives a repo that has none, and wall-clock dated.
+# It lands on the commit the workspace was created from before any agent runs, so the deliverable
+# bundle carries it (a replay needs it to unbundle onto the regenerated base) and the agent's commit
+# count excludes it.
+WORKSPACE_BOOTSTRAP_AUTHOR_EMAIL: Final[str] = "bootstrap@minds.local"
+WORKSPACE_BOOTSTRAP_COMMIT_SUBJECT: Final[str] = "Initial workspace commit"
 COMMON_TRANSCRIPT_FILENAME: Final[str] = "common_transcript.jsonl"
 WORKSPACE_TRAJECTORY_FILENAME: Final[str] = "workspace_trajectory.json"
 _TRANSCRIPT_STDERR_FILENAME: Final[str] = "transcript.err"
@@ -83,6 +121,12 @@ _TRANSCRIPT_STDERR_FILENAME: Final[str] = "transcript.err"
 # directory each under the bundle.
 WORKERS_DIRNAME: Final[str] = "workers"
 WORKER_LISTING_FILENAME: Final[str] = "agents.json"
+# How the listing itself went, beside the listing: a destroyed worker is only recognised as destroyed
+# on a complete listing, so a reader has to be able to tell an empty listing from an unread one.
+WORKER_LISTING_OUTCOME_FILENAME: Final[str] = "listing.json"
+# One record per worker the capture handled, so which workers the trial held is readable from the
+# bundle alone rather than only from the trial metadata harbor keeps elsewhere.
+WORKER_CAPTURES_FILENAME: Final[str] = "captures.json"
 WORKER_TRAJECTORY_FILENAME: Final[str] = "trajectory.json"
 WORKER_STREAM_FILENAME: Final[str] = "common_transcript.jsonl"
 WORKER_REPORTS_DIRNAME: Final[str] = "reports"
@@ -92,11 +136,26 @@ _WORKER_LISTING_STDERR_FILENAME: Final[str] = "list.err"
 # budget; and how deep a worker's own workers are followed.
 MAX_WORKER_COUNT: Final[int] = 100
 MAX_WORKER_ROUNDS: Final[int] = 3
-# Where a workspace's mngr keeps its agents when the exec environment does not say.
-_DEFAULT_WORKSPACE_MNGR_HOST_DIR: Final[str] = "/home/user/.mngr"
 HTTP_DIRNAME: Final[str] = "http"
 FLOWS_DIRNAME: Final[str] = "flows"
 FLOW_LOG_FILENAME: Final[str] = "log.jsonl"
+# One flow's outcome, beside its log: the log says what the flow did, this says how it ended without
+# joining the log to the manifest entry the flow also writes.
+FLOW_RUN_FILENAME: Final[str] = "run.json"
+# The workspace's `tk` tickets, one markdown file per ticket under the repo, and the record the capture
+# writes of them. The directory's README is tk's own description of it, not a ticket.
+TICKETS_RELATIVE_PATH: Final[str] = "data/.tickets"
+TICKETS_FILENAME: Final[str] = "tickets.jsonl"
+# The self-diagnostic probe's raw output, on a step that runs it (see `diagnostic_probe.py`).
+DIAGNOSTIC_PROBE_FILENAME: Final[str] = "diagnostic_probe.txt"
+# The first line of that file when the exec did not answer, so an unrun probe says why on disk rather
+# than reading as a workspace that holds nothing.
+DIAGNOSTIC_PROBE_FAILURE_PREFIX: Final[str] = "failure_reason: "
+_TICKETS_README_FILENAME: Final[str] = "README.md"
+# A tk ticket is a few hundred bytes; the bounds keep a runaway directory within what one exec's output
+# carries, which is the same budget an HTTP probe's body head rides in.
+MAX_TICKET_FILE_BYTES: Final[int] = 8_000
+MAX_TICKETS_TOTAL_BYTES: Final[int] = 256 * 1024
 
 MANIFEST_SCHEMA_VERSION: Final[int] = 1
 
@@ -107,6 +166,8 @@ WORKSPACE_STAGING_DIR: Final[str] = "/tmp/minds-evals-verification"
 # Where the workspace repo lives in a stock workspace (supervisord's `directory=` and the app
 # scaffold both hard-code it). Probed rather than assumed, but tried first so the common case is free.
 DEFAULT_WORKSPACE_REPO_ROOT: Final[str] = "/home/user/workspace"
+# The main supervisord config. Programs may be declared here or one per file under `<this>.d/`,
+# the drop-in directory the template's own layout test pins its `[include]` glob to.
 SUPERVISORD_CONF_RELATIVE_PATH: Final[str] = "system/supervisord.conf"
 # Throwaway "isolated instance" servers record the registry rows they registered here, one state
 # file per instance. Reading that record is how a delivered app is told from a preview.
@@ -138,18 +199,10 @@ _BUNDLE_TIMEOUT_SECONDS: Final[int] = 300
 _TEST_COMMAND_TIMEOUT_SECONDS: Final[int] = 300
 _HTTP_TIMEOUT_SECONDS: Final[int] = 60
 _RSYNC_TIMEOUT_SECONDS: Final[int] = 600
-# One flow step: a box-local exec that drives the browser and reads the page back. Generous
-# because a navigation waits for the network to settle and a heavy page's ARIA tree is large.
-_STEP_TIMEOUT_SECONDS: Final[int] = 120
 # How long the forward proxy gets to start serving. It has to bind, then discover the workspace,
 # then bring up its SSH tunnel, and it answers 503 throughout.
 _FORWARD_READY_ATTEMPT_COUNT: Final[int] = 40
 _FORWARD_READY_POLL_SECONDS: Final[float] = 3.0
-# One flow's own wall-clock. Separate from the phase budget on purpose: exceeding this is the app
-# failing to respond, whereas exhausting the phase budget is the harness running out of time.
-# Re-measured against the box-side executor on its first live run rather than carried over from the
-# fleet's ~30s/step, which was dominated by a workspace hop this executor does not make.
-_FLOW_DEADLINE_SECONDS: Final[float] = 600.0
 
 # What a probe prints in a `*_status` section when the file that section reports on was there to
 # read. Anything else -- including the empty section a probe that died mid-command leaves behind --
@@ -161,7 +214,7 @@ _SECTION_MARKER: Final[str] = "<<<MINDS_EVALS_SECTION:{}>>>"
 _SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"<<<MINDS_EVALS_SECTION:([a-z_]+)>>>\n?")
 
 # Reasons recorded on non-passing entries, so a manifest reader never has to parse prose.
-REASON_TIMEOUT: Final[str] = "timeout"
+REASON_TIMEOUT: Final[str] = ui_flows.REASON_TIMEOUT
 REASON_BRIDGE_FAILED: Final[str] = "bridge_failed"
 REASON_REPO_NOT_FOUND: Final[str] = "repo_not_found"
 REASON_REGISTRY_ABSENT: Final[str] = "registry_absent"
@@ -170,6 +223,9 @@ REASON_REGISTRY_UNREADABLE: Final[str] = "registry_unreadable"
 # from what the workspace was already serving before the agent ran.
 REASON_PREEXISTING_UNKNOWN: Final[str] = "preexisting_unknown"
 REASON_SERVICES_UNREADABLE: Final[str] = "services_unreadable"
+# supervisord is running programs that the config we captured does not declare, so the capture
+# missed part of the config and cannot say which program owns a row.
+REASON_SUPERVISORD_CONF_UNREADABLE: Final[str] = "supervisord_conf_unreadable"
 REASON_PROBE_UNAVAILABLE: Final[str] = "probe_unavailable"
 REASON_NO_REGISTERED_APPS: Final[str] = "no_registered_apps"
 REASON_TARGET_NOT_REGISTERED: Final[str] = "target_not_registered"
@@ -178,7 +234,23 @@ REASON_BODY_MISMATCH: Final[str] = "body_mismatch"
 REASON_SERVICE_NOT_RUNNING: Final[str] = "service_not_running"
 REASON_NO_SUPERVISED_PROGRAM: Final[str] = "no_supervised_program"
 REASON_TOO_FEW_APPS: Final[str] = "too_few_apps"
+REASON_TOO_FEW_FILES: Final[str] = "too_few_files"
 REASON_NONZERO_EXIT: Final[str] = "nonzero_exit"
+# A capture whose exec answered with something other than the shape its command prints.
+REASON_CAPTURE_UNREADABLE: Final[str] = "capture_unreadable"
+# Why a process check did not pass. The last two are the instrument failing rather than the agent:
+# with no transcript, or one holding no record of the agent, there is nothing to read its own work
+# off.
+REASON_SKILL_NOT_INVOKED: Final[str] = "skill_not_invoked"
+REASON_FORBIDDEN_SKILL_INVOKED: Final[str] = "forbidden_skill_invoked"
+REASON_WORKER_LAUNCHES_EXCEEDED: Final[str] = "worker_launches_exceeded"
+REASON_TRANSCRIPT_UNCAPTURED: Final[str] = "transcript_uncaptured"
+REASON_TRANSCRIPT_EMPTY: Final[str] = "transcript_empty"
+# Why a measured time does not stand. Neither is the instrument failing: a client who was never
+# satisfied took infinitely long, and a prerequisite class that fell short means the trial was fast
+# at something other than what the case commissioned. Both are the agent's, and score zero.
+REASON_GOAL_NEVER_SATISFIED: Final[str] = "goal_never_satisfied"
+REASON_TIMING_PREREQUISITE_FAILED: Final[str] = "timing_prerequisite_failed"
 # Why a transcript file did not make it out of the workspace. These are recorded on the driver's
 # trial metadata, not in the manifest: the transcript is the trial's record, not outcome evidence.
 REASON_NOT_ATTEMPTED: Final[str] = "not_attempted"
@@ -194,16 +266,22 @@ _ORACLE_PREEXISTING_APPS: Final[tuple[tuple[str, str], ...]] = (
     ("system_interface", "http://localhost:8000"),
     ("terminal", "http://localhost:7681"),
 )
+# The call the oracle's fabricated evidence says each required skill was invoked from.
+_ORACLE_SKILL_CALL_ID: Final[str] = "call-oracle-skill"
 _ORACLE_APP_NAME: Final[str] = "delivered-app"
 _ORACLE_APP_URL: Final[str] = "http://localhost:8080"
 _ORACLE_APP_LABEL: Final[str] = "delivered-app-o1r2a3c4"
 
 # Walks the workspace home tree once and writes the inventory as JSONL. Run as an in-workspace python
 # program rather than a `find` pipeline so that paths containing quotes or newlines are escaped
-# correctly, and so the entry cap is applied where the walk happens.
+# correctly, and so the entry cap is applied where the walk happens. Each files check's glob is counted
+# over exactly the entries written, with the same `fnmatchcase` the verifier applies to the file, so the
+# count is the one the grade sees.
 _INVENTORY_PROGRAM: Final[str] = """
-import json, os
+import fnmatch, json, os
 excludes = set({excludes!r})
+globs = {globs!r}
+matched = {{check_id: 0 for check_id, _glob in globs}}
 root = os.path.expanduser("~")
 limit = {limit}
 count = 0
@@ -217,36 +295,79 @@ with open(os.path.join({staging!r}, {filename!r}), "w") as handle:
                 stat_result = os.lstat(full)
             except OSError:
                 continue
+            relative = os.path.relpath(full, root)
             handle.write(json.dumps({{
-                "path": os.path.relpath(full, root),
+                "path": relative,
                 "size_bytes": stat_result.st_size,
                 "mtime": stat_result.st_mtime,
             }}) + "\\n")
+            for check_id, glob in globs:
+                if fnmatch.fnmatchcase(relative, glob):
+                    matched[check_id] += 1
             count += 1
             if count >= limit:
                 break
         if count >= limit:
             break
+print({count_marker!r})
 print(count)
+print({matched_marker!r})
+print(json.dumps(matched))
 """
+
+# Reads the tk ticket directory and prints its files as one JSON object; see `tickets_capture_command`.
+_TICKETS_PROGRAM: Final[str] = """
+import json, os
+directory = {directory!r}
+is_present = os.path.isdir(directory)
+names = sorted(name for name in os.listdir(directory) if name.endswith(".md") and name != {readme!r}) if is_present else []
+tickets = []
+unreadable = []
+omitted_count = 0
+total = 0
+for name in names:
+    if total >= {total_limit}:
+        omitted_count += 1
+        continue
+    try:
+        with open(os.path.join(directory, name), "rb") as handle:
+            raw = handle.read({file_limit})
+    except OSError:
+        unreadable.append(name)
+        continue
+    total += len(raw)
+    tickets.append({{"name": name, "text": raw.decode("utf-8", "replace")}})
+print(json.dumps({{"is_directory_present": is_present, "tickets": tickets, "unreadable": unreadable, "omitted_count": omitted_count}}))
+"""
+
+# A shell no-op naming each encoded program, so the command says which probe it is in the trace, where
+# the program itself is an opaque base64 string.
+FILE_INVENTORY_COMMAND_LABEL: Final[str] = ": minds_evals_file_inventory;"
+TICKETS_COMMAND_LABEL: Final[str] = ": minds_evals_tickets;"
 
 
 @pure
-def file_inventory_command() -> str:
-    """The inventory walk, shipped base64-encoded and decoded in the workspace.
+def _encoded_program_command(label: str, program: str) -> str:
+    """A multi-line python program as one line of shell: encoded, so no layer of the bridge -- which
+    quotes the command twice on its way in -- can mangle it, and decoded in the workspace."""
+    encoded = base64.b64encode(program.encode()).decode("ascii")
+    return "{} printf '%s' {} | base64 -d | python3 -".format(label, shlex.quote(encoded))
 
-    Every other probe here is a single line of shell, but this one is a multi-line python program;
-    encoding it keeps the command a single line of plain characters so no layer of the bridge --
-    which quotes the command twice on its way in -- can mangle it.
-    """
+
+@pure
+def file_inventory_command(files_checks: Sequence[FilesCheck], staging_dir: str) -> str:
+    """The inventory walk, counting each files check's glob as it goes and writing the entries it
+    walks into `staging_dir` (`WORKSPACE_STAGING_DIR` in a workspace)."""
     program = _INVENTORY_PROGRAM.format(
         excludes=list(INVENTORY_EXCLUDES),
+        globs=[[check.check_id, check.glob] for check in files_checks],
         limit=MAX_INVENTORY_ENTRY_COUNT,
-        staging=WORKSPACE_STAGING_DIR,
+        staging=staging_dir,
         filename=FILE_INVENTORY_FILENAME,
+        count_marker=_SECTION_MARKER.format("inventory_count"),
+        matched_marker=_SECTION_MARKER.format("files_matched"),
     )
-    encoded = base64.b64encode(program.encode()).decode("ascii")
-    return "printf '%s' {} | base64 -d | python3 -".format(shlex.quote(encoded))
+    return _encoded_program_command(FILE_INVENTORY_COMMAND_LABEL, program)
 
 
 @pure
@@ -275,19 +396,6 @@ async def ensure_evidence_dir(environment: BaseEnvironment) -> None:
 
 
 @pure
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-@pure
-def _bounded(text: str, max_chars: int) -> str:
-    """The tail of a long output, marked so a reader knows it was cut rather than empty."""
-    if len(text) <= max_chars:
-        return text
-    return "[...truncated...]\n" + text[-max_chars:]
-
-
-@pure
 def split_sections(output: str) -> dict[str, str]:
     """Split a multi-section probe's stdout on its section markers.
 
@@ -308,7 +416,7 @@ def split_sections(output: str) -> dict[str, str]:
 
 @pure
 def parse_apps_registry(
-    registry_text: str, preexisting_registrations: frozenset[str]
+    registry_text: str, preexisting_registrations: frozenset[str], seeded_registrations: frozenset[str]
 ) -> tuple[RegisteredApp, ...] | None:
     """The registered apps out of data/.state/apps.toml (an array of {name, url, label} tables).
 
@@ -320,6 +428,10 @@ def parse_apps_registry(
     ``resolve_preexisting_registrations``); the rows it names are stamped as such. A caller that
     could not determine that set must not pass an empty one and read every row as delivered;
     ``EvidenceCollector`` leaves the registry unresolved instead.
+
+    ``seeded_registrations`` is what the case's seed put in the workspace. A seeded app is in the
+    registry and in ``system/supervisord.conf`` from boot, so the pre-existing measurement names it
+    too; a name in both sets is stamped seeded and not pre-existing.
     """
     try:
         parsed = tomllib.loads(registry_text)
@@ -339,12 +451,14 @@ def parse_apps_registry(
         name = str(raw_app.get("name") or "").strip()
         if not name:
             continue
+        is_seeded = name in seeded_registrations
         apps.append(
             RegisteredApp(
                 name=name,
                 url=str(raw_app.get("url") or ""),
                 label=str(raw_app.get("label") or ""),
-                is_preexisting=name in preexisting_registrations,
+                is_preexisting=name in preexisting_registrations and not is_seeded,
+                is_seeded=is_seeded,
                 is_internal=bool(raw_app.get("internal")),
             )
         )
@@ -359,7 +473,7 @@ def parse_registry_names(registry_text: str) -> frozenset[str] | None:
     yet, and no pre-existing set is available to classify them against. None means the registry
     could not be read, which is not the same claim as a registry that lists nothing.
     """
-    apps = parse_apps_registry(registry_text, frozenset())
+    apps = parse_apps_registry(registry_text, frozenset(), frozenset())
     if apps is None:
         return None
     return frozenset(app.name for app in apps)
@@ -376,20 +490,28 @@ def parse_registry_snapshot(output: str) -> frozenset[str] | None:
     """The apps a workspace already serves, out of one `workspace_state_command` run.
 
     What the driver's pre-turn-1 snapshot reads. Both halves of the pre-existing set come out of
-    this single probe -- the registry it captured and the `system/supervisord.conf` it catted, which
+    this single probe -- the registry it captured and the supervisord config it catted, which
     before the first turn is still the pinned template's file verbatim -- so they are decoded here,
     in the module that prints the probe's sections. See `resolve_preexisting_registrations` for why
     one source is not enough.
 
-    None covers a registry that is not there yet as well as one that could not be parsed: either way
-    nothing in it can be called pre-existing.
+    None means unknown, never empty: a registry that is not there yet, one that could not be
+    parsed, or a supervisord config this probe could not read whole. Callers turn it into
+    ``preexisting_unknown`` and leave the trial unmeasured rather than scoring it, which is the
+    whole point -- an empty set would say the workspace served nothing before the agent ran, and
+    every template app would become the agent's deliverable. The config half is included because
+    it has no fallback of its own: a template app that had not registered its port yet is missing
+    from both halves at once.
     """
     sections = split_sections(output)
     if not is_registry_status_present(sections):
         return None
+    supervisord_conf = sections.get("supervisord", "")
+    if is_supervisord_capture_broken(supervisord_conf, parse_service_states(sections.get("services", ""))):
+        return None
     return resolve_preexisting_registrations(
         parse_registry_names(sections.get("registry", "")),
-        frozenset(parse_supervised_registrations(sections.get("supervisord", ""))),
+        frozenset(parse_supervised_registrations(supervisord_conf)),
     )
 
 
@@ -428,13 +550,34 @@ def parse_service_states(services_text: str) -> dict[str, str]:
 _FORWARD_PORT_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py(?P<flags>[^\n&;|]*)")
 _FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name\s+([\w-]+)")
 _FORWARD_PORT_MANIFEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"--manifest\s+\S+")
+# The loopback port a call's `--url` names, with or without the quote a `bash -c "..."` wrapper leaves.
+_FORWARD_PORT_URL_PORT_PATTERN: Final[re.Pattern[str]] = re.compile(r"--url\s+['\"]?[a-z]+://[^\s/:'\"]+:(\d+)")
 _PROGRAM_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
+# A program's block ends at the next section of any kind, not the next program: an
+# ``[eventlistener:*]`` or a second ``[include]`` between two programs belongs to neither.
+_SECTION_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[[^\]]+\]", re.MULTILINE)
+# Everything supervisord supervises and lists in `supervisorctl status`, whatever file declares it.
+_SUPERVISED_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[(?:program|eventlistener):", re.MULTILINE)
 
 
 @pure
-def _registrations_in_block(block: str, program_name: str) -> list[str]:
-    """The registry names the forward_port.py calls in one program block register, in call order."""
+def _without_comment_lines(supervisord_conf: str) -> str:
+    """The config with its full-line comments removed, the two markers supervisord's parser takes."""
+    return "\n".join(line for line in supervisord_conf.splitlines() if not line.lstrip().startswith(("#", ";")))
+
+
+class ProgramRegistrations(FrozenModel):
+    """What one `[program:*]` block of a supervisord config registers through its forward_port.py calls."""
+
+    program_name: str = Field(description="The block's program name")
+    registrations: tuple[str, ...] = Field(description="The registry names its calls register, in call order")
+    url_ports: tuple[int, ...] = Field(description="The ports its calls' --url flags name, in call order")
+
+
+@pure
+def _program_registrations_in_block(block: str, program_name: str) -> ProgramRegistrations:
     registrations: list[str] = []
+    url_ports: list[int] = []
     for call in _FORWARD_PORT_CALL_PATTERN.finditer(block):
         flags = call.group("flags")
         name_match = _FORWARD_PORT_NAME_PATTERN.search(flags)
@@ -444,7 +587,25 @@ def _registrations_in_block(block: str, program_name: str) -> list[str]:
             registrations.append(program_name)
         else:
             pass
-    return registrations
+        url_port_match = _FORWARD_PORT_URL_PORT_PATTERN.search(flags)
+        if url_port_match is not None:
+            url_ports.append(int(url_port_match.group(1)))
+    return ProgramRegistrations(
+        program_name=program_name, registrations=tuple(registrations), url_ports=tuple(url_ports)
+    )
+
+
+@pure
+def parse_program_registrations(supervisord_conf: str) -> tuple[ProgramRegistrations, ...]:
+    """Every `[program:*]` block of a supervisord config, in file order, with what it registers."""
+    section_starts = [match.start() for match in _SECTION_HEADER_PATTERN.finditer(supervisord_conf)]
+    blocks: list[ProgramRegistrations] = []
+    for match in _PROGRAM_SECTION_PATTERN.finditer(supervisord_conf):
+        block_end = next((start for start in section_starts if start > match.start()), len(supervisord_conf))
+        blocks.append(
+            _program_registrations_in_block(supervisord_conf[match.end() : block_end], match.group(1).strip())
+        )
+    return tuple(blocks)
 
 
 @pure
@@ -456,16 +617,63 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     extra origin-label rows (`<name>-admin`) that have no program of their own, and a program is
     free to register a row under any name. The workspace template joins the two the same way, in
     `.agents/skills/migrate-workspace/scripts/migrate_workspace.py`.
+
+    Takes the whole capture, which is the main config followed by its drop-ins. Comment lines are
+    dropped first: a block runs to the next section header, so a drop-in's leading prose -- which
+    routinely names `forward_port.py` -- would otherwise be read as part of the last program of the
+    file before it.
     """
+    supervisord_conf = _without_comment_lines(supervisord_conf)
     program_by_registration: dict[str, str] = {}
-    matches = list(_PROGRAM_SECTION_PATTERN.finditer(supervisord_conf))
-    for index, match in enumerate(matches):
-        block_end = matches[index + 1].start() if index + 1 < len(matches) else len(supervisord_conf)
-        block = supervisord_conf[match.end() : block_end]
-        program_name = match.group(1).strip()
-        for registration in _registrations_in_block(block, program_name):
-            program_by_registration.setdefault(registration, program_name)
+    for block in parse_program_registrations(supervisord_conf):
+        for registration in block.registrations:
+            program_by_registration.setdefault(registration, block.program_name)
     return program_by_registration
+
+
+@pure
+def is_supervisord_capture_broken(supervisord_conf: str, service_state_by_name: Mapping[str, str]) -> bool:
+    """Whether the captured supervisord config cannot be the one supervisord is actually running.
+
+    supervisord takes its programs from the config this capture claims to have read, so a status
+    listing that names programs while the capture declares none is not an app-free workspace: it is
+    a read that missed part of the config. A template layout the capture does not follow looks
+    exactly like this from here, which is the failure that otherwise passes for a true negative --
+    a workspace serving nothing answers with an empty join too.
+
+    Keyed on declared sections rather than on ``forward_port.py`` calls, so it holds for a template
+    whose apps all register their ports at runtime and whose config therefore registers nothing.
+    An unreadable ``supervisorctl status`` (empty mapping) proves nothing either way and is already
+    reported as its own broken instrument.
+    """
+    if not service_state_by_name:
+        return False
+    return not _SUPERVISED_SECTION_PATTERN.search(_without_comment_lines(supervisord_conf))
+
+
+@pure
+def find_seed_collisions(merged_supervisord_conf: str, seed_app_name: str, seed_app_port: int) -> tuple[str, ...]:
+    """What a seed merged into a supervisord config registers on top of, in prose; empty when nothing.
+
+    A clean textual merge can still add the seed's program beside one of the same name, register its
+    registry name a second time, or bind a port another program already serves, and any of those
+    would boot a workspace in which the seeded app is not the app the trial measures.
+    """
+    blocks = parse_program_registrations(merged_supervisord_conf)
+    other_blocks = [block for block in blocks if block.program_name != seed_app_name]
+    collisions: list[str] = []
+    same_name_count = len(blocks) - len(other_blocks)
+    if same_name_count > 1:
+        collisions.append("{} [program:{}] blocks".format(same_name_count, seed_app_name))
+    name_claimants = sorted({block.program_name for block in other_blocks if seed_app_name in block.registrations})
+    if name_claimants:
+        collisions.append(
+            "registry name {} is already registered by program {}".format(seed_app_name, ", ".join(name_claimants))
+        )
+    port_claimants = sorted({block.program_name for block in other_blocks if seed_app_port in block.url_ports})
+    if port_claimants:
+        collisions.append("port {} is already claimed by program {}".format(seed_app_port, ", ".join(port_claimants)))
+    return tuple(collisions)
 
 
 @pure
@@ -482,11 +690,11 @@ def resolve_preexisting_registrations(
       ``forward_port.py`` call in the config itself. The terminal does exactly that, as do the
       owner-exec and vm-exec daemons, and counting one as a deliverable is the failure this
       resolution exists to prevent.
-    - ``config_registrations`` is what the workspace's own ``system/supervisord.conf`` registers,
-      joined through its ``forward_port.py`` invocations (``--name``, or the block's own program
-      name for a ``--manifest`` registration). It covers a template app whose service is slow
-      enough that it had not registered its port yet when the snapshot was taken: the file is on
-      disk from the moment the workspace is cloned, whatever its services are doing. Directory
+    - ``config_registrations`` is what the workspace's own supervisord config registers, drop-ins
+      included, joined through its ``forward_port.py`` invocations (``--name``, or the block's own
+      program name for a ``--manifest`` registration). It covers a template app whose service is
+      slow enough that it had not registered its port yet when the snapshot was taken: the files
+      are on disk from the moment the workspace is cloned, whatever its services are doing. Directory
       names under ``system/apps/`` would not do -- a registry name is what the app hands
       ``forward_port.py`` (a ``--name`` flag, or the name in its ``--manifest``), and a multi-port
       app registers extra origin-label rows that correspond to no directory at all.
@@ -534,7 +742,18 @@ def parse_isolated_instance_services(instances_text: str) -> frozenset[str]:
 def resolve_delivered_apps(
     registered_apps: Sequence[RegisteredApp], isolated_instance_services: frozenset[str]
 ) -> tuple[RegisteredApp, ...]:
-    """The registry rows that represent the case's deliverable.
+    """The registry rows that represent what the agent shipped: the probeable rows minus the seeded
+    ones, which the case put there and the agent did not."""
+    return tuple(
+        app for app in resolve_probeable_apps(registered_apps, isolated_instance_services) if not app.is_seeded
+    )
+
+
+@pure
+def resolve_probeable_apps(
+    registered_apps: Sequence[RegisteredApp], isolated_instance_services: frozenset[str]
+) -> tuple[RegisteredApp, ...]:
+    """The registry rows an HTTP probe or a UI flow may be aimed at: delivered plus seeded, in registry order.
 
     Narrower than "not pre-existing", in two ways a live trial proved matter:
 
@@ -573,6 +792,15 @@ def _entry(
 
 
 @pure
+def flow_run_json(run: flow_runner.FlowRun) -> str:
+    """One flow's outcome as `flows/<slug>/run.json`: how it ended, why when it did not complete, and
+    what driving it cost in verification-agent calls (zero for a scripted flow, which makes none)."""
+    return json.dumps(
+        {"status": run.status.value, "reason": run.reason, "verifier_call_count": run.verifier_call_count}, indent=2
+    )
+
+
+@pure
 def _flow_entry(check: UiFlowCheck, status: CheckStatus, reason: str, detail: str) -> ManifestEntry:
     """One flow's manifest entry. Its evidence path is the flow's DIRECTORY: the grade-time
     pre-step joins entries back to their captured steps and screenshots through that basename."""
@@ -585,6 +813,215 @@ def _flow_entry(check: UiFlowCheck, status: CheckStatus, reason: str, detail: st
         detail=detail,
         evidence_path="{}/{}/{}".format(VERIFICATION_DIRNAME, FLOWS_DIRNAME, slugify(check.name)),
     )
+
+
+@pure
+def _invocation_sites(invocations: Sequence[SkillInvocation]) -> str:
+    """Where a skill was invoked, as the manifest names it: each call, with the step it sat in when
+    the record carries one (a stream record names no step)."""
+    return ", ".join(
+        "{}{}".format(
+            invocation.tool_call_id or "?", " (step {})".format(invocation.step_id) if invocation.step_id else ""
+        )
+        for invocation in invocations
+    )
+
+
+@pure
+def _invoked_skill_names(invocations: Sequence[SkillInvocation]) -> str:
+    """Every skill the transcript shows, each once, so a check that found nothing still says what the
+    agent did reach for -- which is how a renamed skill is told from one the agent never used."""
+    names = list(dict.fromkeys(invocation.name for invocation in invocations))
+    return ", ".join(names) if names else "none"
+
+
+@pure
+def _process_entry(
+    check: ProcessCheck, invocations: Sequence[SkillInvocation], launches: Sequence[WorkerLaunch]
+) -> ManifestEntry:
+    """One process check's verdict, read off the agent's own transcript.
+
+    Every outcome here is the agent's: the transcript is the record of what it did, so a check that
+    can be evaluated at all is FAILED rather than ERROR when it does not hold.
+    """
+    match check.kind:
+        case ProcessCheckKind.REQUIRED_SKILL:
+            matching = [invocation for invocation in invocations if is_same_skill(check.skill, invocation.name)]
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.PASSED if matching else CheckStatus.FAILED,
+                "" if matching else REASON_SKILL_NOT_INVOKED,
+                "{} invoked at {}".format(check.skill, _invocation_sites(matching))
+                if matching
+                else "{} was never invoked; the transcript shows: {}".format(
+                    check.skill, _invoked_skill_names(invocations)
+                ),
+                "",
+            )
+        case ProcessCheckKind.FORBIDDEN_SKILL:
+            matching = [invocation for invocation in invocations if is_same_skill(check.skill, invocation.name)]
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.FAILED if matching else CheckStatus.PASSED,
+                REASON_FORBIDDEN_SKILL_INVOKED if matching else "",
+                "{} invoked at {}".format(check.skill, _invocation_sites(matching))
+                if matching
+                else "{} was never invoked".format(check.skill),
+                "",
+            )
+        case ProcessCheckKind.MAX_WORKER_LAUNCHES:
+            is_within_cap = len(launches) <= check.max_worker_launches
+            return _entry(
+                check.check_id,
+                CheckClass.PROCESS,
+                CheckStatus.PASSED if is_within_cap else CheckStatus.FAILED,
+                "" if is_within_cap else REASON_WORKER_LAUNCHES_EXCEEDED,
+                "{} worker(s) launched against a cap of {}{}".format(
+                    len(launches),
+                    check.max_worker_launches,
+                    ": {}".format(", ".join(launch.name for launch in launches)) if launches else "",
+                ),
+                "",
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def measure_goal_satisfaction_timing(
+    entry_records: Sequence[EntryRecord], turn_records: Sequence[TurnRecord]
+) -> GoalSatisfactionTiming | None:
+    """How long the trial took to get its goal-holding client to say the goal was met, or None when
+    no entry ever did.
+
+    Anchored on the case's FIRST client message, not on the satisfying entry's own: what the timing
+    class measures is how long the client waited between asking and being shown, and the earlier
+    entries are part of that wait. The records accumulate across a stepped case's steps, the way
+    ``conversation_seconds`` does, so a later step's figure spans from the case's first message.
+
+    Closed by the LAST satisfaction rather than the first, so a case that holds out for several
+    goals in turn is measured to the one it finished on -- and, on a stepped case, to this step's.
+    """
+    if not turn_records:
+        return None
+    satisfaction = next(
+        (
+            (record.satisfied_at, record.satisfied_at_turn)
+            for record in reversed(tuple(entry_records))
+            if record.satisfied_at and record.satisfied_at_turn is not None
+        ),
+        None,
+    )
+    if satisfaction is None:
+        return None
+    satisfied_at, satisfied_at_turn = satisfaction
+    started_at = datetime.fromisoformat(turn_records[0].sent_at)
+    return GoalSatisfactionTiming(
+        seconds=round((datetime.fromisoformat(satisfied_at) - started_at).total_seconds(), 1),
+        turn_index=satisfied_at_turn,
+    )
+
+
+@pure
+def _timing_entry(
+    check: TimingCheck,
+    timing: GoalSatisfactionTiming | None,
+    failed_prerequisite_classes: Sequence[CheckClass],
+) -> ManifestEntry:
+    """The timing class's one entry: the measurement the grade-time criterion scores on its curve,
+    plus the prose a reader needs to see why it scored what it did.
+
+    PASSED means there is a time to score, not that the time was good -- the class is continuous and
+    the curve is applied at grade time, so a trial slower than the slow anchor passes here and
+    scores 0.0 there. FAILED means there is nothing to score on the curve: a client that never said
+    the goal was met, or a prerequisite class that fell short. Neither is an ERROR: a client who was
+    never satisfied took unboundedly long, which is a measurement of the agent.
+
+    A time that a prerequisite zeroed is still recorded in ``value``, so the entry says both how
+    fast the trial was and why being fast earned it nothing.
+    """
+    anchors = "fast {:.0f}s, slow {:.0f}s".format(check.fast_seconds, check.slow_seconds)
+    if timing is None:
+        return ManifestEntry(
+            entry_id=check.check_id,
+            check_class=CheckClass.TIMING,
+            status=CheckStatus.FAILED,
+            env=EvidenceEnv.LIVE,
+            reason=REASON_GOAL_NEVER_SATISFIED,
+            detail="no entry's client ever said its goal was met, so the time to it is unbounded ({})".format(anchors),
+            evidence_path="",
+            value=None,
+        )
+    measured = "{:.1f}s to the reply to client message {} ({})".format(timing.seconds, timing.turn_index, anchors)
+    if failed_prerequisite_classes:
+        return ManifestEntry(
+            entry_id=check.check_id,
+            check_class=CheckClass.TIMING,
+            status=CheckStatus.FAILED,
+            env=EvidenceEnv.LIVE,
+            reason=REASON_TIMING_PREREQUISITE_FAILED,
+            detail="{}, but the time does not count: a required check failed in the {} class(es)".format(
+                measured, ", ".join(check_class.value for check_class in failed_prerequisite_classes)
+            ),
+            evidence_path="",
+            value=timing.seconds,
+        )
+    return ManifestEntry(
+        entry_id=check.check_id,
+        check_class=CheckClass.TIMING,
+        status=CheckStatus.PASSED,
+        env=EvidenceEnv.LIVE,
+        reason="",
+        detail=measured,
+        evidence_path="",
+        value=timing.seconds,
+    )
+
+
+@pure
+def supervisord_config_capture_command(repo_root: str) -> str:
+    """Shell that prints a workspace's supervisord config: the main file, then its drop-ins.
+
+    ``repo_root`` is a shell word naming the repo root -- a quoted literal, or a variable
+    reference the surrounding script has already set.
+
+    The drop-ins are ``<config>.d/*.conf``. That directory is the default template's convention,
+    pinned by its own layout test to be what the config's ``[include]`` glob names, so the capture
+    assumes it rather than parsing the glob out of the config.
+
+    A template that declares every program in a drop-in leaves the main config with no
+    ``[program:*]`` section at all, so the registration join comes back empty. The service-health
+    check mostly rides that out on its same-name fallback; what does not is a multi-port app's
+    extra origin rows, and `resolve_preexisting_registrations`, which has no fallback and so
+    credits an unregistered template app to the agent. The failure is silent either way, because
+    an empty result is also what an honestly app-free workspace gives.
+    """
+    shell = (
+        "conf={root}/{conf}; "
+        # Every file is followed by a newline, so a file boundary is always a line boundary: a
+        # config whose last line is unterminated would otherwise run into the next file's first
+        # line, and a `[program:*]` header that is no longer at the start of a line is not one
+        # the block scan can see.
+        "cat \"$conf\" 2>/dev/null; printf '\\n'; "
+        # The glob is applied to the quoted path, so a repo root containing a space stays one
+        # path; with no drop-in directory the pattern stays literal and the -f test skips it.
+        'for path in "$conf".d/*.conf; do [ -f "$path" ] || continue; cat "$path"; printf \'\\n\'; done'
+    )
+    return shell.format(root=repo_root, conf=SUPERVISORD_CONF_RELATIVE_PATH)
+
+
+@pure
+def repo_root_discovery_shell() -> str:
+    """Shell that sets `root` to the workspace repo: the default checkout, else the directory holding a
+    `system/vendor` tree under `$HOME`; empty when neither is found."""
+    return (
+        'root=""; '
+        "if [ -d {default}/.git ]; then root={default}; else "
+        'root=$(find "$HOME" -maxdepth 4 -type d -path "*/system/vendor" 2>/dev/null | head -n 1); '
+        "root=${{root%/system/vendor}}; fi; "
+    ).format(default=DEFAULT_WORKSPACE_REPO_ROOT)
 
 
 @pure
@@ -601,10 +1038,7 @@ def workspace_state_command() -> str:
     # shipping nothing. Collapsing both into an empty capture would turn the very failure this eval
     # exists to catch into a harness error.
     return (
-        'root=""; '
-        "if [ -d {default}/.git ]; then root={default}; else "
-        'root=$(find "$HOME" -maxdepth 4 -type d -path "*/system/vendor" 2>/dev/null | head -n 1); '
-        "root=${{root%/system/vendor}}; fi; "
+        "{root_discovery}"
         'registry="$root/{registry_path}"; '
         "printf '{repo_marker}\\n'; printf '%s\\n' \"$root\"; "
         "printf '{registry_status_marker}\\n'; "
@@ -617,13 +1051,13 @@ def workspace_state_command() -> str:
         # actually delivered apps; both ride this same exec rather than costing round trips of
         # their own.
         "printf '{supervisord_marker}\\n'; "
-        'if [ -n "$root" ]; then cat "$root/{supervisord_path}" 2>/dev/null; fi; '
+        'if [ -n "$root" ]; then {supervisord_capture}; fi; '
         "printf '{instances_marker}\\n'; "
         'if [ -n "$root" ]; then find "$root/{instances_path}" -name {instance_file} '
         "-exec cat {{}} + 2>/dev/null; fi; "
         "exit 0"
     ).format(
-        default=DEFAULT_WORKSPACE_REPO_ROOT,
+        root_discovery=repo_root_discovery_shell(),
         present=STATUS_PRESENT,
         repo_marker=_SECTION_MARKER.format("repo_root"),
         registry_status_marker=_SECTION_MARKER.format("registry_status"),
@@ -632,7 +1066,7 @@ def workspace_state_command() -> str:
         supervisord_marker=_SECTION_MARKER.format("supervisord"),
         instances_marker=_SECTION_MARKER.format("isolated_instances"),
         registry_path=minds_bridge.WORKSPACE_APPS_REGISTRY,
-        supervisord_path=SUPERVISORD_CONF_RELATIVE_PATH,
+        supervisord_capture=supervisord_config_capture_command('"$root"'),
         instances_path=ISOLATED_INSTANCES_RELATIVE_PATH,
         instance_file=shlex.quote(ISOLATED_INSTANCE_FILENAME),
     )
@@ -693,19 +1127,27 @@ def worker_listing_command() -> str:
 
 
 @pure
-def worker_capture_command(name: str, lead_work_dir: str, task_file: str) -> str:
+def worker_capture_command(name: str, agent_id: str, lead_work_dir: str, task_file: str) -> str:
     """Write one worker's ATIF document, its stream, and the report it pushed back into the staging
     directory, reporting each part on its own.
 
-    A worker destroyed after finishing is no longer an agent `mngr transcript` can resolve, but mngr
-    preserves its stream under `preserved/<name>--<id>/`; the newest such directory stands in for the
-    live stream, and its basename is how the host side learns the destroyed worker's id. The report is
-    read from the lead's side: the launch-task contract has the worker push it to the path named in the
-    task file's frontmatter, under the lead's own work dir.
+    `--preserved` keeps mngr's normal live lookup and adds its caller-local preservation archive,
+    which is where a worker destroyed after finishing still has a stream. The target is the
+    listing's exact agent id whenever the listing has one: a launch records only a name, and a name
+    a destroyed worker released can be taken by another agent, so a name resolves to whoever holds
+    it now. The identity recorded in evidence is the one in the captured document, not the name.
+
+    Each part retries without `--preserved` when the flagged form fails, because the workspace runs
+    the mngr its image was pinned to, which can be older than the flag: without the retry an mngr
+    that rejects the option loses a live worker's evidence too. `||` makes the reported exit code
+    the retry's when the first attempt failed, so a part that fails for a real reason still says so.
+
+    The report is read from the lead's side: the launch-task contract has the worker push it to the
+    path named in the task file's frontmatter, under the lead's own work dir.
     """
     worker_dir = "{}/{}/{}".format(WORKSPACE_STAGING_DIR, WORKERS_DIRNAME, name)
     quoted_dir = shlex.quote(worker_dir)
-    quoted_name = shlex.quote(name)
+    quoted_target = shlex.quote(agent_id or name)
     report_step = (
         "r=$(sed -n 's/^finish_report_path:[[:space:]]*//p' {task_file} 2>/dev/null | head -n 1); "
         "printf '%s\\n' \"$r\"; "
@@ -722,28 +1164,23 @@ def worker_capture_command(name: str, lead_work_dir: str, task_file: str) -> str
     )
     return (
         "mkdir -p {dir}; "
-        "mngr transcript {name} --headless --format atif --output {dir}/{document} 2> {dir}/{stderr}; "
+        "mngr transcript {target} --preserved --headless --format atif --output {dir}/{document} 2> {dir}/{stderr} "
+        "|| mngr transcript {target} --headless --format atif --output {dir}/{document} 2>> {dir}/{stderr}; "
         "printf '{document_marker}\\n%s\\n' \"$?\"; "
-        "mngr transcript {name} --headless --format jsonl > {dir}/{stream} 2>> {dir}/{stderr}; "
+        "mngr transcript {target} --preserved --headless --format jsonl > {dir}/{stream} 2>> {dir}/{stderr} "
+        "|| mngr transcript {target} --headless --format jsonl > {dir}/{stream} 2>> {dir}/{stderr}; "
         "printf '{stream_marker}\\n%s\\n' \"$?\"; "
-        "printf '{preserved_marker}\\n'; "
-        "if [ ! -s {dir}/{stream} ]; then "
-        'p=$(ls -td "${{MNGR_HOST_DIR:-{host_dir}}}/preserved/"{name}"--"*/ 2>/dev/null | head -n 1); '
-        'if [ -n "$p" ]; then cp "$p"events/*/common_transcript/events.jsonl {dir}/{stream} 2>> {dir}/{stderr} '
-        "&& printf '%s\\n' \"$p\"; fi; fi; "
         "printf '{report_marker}\\n'; {report_step}"
         "printf '{stderr_marker}\\n'; tail -c {limit} {dir}/{stderr} 2>/dev/null; "
         "exit 0"
     ).format(
         dir=quoted_dir,
-        name=quoted_name,
+        target=quoted_target,
         document=WORKER_TRAJECTORY_FILENAME,
         stream=WORKER_STREAM_FILENAME,
         stderr=_WORKER_STDERR_FILENAME,
-        host_dir=_DEFAULT_WORKSPACE_MNGR_HOST_DIR,
         document_marker=_SECTION_MARKER.format("document_exit"),
         stream_marker=_SECTION_MARKER.format("stream_exit"),
-        preserved_marker=_SECTION_MARKER.format("preserved"),
         report_marker=_SECTION_MARKER.format("report_path"),
         report_step=report_step if task_file else "",
         stderr_marker=_SECTION_MARKER.format("stderr"),
@@ -772,6 +1209,25 @@ def _worker_state(raw_state: str) -> WorkerState:
 
 
 @pure
+def listing_reports_errors(listing_json: str) -> bool:
+    """Whether `mngr list` reported that it could not see part of what it was asked for.
+
+    It defaults to --on-error continue, so an unreachable provider yields the agents it did reach
+    plus a non-empty `errors` array. The agents it named are still good; what it cannot support is
+    a conclusion drawn from an agent's absence.
+    """
+    try:
+        payload = json.loads(listing_json)
+    except ValueError:
+        return True
+    if isinstance(payload, dict):
+        return bool(parse_worker_listing_errors(listing_json))
+    # A bare array is the other shape `parse_worker_listing` reads a listing in. Anything else
+    # carries no agents at all, so it cannot speak for the agents it does not name either.
+    return not isinstance(payload, list)
+
+
+@pure
 def parse_worker_listing(listing_json: str) -> tuple[WorkerListingEntry, ...]:
     """The agents out of `mngr list --format json`; empty when the listing could not be read."""
     try:
@@ -787,6 +1243,7 @@ def parse_worker_listing(listing_json: str) -> tuple[WorkerListingEntry, ...]:
     for raw_agent in raw_agents:
         if not isinstance(raw_agent, dict) or not raw_agent.get("id"):
             continue
+        raw_labels = raw_agent.get("labels")
         entries.append(
             WorkerListingEntry(
                 agent_id=str(raw_agent["id"]),
@@ -794,9 +1251,86 @@ def parse_worker_listing(listing_json: str) -> tuple[WorkerListingEntry, ...]:
                 agent_type=str(raw_agent.get("type") or ""),
                 state=_worker_state(str(raw_agent.get("state") or "")),
                 work_dir=str(raw_agent.get("work_dir") or ""),
+                labels={str(key): str(value) for key, value in raw_labels.items()}
+                if isinstance(raw_labels, dict)
+                else {},
             )
         )
     return tuple(entries)
+
+
+@pure
+def worker_listing_outcome_json(exit_code: int | None, errors: Sequence[str], is_complete: bool) -> str:
+    """How the agent listing itself went, as `workers/listing.json`. The exit code is None when the
+    listing command never ran, which is a different reading from one that ran and failed."""
+    return json.dumps({"exit_code": exit_code, "errors": list(errors), "is_complete": is_complete}, indent=2)
+
+
+@pure
+def worker_captures_json(captures: Sequence[WorkerCapture], overflow: Sequence[str]) -> str:
+    """Every worker the capture handled, as `workers/captures.json`: one record per capture, then one
+    per launch the caps left uncaptured.
+
+    An overflowed launch has a name and nothing else, so it carries `is_overflow` and the fields a
+    capture would have answered are null: "we never looked" is not "we looked and found nothing".
+    """
+    records: list[dict[str, JsonValue]] = [
+        {
+            "name": capture.launch.name,
+            "agent_id": capture.agent_id,
+            "agent_type": capture.agent_type,
+            "state": capture.state.value,
+            "depth": capture.launch.depth,
+            "lead_name": capture.launch.lead_name,
+            "directory": "{}/{}".format(WORKERS_DIRNAME, capture.launch.name),
+            "is_document_captured": capture.document.is_captured,
+            "is_stream_captured": capture.stream.is_captured,
+            "is_report_captured": capture.report.is_captured,
+            "is_overflow": False,
+        }
+        for capture in captures
+    ]
+    records.extend(
+        {
+            "name": name,
+            "agent_id": None,
+            "agent_type": None,
+            "state": None,
+            "depth": None,
+            "lead_name": None,
+            "directory": None,
+            "is_document_captured": None,
+            "is_stream_captured": None,
+            "is_report_captured": None,
+            "is_overflow": True,
+        }
+        for name in overflow
+    )
+    return json.dumps(records, indent=2)
+
+
+@pure
+def parse_worker_listing_errors(listing_json: str) -> tuple[str, ...]:
+    """What `mngr list` could not reach, from the listing's own `errors` array. It is the one reader of
+    that array, so a listing's completeness and the errors recorded beside it cannot disagree.
+
+    A listing that failed to reach a provider still returns the agents it did find, so without this a
+    partial inventory is indistinguishable from a complete one. Empty for a listing that is not a JSON
+    object, which carries no `errors` to read.
+    """
+    try:
+        payload = json.loads(listing_json)
+    except ValueError:
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+    raw_errors = payload.get("errors")
+    if not raw_errors:
+        return ()
+    # mngr writes an array; any other non-empty value still reports that something went unseen.
+    if not isinstance(raw_errors, list):
+        return (str(raw_errors),)
+    return tuple(str(error) for error in raw_errors)
 
 
 @pure
@@ -830,11 +1364,33 @@ def _failed_worker_capture(
 
 
 @pure
-def preserved_worker_id(preserved_dir: str, name: str) -> str:
-    """The id encoded in a preserved directory's `<name>--<id>` basename, or empty when it is not one."""
-    basename = preserved_dir.rstrip("/").rsplit("/", 1)[-1]
-    prefix = "{}--".format(name)
-    return basename[len(prefix) :] if basename.startswith(prefix) and len(basename) > len(prefix) else ""
+def _state_of_unlisted_worker(is_listing_complete: bool, is_stream_captured: bool) -> WorkerState:
+    """What a listing that does not hold a launched worker says about it.
+
+    A complete listing that does not name the worker means no live agent answers to that name, so a
+    stream the preservation-aware capture still produced came out of mngr's archive: the worker was
+    destroyed after finishing. A listing that could not be read, or that mngr answered only in part,
+    says nothing about an agent it does not name.
+    """
+    if is_listing_complete and is_stream_captured:
+        return WorkerState.DESTROYED
+    return WorkerState.UNKNOWN
+
+
+def _worker_document_identity(document: CapturedFile, worker_name: str) -> tuple[str, str]:
+    """The agent id and type a captured ATIF document names, both empty when no valid document
+    reached the host. mngr builds the document's `agent.name` from the agent type it recorded for
+    the worker, so a worker the listing never named still reports the type it actually ran."""
+    if document.host_path is None:
+        return "", ""
+    try:
+        parsed = parse_worker_document(document.host_path.read_text())
+    except (OSError, TrajectoryDocumentError) as exc:
+        logger.warning("Worker {}'s captured document names no identity: {}", worker_name, exc)
+        return "", ""
+    agent = parsed.get("agent")
+    agent_type = str(agent.get("name") or "") if isinstance(agent, dict) else ""
+    return str(parsed["trajectory_id"]), agent_type
 
 
 @pure
@@ -888,6 +1444,144 @@ def _launches_in_captured_streams(
 
 
 @pure
+def tickets_capture_command(repo_root: str) -> str:
+    """Read every `tk` ticket file in the workspace in one exec, printed as one JSON object.
+
+    Read in the workspace rather than pulled as files, because the whole directory is small and one
+    exec is the cheapest round trip; bounded per file and in total so a runaway directory cannot
+    outgrow the exec's output. JSON rather than section markers, because a ticket's text is the
+    agent's and could carry a marker of its own.
+    """
+    program = _TICKETS_PROGRAM.format(
+        directory=posixpath.join(repo_root, TICKETS_RELATIVE_PATH),
+        readme=_TICKETS_README_FILENAME,
+        file_limit=MAX_TICKET_FILE_BYTES,
+        total_limit=MAX_TICKETS_TOTAL_BYTES,
+    )
+    return _encoded_program_command(TICKETS_COMMAND_LABEL, program)
+
+
+@pure
+def _markdown_section_text(body_lines: Sequence[str], heading: str) -> str:
+    """The text under one `## <heading>` section, up to the next heading of that level or above."""
+    section_lines: list[str] = []
+    is_inside = False
+    for line in body_lines:
+        if line.startswith("## ") or line.startswith("# "):
+            if is_inside:
+                break
+            is_inside = line[3:].strip() == heading if line.startswith("## ") else False
+            continue
+        if is_inside:
+            section_lines.append(line)
+    return "\n".join(section_lines).strip()
+
+
+@pure
+def parse_ticket_file(file_name: str, text: str) -> TicketRecord | None:
+    """One `tk` ticket file as a record, or None when it opens with no frontmatter block.
+
+    tk writes flat `key: value` frontmatter, which is read line by line rather than as YAML: a value
+    is everything after the first colon, which keeps a timestamp's own colons intact.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    closing_index = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+    if closing_index is None:
+        return None
+    frontmatter: dict[str, str] = {}
+    for line in lines[1:closing_index]:
+        key, separator, value = line.partition(":")
+        if separator and key.strip():
+            frontmatter.setdefault(key.strip(), value.strip())
+    body_lines = lines[closing_index + 1 :]
+    return TicketRecord(
+        ticket_id=frontmatter.get("id") or file_name.removesuffix(".md"),
+        ticket_type=frontmatter.get("type", ""),
+        status=frontmatter.get("status", ""),
+        is_step=frontmatter.get("step", "").lower() == "true",
+        agent=frontmatter.get("agent", ""),
+        title=next((line[2:].strip() for line in body_lines if line.startswith("# ")), ""),
+        summary=_markdown_section_text(body_lines, "Summary"),
+        created=frontmatter.get("created", ""),
+        closed=frontmatter.get("closed", ""),
+    )
+
+
+@pure
+def not_attempted_ticket_capture() -> TicketCapture:
+    """What a collector reports before the tickets step has run."""
+    return _failed_ticket_capture(REASON_NOT_ATTEMPTED, "")
+
+
+@pure
+def _failed_ticket_capture(failure_reason: str, failure_detail: str) -> TicketCapture:
+    return TicketCapture(
+        records=(),
+        is_directory_present=False,
+        unparsed_file_names=(),
+        omitted_file_count=0,
+        failure_reason=failure_reason,
+        failure_detail=failure_detail,
+    )
+
+
+@pure
+def parse_ticket_capture(output: str) -> TicketCapture:
+    """The tickets exec's JSON, parsed into records; a reply that is not the shape the command prints
+    is recorded as the capture failing rather than as a workspace with no tickets."""
+    try:
+        payload = json.loads(output.strip())
+    except ValueError:
+        return _failed_ticket_capture(REASON_CAPTURE_UNREADABLE, output.strip()[:MAX_COMMAND_OUTPUT_CHARS])
+    raw_tickets = payload.get("tickets") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or not isinstance(raw_tickets, list):
+        return _failed_ticket_capture(REASON_CAPTURE_UNREADABLE, output.strip()[:MAX_COMMAND_OUTPUT_CHARS])
+    records: list[TicketRecord] = []
+    unparsed_file_names = [name for name in payload.get("unreadable") or [] if isinstance(name, str)]
+    for raw_ticket in raw_tickets:
+        name = raw_ticket.get("name") if isinstance(raw_ticket, dict) else None
+        text = raw_ticket.get("text") if isinstance(raw_ticket, dict) else None
+        if not isinstance(name, str) or not isinstance(text, str):
+            continue
+        record = parse_ticket_file(name, text)
+        if record is None:
+            unparsed_file_names.append(name)
+            continue
+        records.append(record)
+    omitted_file_count = payload.get("omitted_count")
+    return TicketCapture(
+        records=tuple(records),
+        is_directory_present=payload.get("is_directory_present") is True,
+        unparsed_file_names=tuple(unparsed_file_names),
+        omitted_file_count=omitted_file_count if isinstance(omitted_file_count, int) else 0,
+        failure_reason="",
+        failure_detail="",
+    )
+
+
+@pure
+def tickets_jsonl(records: Sequence[TicketRecord]) -> str:
+    """The records as `verification/tickets.jsonl`, under the ticket file's own key names."""
+    return "".join(json.dumps(record.model_dump(mode="json", by_alias=True)) + "\n" for record in records)
+
+
+@pure
+def diagnostic_probe_failure_text(failure_reason: str, detail: str) -> str:
+    """What a failed probe writes instead of its sections: the reason, then whatever the exec printed.
+    It carries no end section, so the probe's own parser reads it as nothing."""
+    return "{}{}\n{}".format(DIAGNOSTIC_PROBE_FAILURE_PREFIX, failure_reason, detail)
+
+
+@pure
+def ticket_failure_jsonl(failure_reason: str) -> str:
+    """What a failed capture writes instead of the records, so an unread ticket directory says so on
+    disk rather than reading as a workspace that holds no tickets."""
+    return json.dumps({"failure_reason": failure_reason}) + "\n"
+
+
+@pure
 def not_attempted_transcript_capture() -> TranscriptCapture:
     """What a collector reports before the capture step has run: nothing was captured, and nothing
     failed either."""
@@ -930,29 +1624,122 @@ def http_probe_command(url: str) -> str:
 
 
 @pure
-def repo_state_command(repo_root: str, base_sha: str) -> str:
-    """HEAD, working-tree cleanliness, and the agent's commits beyond the prepared clone, plus the
-    incremental bundle that keeps a captured trial replayable in a fresh environment later."""
+def repo_state_command(repo_root: str, base_sha: str, seeded_sha: str) -> str:
+    """HEAD, working-tree cleanliness, the commits beyond the prepared clone and whether the first of
+    them is the workspace's bootstrap commit, plus the incremental bundle that keeps a captured trial
+    replayable in a fresh environment later, and its size. On a seeded trial (a non-empty `seeded_sha`)
+    also whether the seeded commit is still in HEAD's history and how many commits HEAD has beyond it."""
+    # The workspace is created from the seeded commit on a seeded trial and from the base otherwise, so
+    # that is where the bootstrap commit sits, and the agent's commits are counted from the same place.
+    # The bootstrap commit is recognised by its parent, author and subject together. Its author alone
+    # is not enough: the bootstrap also sets that identity as the repo's own, so a commit made without
+    # an exported author (a harness whose tool calls export none) carries it too. Its position alone
+    # is not enough either: if the bootstrap's commit failed, the agent's first commit is the one on
+    # the base.
+    start_sha = seeded_sha or base_sha
+    bootstrap_section = (
+        "printf '{bootstrap_marker}\\n'; "
+        "if commits=$(git rev-list --first-parent --reverse {start}..HEAD 2>/dev/null); then "
+        "first=$(printf '%s\\n' \"$commits\" | head -n 1); "
+        'if [ -n "$first" ] && [ "$(git log -1 --format=\'%P %ae %s\' "$first" 2>/dev/null)" = {signature} ]; '
+        "then printf '1\\n'; else printf '0\\n'; fi; "
+        "else printf 'unknown\\n'; fi; "
+    ).format(
+        start=shlex.quote(start_sha),
+        signature=shlex.quote(
+            "{} {} {}".format(start_sha, WORKSPACE_BOOTSTRAP_AUTHOR_EMAIL, WORKSPACE_BOOTSTRAP_COMMIT_SUBJECT)
+        ),
+        bootstrap_marker=_SECTION_MARKER.format("bootstrap_commit_count"),
+    )
+    seed_sections = (
+        "printf '{in_head_marker}\\n'; "
+        "if git merge-base --is-ancestor {seeded} HEAD 2>/dev/null; then printf 'true\\n'; else printf 'false\\n'; fi; "
+        "printf '{seeded_count_marker}\\n'; git rev-list --count {seeded}..HEAD 2>/dev/null || printf 'unknown\\n'; "
+    ).format(
+        seeded=shlex.quote(seeded_sha),
+        in_head_marker=_SECTION_MARKER.format("seeded_in_head"),
+        seeded_count_marker=_SECTION_MARKER.format("seeded_commit_count"),
+    )
     return (
-        "mkdir -p {staging}; cd {repo} || exit 97; "
+        # An earlier step's bundle is removed first, so the size reported is this capture's own.
+        "mkdir -p {staging}; rm -f {staging}/{bundle}; cd {repo} || exit 97; "
         "printf '{head_marker}\\n'; git rev-parse HEAD 2>&1; "
         "printf '{status_marker}\\n'; git status --porcelain 2>&1; "
+        "{seed_sections}"
+        "{bootstrap_section}"
         "count=$(git rev-list --count {base}..HEAD 2>/dev/null || printf 'unknown'); "
         "printf '{count_marker}\\n%s\\n' \"$count\"; "
         "printf '{bundle_marker}\\n'; "
         # Pattern-matched rather than compared numerically: an empty or non-numeric count would make
         # `[ "$count" -gt 0 ]` itself an error under a POSIX shell.
         "case \"$count\" in \"\"|*[!0-9]*) printf 'no-commits' ;; 0) printf 'no-commits' ;; "
-        "*) git bundle create {staging}/{bundle} {base}..HEAD 2>&1 ;; esac"
+        "*) git bundle create {staging}/{bundle} {base}..HEAD 2>&1 ;; esac; "
+        # Last, because the bundle section above carries whatever git printed while writing it.
+        "printf '\\n{bytes_marker}\\n'; "
+        "if [ -f {staging}/{bundle} ]; then wc -c < {staging}/{bundle}; else printf '0\\n'; fi"
     ).format(
         staging=WORKSPACE_STAGING_DIR,
         repo=shlex.quote(repo_root),
         base=shlex.quote(base_sha),
         bundle=DELIVERABLE_BUNDLE_FILENAME,
+        seed_sections=seed_sections if seeded_sha else "",
+        bootstrap_section=bootstrap_section,
         head_marker=_SECTION_MARKER.format("head_sha"),
         status_marker=_SECTION_MARKER.format("status"),
         count_marker=_SECTION_MARKER.format("commit_count"),
         bundle_marker=_SECTION_MARKER.format("bundle"),
+        bytes_marker=_SECTION_MARKER.format("bundle_bytes"),
+    )
+
+
+class RepoStateReading(FrozenModel):
+    """What one repo-state capture read back about the delivered repo."""
+
+    head_sha: str = Field(description="The repo's HEAD; empty when it could not be read")
+    commit_count_beyond_base: int | None = Field(description="Commits in base..HEAD; None when unknown")
+    bundle_byte_count: int | None = Field(description="The size of the bundle written, 0 for none; None when unknown")
+    seeded_sha: str = Field(description="The seeded commit the capture was taken against; empty on an unseeded trial")
+    is_seeded_sha_in_head: bool | None = Field(
+        description="Whether the seeded commit is an ancestor of HEAD; None on an unseeded trial or when unknown"
+    )
+    commit_count_beyond_seeded: int | None = Field(
+        description="Commits in seeded..HEAD; None on an unseeded trial or when unknown"
+    )
+    bootstrap_commit_count: int | None = Field(
+        description="1 when the first commit beyond the workspace's starting commit is the bootstrap's, else 0; "
+        "None when unknown"
+    )
+
+    @computed_field
+    @cached_property
+    def agent_commit_count(self) -> int | None:
+        """The commits beyond the workspace's starting commit (the seeded commit on a seeded trial, the
+        base otherwise) that are not the bootstrap commit; None when either count is unknown."""
+        range_commit_count = self.commit_count_beyond_seeded if self.seeded_sha else self.commit_count_beyond_base
+        if range_commit_count is None or self.bootstrap_commit_count is None:
+            return None
+        return range_commit_count - self.bootstrap_commit_count
+
+
+@pure
+def _section_count(sections: Mapping[str, str], name: str) -> int | None:
+    text = sections.get(name, "").strip()
+    return int(text) if text.isdigit() else None
+
+
+@pure
+def read_repo_state_output(output: str, seeded_sha: str) -> RepoStateReading:
+    """A `repo_state_command` run's sections, as the values they report."""
+    sections = split_sections(output)
+    in_head_text = sections.get("seeded_in_head", "").strip()
+    return RepoStateReading(
+        head_sha=sections.get("head_sha", "").strip(),
+        commit_count_beyond_base=_section_count(sections, "commit_count"),
+        bundle_byte_count=_section_count(sections, "bundle_bytes"),
+        seeded_sha=seeded_sha,
+        is_seeded_sha_in_head=(in_head_text == "true") if seeded_sha and in_head_text in ("true", "false") else None,
+        commit_count_beyond_seeded=_section_count(sections, "seeded_commit_count") if seeded_sha else None,
+        bootstrap_commit_count=_section_count(sections, "bootstrap_commit_count"),
     )
 
 
@@ -982,6 +1769,13 @@ def _timeout_or(reason: str, remaining_seconds: float) -> str:
     """A step that failed with the phase budget already gone timed out; anything else is the
     instrument. Recording which one it was is the difference between a diagnosable run and a shrug."""
     return REASON_TIMEOUT if remaining_seconds <= 0 else reason
+
+
+@pure
+def parse_exit_code(exit_code_section: str) -> int | None:
+    """A reported exit code as a number, or None when none was reported or it is not one."""
+    stripped = exit_code_section.strip()
+    return int(stripped) if stripped.isdigit() else None
 
 
 @pure
@@ -1024,12 +1818,12 @@ def http_entry_status(
 
 
 @pure
-def resolve_http_targets(check: HttpCheck, delivered_apps: Sequence[RegisteredApp]) -> tuple[RegisteredApp, ...]:
-    """Which apps a check probes. The fan-out target covers the DELIVERED apps, so an abandoned
-    throwaway's dead port is never probed as though it were the deliverable."""
+def resolve_http_targets(check: HttpCheck, probeable_apps: Sequence[RegisteredApp]) -> tuple[RegisteredApp, ...]:
+    """Which apps a check probes. The fan-out target covers the PROBEABLE apps (delivered or seeded),
+    so an abandoned throwaway's dead port is never probed as though it were the deliverable."""
     if check.target == REGISTERED_APPS_HTTP_TARGET:
-        return tuple(app for app in delivered_apps if app.url)
-    return tuple(app for app in delivered_apps if app.name == check.target and app.url)
+        return tuple(app for app in probeable_apps if app.url)
+    return tuple(app for app in probeable_apps if app.name == check.target and app.url)
 
 
 @pure
@@ -1064,7 +1858,7 @@ def registration_entry(
 
 
 @pure
-def _service_state_for(program_name: str, service_state_by_name: Mapping[str, str]) -> str:
+def service_state_for(program_name: str, service_state_by_name: Mapping[str, str]) -> str:
     """The reported state of one supervisord program. supervisorctl prints a grouped program as
     ``group:process``, so a bare-name lookup alone would read a grouped service as absent."""
     if program_name in service_state_by_name:
@@ -1082,6 +1876,7 @@ def service_entries(
     service_state_by_name: Mapping[str, str],
     program_by_registration: Mapping[str, str],
     is_services_readable: bool,
+    is_supervisord_conf_readable: bool,
 ) -> tuple[ManifestEntry, ...]:
     """One entry per delivered app: an app whose supervising program is not running is exactly the
     "started it, then it crashed" failure the liveness checks exist to catch.
@@ -1090,7 +1885,8 @@ def service_entries(
     not by assuming the two share a name -- a multi-port app registers extra origin-label rows that
     no program owns. A row no program registers at all is a real shortfall of the minds-app contract
     (the app was started by hand and would not survive a restart), recorded under its own reason so
-    it stays distinguishable from a program that exists and crashed.
+    it stays distinguishable from a program that exists and crashed -- and, when the config could
+    not be read whole, from a row whose program the capture simply could not see.
     """
     entries: list[ManifestEntry] = []
     for app in delivered_apps:
@@ -1102,21 +1898,23 @@ def service_entries(
         # exactly like the row -- unambiguous, and it covers a service that registers its port at
         # runtime instead of through a forward_port call in the config.
         program_name = program_by_registration.get(app.name)
-        if program_name is None and _service_state_for(app.name, service_state_by_name) != "ABSENT":
+        if program_name is None and service_state_for(app.name, service_state_by_name) != "ABSENT":
             program_name = app.name
         if program_name is None:
-            entries.append(
-                _entry(
-                    entry_id,
-                    CheckClass.APP,
-                    CheckStatus.FAILED,
-                    REASON_NO_SUPERVISED_PROGRAM,
-                    "no supervisord program registers {}, so nothing supervises it".format(app.name),
-                    "",
+            if is_supervisord_conf_readable:
+                status = CheckStatus.FAILED
+                reason = REASON_NO_SUPERVISED_PROGRAM
+                detail = "no supervisord program registers {}, so nothing supervises it".format(app.name)
+            else:
+                status = CheckStatus.ERROR
+                reason = REASON_SUPERVISORD_CONF_UNREADABLE
+                detail = (
+                    "supervisord is running programs the captured config does not declare, so "
+                    "which program owns {} could not be read".format(app.name)
                 )
-            )
+            entries.append(_entry(entry_id, CheckClass.APP, status, reason, detail, ""))
             continue
-        state = _service_state_for(program_name, service_state_by_name)
+        state = service_state_for(program_name, service_state_by_name)
         is_running = state == "RUNNING"
         entries.append(
             _entry(
@@ -1129,6 +1927,38 @@ def service_entries(
             )
         )
     return tuple(entries)
+
+
+class CollectedEvidence(FrozenModel):
+    """What one step's collection read and produced, handed back whole so that anything computed over a
+    step's evidence reads these rather than the workspace a second time."""
+
+    is_collection_complete: bool = Field(description="Whether the collection phase ran to its end without raising")
+    manifest: EvidenceManifest = Field(description="The manifest as the collector last wrote it")
+    services_text: str = Field(description="supervisorctl status output exactly as captured")
+    supervisord_conf: str = Field(description="The workspace's supervisord config as captured")
+    registered_apps: tuple[RegisteredApp, ...] | None = Field(
+        description="The parsed app registry; None when it was absent, unreadable, or not resolvable"
+    )
+    isolated_instance_services: frozenset[str] = Field(description="Registry rows owned by throwaway preview servers")
+    flow_run_by_check_id: dict[str, flow_runner.FlowRun] = Field(
+        description="What each UI flow that was driven produced, keyed by its check id"
+    )
+    worker_captures: tuple[WorkerCapture, ...] = Field(description="One record per launched worker captured")
+    worker_capture_overflow: tuple[str, ...] = Field(
+        description="Launched worker names the count or depth caps left uncaptured"
+    )
+    agent_inventory: tuple[WorkerListingEntry, ...] = Field(description="Every agent the workspace listed")
+    listing_errors: tuple[str, ...] = Field(description="What the agent listing could not reach")
+    is_listing_complete: bool = Field(
+        description="Whether the agent listing was read, exited 0 and reported no errors, so an agent's "
+        "absence from it means something"
+    )
+    ticket_capture: TicketCapture = Field(description="What the tickets step read")
+    diagnostic_probe: DiagnosticProbeCapture | None = Field(
+        description="What the self-diagnostic probe printed; None on a step that does not run it"
+    )
+    repo_state: RepoStateReading | None = Field(description="What the repo-state capture read; None when not taken")
 
 
 class EvidenceCollector(MutableModel):
@@ -1149,6 +1979,16 @@ class EvidenceCollector(MutableModel):
         "the driver never resolved one, in which case the capture is not attempted",
     )
     case: CaseConfig = Field(frozen=True, description="The case whose expanded expectations drive the probes")
+    # The conversation the driver just held, as the records state.json publishes. Only the timing
+    # class reads them, and only to turn "the client said it was satisfied" into a span; they are
+    # passed in rather than re-read from the state file so the collector never has to parse what
+    # the driver is still writing.
+    entry_records: tuple[EntryRecord, ...] = Field(
+        frozen=True, default=(), description="How each prompts entry played out, in order"
+    )
+    turn_records: tuple[TurnRecord, ...] = Field(
+        frozen=True, default=(), description="Every answered client message, in order"
+    )
     clone_base_sha: str = Field(frozen=True, description="HEAD of the prepared dwt clone; the git bundle's base")
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
     # Required rather than defaulted to None: an unmeasured trial must be a deliberate claim, never
@@ -1156,12 +1996,23 @@ class EvidenceCollector(MutableModel):
     preexisting_registrations: frozenset[str] | None = Field(
         frozen=True, description="Registry names the workspace already served before the agent ran"
     )
+    seeded_registrations: frozenset[str] = Field(
+        frozen=True, description="Registry names the case seeded the workspace with; empty on an unseeded trial"
+    )
+    seed_commit_sha: str = Field(
+        frozen=True, description="The seed as a commit on the pinned template; empty on an unseeded trial"
+    )
+    seeded_sha: str = Field(
+        frozen=True, description="The seeded case base the workspace was created from; empty on an unseeded trial"
+    )
     host_logs_dir: Path = Field(frozen=True, description="The trial's host-side logs dir")
     deadline: float = Field(frozen=True, description="Monotonic-clock deadline for the whole phase")
-    # None when no key was available to build one; the flows are then recorded as unmeasurable
-    # rather than silently skipped.
+    # None when no key was available to build one; the model-driven flows are then recorded as
+    # unmeasurable rather than silently skipped, and the scripted ones, which need no agent, still run.
     verification_agent: ui_flows.VerificationAgent | None = Field(
-        frozen=True, default=None, description="Decides each flow's next action and reads its final state"
+        frozen=True,
+        default=None,
+        description="Decides each model-driven flow's next action and reads its final state",
     )
     verifier_model: str = Field(frozen=True, default="", description="Model the UI-flow agent reasons with")
     # Minted per trial. The driver owns the forward instance precisely so it knows this, rather
@@ -1188,14 +2039,16 @@ class EvidenceCollector(MutableModel):
     registry_text: str = Field(default="", description="The app registry exactly as captured")
     is_registry_present: bool = Field(default=False, description="Whether the registry file exists at all")
     services_text: str = Field(default="", description="supervisorctl status output exactly as captured")
-    supervisord_conf: str = Field(default="", description="The workspace's supervisord config as captured")
+    supervisord_conf: str = Field(
+        default="", description="The workspace's supervisord config, and its drop-ins, as captured"
+    )
     isolated_instance_services: frozenset[str] = Field(
         default=frozenset(), description="Registry rows owned by throwaway preview servers"
     )
     # None until the registry has been read, and again if it turned out to be unreadable.
     registered_apps: tuple[RegisteredApp, ...] | None = Field(default=None, description="The parsed registry")
     serving_app_names: set[str] = Field(
-        default_factory=set, description="Delivered apps that answered their root-path probe as expected"
+        default_factory=set, description="Delivered or seeded apps that answered their root-path probe as expected"
     )
     transcript_capture: TranscriptCapture = Field(
         default_factory=not_attempted_transcript_capture,
@@ -1207,6 +2060,40 @@ class EvidenceCollector(MutableModel):
     )
     worker_capture_overflow: list[str] = Field(
         default_factory=list, description="Launched worker names the count or depth caps left uncaptured"
+    )
+    agent_inventory: tuple[WorkerListingEntry, ...] = Field(
+        default=(),
+        description="Every agent the workspace held at collection time, as mngr listed them",
+    )
+    listing_errors: tuple[str, ...] = Field(
+        default=(),
+        description="What `mngr list` could not reach, so a partial inventory is not read as a complete one",
+    )
+    is_listing_complete: bool = Field(
+        default=False,
+        description="Whether the agent listing was read, exited 0 and reported no errors; false until it was",
+    )
+    ticket_capture: TicketCapture = Field(
+        default_factory=not_attempted_ticket_capture,
+        description="What the capture step read out of the workspace's `tk` ticket directory",
+    )
+    diagnostic_probe_capture: DiagnosticProbeCapture | None = Field(
+        default=None,
+        description="What the self-diagnostic probe printed; None until it has run, or on a step without it",
+    )
+    repo_state: RepoStateReading | None = Field(
+        default=None, description="What the repo-state capture read; None until it has run"
+    )
+    # None per check until the inventory walk has answered; the walk evaluates the globs over exactly
+    # the entries it records, which are the ones the verifier later matches against.
+    files_matched_count_by_check_id: dict[str, int] | None = Field(
+        default=None, description="Each files check's glob match count against the inventory"
+    )
+    inventory_failure_reason: str = Field(
+        default="", description="Why the file inventory was not captured; empty once it was"
+    )
+    flow_run_by_check_id: dict[str, flow_runner.FlowRun] = Field(
+        default_factory=dict, description="What each UI flow that was driven produced, keyed by its check id"
     )
     started_at: str = Field(default="", description="UTC ISO timestamp the phase began")
 
@@ -1240,10 +2127,19 @@ class EvidenceCollector(MutableModel):
     @property
     def _delivered_apps(self) -> tuple[RegisteredApp, ...] | None:
         """The registry rows that count as the case's deliverable, or None if the set could not be
-        resolved. Both the app checks and the HTTP fan-out score exactly this set."""
+        resolved. The app checks score exactly this set."""
         if self.registered_apps is None:
             return None
         return resolve_delivered_apps(self.registered_apps, self.isolated_instance_services)
+
+    @property
+    def _probeable_apps(self) -> tuple[RegisteredApp, ...] | None:
+        """The delivered rows plus the seeded ones, or None exactly when the delivered set is. The HTTP
+        probes and the UI flows are aimed at this set, so a seeded app is exercised without ever
+        counting towards what the agent shipped."""
+        if self.registered_apps is None:
+            return None
+        return resolve_probeable_apps(self.registered_apps, self.isolated_instance_services)
 
     @property
     def _remaining_seconds(self) -> float:
@@ -1259,11 +2155,11 @@ class EvidenceCollector(MutableModel):
         )
         self.trace.append(
             TraceRecord(
-                timestamp=utc_now_iso(),
+                timestamp=ui_flows.utc_now_iso(),
                 phase=phase,
                 command=command,
                 is_success=is_success,
-                output=_bounded(output, MAX_TRACE_OUTPUT_CHARS),
+                output=ui_flows.bounded_tail(output, MAX_TRACE_OUTPUT_CHARS),
             )
         )
         return is_success, output
@@ -1287,11 +2183,11 @@ class EvidenceCollector(MutableModel):
         is_success = result.return_code == 0
         self.trace.append(
             TraceRecord(
-                timestamp=utc_now_iso(),
+                timestamp=ui_flows.utc_now_iso(),
                 phase=phase,
                 command=command,
                 is_success=is_success,
-                output=_bounded((result.stdout or "") + (result.stderr or ""), MAX_TRACE_OUTPUT_CHARS),
+                output=ui_flows.bounded_tail((result.stdout or "") + (result.stderr or ""), MAX_TRACE_OUTPUT_CHARS),
             )
         )
         return is_success
@@ -1347,9 +2243,11 @@ class EvidenceCollector(MutableModel):
             preexisting_registrations=(
                 None if self.preexisting_registrations is None else tuple(sorted(self.preexisting_registrations))
             ),
+            is_registry_present=self.is_registry_present,
+            seeded_registrations=tuple(sorted(self.seeded_registrations)),
             is_expectations_declared=self.case.expectations is not None,
             is_evidence_complete=all(entry.status != CheckStatus.ERROR for entry in self.entries),
-            started_at=self.started_at or utc_now_iso(),
+            started_at=self.started_at or ui_flows.utc_now_iso(),
             phases=tuple(self.phases),
             entries=tuple(self.entries),
         )
@@ -1364,7 +2262,7 @@ class EvidenceCollector(MutableModel):
         expectations-driven steps are skipped on trials that never finished: their structural gates
         already zero the reward, so probing an unfinished build buys nothing.
         """
-        self.started_at = utc_now_iso()
+        self.started_at = ui_flows.utc_now_iso()
         # Idempotent: setup already created this so the declared artifact always exists, but a
         # collector run against a box that skipped setup must not write into a missing directory.
         await ensure_evidence_dir(self.environment)
@@ -1373,25 +2271,58 @@ class EvidenceCollector(MutableModel):
         # home-tree walk is the slowest of the always-on ones.
         if self.chat_agent_id:
             await self._capture_common_transcript()
-            await self._capture_workers()
+        # Outside the chat-agent guard: the agent listing is taken on every trial with a workspace, and
+        # with no captured stream there is simply no launch to follow.
+        await self._capture_workers()
+        await self._capture_tickets()
+        await self._run_diagnostic_probe()
         await self._capture_file_inventory()
         expectations = self.case.expectations
         if is_expectations_collection_wanted and expectations is not None:
+            # Reads what the always-on capture already brought out, so it costs no round trip and is
+            # recorded even when the probes below run the budget down.
+            self._evaluate_process_checks(expectations)
             if expectations.is_deliverable_bundle_required:
                 await self._capture_repo_state()
+            self._evaluate_files_checks(expectations)
             await self._run_test_commands(expectations)
             await self._run_http_probes(expectations)
             self._evaluate_app_checks(expectations)
             # Last, and after the HTTP probes: driving the UI is the most expensive step and the
             # one most likely to exhaust the budget, and everything above is worth having anyway.
             await self._run_ui_flows(expectations)
+            # After every other class, because a timing prerequisite is answered from the failures
+            # this bundle already records.
+            self._evaluate_timing_checks(expectations)
         await self._flush_record()
         return self.manifest()
 
     def verifier_usage(self) -> ui_flows.VerifierUsage:
-        """What the UI-flow agent spent. Harness spend, reported beside the decider's."""
+        """What the UI-flow agent spent. Evals spend, reported beside the decider's. A scripted
+        flow's decisions are no model calls, so they are not counted here."""
         calls = tuple(self.verification_agent.calls) if self.verification_agent is not None else ()
         return ui_flows.summarize_verifier_usage(calls, self.verifier_model)
+
+    def collected_evidence(self, is_collection_complete: bool) -> CollectedEvidence:
+        """Everything this collector read and produced so far; valid after `collect` has returned or
+        raised, in which case it holds what was collected up to the failure."""
+        return CollectedEvidence(
+            is_collection_complete=is_collection_complete,
+            manifest=self.manifest(),
+            services_text=self.services_text,
+            supervisord_conf=self.supervisord_conf,
+            registered_apps=self.registered_apps,
+            isolated_instance_services=self.isolated_instance_services,
+            flow_run_by_check_id=dict(self.flow_run_by_check_id),
+            worker_captures=tuple(self.worker_captures),
+            worker_capture_overflow=tuple(self.worker_capture_overflow),
+            agent_inventory=self.agent_inventory,
+            listing_errors=self.listing_errors,
+            is_listing_complete=self.is_listing_complete,
+            ticket_capture=self.ticket_capture,
+            diagnostic_probe=self.diagnostic_probe_capture,
+            repo_state=self.repo_state,
+        )
 
     async def _capture_workspace_state(self) -> None:
         """Always-on: the app registry and supervisord's view of the world. Cheap enough that even a
@@ -1406,17 +2337,22 @@ class EvidenceCollector(MutableModel):
         self.registry_text = sections.get("registry", "")
         self.services_text = sections.get("services", "")
         self.supervisord_conf = sections.get("supervisord", "")
-        self.isolated_instance_services = parse_isolated_instance_services(sections.get("isolated_instances", ""))
+        isolated_instances_text = sections.get("isolated_instances", "")
+        self.isolated_instance_services = parse_isolated_instance_services(isolated_instances_text)
         # A row can only be stamped pre-existing-or-not against a known pre-existing set, so an
         # unknown one leaves the registry unresolved even though it is captured verbatim just below.
         preexisting = self.preexisting_registrations
         self.registered_apps = (
-            parse_apps_registry(self.registry_text, preexisting)
+            parse_apps_registry(self.registry_text, preexisting, self.seeded_registrations)
             if self.is_registry_present and preexisting is not None
             else None
         )
         await self._write_evidence(APPS_REGISTRY_FILENAME, self.registry_text)
         await self._write_evidence(SERVICES_FILENAME, self.services_text)
+        # Verbatim, both of them: the delivered-app set is resolved from these two texts, so a
+        # disputed row is re-readable against what the workspace actually declared.
+        await self._write_evidence(SUPERVISORD_CONF_FILENAME, self.supervisord_conf)
+        await self._write_evidence(ISOLATED_INSTANCE_SERVICES_FILENAME, isolated_instances_text)
         if not is_success:
             self.entries.append(
                 _entry(
@@ -1424,7 +2360,7 @@ class EvidenceCollector(MutableModel):
                     CheckClass.APP,
                     CheckStatus.ERROR,
                     _timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds),
-                    _bounded(output, MAX_COMMAND_OUTPUT_CHARS),
+                    ui_flows.bounded_tail(output, MAX_COMMAND_OUTPUT_CHARS),
                     "",
                 )
             )
@@ -1448,7 +2384,7 @@ class EvidenceCollector(MutableModel):
         sections = split_sections(output)
         # The commands' own stderr is the diagnostic when they ran; the bridge's output when they
         # did not.
-        detail = _bounded(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
+        detail = ui_flows.bounded_tail(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
         stream = await self._bring_out_transcript_file(
             COMMON_TRANSCRIPT_FILENAME, is_success, sections.get("stream_exit", "").strip(), detail
         )
@@ -1484,16 +2420,25 @@ class EvidenceCollector(MutableModel):
         capture this is the trial's record, not outcome evidence: failures land on the driver's metadata,
         never in the manifest.
         """
-        stream_path = self.transcript_capture.stream.host_path
-        if stream_path is None:
-            return
-        pending = scan_worker_launches(parse_transcript_jsonl(stream_path.read_text()), depth=0, lead_name="")
-        if not pending:
-            return
         started_at = time.monotonic()
-        entries = await self._capture_worker_listing()
-        work_dir_by_name = {entry.name: entry.work_dir for entry in entries}
-        chat_entry = next((entry for entry in entries if entry.agent_id == self.chat_agent_id), None)
+        # The listing is taken before anything is discovered, and whether or not anything is. It is the
+        # only authoritative statement of which agents the workspace holds; scanning the lead's command
+        # text can only ever propose a set, and a trial whose scan finds nothing is exactly the trial
+        # whose inventory is most worth having.
+        listing = await self._capture_worker_listing()
+        self.agent_inventory = listing.entries
+        self.is_listing_complete = listing.is_complete
+        stream_path = self.transcript_capture.stream.host_path
+        pending = (
+            scan_worker_launches(parse_transcript_jsonl(stream_path.read_text()), depth=0, lead_name="")
+            if stream_path is not None
+            else []
+        )
+        if not pending:
+            await self._write_worker_captures()
+            return
+        work_dir_by_name = {entry.name: entry.work_dir for entry in listing.entries}
+        chat_entry = next((entry for entry in listing.entries if entry.agent_id == self.chat_agent_id), None)
         work_dir_by_name[""] = chat_entry.work_dir if chat_entry is not None else DEFAULT_WORKSPACE_REPO_ROOT
         # Every name already captured or already counted as overflow, so a name two leads both
         # launch, or one the cap already dropped, is recorded once.
@@ -1508,7 +2453,7 @@ class EvidenceCollector(MutableModel):
                     self.worker_capture_overflow.append(launch.name)
                     continue
                 this_round.append(
-                    await self._capture_one_worker(launch, entries, work_dir_by_name.get(launch.lead_name, ""))
+                    await self._capture_one_worker(launch, listing, work_dir_by_name.get(launch.lead_name, ""))
                 )
             if not this_round:
                 pending = []
@@ -1527,51 +2472,90 @@ class EvidenceCollector(MutableModel):
             self.worker_captures.extend(settled)
             pending = _launches_in_captured_streams(settled, known_names)
         self.worker_capture_overflow.extend(launch.name for launch in pending)
+        await self._write_worker_captures()
         self._record_phase("workers", started_at)
         await self._flush_record()
 
-    async def _capture_worker_listing(self) -> tuple[WorkerListingEntry, ...]:
+    async def _write_worker_listing_outcome(
+        self, exit_code: int | None, errors: Sequence[str], is_complete: bool
+    ) -> None:
+        await self._write_evidence(
+            "{}/{}".format(WORKERS_DIRNAME, WORKER_LISTING_OUTCOME_FILENAME),
+            worker_listing_outcome_json(exit_code, errors, is_complete),
+        )
+
+    async def _write_worker_captures(self) -> None:
+        """Written on every trial with a workspace, the empty list included: a trial that launched no
+        worker is exactly the trial an absent file would be read as."""
+        await self._write_evidence(
+            "{}/{}".format(WORKERS_DIRNAME, WORKER_CAPTURES_FILENAME),
+            worker_captures_json(self.worker_captures, self.worker_capture_overflow),
+        )
+
+    async def _capture_worker_listing(self) -> WorkerListing:
         """The workspace's agents, or nothing when the listing could not be had: the workers are then
         captured by name alone, with no id, state, or lead work dir from the listing."""
         is_success, output = await self._run_in_workspace("workers", worker_listing_command(), _WORKER_TIMEOUT_SECONDS)
         if not is_success:
-            logger.warning("Could not list the workspace's agents: {}", _bounded(output, MAX_COMMAND_OUTPUT_CHARS))
-            return ()
-        sections = split_sections(output)
-        entries = parse_worker_listing(sections.get("listing", ""))
-        if not entries:
             logger.warning(
-                "The workspace's agent listing had no agents in it (exit {}): {}",
-                sections.get("list_exit", "").strip(),
-                _bounded(sections.get("stderr", ""), MAX_COMMAND_OUTPUT_CHARS),
+                "Could not list the workspace's agents: {}", ui_flows.bounded_tail(output, MAX_COMMAND_OUTPUT_CHARS)
             )
-        return entries
+            await self._write_worker_listing_outcome(exit_code=None, errors=(), is_complete=False)
+            return WorkerListing()
+        sections = split_sections(output)
+        listing_json = sections.get("listing", "")
+        # Written from the exec's own output rather than left to the workers directory's transfer, which
+        # only runs when a worker was captured: the listing belongs in the bundle on every trial.
+        await self._write_evidence("{}/{}".format(WORKERS_DIRNAME, WORKER_LISTING_FILENAME), listing_json)
+        self.listing_errors = parse_worker_listing_errors(listing_json)
+        if self.listing_errors:
+            logger.warning("The workspace's agent listing is partial: {}", "; ".join(self.listing_errors)[:400])
+        entries = parse_worker_listing(listing_json)
+        list_exit = sections.get("list_exit", "").strip()
+        is_complete = list_exit == "0" and not listing_reports_errors(listing_json)
+        await self._write_worker_listing_outcome(
+            exit_code=parse_exit_code(list_exit), errors=self.listing_errors, is_complete=is_complete
+        )
+        if not entries or not is_complete:
+            logger.warning(
+                "The workspace's agent listing named {} agent(s) and is {} (exit {}): {}",
+                len(entries),
+                "complete" if is_complete else "incomplete",
+                list_exit,
+                ui_flows.bounded_tail(sections.get("stderr", ""), MAX_COMMAND_OUTPUT_CHARS),
+            )
+        return WorkerListing(entries=entries, is_complete=is_complete)
 
     async def _capture_one_worker(
-        self, launch: WorkerLaunch, entries: Sequence[WorkerListingEntry], lead_work_dir: str
+        self, launch: WorkerLaunch, listing: WorkerListing, lead_work_dir: str
     ) -> WorkerCapture:
         """Run one worker's capture and record what the workspace said about each part; the host paths
         are filled in once the round's directory transfer has landed."""
-        entry = next((entry for entry in entries if entry.name == launch.name), None)
+        entry = next((entry for entry in listing.entries if entry.name == launch.name), None)
         if self._remaining_seconds <= 0:
             return _failed_worker_capture(launch, entry, _uncaptured(REASON_TIMEOUT, ""))
         is_success, output = await self._run_in_workspace(
-            "workers", worker_capture_command(launch.name, lead_work_dir, launch.task_file), _WORKER_TIMEOUT_SECONDS
+            "workers",
+            worker_capture_command(
+                launch.name, entry.agent_id if entry is not None else "", lead_work_dir, launch.task_file
+            ),
+            _WORKER_TIMEOUT_SECONDS,
         )
         sections = split_sections(output)
-        detail = _bounded(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
-        preserved_dir = sections.get("preserved", "").strip()
+        detail = ui_flows.bounded_tail(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
         if not is_success:
             return _failed_worker_capture(
                 launch, entry, _uncaptured(_timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds), detail)
             )
-        is_stream_captured = sections.get("stream_exit", "").strip() == "0" or bool(preserved_dir)
+        is_stream_captured = sections.get("stream_exit", "").strip() == "0"
         return WorkerCapture(
             launch=launch,
-            agent_id=entry.agent_id if entry is not None else preserved_worker_id(preserved_dir, launch.name),
+            agent_id=entry.agent_id if entry is not None else "",
             agent_type=entry.agent_type if entry is not None else "",
             state=(
-                entry.state if entry is not None else WorkerState.DESTROYED if preserved_dir else WorkerState.UNKNOWN
+                entry.state
+                if entry is not None
+                else _state_of_unlisted_worker(listing.is_complete, is_stream_captured)
             ),
             # Captured here means "the workspace produced it"; the host path is attached after the
             # transfer, which is when the file is actually in hand.
@@ -1600,38 +2584,111 @@ class EvidenceCollector(MutableModel):
         settled: list[WorkerCapture] = []
         for capture in captures:
             worker_dir = self._host_dir / WORKERS_DIRNAME / capture.launch.name
+            document = _transferred_capture(capture.document, worker_dir, transfer_failure_reason)
+            document_id, document_type = (
+                _worker_document_identity(document, capture.launch.name)
+                if not capture.agent_id or not capture.agent_type
+                else ("", "")
+            )
             settled.append(
                 WorkerCapture(
                     launch=capture.launch,
-                    agent_id=capture.agent_id,
-                    agent_type=capture.agent_type,
+                    agent_id=capture.agent_id or document_id,
+                    agent_type=capture.agent_type or document_type,
                     state=capture.state,
-                    document=_transferred_capture(capture.document, worker_dir, transfer_failure_reason),
+                    document=document,
                     stream=_transferred_capture(capture.stream, worker_dir, transfer_failure_reason),
                     report=_transferred_capture(capture.report, worker_dir, transfer_failure_reason),
                 )
             )
         return settled
 
-    async def _capture_file_inventory(self) -> None:
+    async def _capture_tickets(self) -> None:
+        """Always-on: every `tk` ticket in the workspace, as `tickets.jsonl`.
+
+        Like the transcript capture this is the trial's record rather than outcome evidence, so it adds
+        no manifest entry: a failure is kept on the capture itself, and the file then holds the reason
+        alone, so a directory that could not be read never reads as a workspace with no tickets.
+        """
         started_at = time.monotonic()
         is_success, output = await self._run_in_workspace(
-            "file_inventory", file_inventory_command(), _INVENTORY_TIMEOUT_SECONDS
+            "tickets", tickets_capture_command(self.repo_root or DEFAULT_WORKSPACE_REPO_ROOT), PROBE_TIMEOUT_SECONDS
+        )
+        self.ticket_capture = (
+            parse_ticket_capture(output)
+            if is_success
+            else _failed_ticket_capture(
+                _timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds),
+                ui_flows.bounded_tail(output, MAX_COMMAND_OUTPUT_CHARS),
+            )
+        )
+        if self.ticket_capture.failure_reason:
+            logger.warning(
+                "Could not read the workspace's tickets ({}): {}",
+                self.ticket_capture.failure_reason,
+                self.ticket_capture.failure_detail[:400],
+            )
+            await self._write_evidence(TICKETS_FILENAME, ticket_failure_jsonl(self.ticket_capture.failure_reason))
+        else:
+            await self._write_evidence(TICKETS_FILENAME, tickets_jsonl(self.ticket_capture.records))
+        self._record_phase("tickets", started_at)
+        await self._flush_record()
+
+    async def _run_diagnostic_probe(self) -> None:
+        """On a step whose config asks for it: the self-diagnostic probe, kept raw beside the bundle.
+
+        Like the tickets capture it adds no manifest entry, and a probe that did not answer still writes
+        the file, holding its reason alone. Its output is parsed by `diagnostic_probe.py`, which shares
+        nothing with this collector.
+        """
+        step = self.case.step
+        if step is None or not step.is_diagnostic_probe_run:
+            return
+        started_at = time.monotonic()
+        command = diagnostic_probe.diagnostic_probe_command(
+            self.repo_root or DEFAULT_WORKSPACE_REPO_ROOT, diagnostic_probe.PRODUCTION_AGENT_LISTING_COMMAND
+        )
+        is_success, output = await self._run_in_workspace("diagnostic_probe", command, PROBE_TIMEOUT_SECONDS)
+        failure_reason = "" if is_success else _timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds)
+        self.diagnostic_probe_capture = DiagnosticProbeCapture(
+            output=output if is_success else "", failure_reason=failure_reason
+        )
+        detail = ui_flows.bounded_tail(output, MAX_COMMAND_OUTPUT_CHARS)
+        if not is_success:
+            logger.warning("Could not run the diagnostic probe ({}): {}", failure_reason, detail)
+        await self._write_evidence(
+            DIAGNOSTIC_PROBE_FILENAME, output if is_success else diagnostic_probe_failure_text(failure_reason, detail)
+        )
+        self._record_phase("diagnostic_probe", started_at)
+        await self._flush_record()
+
+    async def _capture_file_inventory(self) -> None:
+        started_at = time.monotonic()
+        files_checks = self.case.expectations.files_checks if self.case.expectations is not None else ()
+        is_success, output = await self._run_in_workspace(
+            "file_inventory",
+            file_inventory_command(files_checks, staging_dir=WORKSPACE_STAGING_DIR),
+            _INVENTORY_TIMEOUT_SECONDS,
         )
         is_pulled = (
             await self._pull_staged_path("file_inventory", FILE_INVENTORY_FILENAME, is_directory=False)
             if is_success
             else False
         )
+        sections = split_sections(output)
+        self.inventory_failure_reason = "" if is_pulled else _timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds)
+        self.files_matched_count_by_check_id = (
+            parse_files_matched_counts(sections.get("files_matched", "")) if is_pulled else None
+        )
         self.entries.append(
             _entry(
                 "file_inventory",
                 CheckClass.FILES,
                 CheckStatus.PASSED if is_pulled else CheckStatus.ERROR,
-                "" if is_pulled else _timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds),
-                "{} file(s) inventoried".format(output.strip())
+                self.inventory_failure_reason,
+                "{} file(s) inventoried".format(sections.get("inventory_count", "").strip())
                 if is_pulled
-                else _bounded(output, MAX_COMMAND_OUTPUT_CHARS),
+                else ui_flows.bounded_tail(output, MAX_COMMAND_OUTPUT_CHARS),
                 "{}/{}".format(VERIFICATION_DIRNAME, FILE_INVENTORY_FILENAME),
             )
         )
@@ -1651,10 +2708,14 @@ class EvidenceCollector(MutableModel):
             await self._flush_record()
             return
         is_success, output = await self._run_in_workspace(
-            "repo_state", repo_state_command(self.repo_root, self.clone_base_sha), _BUNDLE_TIMEOUT_SECONDS
+            "repo_state",
+            repo_state_command(self.repo_root, self.clone_base_sha, self.seeded_sha),
+            _BUNDLE_TIMEOUT_SECONDS,
         )
         sections = split_sections(output)
-        head_sha = sections.get("head_sha", "").strip()
+        reading = read_repo_state_output(output, self.seeded_sha)
+        self.repo_state = reading if is_success else None
+        head_sha = reading.head_sha
         porcelain = sections.get("status", "")
         commit_count = sections.get("commit_count", "").strip()
         is_bundle_expected = commit_count.isdigit() and int(commit_count) > 0
@@ -1669,13 +2730,22 @@ class EvidenceCollector(MutableModel):
                 {
                     "repo_root": self.repo_root,
                     # Both SHAs travel: a replay regenerates the base clone from the dwt tip, checks
-                    # it reproduces base_sha, then unbundles the agent's commits onto it.
+                    # it reproduces base_sha, then unbundles the workspace's commits onto it.
                     "base_sha": self.clone_base_sha,
                     "dwt_tip_sha": self.dwt_tip_sha,
+                    # On a seeded trial the base is the seeded commit, so a replay rebuilds the seed
+                    # onto the regenerated clone, checks it reproduces seeded_sha, then unbundles.
+                    "seed_commit_sha": self.seed_commit_sha,
+                    "seeded_sha": self.seeded_sha,
                     "head_sha": head_sha,
                     "commit_count_beyond_base": commit_count,
+                    # The bundle holds every commit beyond the base, the bootstrap's included.
+                    "bootstrap_commit_count": reading.bootstrap_commit_count,
+                    "agent_commit_count": reading.agent_commit_count,
+                    "bundle_byte_count": reading.bundle_byte_count,
+                    "is_seeded_sha_in_head": reading.is_seeded_sha_in_head,
                     "is_clean": not porcelain.strip(),
-                    "status_porcelain": _bounded(porcelain, MAX_COMMAND_OUTPUT_CHARS),
+                    "status_porcelain": ui_flows.bounded_tail(porcelain, MAX_COMMAND_OUTPUT_CHARS),
                 },
                 indent=2,
             ),
@@ -1722,17 +2792,20 @@ class EvidenceCollector(MutableModel):
             )
             sections = split_sections(output)
             exit_code = sections.get("exit_code", "").strip()
+            entry = _entry(
+                entry_id,
+                CheckClass.TEST_COMMAND,
+                _test_command_status(is_success, exit_code),
+                "" if exit_code == "0" else (REASON_NONZERO_EXIT if is_success else REASON_BRIDGE_FAILED),
+                "$ {}\nexit {}\n{}".format(
+                    command,
+                    exit_code or "unknown",
+                    ui_flows.bounded_tail(sections.get("output", ""), MAX_COMMAND_OUTPUT_CHARS),
+                ),
+                "",
+            )
             self.entries.append(
-                _entry(
-                    entry_id,
-                    CheckClass.TEST_COMMAND,
-                    _test_command_status(is_success, exit_code),
-                    "" if exit_code == "0" else (REASON_NONZERO_EXIT if is_success else REASON_BRIDGE_FAILED),
-                    "$ {}\nexit {}\n{}".format(
-                        command, exit_code or "unknown", _bounded(sections.get("output", ""), MAX_COMMAND_OUTPUT_CHARS)
-                    ),
-                    "",
-                )
+                entry.model_copy_update(to_update(entry.field_ref().exit_code, parse_exit_code(exit_code)))
             )
         self._record_phase("test_commands", started_at)
         await self._flush_record()
@@ -1750,9 +2823,9 @@ class EvidenceCollector(MutableModel):
         await self._flush_record()
 
     async def _run_one_http_check(self, check: HttpCheck) -> None:
-        delivered_apps = self._delivered_apps
-        if delivered_apps is None:
-            # Without a resolved delivered set there is no address to probe; that is the harness
+        probeable_apps = self._probeable_apps
+        if probeable_apps is None:
+            # Without a resolved probeable set there is no address to probe; that is the harness
             # failing to measure, not the app refusing a connection.
             self.entries.append(
                 _entry(
@@ -1760,12 +2833,12 @@ class EvidenceCollector(MutableModel):
                     CheckClass.HTTP,
                     CheckStatus.ERROR,
                     self._unresolved_reason,
-                    "the delivered apps could not be resolved, so target {!r} has no address".format(check.target),
+                    "the registered apps could not be resolved, so target {!r} has no address".format(check.target),
                     "",
                 )
             )
             return
-        targets = resolve_http_targets(check, delivered_apps)
+        targets = resolve_http_targets(check, probeable_apps)
         if not targets:
             reason = (
                 REASON_NO_REGISTERED_APPS
@@ -1812,7 +2885,7 @@ class EvidenceCollector(MutableModel):
                     "status_code": status_code,
                     "elapsed_seconds": elapsed_seconds,
                     "probe_error": probe_error.strip(),
-                    "headers": _bounded(sections.get("headers", ""), MAX_COMMAND_OUTPUT_CHARS),
+                    "headers": ui_flows.bounded_tail(sections.get("headers", ""), MAX_COMMAND_OUTPUT_CHARS),
                     "body_head": body_head,
                 },
                 indent=2,
@@ -1821,27 +2894,27 @@ class EvidenceCollector(MutableModel):
         status, reason = http_entry_status(is_success, probe_error, status_code, body_head, check)
         if status is CheckStatus.PASSED:
             self.serving_app_names.add(target.name)
-        self.entries.append(
-            _entry(
-                entry_id,
-                CheckClass.HTTP,
-                status,
-                reason,
-                "{} -> HTTP {} in {}s (expected {})".format(
-                    target.url, status_code, elapsed_seconds, check.expect_status
-                ),
-                "{}/{}".format(VERIFICATION_DIRNAME, evidence_name),
-            )
+        entry = _entry(
+            entry_id,
+            CheckClass.HTTP,
+            status,
+            reason,
+            "{} -> HTTP {} in {}s (expected {})".format(target.url, status_code, elapsed_seconds, check.expect_status),
+            "{}/{}".format(VERIFICATION_DIRNAME, evidence_name),
         )
+        # A probe the bridge never delivered observed no status at all, which is not curl's 0 for a
+        # refused connection.
+        observed_status_code = status_code if is_success else None
+        self.entries.append(entry.model_copy_update(to_update(entry.field_ref().status_code, observed_status_code)))
 
-    async def _run_step_script(self, step_request: str) -> ui_flows.StepOutcome:
+    async def run_step_script(self, step_request: str) -> ui_flows.StepOutcome:
         """One flow step: one box exec of the step script, which acts, shoots and reads the page.
 
         Box-local, unlike everything else this collector runs -- the browser and the forward proxy
         both live here, and only the proxy's own tunnel touches the workspace. That is the whole
         latency argument for this executor.
         """
-        wanted_seconds = _STEP_TIMEOUT_SECONDS
+        wanted_seconds = flow_runner.STEP_TIMEOUT_SECONDS
         if self.flow_deadline:
             wanted_seconds = max(1, min(wanted_seconds, int(self.flow_deadline - time.monotonic())))
         result = await minds_bridge.run_in_box(
@@ -1850,11 +2923,11 @@ class EvidenceCollector(MutableModel):
         output = (result.stdout or "") + (result.stderr or "")
         self.trace.append(
             TraceRecord(
-                timestamp=utc_now_iso(),
+                timestamp=ui_flows.utc_now_iso(),
                 phase="ui_flows",
                 command=ui_flows.step_command(step_request)[:400],
                 is_success=result.return_code == 0,
-                output=_bounded(output, MAX_TRACE_OUTPUT_CHARS),
+                output=ui_flows.bounded_tail(output, MAX_TRACE_OUTPUT_CHARS),
             )
         )
         return ui_flows.parse_step_result(result.stdout or "")
@@ -1879,7 +2952,7 @@ class EvidenceCollector(MutableModel):
         await minds_bridge.run_in_box(self.environment, start, self.box_env, self._budget(PROBE_TIMEOUT_SECONDS))
         self.trace.append(
             TraceRecord(
-                timestamp=utc_now_iso(),
+                timestamp=ui_flows.utc_now_iso(),
                 phase="ui_flows",
                 command=forward_instance.redact_forward_command(argv),
                 is_success=True,
@@ -1909,11 +2982,11 @@ class EvidenceCollector(MutableModel):
         )
         self.trace.append(
             TraceRecord(
-                timestamp=utc_now_iso(),
+                timestamp=ui_flows.utc_now_iso(),
                 phase="ui_flows",
                 command=launch,
                 is_success=result.return_code == 0,
-                output=_bounded((result.stdout or "") + (result.stderr or ""), MAX_TRACE_OUTPUT_CHARS),
+                output=ui_flows.bounded_tail((result.stdout or "") + (result.stderr or ""), MAX_TRACE_OUTPUT_CHARS),
             )
         )
         if result.return_code != 0:
@@ -1943,11 +3016,11 @@ class EvidenceCollector(MutableModel):
         if summary:
             self.trace.append(
                 TraceRecord(
-                    timestamp=utc_now_iso(),
+                    timestamp=ui_flows.utc_now_iso(),
                     phase="ui_flows",
                     command="(mngr forward envelopes)",
                     is_success=True,
-                    output=_bounded(summary, MAX_TRACE_OUTPUT_CHARS),
+                    output=ui_flows.bounded_tail(summary, MAX_TRACE_OUTPUT_CHARS),
                 )
             )
 
@@ -1963,7 +3036,8 @@ class EvidenceCollector(MutableModel):
         )
 
     async def _run_ui_flows(self, expectations: ExpandedExpectations) -> None:
-        """Drive each declared flow through the delivered app's forwarded origin.
+        """Drive each declared flow through the delivered or seeded app's forwarded origin, opening at
+        the flow's own start path.
 
         This runs LAST of the collection steps: it is the most expensive one and the one most
         likely to exhaust the budget, and everything before it is worth having even when it does.
@@ -1971,23 +3045,30 @@ class EvidenceCollector(MutableModel):
         if not expectations.ui_flow_checks:
             return
         started_at = time.monotonic()
-        agent = self.verification_agent
-        if agent is None:
+        # A scripted flow brings its own decisions; only a model-driven flow needs the configured
+        # agent, so a missing one leaves the scripted flows to run.
+        is_agent_configured = self.verification_agent is not None
+        unagented_checks = tuple(
+            check for check in expectations.ui_flow_checks if not check.script and not is_agent_configured
+        )
+        if unagented_checks:
             self._record_flow_error(
-                expectations.ui_flow_checks,
+                unagented_checks,
                 ui_flows.REASON_VERIFIER_AGENT_FAILED,
-                "no verification agent was configured",
+                "no verification agent was configured to carry out a model-driven flow",
             )
+        checks = tuple(check for check in expectations.ui_flow_checks if check not in unagented_checks)
+        if not checks:
             await self._finish_flow_phase(started_at)
             return
-        delivered_apps = self._delivered_apps
-        if delivered_apps is None:
-            # A delivered set we could not resolve tells us nothing about what was served, which is
+        probeable_apps = self._probeable_apps
+        if probeable_apps is None:
+            # A probeable set we could not resolve tells us nothing about what was served, which is
             # the harness failing to look -- quite unlike a registry that lists nothing.
             self._record_flow_error(
-                expectations.ui_flow_checks,
+                checks,
                 self._unresolved_reason,
-                "the delivered apps could not be resolved, so there is no origin to drive a flow against",
+                "the registered apps could not be resolved, so there is no origin to drive a flow against",
             )
             await self._finish_flow_phase(started_at)
             return
@@ -1995,7 +3076,7 @@ class EvidenceCollector(MutableModel):
             # The agent id is the origin coordinate, so one the proxy does not route on leaves no
             # origin to build, whatever the workspace is serving.
             self._record_flow_error(
-                expectations.ui_flow_checks,
+                checks,
                 ui_flows.REASON_WORKSPACE_UNADDRESSABLE,
                 "workspace agent id {!r} is not an origin coordinate, so no forwarded origin can be addressed".format(
                     self.workspace_agent_id
@@ -2003,16 +3084,16 @@ class EvidenceCollector(MutableModel):
             )
             await self._finish_flow_phase(started_at)
             return
-        target_url = self._flow_target_url(delivered_apps)
-        if not target_url:
-            # A readable registry listing no delivered app is the agent shipping nothing.
-            for check in expectations.ui_flow_checks:
+        app_origin = self._flow_target_url(probeable_apps)
+        if not app_origin:
+            # A readable registry listing no delivered or seeded app is the agent shipping nothing.
+            for check in checks:
                 self.entries.append(
                     _flow_entry(
                         check,
                         CheckStatus.FAILED,
                         ui_flows.REASON_NO_APP_TO_OPEN,
-                        "no delivered app is registered, so there is no UI to exercise",
+                        "no delivered or seeded app is registered, so there is no UI to exercise",
                     )
                 )
             await self._finish_flow_phase(started_at)
@@ -2020,12 +3101,14 @@ class EvidenceCollector(MutableModel):
         await minds_bridge.upload_flow_step_script(self.environment, ui_flows.BOX_FLOW_STEP_PATH)
         forward_reason = await self._start_forward()
         if forward_reason:
-            self._record_flow_error(expectations.ui_flow_checks, forward_reason, "the forward proxy never served")
+            self._record_flow_error(checks, forward_reason, "the forward proxy never served")
             await self._stop_forward()
             await self._finish_flow_phase(started_at)
             return
-        for flow_index, check in enumerate(expectations.ui_flow_checks):
-            await self._run_one_flow(check, flow_index, target_url, agent)
+        for flow_index, check in enumerate(checks):
+            agent = flow_runner.choose_flow_agent(check, app_origin, self.verification_agent)
+            assert agent is not None, "a model-driven flow with no agent is recorded before any flow runs"
+            await self._run_one_flow(check, flow_index, ui_flows.flow_start_url(app_origin, check.start_path), agent)
         await self._stop_forward()
         await self._finish_flow_phase(started_at)
 
@@ -2034,14 +3117,14 @@ class EvidenceCollector(MutableModel):
         self._record_phase("ui_flows", started_at)
         await self._flush_record()
 
-    def _flow_target_url(self, delivered_apps: Sequence[RegisteredApp]) -> str:
+    def _flow_target_url(self, probeable_apps: Sequence[RegisteredApp]) -> str:
         """The forwarded origin of the app a flow drives: its label on the workspace's agent-keyed origin.
 
         Empty means the workspace registered nothing to drive, which is the agent's shortfall; the
         caller has already established that the agent id is addressable.
 
         An app that ANSWERED its root-path probe wins over one that merely holds a registry row.
-        With more than one delivered row, taking the first would point the flow at whichever
+        With more than one probeable row, taking the first would point the flow at whichever
         registered first, and a row whose port is dead serves the proxy's own error page -- so the
         flow would record the deliverable as broken having never once reached it. Registry order
         decides only among apps that are equally reachable, and remains the fallback when nothing
@@ -2052,7 +3135,7 @@ class EvidenceCollector(MutableModel):
         mapping it back to the service itself. A row with no label predates labels and routes under
         its name.
         """
-        addressable = [app for app in delivered_apps if app.url]
+        addressable = [app for app in probeable_apps if app.url]
         serving = [app for app in addressable if app.name in self.serving_app_names]
         for app in serving or addressable:
             return forward_instance.forwarded_origin(
@@ -2063,211 +3146,134 @@ class EvidenceCollector(MutableModel):
     def _record_flow_error(self, checks: Sequence[UiFlowCheck], reason: str, detail: str) -> None:
         for check in checks:
             self.entries.append(
-                _flow_entry(check, CheckStatus.ERROR, reason, _bounded(detail, MAX_COMMAND_OUTPUT_CHARS))
+                _flow_entry(check, CheckStatus.ERROR, reason, ui_flows.bounded_tail(detail, MAX_COMMAND_OUTPUT_CHARS))
             )
 
     async def _run_one_flow(
         self, check: UiFlowCheck, flow_index: int, target_url: str, agent: ui_flows.VerificationAgent
     ) -> None:
-        """Execute one flow: open the app in a browser of its own, then read-decide-act until the
-        agent says it is done, and finally judge the declared `expect` against the last state."""
+        """Execute one flow in a browser of its own, and record what it produced."""
         slug = slugify(check.name)
-        self.flow_deadline = min(time.monotonic() + _FLOW_DEADLINE_SECONDS, self.deadline)
-        steps: list[str] = []
-        history: list[str] = []
-        is_finished_by_agent = False
+        self.flow_deadline = min(time.monotonic() + flow_runner.FLOW_DEADLINE_SECONDS, self.deadline)
 
         # A browser of its own per flow, so one flow's cookies and storage never leak into the next.
         browser_reason = await self._start_browser(flow_index)
         if browser_reason:
             await self._finish_flow(
-                check, slug, steps, CheckStatus.ERROR, browser_reason, "the box browser never came up"
-            )
-            return
-        endpoint = ui_flows.cdp_endpoint(ui_flows.flow_browser_port(flow_index))
-
-        # The session cookie rides this first request, so the opening navigation is already
-        # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
-        opening = ui_flows.FlowAction(
-            kind=ui_flows.FlowActionKind.OPEN,
-            role="",
-            target="",
-            text=target_url,
-            amount=0,
-            reasoning="the flow has not opened the app yet",
-            expected="the delivered app loads",
-        )
-        outcome = await self._run_step_script(
-            ui_flows.build_step_request(
-                opening,
-                self._flow_screenshot_path(slug, 0),
-                cdp_endpoint_url=endpoint,
-                preauth_cookie=self.preauth_cookie.get_secret_value(),
-                cookie_domain=forward_instance.session_cookie_domain(self.workspace_agent_id),
-            )
-        )
-        if not outcome.is_ok:
-            # The harness's own navigation to the delivered app's forwarded origin. If THIS fails on
-            # the instrument, it cannot look at the app at all; if it fails on the app -- a page that
-            # never loads -- that is the deliverable falling short.
-            # A step that failed always names its layer; a report that names none is the executor
-            # failing to say what happened, which is an instrument failure like any other. The
-            # status follows the reason, so the two can never disagree.
-            reason = outcome.reason or ui_flows.REASON_STEP_ERROR
-            await self._finish_flow(
                 check,
                 slug,
-                steps,
-                CheckStatus.ERROR if ui_flows.is_instrument_reason(reason) else CheckStatus.FAILED,
-                reason,
-                outcome.detail,
+                flow_runner.FlowRun(
+                    status=CheckStatus.ERROR,
+                    reason=browser_reason,
+                    detail="the box browser never came up",
+                    records=(),
+                    verifier_call_count=0,
+                ),
             )
             return
-        state_text = outcome.state_text
-        steps.append(
-            ui_flows.flow_init_record(
-                check.steps, check.expect, target_url, state_text, outcome.screenshot_name, utc_now_iso()
-            )
+        executor = _BoxFlowStepExecutor(
+            collector=self,
+            slug=slug,
+            cdp_endpoint_url=ui_flows.cdp_endpoint(ui_flows.flow_browser_port(flow_index)),
         )
-
-        for step_index in range(1, ui_flows.MAX_STEPS_PER_FLOW + 1):
-            if self._remaining_seconds <= 0:
-                await self._finish_flow(
-                    check, slug, steps, CheckStatus.ERROR, REASON_TIMEOUT, "the collection budget ran out mid-flow"
-                )
-                return
-            if time.monotonic() >= self.flow_deadline:
-                # The flow's own deadline, unlike the phase budget, is about THIS app: a page that
-                # never settles is the delivered thing being unusable.
-                await self._finish_flow(
-                    check,
-                    slug,
-                    steps,
-                    CheckStatus.FAILED,
-                    ui_flows.REASON_FLOW_DEADLINE,
-                    "the flow did not finish within its deadline",
-                )
-                return
-            action, _call = agent.decide_next_action(check.steps, tuple(history), state_text)
-            if action is None:
-                await self._finish_flow(
-                    check,
-                    slug,
-                    steps,
-                    CheckStatus.ERROR,
-                    ui_flows.REASON_VERIFIER_AGENT_FAILED,
-                    "the verification agent returned no usable action",
-                )
-                return
-            described = ui_flows.describe_action(action)
-            if action.kind == ui_flows.FlowActionKind.DONE:
-                steps.append(
-                    ui_flows.flow_step_record(
-                        step_index,
-                        described,
-                        action.reasoning,
-                        action.expected,
-                        "",
-                        state_text,
-                        "",
-                        "",
-                        utc_now_iso(),
-                    )
-                )
-                is_finished_by_agent = True
-                break
-            outcome = await self._run_step_script(
-                ui_flows.build_step_request(
-                    action,
-                    self._flow_screenshot_path(slug, step_index),
-                    cdp_endpoint_url=endpoint,
-                    preauth_cookie="",
-                    cookie_domain="",
-                )
-            )
-            if ui_flows.is_instrument_reason(outcome.reason):
-                steps.append(
-                    ui_flows.flow_step_record(
-                        step_index,
-                        described,
-                        action.reasoning,
-                        action.expected,
-                        "",
-                        state_text,
-                        "",
-                        outcome.reason,
-                        utc_now_iso(),
-                    )
-                )
-                await self._finish_flow(check, slug, steps, CheckStatus.ERROR, outcome.reason, outcome.detail)
-                return
-            step_error = ""
-            if not outcome.is_ok:
-                # The action did not land but the browser is fine -- an element that is not there,
-                # a click that hit nothing. The page below shows the truth, so the flow carries on
-                # with the failure recorded where the grade-time judge will read it.
-                step_error = _bounded(outcome.detail.strip(), 200)
-            # What the page did, against what the action predicted it would do. Recorded on the step
-            # and carried into the next decision's history, which is where a wrong model of the UI
-            # -- a filter that turns out to be a toggle -- becomes visible instead of being retried.
-            observed = ui_flows.summarize_state_change(state_text, outcome.state_text or state_text)
-            history.append(ui_flows.describe_step(described, action.expected, step_error, observed))
-            steps.append(
-                ui_flows.flow_step_record(
-                    step_index,
-                    described,
-                    action.reasoning,
-                    action.expected,
-                    observed,
-                    state_text,
-                    # The executor names the frame it actually wrote, and names nothing when the
-                    # capture failed. Naming the file it would have written instead would put a
-                    # screenshot that does not exist in front of the grade-time judge.
-                    outcome.screenshot_name,
-                    step_error,
-                    utc_now_iso(),
-                )
-            )
-            state_text = outcome.state_text or state_text
-
-        # The agent's account of the state the flow ended in. Evidence for the judge, never a
-        # verdict on the `expect` -- and a call that produced nothing costs the flow its context,
-        # not its completion, because the step log already carries every state that was seen.
-        reading, _reading_call = agent.read_final_state(check.steps, tuple(history), state_text)
-        observation = reading.observation if reading is not None else ""
-        steps.append(ui_flows.flow_final_record(len(steps), observation, state_text, utc_now_iso()))
-        # Completion, not achievement: a flow that carried out its declared steps is `completed`,
-        # and one that ran out of budget first is `incomplete`. Whether the app did what the
-        # `expect` describes is decided at grade time, from this evidence.
-        await self._finish_flow(
-            check,
-            slug,
-            steps,
-            CheckStatus.PASSED if is_finished_by_agent else CheckStatus.FAILED,
-            "" if is_finished_by_agent else ui_flows.REASON_STEP_BUDGET_EXHAUSTED,
-            "expected: {}\nagent's reading of the final state: {}".format(
-                check.expect, observation or "(none recorded)"
-            ),
+        run = await flow_runner.run_flow(
+            check, target_url, agent, executor, phase_deadline=self.deadline, flow_deadline=self.flow_deadline
         )
+        await self._finish_flow(check, slug, run)
 
-    def _flow_screenshot_path(self, slug: str, step_index: int) -> str:
+    def flow_screenshot_path(self, slug: str, step_index: int) -> str:
         """Where the step script writes a frame: straight into the box's evidence directory.
 
         The browser runs in the box, so the screenshot is already where the declared artifact
         collector will find it -- there is no workspace staging leg and no rsync at all, which is
         the transport the fleet executor needed and this one does not.
         """
-        return "{}/{}/{}/step_{:03d}.png".format(self._box_dir, FLOWS_DIRNAME, slug, step_index)
+        return "{}/{}/{}/{}".format(self._box_dir, FLOWS_DIRNAME, slug, ui_flows.flow_screenshot_name(step_index))
 
-    async def _finish_flow(
-        self, check: UiFlowCheck, slug: str, steps: Sequence[str], status: CheckStatus, reason: str, detail: str
-    ) -> None:
-        """Write one flow's step log and record its entry. Screenshots are already in place."""
+    async def _finish_flow(self, check: UiFlowCheck, slug: str, run: flow_runner.FlowRun) -> None:
+        """Write one flow's step log, keep its run and record its entry. Screenshots are already in place."""
         await self._write_evidence(
-            "{}/{}/{}".format(FLOWS_DIRNAME, slug, FLOW_LOG_FILENAME), "".join(line + "\n" for line in steps)
+            "{}/{}/{}".format(FLOWS_DIRNAME, slug, FLOW_LOG_FILENAME), "".join(line + "\n" for line in run.records)
         )
-        self.entries.append(_flow_entry(check, status, reason, _bounded(detail, MAX_COMMAND_OUTPUT_CHARS)))
+        # Its own file rather than a last line of the log: the judge's renderer reads every log
+        # record as a flow step, so an outcome record there would render as one more step.
+        await self._write_evidence("{}/{}/{}".format(FLOWS_DIRNAME, slug, FLOW_RUN_FILENAME), flow_run_json(run))
+        self.flow_run_by_check_id[check.check_id] = run
+        self.entries.append(
+            _flow_entry(check, run.status, run.reason, ui_flows.bounded_tail(run.detail, MAX_COMMAND_OUTPUT_CHARS))
+        )
         await self._flush_record()
+
+    def _evaluate_process_checks(self, expectations: ExpandedExpectations) -> None:
+        """How the agent worked, rather than what it delivered: which skills it invoked and how many
+        background workers it launched, read off the captured transcript stream.
+
+        The stream is the same input the worker capture scans, and it is already host-side, so this
+        costs no round trip. Without it nothing about the agent's own work can be read, and every
+        check is an ERROR -- the instrument failed, and an agent must not be charged for that.
+
+        A stream that came out but holds no agent record at all is the same failure wearing the
+        shape of a success. These checks run only on a finished conversation, where every configured
+        entry was answered, so the chat agent's own stream cannot honestly be free of its steps --
+        and reading an empty one as evidence would charge the agent for every required skill while
+        waving off however many workers it launched.
+        """
+        if not expectations.process_checks:
+            return
+        started_at = time.monotonic()
+        stream = self.transcript_capture.stream
+        records = parse_transcript_jsonl(stream.host_path.read_text()) if stream.host_path is not None else []
+        if any(record.get("source") == "agent" for record in records):
+            invocations = scan_skill_invocations(records)
+            launches = scan_worker_launches(records, depth=0, lead_name="")
+            self.entries.extend(_process_entry(check, invocations, launches) for check in expectations.process_checks)
+        else:
+            is_uncaptured = stream.host_path is None
+            detail = (
+                "the transcript stream was not captured: {} {}".format(
+                    stream.failure_reason, stream.failure_detail
+                ).strip()
+                if is_uncaptured
+                else "the captured transcript stream holds no record of the agent"
+            )
+            self.entries.extend(
+                _entry(
+                    check.check_id,
+                    CheckClass.PROCESS,
+                    CheckStatus.ERROR,
+                    REASON_TRANSCRIPT_UNCAPTURED if is_uncaptured else REASON_TRANSCRIPT_EMPTY,
+                    detail,
+                    "",
+                )
+                for check in expectations.process_checks
+            )
+        self._record_phase("process_checks", started_at)
+
+    def _evaluate_timing_checks(self, expectations: ExpandedExpectations) -> None:
+        """How long the agent took to satisfy the goal-holding client, read off the conversation
+        records the driver holds. Costs no round trip: nothing about it is in the workspace.
+
+        Runs after every other class, so the prerequisite is answered from the failures this bundle
+        actually recorded rather than from a second pass over the workspace.
+        """
+        if not expectations.timing_checks:
+            return
+        started_at = time.monotonic()
+        timing = measure_goal_satisfaction_timing(self.entry_records, self.turn_records)
+        failed_classes = frozenset(entry.check_class for entry in self.entries if entry.status == CheckStatus.FAILED)
+        for check in expectations.timing_checks:
+            self.entries.append(
+                _timing_entry(
+                    check,
+                    timing,
+                    tuple(
+                        check_class
+                        for check_class in sorted(set(check.requires_no_failures))
+                        if check_class in failed_classes
+                    ),
+                )
+            )
+        self._record_phase("timing_checks", started_at)
 
     def _evaluate_app_checks(self, expectations: ExpandedExpectations) -> None:
         """The registry/service half of the deliverable: enough delivered apps registered, and each
@@ -2279,6 +3285,7 @@ class EvidenceCollector(MutableModel):
         service_states = parse_service_states(self.services_text)
         delivered_apps = self._delivered_apps
         program_by_registration = parse_supervised_registrations(self.supervisord_conf)
+        is_supervisord_conf_readable = not is_supervisord_capture_broken(self.supervisord_conf, service_states)
         for check in expectations.app_checks:
             self.entries.append(
                 registration_entry(check.check_id, check.min_registered_apps, delivered_apps, self._unresolved_reason)
@@ -2292,10 +3299,102 @@ class EvidenceCollector(MutableModel):
                         delivered_apps,
                         service_states,
                         program_by_registration,
-                        bool(service_states),
+                        is_services_readable=bool(service_states),
+                        is_supervisord_conf_readable=is_supervisord_conf_readable,
                     )
                 )
         self._record_phase("app_checks", started_at)
+
+    def _evaluate_files_checks(self, expectations: ExpandedExpectations) -> None:
+        """One entry per declared files check, carrying the match count the inventory walk took. Costs
+        no round trip: the counts rode the inventory's own exec."""
+        for check in expectations.files_checks:
+            entry = files_check_entry(check, self.files_matched_count_by_check_id, self.inventory_failure_reason)
+            if entry is None:
+                logger.warning(
+                    "The file inventory was captured but reported no match count for {}; recording no entry for it",
+                    check.check_id,
+                )
+                continue
+            self.entries.append(entry)
+
+
+@pure
+def parse_files_matched_counts(matched_section: str) -> dict[str, int]:
+    """Each files check's match count out of the inventory walk's JSON; the checks it does not name, or
+    names with something other than a count, are left out."""
+    try:
+        payload = json.loads(matched_section.strip())
+    except ValueError:
+        logger.warning("The file inventory's match counts are not JSON: {!r}", matched_section[:200])
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(check_id): count
+        for check_id, count in payload.items()
+        if isinstance(count, int) and not isinstance(count, bool)
+    }
+
+
+@pure
+def files_check_entry(
+    check: FilesCheck,
+    # None when the inventory was not captured, in which case the failure reason says why.
+    matched_count_by_check_id: Mapping[str, int] | None,
+    inventory_failure_reason: str,
+) -> ManifestEntry | None:
+    """One files check's entry, or None when a captured inventory reported no count for it.
+
+    Its status restates the verifier's own rule -- at least `min_count` matches -- so it never
+    disagrees with the grade; and it errors only when the inventory entry itself did, which is the one
+    condition the verifier already treats as an unmeasured files class.
+    """
+    evidence_path = "{}/{}".format(VERIFICATION_DIRNAME, FILE_INVENTORY_FILENAME)
+    if matched_count_by_check_id is None:
+        assert inventory_failure_reason, "an uncaptured inventory must name the reason it is uncaptured"
+        return _entry(check.check_id, CheckClass.FILES, CheckStatus.ERROR, inventory_failure_reason, "", "")
+    matched_count = matched_count_by_check_id.get(check.check_id)
+    if matched_count is None:
+        return None
+    is_met = matched_count >= check.min_count
+    entry = _entry(
+        check.check_id,
+        CheckClass.FILES,
+        CheckStatus.PASSED if is_met else CheckStatus.FAILED,
+        "" if is_met else REASON_TOO_FEW_FILES,
+        "{} inventory path(s) match {!r}; expected at least {}".format(matched_count, check.glob, check.min_count),
+        evidence_path,
+    )
+    return entry.model_copy_update(to_update(entry.field_ref().matched_count, matched_count))
+
+
+class _BoxFlowStepExecutor(flow_runner.FlowStepExecutor):
+    """The trial-time executor: each step is one exec of the step script in the box, against the
+    browser the collector launched for this flow, writing its frame into the box's evidence dir.
+
+    The session cookie rides the OPENING request only, so the flow's first navigation is already
+    authenticated; later steps land in the same browser, which is still holding the session. The
+    scope it is installed at is `forward_instance.session_cookie_domain`.
+    """
+
+    collector: EvidenceCollector = Field(frozen=True, description="Owns the bridge, the budget and the trace")
+    slug: str = Field(frozen=True, description="The flow's evidence directory name under flows/")
+    cdp_endpoint_url: str = Field(frozen=True, description="Where this flow's box browser listens for CDP")
+
+    async def run_step(self, action: ui_flows.FlowAction, step_index: int) -> ui_flows.StepOutcome:
+        is_opening = step_index == 0
+        return await self.collector.run_step_script(
+            ui_flows.build_step_request(
+                action,
+                self.collector.flow_screenshot_path(self.slug, step_index),
+                cdp_endpoint_url=self.cdp_endpoint_url,
+                preauth_cookie=self.collector.preauth_cookie.get_secret_value() if is_opening else "",
+                cookie_domain=(
+                    forward_instance.session_cookie_domain(self.collector.workspace_agent_id) if is_opening else ""
+                ),
+            )
+        )
 
 
 @pure
@@ -2324,11 +3423,13 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
         base_sha="0" * 40,
         dwt_tip_sha="d" * 40,
         preexisting_registrations=tuple(sorted(name for name, _url in _ORACLE_PREEXISTING_APPS)),
+        is_registry_present=True,
+        seeded_registrations=(),
         is_expectations_declared=True,
         is_evidence_complete=True,
         started_at="1970-01-01T00:00:00+00:00",
         phases=(PhaseTiming(name="oracle", seconds=0.0),),
-        entries=_oracle_entries(expectations),
+        entries=_oracle_entries(expectations, _oracle_satisfied_turn_index(case)),
     )
     trace = TraceRecord(
         timestamp="1970-01-01T00:00:00+00:00",
@@ -2391,21 +3492,27 @@ def _oracle_flow_log(check: UiFlowCheck) -> str:
         line + "\n"
         for line in (
             ui_flows.flow_init_record(
-                check.steps,
+                check.actions,
                 check.expect,
                 _ORACLE_APP_URL,
                 opening_state,
                 "",
+                0,
+                False,
                 "1970-01-01T00:00:00+00:00",
             ),
             ui_flows.flow_step_record(
                 1,
                 "finish the flow",
-                "the delivered app, open and showing what the steps describe",
-                "nothing further -- every declared step has been carried out",
                 "",
+                "the delivered app, open and showing what the declared actions describe",
+                "nothing further -- every declared action has been carried out",
+                "",
+                StepReaction.UNOBSERVED,
                 "{}\n{}".format(opening_state, check.expect),
                 "",
+                0,
+                False,
                 "",
                 "1970-01-01T00:00:00+00:00",
             ),
@@ -2441,7 +3548,22 @@ def _oracle_inventory_paths(expectations: ExpandedExpectations) -> tuple[str, ..
 
 
 @pure
-def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, ...]:
+def _oracle_satisfied_turn_index(case: CaseConfig) -> int:
+    """Which client message the oracle's goal-holding client was satisfied by.
+
+    The oracle's canned conversation is one message per prompts entry, and its state.json records a
+    goal entry as satisfied by its own message, so that is the entry's 1-based position. A case with
+    no goal entry has no such message; the last one stands in, which keeps the fabricated timing
+    entry self-consistent with the fabricated conversation.
+    """
+    return max(
+        (index + 1 for index, entry in enumerate(case.prompts) if isinstance(entry, GoalEntry)),
+        default=len(case.prompts),
+    )
+
+
+@pure
+def _oracle_entries(expectations: ExpandedExpectations, satisfied_turn_index: int) -> tuple[ManifestEntry, ...]:
     entries: list[ManifestEntry] = [
         _entry(
             "file_inventory",
@@ -2463,6 +3585,17 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                 "",
             )
         )
+    # Counted over the fabricated inventory with the matching the walk uses, so the oracle's files
+    # entries carry the count its own inventory file would give.
+    oracle_paths = _oracle_inventory_paths(expectations)
+    oracle_matched_count_by_check_id = {
+        check.check_id: sum(1 for path in oracle_paths if fnmatch.fnmatchcase(path, check.glob))
+        for check in expectations.files_checks
+    }
+    for check in expectations.files_checks:
+        files_entry = files_check_entry(check, oracle_matched_count_by_check_id, "")
+        assert files_entry is not None, "every oracle files check has a count"
+        entries.append(files_entry)
     for check in expectations.app_checks:
         entries.append(
             registration_entry(
@@ -2474,6 +3607,7 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                         url=_ORACLE_APP_URL,
                         label=_ORACLE_APP_LABEL,
                         is_preexisting=False,
+                        is_seeded=False,
                         is_internal=False,
                     ),
                 ),
@@ -2490,38 +3624,38 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                             url=_ORACLE_APP_URL,
                             label=_ORACLE_APP_LABEL,
                             is_preexisting=False,
+                            is_seeded=False,
                             is_internal=False,
                         ),
                     ),
                     {_ORACLE_APP_NAME: "RUNNING"},
                     {_ORACLE_APP_NAME: _ORACLE_APP_NAME},
                     is_services_readable=True,
+                    is_supervisord_conf_readable=True,
                 )
             )
     for check in expectations.http_checks:
+        http_entry = _entry(
+            "{}_{}".format(check.check_id, slugify(_ORACLE_APP_NAME)),
+            CheckClass.HTTP,
+            CheckStatus.PASSED,
+            "",
+            "{} -> HTTP {} in 0.01s (expected {})".format(_ORACLE_APP_URL, check.expect_status, check.expect_status),
+            "{}/{}".format(VERIFICATION_DIRNAME, _oracle_http_evidence_name(check)),
+        )
         entries.append(
-            _entry(
-                "{}_{}".format(check.check_id, slugify(_ORACLE_APP_NAME)),
-                CheckClass.HTTP,
-                CheckStatus.PASSED,
-                "",
-                "{} -> HTTP {} in 0.01s (expected {})".format(
-                    _ORACLE_APP_URL, check.expect_status, check.expect_status
-                ),
-                "{}/{}".format(VERIFICATION_DIRNAME, _oracle_http_evidence_name(check)),
-            )
+            http_entry.model_copy_update(to_update(http_entry.field_ref().status_code, check.expect_status))
         )
     for index, command in enumerate(expectations.test_commands):
-        entries.append(
-            _entry(
-                "test_command_{}".format(index),
-                CheckClass.TEST_COMMAND,
-                CheckStatus.PASSED,
-                "",
-                "$ {}\nexit 0\n".format(command),
-                "",
-            )
+        test_entry = _entry(
+            "test_command_{}".format(index),
+            CheckClass.TEST_COMMAND,
+            CheckStatus.PASSED,
+            "",
+            "$ {}\nexit 0\n".format(command),
+            "",
         )
+        entries.append(test_entry.model_copy_update(to_update(test_entry.field_ref().exit_code, 0)))
     for check in expectations.ui_flow_checks:
         entries.append(
             _flow_entry(
@@ -2531,4 +3665,24 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                 "expected: {}\nagent's reading of the final state: as described".format(check.expect),
             )
         )
+    # Graded by the same function a live trial uses, against a transcript in which every required
+    # skill was invoked and no worker was ever launched, so the fabricated entries keep the shape a
+    # real run records.
+    oracle_invocations = tuple(
+        SkillInvocation(name=check.skill, tool_call_id=_ORACLE_SKILL_CALL_ID, step_id="2")
+        for check in expectations.process_checks
+        if check.kind is ProcessCheckKind.REQUIRED_SKILL
+    )
+    entries.extend(_process_entry(check, oracle_invocations, ()) for check in expectations.process_checks)
+    # Built by the same function a live trial uses, against a conversation that reached the client's
+    # goal exactly at the case's fast anchor and left no prerequisite class failing -- so an oracle
+    # run scores the class's full mark instead of erroring for want of a measurement.
+    entries.extend(
+        _timing_entry(
+            check,
+            GoalSatisfactionTiming(seconds=check.fast_seconds, turn_index=satisfied_turn_index),
+            (),
+        )
+        for check in expectations.timing_checks
+    )
     return tuple(entries)

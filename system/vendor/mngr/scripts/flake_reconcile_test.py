@@ -3,11 +3,13 @@ from textwrap import dedent
 
 from scripts.flake_reconcile import CheckRunRecord
 from scripts.flake_reconcile import ClusterStatus
+from scripts.flake_reconcile import FlakeTicket
 from scripts.flake_reconcile import RunOutcome
 from scripts.flake_reconcile import aggregate_flaky_tests
 from scripts.flake_reconcile import merge_check_run_pages
 from scripts.flake_reconcile import parse_check_run_summary
 from scripts.flake_reconcile import preferred_status_for_branches
+from scripts.flake_reconcile import tickets_missing_project
 
 
 def test_preferred_status_ready_when_a_flake_hit_main() -> None:
@@ -118,12 +120,17 @@ def _summary_from_rows(rows: Sequence[tuple[str, str, str, str]]) -> str:
     )
 
 
-def _acceptance_record(commit: str, occurred_at: str, summary: str) -> CheckRunRecord:
+def _acceptance_record(
+    commit: str,
+    occurred_at: str,
+    summary: str,
+    branch: str = "feature-branch",
+) -> CheckRunRecord:
     return CheckRunRecord(
         suite="Acceptance Tests",
         conclusion="neutral",
         commit=commit,
-        branch="feature-branch",
+        branch=branch,
         occurred_at=occurred_at,
         url=f"https://github.example/runs/{commit}",
         parsed=parse_check_run_summary(summary),
@@ -132,6 +139,9 @@ def _acceptance_record(commit: str, occurred_at: str, summary: str) -> CheckRunR
 
 _MODAL_TEST: str = "libs/mngr_modal/test_create.py::test_create_on_modal"
 _RUFF_TEST: str = "scripts/test_ratchets.py::test_no_ruff_errors"
+_FIELD_GENERATOR_TEST: str = "libs/mngr/imbue/mngr/api/list_test.py::test_field_generators_omit_none_values"
+_TIMEOUT_LINE: str = "Failed: Timeout (>10.0s) from pytest-timeout."
+_ATTRIBUTE_ERROR_LINE: str = "AttributeError: 'tuple' object has no attribute 'plugin_name'"
 
 
 def test_aggregate_flaky_tests_keeps_flaky_tests_and_drops_pure_hard_failures() -> None:
@@ -173,8 +183,39 @@ def test_aggregate_flaky_tests_keeps_flaky_tests_and_drops_pure_hard_failures() 
     assert modal_flake.first_seen == "2026-08-10T01:00:00Z"
     assert modal_flake.last_seen == "2026-08-12T01:00:00Z"
     # Raw failure lines are handed to the agent to cluster -- no root-causing here.
-    assert "AssertionError: Creating host aaa-bbb in modal" in modal_flake.sample_failure_lines
-    assert "AssertionError: Creating host ccc-ddd in modal" in modal_flake.sample_failure_lines
+    observed_lines = {mode.first_line for mode in modal_flake.failure_modes}
+    assert "AssertionError: Creating host aaa-bbb in modal" in observed_lines
+    assert "AssertionError: Creating host ccc-ddd in modal" in observed_lines
+
+
+def test_aggregate_flaky_tests_attributes_each_failure_mode_to_its_own_branches() -> None:
+    # One test, two unrelated failure modes: it flaky-recovers on a timeout on main
+    # and hard-fails for an unrelated reason on a single feature branch. Each mode has
+    # to carry its own branches, or the test-level union promotes both as main problems.
+    records = [
+        _acceptance_record(
+            "commit-1",
+            "2026-08-10T01:00:00Z",
+            _summary_from_rows([(_FIELD_GENERATOR_TEST, "flaked 1, passed 1", "no", _TIMEOUT_LINE)]),
+            branch="main",
+        ),
+        _acceptance_record(
+            "commit-2",
+            "2026-08-11T01:00:00Z",
+            _summary_from_rows([(_FIELD_GENERATOR_TEST, "failed", "no", _ATTRIBUTE_ERROR_LINE)]),
+            branch="feature-x",
+        ),
+    ]
+
+    (flaky_test,) = aggregate_flaky_tests(records)
+
+    branches_by_line = {mode.first_line: mode.branches for mode in flaky_test.failure_modes}
+    assert branches_by_line == {_TIMEOUT_LINE: ("main",), _ATTRIBUTE_ERROR_LINE: ("feature-x",)}
+    # The branch filter separates them: live on main, versus branch-local.
+    assert preferred_status_for_branches(set(branches_by_line[_TIMEOUT_LINE])) is ClusterStatus.READY
+    assert preferred_status_for_branches(set(branches_by_line[_ATTRIBUTE_ERROR_LINE])) is ClusterStatus.BACKLOG
+    # The test-level union describes the test as a whole.
+    assert flaky_test.branches == ("feature-x", "main")
 
 
 def test_merge_check_run_pages_concatenates_every_page() -> None:
@@ -193,3 +234,25 @@ def test_merge_check_run_pages_tolerates_a_page_carrying_no_check_runs() -> None
     # A commit with no check-runs still answers with a page, and gh can emit no pages at all.
     assert merge_check_run_pages(({"total_count": 0},)) == ()
     assert merge_check_run_pages(()) == ()
+
+
+def _ticket(identifier: str, project_id: str) -> FlakeTicket:
+    return FlakeTicket(
+        identifier=identifier,
+        issue_id=f"uuid-{identifier}",
+        url=f"https://linear.app/imbue/issue/{identifier}",
+        state_type="unstarted",
+        is_open=True,
+        description="",
+        project_id=project_id,
+    )
+
+
+def test_tickets_missing_project_selects_every_labelled_ticket_not_on_the_project() -> None:
+    tickets = (
+        _ticket("MIND-1", "proj-uuid"),
+        _ticket("MIND-2", ""),
+        _ticket("MIND-3", "some-other-project"),
+    )
+    missing = tickets_missing_project(tickets, "proj-uuid")
+    assert tuple(ticket.identifier for ticket in missing) == ("MIND-2", "MIND-3")

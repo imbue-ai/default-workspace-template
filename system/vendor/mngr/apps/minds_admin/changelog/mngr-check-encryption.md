@@ -1,0 +1,13 @@
+Gen-2 bare-metal boxes now keep every slice's disks on an encrypted volume.
+
+- `minds-admin server prep` / `setup` format a gen-2 box's storage partition (`/srv/mngr-slices`) as a LUKS2 volume mounted from `/dev/mapper/mngr-storage`, so slice disks, the staged base image, the image tar cache and the swapfile are ciphertext at rest. The volume unlocks at boot through the box's TPM 2.0 (enrolled with no PCR policy, so kernel updates never lock the box) and by a per-box recovery passphrase the CLI mints, stores in the tier's Vault at `secrets/minds/<tier>/box-storage/<ovh-service-name>` before formatting, stages on the box's tmpfs (never inside the prep script), and verifies against a keyslot on every re-prep, which also re-seals the volume to the box's current TPM (a cleared or replaced TPM is recovered by `server unlock` plus a re-prep). Each prep stages a LUKS header backup that the CLI uploads to the tier's workspace-storage bucket under `boxes/<ovh-service-name>/`.
+
+- Encryption is a precondition: the prep formats only an empty storage partition and refuses one that holds slices (drain and repave; there is no in-place conversion), and every bake (`pool create`, `pool warm-cache`) refuses a gen-2 box whose storage root is not the mounted LUKS volume.
+
+- The prep relocates the root partition's user-adjacent state onto the volume: the box journal (the guest consoles), the slice service user's home (transfer staging) and `/tmp` + `/var/tmp` are bind-mounted from `/srv/mngr-slices/system/` by prep-installed mount units (replacing Debian 13's RAM-backed tmpfs on `/tmp`, which no longer competes with the slices for memory; both temp binds keep the tmpfs's `nosuid,nodev`), with the root-side service user home left as a root-owned stub. A journald flush drop-in keeps a locked box's journal in RAM.
+
+- New `minds-admin server unlock --server-id <id>` opens a locked volume with the Vault passphrase (handed to the box on stdin), restores the mounts and swap, and starts the enabled slice units -- the recovery path when the TPM unlock fails at boot.
+
+- `server list --verify-occupancy` reports `is_storage_encrypted` per box and warns about gen-2 boxes whose storage is plaintext or locked; the box telemetry collector emits a `storage_volume` event and the new `STORAGE_VOLUME_LOCKED` signal, and the prep-artifact integrity manifest covers crypttab and the bind-mount units.
+
+- The box script that `server prep` / `setup` (and every other root-script box command) copies over SSH is staged on the box's tmpfs (`/dev/shm`) instead of `/tmp`, so the prep's relocation of `/tmp` onto the encrypted volume cannot shadow the running script and leave a copy on the plain root partition.

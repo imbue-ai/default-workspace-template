@@ -210,7 +210,6 @@ class AppInventory(MutableModel):
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_thread: threading.Thread | None = PrivateAttr(default=None)
-    _removed_listeners: list[Callable[[list[Address]], None]] = PrivateAttr(default_factory=list)
 
     # ---------- lifecycle ----------
 
@@ -236,10 +235,6 @@ class AppInventory(MutableModel):
             self._pending_nudge_by_name.clear()
         for timer in timers:
             timer.cancel()
-
-    def add_removed_listener(self, listener: Callable[[list[Address]], None]) -> None:
-        """Register a callback for addresses that a running app stopped listing (the observation that prunes references)."""
-        self._removed_listeners.append(listener)
 
     # ---------- reads ----------
 
@@ -410,7 +405,6 @@ class AppInventory(MutableModel):
             self._fold_fetch(app_name, outcome)
 
     def _fold_fetch(self, app_name: str, outcome: InstanceFetchOutcome) -> None:
-        removed: list[Address] = []
         with self._lock:
             entry = self._entry_by_name.get(app_name)
             if entry is None:
@@ -421,9 +415,6 @@ class AppInventory(MutableModel):
                     now = self.clock()
                     listed_keys = {instance.key for instance in listed}
                     first_seen = {key: entry.first_seen_at_by_key.get(key, now) for key in listed_keys}
-                    removed = [
-                        entry.address_of(instance) for instance in entry.instances if instance.key not in listed_keys
-                    ]
                     updated = entry.model_copy_update(
                         to_update(entry.field_ref().instances, listed),
                         to_update(entry.field_ref().first_seen_at_by_key, first_seen),
@@ -438,9 +429,6 @@ class AppInventory(MutableModel):
                 case _ as unreachable:
                     assert_never(unreachable)
             self._entry_by_name[app_name] = updated
-        if removed:
-            for listener in self._removed_listeners:
-                listener(removed)
 
     # ---------- the sweep ----------
 
@@ -460,9 +448,8 @@ class AppInventory(MutableModel):
     def sweep_once(self, is_reconciling: bool) -> None:
         """One pass of the sweep: re-derive liveness and, when reconciling, refetch every running app's list.
 
-        A pass that raises (a state file the removed-instances listener cannot write, a registry
-        url the probe cannot parse) is logged and the next pass runs: the sweep is what keeps
-        every status current, so it must outlive one bad pass.
+        A pass that raises (a registry url the probe cannot parse) is logged and the next pass
+        runs: the sweep is what keeps every status current, so it must outlive one bad pass.
         """
         try:
             self.refresh_liveness()

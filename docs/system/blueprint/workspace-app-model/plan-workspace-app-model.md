@@ -75,7 +75,7 @@ Everything a tab shows is an instance: there are no page tabs outside the instan
 
 The shell never stores instances.
 Its inventory is the union of every app's list, refreshed when an app nudges it and on a slow reconciliation sweep.
-Layouts and project tab sets hold addresses only, and an address whose instance is no longer listed is dropped by observation.
+Layouts and project tab sets hold addresses only, and an address leaves them when its instance is deleted through the shell; one merely missing from its app's list stays, shown as unavailable.
 
 Each instance also says how long it lives, in its `lifetime` field.
 An `explicit` instance exists until something calls Delete; a closed chat or terminal keeps existing.
@@ -107,7 +107,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 | Add to project, Remove from project | Shell, shared |
 | Arrangement, docked set, last-focused per tab, active view | Shell, per client |
 | Close (undock) a tab | Shell, per client |
-| Workspace-level facts minds needs (service discovery events, owner-exec, share materials) | Minds, through its own contract with the workspace, which this model does not touch |
+| Workspace-level facts minds needs (service discovery events, owner-exec, share materials) | Mind, through its own contract with the workspace, which this model does not touch |
 
 ### 3.5 Invariants
 
@@ -239,7 +239,7 @@ A wrapped server that carries no beacon still works, with every instance opening
 All shell state lives under `data/.state/system_interface/`:
 
 - `projects.json`: `{version, last_active_view, projects: [{id, name, color, glyph, tabs: [address], shortcuts: [{app, action, mode}]}]}`.
-- `layouts/<view-id>/<client-id>.json`: `{dockview, tabs: {panel_id: {address, tab_id, last_focused_ms}}, device_kind, updated_at}`.
+- `layouts/<view-id>/<client-id>.json`: `{dockview, device_kind, updated_at}`, each panel's `params` in the dockview document naming what it shows (`kind`, `address`, `tabId`, `lastFocusedMs`).
 - `layouts/<view-id>/seed.<device-kind>.json`: the seed a new client of that device kind starts from; rewritten from the most recently saved layout of that kind.
 - `clients.json`: `{client_id: {device_kind, active_view, last_seen}}`; layouts of clients unseen for ninety days are pruned.
 - `migrated.json`: the migration's marker (section 9).
@@ -337,14 +337,14 @@ Every file-browser instance is `referenced`, so it is deleted by the shell once 
 
 The chat app, `system/apps/chat/`, holds everything that concerns chats: the harness watchers, transcripts, sends, queue and interrupt handling, model choice, provider accounts and sign-in, uploads, the latchkey catalog proxy, memory-shedding retagging of chat agents, and its own frontend bundle.
 It runs from its own uv tool environment (3.1), installed with the mngr harness plugins that `system/config/mngr_plugins.toml` assigns to `chat`; the shell's tool needs no mngr plugin.
-Its instances are the workspace's chat agents, listed from `mngr observe`, excluding the primary services agent; keys are agent ids, URLs are `/<agent-id>`, titles are display names, rename goes through `mngr rename`, delete through `mngr destroy`, and status maps thinking and tool-running to `working`, a pending permission to `attention`, and a stopped agent to `stopped`.
-Its `new` action creates a provisional instance: the chat backend mints the agent id before it runs `mngr create`, so the instance is keyed by that future id, and the tab never changes address.
-Creation starts at once on the pinned default account (a star in the provider menu; `AccountIndex.default_account`), else the most recently used one, else the oldest; with nothing signed in the chat waits, and its page at `/<agent-id>` shows the account chooser, whose sign-in launches the chat under the same id.
+Its instances are the workspace's chats, each a sequence of agent transcripts run by one agent at a time (`docs/system/blueprint/chat-agent-split/`), listed from `mngr observe`, excluding the primary services agent; keys are chat ids (the id of the chat's first agent), URLs are `/<chat-id>`, titles are display names, rename goes through `mngr rename` of the active agent, delete through `mngr destroy`, and status maps the active agent's thinking and tool-running to `working`, a pending permission to `attention`, and a stopped agent to `stopped`.
+Its `new` action creates a provisional instance: the chat backend mints the chat id before it runs `mngr create`, so the instance is keyed by that future id, and the tab never changes address.
+Creation starts at once on the pinned default account (a star in the provider menu; `AccountIndex.default_account`), else the most recently used one, else the oldest; with nothing signed in the chat waits, and its page at `/<chat-id>` shows the account chooser, whose sign-in launches the chat under the same id.
 While the create runs the page shows the composer over an empty transcript (a message typed then is held and delivered when the agent lands); a failed create shows the reason in the tab with a retry; the transcript takes over when the agent registers.
 A provisional instance is `referenced`, so one whose tab is closed before the agent exists is deleted by the shell like any other unreferenced instance.
-A subagent view is a chat instance too, keyed `<agent-id>.<session-id>`, `referenced`, created on demand by the `subagent` action when the user opens one from the parent chat's page, which then docks it with `shell:open`; agents and sub-agents are just chats.
+A subagent view is a chat instance too, keyed `<chat-id>.<agent-id>.<session-id>` (the chat, the agent of it whose harness session the subagent ran under, the session), `referenced`, created on demand by the `subagent` action when the user opens one from the parent chat's page, which then docks it with `shell:open`; agents and sub-agents are just chats.
 Provider accounts live under `~/.minds/accounts`: chats bind to them by absolute paths in their env files and credential symlinks, and the store is chat-owned state whatever its path.
-The chat app serves every `/api/agents/...` route at its own origin; the shell serves a plain `/api/health` for probes.
+The chat app serves every `/api/chats/...` route at its own origin (the `/api/agents/...` aliases were dropped in phase 7 of the chat-agent split); the shell serves a plain `/api/health` for probes.
 The first-chat claim and `/welcome` are the chat app's; the shell creates nothing.
 The chat app's manifest declares `critical = true` and `priority = "chat"`, a band in `oom_priority.bands` sitting below the shell and above every chat agent.
 Worker agents that chats spawn are listed as instances too; they are chats with a different origin label.
@@ -393,7 +393,7 @@ The exact rules are in [phase_09_migration.md](phase_09_migration.md):
 | the registry's last-active project id | dropped; the active view lives on each client's record, and a first-visiting client lands on the first project |
 | `unpinned_shortcuts` and `shortcut_overrides` | the project's `shortcuts` list |
 | `projects/<id>.json` and `<id>.mobile.json` | `layouts/<id>/seed.desktop.json` and `seed.mobile.json` |
-| `member_last_used.json` | `last_focused_ms` on the matching seed-layout tabs |
+| `member_last_used.json` | `lastFocusedMs` in the matching seed panels' params |
 | every terminal found | a record in the terminal app's store, so the terminal is listed before its tmux session exists again and its tabs survive the first observation |
 | `member_titles.json` | terminal titles become the terminal record's title; the rest are dropped, since chats already carry theirs |
 | `member_locations.json` | imported into the files app's store |

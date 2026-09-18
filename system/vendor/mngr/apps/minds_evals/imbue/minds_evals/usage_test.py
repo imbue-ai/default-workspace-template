@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from imbue.minds_evals.data_types import DeciderResult
@@ -7,6 +9,7 @@ from imbue.minds_evals.usage import parse_proxy_usage_log
 from imbue.minds_evals.usage import resolve_workspace_usage
 from imbue.minds_evals.usage import summarize_decider_usage
 from imbue.minds_evals.usage import summarize_proxy_usage
+from imbue.minds_evals.usage import summarize_turn_usage
 from imbue.minds_evals.usage import summarize_workspace_usage
 from imbue.minds_evals.usage import workspace_usage_metadata
 from imbue.mngr_usage.data_types import TokenSnapshot
@@ -174,6 +177,39 @@ def test_summarize_workspace_usage_without_any_usage_reports_unknown_not_zero() 
     assert usage.per_model == ()
     # A trial we have no usage data for did not cost nothing.
     assert usage.cost_usd is None
+
+
+def test_summarize_turn_usage_reads_only_the_events_the_turns_message_provoked() -> None:
+    """The slice starts where the stream stood when the message went out, so an earlier turn's
+    spend -- in either stream vintage -- is not charged to this one."""
+    events = [
+        _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100, cache_read_tokens=5_000),
+        {"type": "user_message", "content": "and now the second ask"},
+        _atif_step_event("claude-opus-4-8", prompt_tokens=2_020, completion_tokens=50, cached_tokens=2_000),
+    ]
+
+    second_turn = summarize_turn_usage(events, 1)
+
+    assert second_turn.message_count == 1
+    assert second_turn.tokens.input == 20
+    assert second_turn.tokens.output == 50
+    assert second_turn.tokens.cache_read == 2_000
+    assert second_turn.cost_usd is not None
+    assert summarize_turn_usage(events, 0).tokens.output == 150
+
+
+def test_summarize_turn_usage_of_an_unmetered_turn_reports_unknown_not_zero() -> None:
+    """A codex turn's reply carries no usage block at all, and a turn we have no figures for did not
+    cost nothing."""
+    events = [
+        _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
+        {"type": "assistant_message", "text": "done, though nobody metered it"},
+    ]
+
+    turn = summarize_turn_usage(events, 1)
+
+    assert turn.message_count == 0
+    assert turn.cost_usd is None
 
 
 def test_workspace_usage_metadata_exposes_the_four_way_split() -> None:
@@ -593,6 +629,103 @@ def test_summarize_proxy_usage_splits_fast_usage_per_model() -> None:
     assert by_model["claude-opus-4-8"].fast_tokens.output == 100
     assert by_model["claude-haiku-4-5"].fast_message_count == 0
     assert by_model["claude-haiku-4-5"].fast_tokens == TokenSnapshot()
+
+
+def _failed_proxy_record(model: str = "claude-opus-4-8", speed: str | None = None) -> dict:
+    """A failure record as the in-box hooks write it: every bucket zero, no cost."""
+    return {
+        "model": model,
+        "outcome": "failed",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "prompt_tokens_including_cache": 0,
+        "cost_usd": None,
+        "speed": speed,
+        "call_type": "acompletion",
+        "status_code": 529,
+        "error_class": "InternalServerError",
+    }
+
+
+def test_summarize_proxy_usage_counts_failures_without_treating_them_as_usage() -> None:
+    usage = summarize_proxy_usage(
+        [
+            {**_proxy_record(input_tokens=10, output_tokens=100), "outcome": "succeeded"},
+            _failed_proxy_record(),
+            _failed_proxy_record(model="claude-haiku-4-5"),
+        ]
+    )
+
+    assert usage.failed_request_count == 2
+    assert usage.message_count == 1
+    # A model whose every request failed served nothing, so it gets no row.
+    assert [entry.model for entry in usage.per_model] == ["claude-opus-4-8"]
+    assert usage.per_model[0].message_count == 1
+    assert usage.tokens.output == 100
+    assert usage.cost_usd == summarize_proxy_usage([_proxy_record(input_tokens=10, output_tokens=100)]).cost_usd
+
+
+def test_summarize_proxy_usage_of_only_failures_reports_no_usage_and_an_unknown_cost() -> None:
+    usage = summarize_proxy_usage([_failed_proxy_record(speed="fast")])
+
+    assert usage.failed_request_count == 1
+    assert usage.message_count == 0
+    assert usage.per_model == ()
+    assert usage.tokens == TokenSnapshot()
+    assert usage.cost_usd is None
+    assert usage.fast_message_count == 0
+    # Speed is observed through served requests; a log with none has observed no tier.
+    assert usage.is_speed_observed is False
+
+
+def test_summarize_proxy_usage_reads_a_log_mixing_successes_failures_and_records_without_an_outcome() -> None:
+    # A record without `outcome` comes from a log written before failures were recorded, and is a
+    # success. Its missing `speed` key still makes the tier unobserved, while the failure's key has
+    # no say either way.
+    legacy = _proxy_record(input_tokens=5, output_tokens=50)
+    del legacy["speed"]
+    contents = "\n".join(
+        json.dumps(record)
+        for record in (
+            {**_proxy_record(speed="fast", output_tokens=100), "outcome": "succeeded"},
+            _failed_proxy_record(),
+            legacy,
+        )
+    )
+
+    usage = summarize_proxy_usage(parse_proxy_usage_log(contents))
+
+    assert usage.message_count == 2
+    assert usage.failed_request_count == 1
+    assert usage.tokens.output == 150
+    assert usage.tokens.input == 5
+    assert usage.fast_message_count == 1
+    assert usage.is_speed_observed is False
+
+
+def test_summarize_proxy_usage_ignores_a_failures_speed_when_deciding_whether_the_tier_was_observed() -> None:
+    # The failure below lacks the key entirely; only served requests decide the tier.
+    failure_without_speed = _failed_proxy_record()
+    del failure_without_speed["speed"]
+
+    usage = summarize_proxy_usage([_proxy_record(output_tokens=10), failure_without_speed])
+
+    assert usage.is_speed_observed is True
+
+
+def test_workspace_usage_metadata_reports_the_failed_request_count() -> None:
+    proxy_metadata = workspace_usage_metadata(
+        summarize_proxy_usage([_proxy_record(output_tokens=10), _failed_proxy_record()])
+    )
+    transcript_metadata = workspace_usage_metadata(
+        summarize_workspace_usage([_assistant_event("claude-opus-4-8", output_tokens=10)])
+    )
+
+    assert proxy_metadata["failed_request_count"] == 1
+    assert proxy_metadata["message_count"] == 1
+    assert transcript_metadata["failed_request_count"] == 0
 
 
 def test_transcript_usage_never_claims_to_have_observed_the_speed_tier() -> None:

@@ -1,7 +1,7 @@
 # Pattern: real-signup end-to-end tests (the swarm template)
 
 This is the recipe a hand-written account-signup e2e test follows, so a
-behavioral swarm (`tmr-behaviors`) can replicate it as a template instead of
+behavioral swarm (`mngr witness`) can replicate it as a template instead of
 re-deriving it per agent. It is written against the concrete anchor tests in
 `apps/minds/deployment_tests/test_account_signup_e2e.py`; read that file
 alongside this doc -- the doc explains *why*, the file shows *how*.

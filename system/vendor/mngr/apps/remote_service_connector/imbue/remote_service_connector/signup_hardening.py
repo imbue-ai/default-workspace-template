@@ -210,9 +210,7 @@ def is_signup_ip_enforcement_enabled() -> bool:
     return is_json_signup_disabled()
 
 
-# ---------------------------------------------------------------------------
 # Stores (Neon-backed; in-memory fakes live in testing.py)
-# ---------------------------------------------------------------------------
 
 
 class SignupAttemptStore(Protocol):
@@ -353,9 +351,7 @@ class PostgresIpReputationCache:
         return int(row[0])
 
 
-# ---------------------------------------------------------------------------
 # Reputation provider (IPinfo) and the Tor-exit-list backstop
-# ---------------------------------------------------------------------------
 
 
 class IpReputationProvider(Protocol):
@@ -457,10 +453,8 @@ class CachedTorExitList(BaseModel):
         logger.info("Refreshed the Tor exit list: %d exit IPs", len(fetched_ips))
 
 
-# ---------------------------------------------------------------------------
 # Module singletons (patched wholesale by the test fakes, like the
 # device-code store in accounts_web)
-# ---------------------------------------------------------------------------
 
 
 _signup_attempt_store: SignupAttemptStore | None = None
@@ -497,9 +491,7 @@ def get_tor_exit_list() -> TorExitList:
     return _tor_exit_list
 
 
-# ---------------------------------------------------------------------------
 # Assessment and recording
-# ---------------------------------------------------------------------------
 
 
 def _resolve_reputation(client_ip: str, is_live_lookup_allowed: bool) -> IpReputation | None:

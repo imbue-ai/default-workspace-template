@@ -14,6 +14,11 @@ worked. Decay also keeps the criterion discriminating at the bad end, where a li
 every badly-broken run at the same 0. Counts come from harness_failures.json, written by
 render_harness_report.py in the same pre-step pass.
 
+These criteria only ever run on a claude trajectory: the report they and the judges score is built by
+claude-shaped rules, so on any other harness it is thin for want of those rules rather than for want
+of friction, and that same pre-step removes this whole dimension there. See
+render_harness_report.py::is_harness_quality_applicable.
+
 Runs in the verifier container: stdlib + rewardkit only, absolute paths.
 """
 

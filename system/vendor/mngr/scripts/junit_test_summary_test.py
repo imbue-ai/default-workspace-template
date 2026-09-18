@@ -6,9 +6,9 @@ from scripts.junit_test_summary import AttemptsRecord
 from scripts.junit_test_summary import FailureDetail
 from scripts.junit_test_summary import RunStatus
 from scripts.junit_test_summary import _load_flaky_manifest
-from scripts.junit_test_summary import _parse_junit
 from scripts.junit_test_summary import _render_markdown
 from scripts.junit_test_summary import _testcase_outcome
+from scripts.junit_test_summary import parse_junit
 
 
 def _write_junit(path: Path, testsuites_xml: str) -> None:
@@ -31,7 +31,7 @@ def test_parse_junit_counts_attempts(tmp_path: Path) -> None:
             """
         ),
     )
-    per_test, failures = _parse_junit(junit)
+    per_test, failures = parse_junit(junit)
     assert per_test["pkg/test_x.py::test_a"].attempts == 2
     assert per_test["pkg/test_x.py::test_a"].passed == 2
     assert per_test["pkg/test_x.py::test_a"].final_status is RunStatus.PASSED

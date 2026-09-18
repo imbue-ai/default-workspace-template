@@ -133,6 +133,11 @@ class SleepTracker(MutableModel):
     (:meth:`get_last_wake_at`), which is the baseline for anything that ages a
     timestamp against now.
 
+    A sleep is not always one interval: on battery, macOS takes short dark wakes
+    partway through, each of which ends the interval, fires the wake callbacks,
+    and moves the last-wake baseline. A "wake" here is not evidence the user
+    opened the lid.
+
     Every reading is negative-only by construction. No interval recorded -- a
     process that just started, or one whose heartbeat loop is not running --
     answers "no sleep recorded", which leaves every consumer exactly as it
@@ -172,9 +177,10 @@ class SleepTracker(MutableModel):
         whichever loop's tick happened to close the gap: the heartbeat loop, or
         one of the consumers that establishes the wake for itself rather than
         race the heartbeat for it (the discovery watchdog, the system-interface
-        health probe). So keep them fast for the reason that survives whichever
-        it was -- what a slow callback delays is that loop's own next act, which
-        may be a stall verdict or a pass of the loop that adjudicates STUCK.
+        health probe, the view-refresh settle worker). So keep them fast for the
+        reason that survives whichever it was -- what a slow callback delays is
+        that loop's own next act, which may be a stall verdict or a pass of the
+        loop that adjudicates STUCK.
         """
         with self._lock:
             self._on_wake_callbacks.append(callback)

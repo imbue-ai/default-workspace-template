@@ -1,0 +1,2 @@
+2026-09-16 05:01:45.217 | INFO     | imbue.minds_evals.driver:3187 - Preparing the workspace template clone (https://github.com/imbue-ai/default-workspace-template.git@d525d62ef939, pinned from main)
+2026-09-16 05:18:24.317 | INFO     | imbue.minds_evals.driver:2072 - Recorded 5 verification entr(ies) (1 failed, 0 errored)

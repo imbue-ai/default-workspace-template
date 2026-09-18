@@ -6,6 +6,7 @@ from imbue.modal_app_kit.testing import imported_module_names
 from imbue.modal_app_kit.testing import is_module_within_package
 from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstrap
 from imbue.modal_app_kit.testing import uses_dunder_name_logger
+from imbue.modal_app_kit.testing import web_functions_missing_region_pin
 
 
 def test_is_connection_failure_output_matches_only_connection_error_codes(app_module: ModuleType) -> None:
@@ -43,6 +44,11 @@ def test_entrypoint_logger_is_named_under_imbue() -> None:
 def test_every_modal_function_bootstraps_logging_first() -> None:
     """The JSON root handler exists only once ``configure_logging()`` runs; a function that skips it drops its INFO lines."""
     assert modal_functions_missing_logging_bootstrap(Path(__file__).parent / "app.py") == []
+
+
+def test_every_web_function_pins_its_region() -> None:
+    """A web function scheduled outside the US makes every user request pay the distance (see WEB_FUNCTION_REGION)."""
+    assert web_functions_missing_region_pin(Path(__file__).parent / "app.py") == []
 
 
 def test_litellm_logging_env_updates_turn_on_json_logs_at_info(app_module: ModuleType) -> None:

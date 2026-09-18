@@ -104,7 +104,7 @@ export function UnlockView(): m.Component {
           ),
           isSetup
             ? m("p", { class: "text-sm text-slate-500 whitespace-pre-line" }, [
-                'Minds is "Honest Software", which means that we cannot see your data.\n' +
+                'Mind is "Honest Software", which means that we cannot see your data.\n' +
                   "To ensure this, you must pick a master password that we don't know.\n" +
                   "Learn more here: ",
                 // The Honest Software explainer does not exist yet; the link

@@ -22,12 +22,14 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
+from imbue.imbue_common.model_update import to_update
 from imbue.modal_proxy.data_types import FileEntry
 from imbue.modal_proxy.data_types import FileEntryType
 from imbue.modal_proxy.data_types import StreamType
 from imbue.modal_proxy.data_types import TunnelInfo
 from imbue.modal_proxy.errors import ModalProxyConnectionError
 from imbue.modal_proxy.errors import ModalProxyError
+from imbue.modal_proxy.errors import ModalProxyImageBuildError
 from imbue.modal_proxy.errors import ModalProxyNotFoundError
 from imbue.modal_proxy.interface import AppInterface
 from imbue.modal_proxy.interface import ExecOutput
@@ -55,22 +57,23 @@ class FakeExecOutput(ExecOutput):
 
 
 class FakeExecProcess(ExecProcess):
-    """Exec process backed by a ConcurrencyGroup-managed process."""
+    """Exec process backed by a ConcurrencyGroup-managed process, or by an already-known outcome."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    _completed_text: str = PrivateAttr(default="")
+    completed_output: str = Field(default="", description="Stdout of a command that already finished")
+    completed_exit_code: int = Field(default=0, description="Exit code of a command that already finished")
     _running_process: RunningProcess | None = PrivateAttr(default=None)
 
     def get_stdout(self) -> ExecOutput:
         if self._running_process is not None:
             return FakeExecOutput(output_text=self._running_process.read_stdout())
-        return FakeExecOutput(output_text=self._completed_text)
+        return FakeExecOutput(output_text=self.completed_output)
 
     def wait(self) -> int:
         if self._running_process is not None:
             return self._running_process.wait()
-        return 0
+        return self.completed_exit_code
 
 
 class FakeSecret(SecretInterface):
@@ -91,14 +94,29 @@ class FakeFunction(FunctionInterface):
 class FakeImage(ImageInterface):
     """Lightweight no-op image for testing."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     image_id: str = Field(description="Unique identifier for this image")
+    build_failure_message: str | None = Field(
+        default=None, description="If set, build() fails with this message instead of succeeding"
+    )
+    build_logs: str = Field(default="", description="Build output that fetch_build_logs() reports")
+    streamed_build_logs: str = Field(
+        default="",
+        # Kept apart from build_logs so a fake can pose the case this exists to model:
+        # Modal streamed nothing, yet still has the log if asked.
+        description="Build output that build() streams into streaming_capture_buffer",
+    )
+    streaming_capture_buffer: StringIO | None = Field(
+        default=None, description="Where build() streams streamed_build_logs, if anywhere"
+    )
 
     def get_object_id(self) -> str:
         return self.image_id
 
     def apt_install(self, *packages: str) -> "ImageInterface":
         # No-op -- packages are already installed in the test environment
-        return FakeImage(image_id=self.image_id)
+        return self._derive(self.image_id)
 
     def dockerfile_commands(
         self,
@@ -108,11 +126,24 @@ class FakeImage(ImageInterface):
         secrets: Sequence[SecretInterface] = (),
     ) -> "ImageInterface":
         # No-op -- return a new image with a fresh ID to simulate layer caching
-        return FakeImage(image_id=f"img-{uuid.uuid4().hex}")
+        return self._derive(f"img-{uuid.uuid4().hex}")
 
     def build(self, app: AppInterface) -> None:
-        # No-op -- images are not real in the test environment
-        pass
+        if self.streaming_capture_buffer is not None:
+            self.streaming_capture_buffer.write(self.streamed_build_logs)
+        if self.build_failure_message is not None:
+            raise ModalProxyImageBuildError(self.build_failure_message)
+
+    def fetch_build_logs(self) -> str:
+        return self.build_logs
+
+    def _derive(self, image_id: str) -> "FakeImage":
+        """Make the next layer.
+
+        Only the last layer of a chain is ever built, so whatever a test
+        configured has to reach it.
+        """
+        return self.model_copy_update(to_update(self.field_ref().image_id, image_id))
 
 
 class FakeVolume(VolumeInterface):
@@ -123,6 +154,13 @@ class FakeVolume(VolumeInterface):
 
     def get_name(self) -> str | None:
         return self.volume_name
+
+    def get_object_id(self) -> str:
+        # The backing directory is this volume's identity: deleting it is how the
+        # fake expresses a volume that no longer exists.
+        if not self.root_dir.is_dir():
+            raise ModalProxyNotFoundError(f"Volume not found: {self.volume_name}")
+        return f"vo-{self.root_dir.name}"
 
     def _resolve(self, path: str) -> Path:
         """Resolve a volume path to a local filesystem path."""
@@ -193,6 +231,17 @@ class FakeVolume(VolumeInterface):
 # (128 + SIGKILL) that Modal surfaces for a terminated sandbox.
 _FAKE_TERMINATED_EXIT_CODE: Final[int] = 137
 
+# FakeSandbox runs argv on the machine running the tests. mngr's host bring-up
+# (build_configure_ssh_command and friends) rewrites the sshd host key, replaces
+# root's authorized_keys, and apt-installs packages; run as root, e.g. inside a
+# workspace container, that re-keys the real machine and locks its owner out.
+# Any command that reaches for these is refused instead of executed.
+_HOST_PROVISIONING_MARKERS: Final[tuple[str, ...]] = ("/etc/ssh", "/usr/sbin/sshd", "apt-get")
+
+
+class FakeSandboxRefusedHostProvisioningError(ModalProxyError):
+    """Raised when a FakeSandbox is asked to run mngr's host bring-up on the test machine."""
+
 
 class FakeSandbox(SandboxInterface):
     """Sandbox that runs commands locally via ConcurrencyGroup.
@@ -224,6 +273,14 @@ class FakeSandbox(SandboxInterface):
         if self._cg is None:
             raise ModalProxyError("Sandbox has no ConcurrencyGroup")
 
+        command_text = " ".join(args)
+        if any(marker in command_text for marker in _HOST_PROVISIONING_MARKERS):
+            raise FakeSandboxRefusedHostProvisioningError(
+                "FakeSandbox runs commands on the test machine and refuses to run host provisioning there "
+                f"(command mentions one of {_HOST_PROVISIONING_MARKERS}); drive bring-up against a real "
+                f"sandbox, or use a sandbox fake that answers without executing. Command: {command_text[:200]}"
+            )
+
         # Check if this is a "background" command (like sshd -D or nohup)
         # that should not block
         is_background = False
@@ -248,9 +305,10 @@ class FakeSandbox(SandboxInterface):
                 timeout=60,
                 is_checked_after=False,
             )
-            exec_proc = FakeExecProcess()
-            exec_proc._completed_text = finished.stdout
-            return exec_proc
+            return FakeExecProcess(
+                completed_output=finished.stdout,
+                completed_exit_code=finished.returncode if finished.returncode is not None else 0,
+            )
 
     def tunnels(self, *, timeout: int = 50) -> dict[int, TunnelInfo]:
         if self._is_terminated:
@@ -402,7 +460,7 @@ class FakeModalInterface(ModalInterface):
         experimental_options: Mapping[str, bool] | None = None,
     ) -> SandboxInterface:
         sandbox_id = f"sb-{uuid.uuid4().hex}"
-        sandbox = FakeSandbox(sandbox_id=sandbox_id)
+        sandbox = self._build_sandbox(sandbox_id)
         # Create a child ConcurrencyGroup for this sandbox's processes
         child_cg = self.concurrency_group.make_concurrency_group(
             name=f"sandbox-{sandbox_id}",
@@ -412,6 +470,10 @@ class FakeModalInterface(ModalInterface):
         sandbox._cg = child_cg
         self._sandboxes.append(sandbox)
         return sandbox
+
+    def _build_sandbox(self, sandbox_id: str) -> FakeSandbox:
+        """The sandbox object sandbox_create hands out; a subclass overrides this to change how commands are answered."""
+        return FakeSandbox(sandbox_id=sandbox_id)
 
     def sandbox_list(self, *, app_id: str) -> list[SandboxInterface]:
         # Return all non-terminated sandboxes

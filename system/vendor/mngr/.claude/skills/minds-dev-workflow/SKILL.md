@@ -80,6 +80,8 @@ just minds-start
 
 That's it. After the create-form is filled in and you've created an agent, see [Iterating on a running agent](#iterating-on-a-running-agent) for the inner loop.
 
+Never run two minds instances against the same env on one machine (two `just minds-start` / `minds run` launches, or a launch next to a supervisor left over from another env root for the same env). Both supervisors provision the same remote machines and the agents there lose their latchkey permission channel ("Unauthorized"). Different envs or tiers side by side are fine. `just minds-stop` deliberately leaves the `mngr latchkey forward` supervisor running; to stop an env root completely (a second-device test root, say), run `uv run minds-admin env stop-local <env>`.
+
 If you want to run against prod / staging instead of a personal dev env, use `eval "$(uv run minds-admin env activate production)"` (or `... activate staging`) and then `just minds-start`. **Do not** run `minds-admin env deploy` against production / staging without coordinating with the rest of the team -- that pushes Vault secrets to Modal and re-deploys the live tier; the unified deploy CLI requires `--yes-i-mean-production` / `--yes-i-mean-staging` as a safety bar.
 
 ### What `just minds-start` does
@@ -126,7 +128,7 @@ The port is randomly assigned by Docker per agent. The container name is `<MNGR_
 ```bash
 eval "$(uv run minds-admin env activate dev-<your-user>)"   # so we know MNGR_PREFIX
 docker ps --format '{{.Names}} {{.Ports}}' | grep "${MNGR_PREFIX}mind-"
-# e.g.  minds-dev-<your-user>-mind-1-host 0.0.0.0:32772->22/tcp
+# e.g.  minds-dev-<your-user>-mind-1-host 127.0.0.1:32772->22/tcp
 ```
 
 The SSH key for a minds Docker agent lives under the activated env's `MNGR_HOST_DIR`:
@@ -157,7 +159,8 @@ Do NOT use a key from `~/.mngr/profiles/...` -- that belongs to non-minds mngr a
 
 Both `minds-admin env deploy` (which reads dev-tier provisioning credentials -- Neon, SuperTokens, etc. -- at command time) and slice bakes (`minds-admin pool create`, `just pool-bake` / `just pool-bake-from-worktree` -- the tier's `POOL_SSH_PRIVATE_KEY`, the host-pool DSN, etc.) read secrets from HCP Vault. (Baking new OVH classic VPS pool hosts is deprecated and no longer supported.) Two things to know:
 
-- **Login is interactive.** Run `vault login -method=oidc` once per session (browser OIDC); the token lands at `~/.vault-token`.
+- **Login is interactive.** Run `vault login -method=oidc` once per session (browser OIDC); the token lands at `~/.vault-token`. The default (no `role=`) is the `employee` role, which is what the dev and ci tiers need: it reads `secrets/minds/{dev,ci}/*` and signs the operator SSH certificates the gen-2 dev boxes require. Staging / production need `role=minds_staging` / `role=minds_production` instead.
+- **Slice bakes dial gen-2 boxes.** A bake or any `server` command SSHes the box with that certificate, over the operator WireGuard overlay once a box's `:22` is locked down. Your key must be committed to the dev `deploy.toml` and synced to the fleet first (`minds-admin wireguard sync-peers --tier dev`, run by an existing operator), and `minds-admin wireguard install-onetun` installed once; see the "Gen-2 box access" prerequisite in `apps/minds/docs/dev-setup.md`.
 - **`VAULT_ADDR` / `VAULT_NAMESPACE` are usually NOT set in a non-interactive shell.** The `minds-admin` commands (and the `bake-*` recipes that wrap them) apply the imbue HCP defaults automatically via `apps/minds/imbue/minds/envs/vault_reader.py`, so they "just work" with only the token -- **prefer them**. If you run a **raw** `vault` command, a bare `vault` defaults to `https://127.0.0.1:8200` and fails with "connection refused" -- that is a missing address, **NOT** "logged out" (don't ask the operator to re-login, and don't ask them for `VAULT_ADDR`). Export the defaults first:
 
   ```bash

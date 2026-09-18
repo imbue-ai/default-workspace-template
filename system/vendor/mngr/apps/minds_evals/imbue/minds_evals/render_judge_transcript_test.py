@@ -6,11 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import UsageSource
 from imbue.minds_evals.template_loading import load_template_module
 from imbue.minds_evals.testing import atif_document
+from imbue.minds_evals.testing import codex_code_mode_trajectory_document
+from imbue.minds_evals.trajectory import _code_mode_commands
 from imbue.minds_evals.trajectory import build_hand_built_trajectory
 from imbue.minds_evals.usage import summarize_workspace_usage
 
@@ -103,6 +107,47 @@ def test_load_trajectory_steps_of_a_missing_or_malformed_file_is_empty(tmp_path:
     assert _RENDERER.load_trajectory_steps(tmp_path / "not-a-document.json") == []
 
 
+def _code_mode_program(*commands: str) -> str:
+    """The JavaScript one codex `exec` tool call carries, running the given commands through the
+    shell function the way a real program does -- each command JSON-serialised into a string literal,
+    so a command containing a quote arrives escaped.
+
+    A real program awaits each call. The keyword is left out here, and in the other code-mode
+    fixtures, because the renderer keys on the `tools.<fn>(` call and nothing else, while the
+    async ratchet cannot tell JavaScript in a string from Python and would count every fixture.
+    """
+    calls = "".join(
+        'const r{} = tools.shell_command({{"command":{},"workdir":"/home/user/workspace",'
+        '"timeout_ms":10000}});\n'.format(index, json.dumps(command))
+        for index, command in enumerate(commands)
+    )
+    return calls + 'text("done");\n'
+
+
+def _one_declaration_steps(tool_name: str, created_id: str, title: str) -> list[dict[str, Any]]:
+    """A conversation whose agent declares one progress step, through the named shell tool and under
+    the named ticket id -- the two things about a `tk` declaration that vary by harness and by the
+    directory `tk` was run in."""
+    return [
+        {"step_id": 1, "source": "user", "message": "Build it"},
+        {
+            "step_id": 2,
+            "source": "agent",
+            "message": "On it.",
+            "tool_calls": [
+                {
+                    "tool_call_id": "c1",
+                    "function_name": tool_name,
+                    "arguments": {"command": 'tk create --step "{}"'.format(title)},
+                }
+            ],
+            "observation": {
+                "results": [{"source_call_id": "c1", "content": "Created {}: {}".format(created_id, title)}]
+            },
+        },
+    ]
+
+
 def _step_records_steps() -> list[dict[str, Any]]:
     """A conversation whose agent declares progress steps, closes one, and also opens a regular
     cross-agent ticket -- which the client never sees and the rendering must leave out."""
@@ -190,22 +235,7 @@ def test_a_step_records_id_prefix_is_not_pinned_to_one_working_directory() -> No
     # directory called `workspace` mints `cod-step-`, `a7-step-`, and so on. Pinning `wor-` here drops
     # every declaration from such a run while its closes still render, and the criterion scores 10 for
     # the empty timeline that leaves -- a parsing break that reads as a perfect score.
-    steps = [
-        {"step_id": 1, "source": "user", "message": "Build it"},
-        {
-            "step_id": 2,
-            "source": "agent",
-            "message": "On it.",
-            "tool_calls": [
-                {
-                    "tool_call_id": "c1",
-                    "function_name": "Bash",
-                    "arguments": {"command": 'tk create --step "Set it up"'},
-                }
-            ],
-            "observation": {"results": [{"source_call_id": "c1", "content": "Created cod-step-f1zl: Set it up"}]},
-        },
-    ]
+    steps = _one_declaration_steps("Bash", "cod-step-f1zl", "Set it up")
 
     rendered = _RENDERER.render_judge_transcript(steps)
 
@@ -528,3 +558,190 @@ def test_a_harness_step_boundary_never_reaches_the_judge() -> None:
 
     assert "adjust-requirements" not in rendered
     assert rendered == "[USER]\nNow change it\n\n[AGENT \u00b7 message 1]\nChanged.\n"
+
+
+def test_codexs_shell_puts_its_progress_steps_on_the_clients_timeline() -> None:
+    # codex calls the unified exec tool, whose one argument is a JavaScript program that reaches the
+    # shell as `tools.shell_command`. The timeline needs the output, which keys on the tool name, and
+    # the structural gate needs the command text, which is a literal inside that program.
+    steps = _one_declaration_steps("exec", "cod-step-aaaa", "Set up the to-do app")
+    steps[1]["tool_calls"][0]["arguments"] = {"_raw": _code_mode_program('tk create --step "Set up the to-do app"')}
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS \u00b7 step declared]\nSet up the to-do app" in rendered
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
+
+
+def test_codexs_classic_shell_call_carries_its_command_under_cmd() -> None:
+    # The other spelling of codex's shell function names its argument `cmd` rather than `command`.
+    steps = _one_declaration_steps("exec", "cod-step-bbbb", "Set up the to-do app")
+    steps[1]["tool_calls"][0]["arguments"] = {
+        "_raw": 'tools.exec_command({cmd: "tk start s1", workdir: "/home/user/workspace"});'
+    }
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert _RENDERER.summarize_progress(steps, rendered)["is_step_command_run"] is True
+
+
+def test_codexs_shell_with_code_mode_off_puts_its_progress_steps_on_the_clients_timeline() -> None:
+    # With code mode off and unified exec on, codex calls `exec_command` directly and passes the
+    # command as its `cmd` argument rather than inside a program.
+    steps = _one_declaration_steps("exec_command", "cod-step-cccc", "Set up the to-do app")
+    steps[1]["tool_calls"][0]["arguments"] = {"cmd": 'tk create --step "Set up the to-do app"'}
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS · step declared]\nSet up the to-do app" in rendered
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
+
+
+def test_every_shell_call_of_a_batched_code_mode_program_is_read() -> None:
+    # One codex tool call is a whole program, which may drive several tools. Reading only the first
+    # call would miss a step verb batched behind an unrelated one, and reading the first command
+    # literal anywhere in the text would attribute another call's argument to the shell.
+    program = 'tools.view_image({path: "/home/user/workspace/shot.png"});\n' + _code_mode_program(
+        "ls -la", 'tk close wor-step-aaaa "Set it up and checked it opens."'
+    )
+
+    commands = _RENDERER.code_mode_commands(program)
+
+    assert commands == ["ls -la", 'tk close wor-step-aaaa "Set it up and checked it opens."']
+
+
+def test_a_code_mode_command_recovers_a_title_only_the_command_carries() -> None:
+    # `S1=$(tk create --step "Set it up")` captures the id into a shell variable, so the output has
+    # no `Created <id>: <title>` line and the title survives only in the command -- inside codex's
+    # program, with its quotes escaped by the JSON serialisation around it.
+    steps = _one_declaration_steps("exec", "wor-step-aaaa", "Set it up")
+    steps[1]["tool_calls"][0]["arguments"] = {"_raw": _code_mode_program('S1=$(tk create --step "Set it up")')}
+    steps[1]["observation"]["results"][0]["content"] = "wor-step-aaaa"
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS \u00b7 step declared]\nSet it up" in rendered
+
+
+def test_pis_lowercase_shell_puts_its_progress_steps_on_the_clients_timeline() -> None:
+    # pi-coding names the shell `bash` and runs the same `tk` records through it. A tool set that
+    # knows only claude's `Bash` reads none of that output, which renders an empty timeline -- and an
+    # empty timeline is scored a perfect 10 for copy nobody graded.
+    steps = _one_declaration_steps("bash", "wor-step-aaaa", "Set up the to-do app")
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS · step declared]\nSet up the to-do app" in rendered
+    # The structural gate reads the same commands, so it must see the step verb it ran too.
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
+
+
+def _code_mode_programs(document: dict[str, Any]) -> list[str]:
+    """The code-mode program of every `exec` call in the document, in step order."""
+    return [
+        call["arguments"]["_raw"]
+        for step in document["steps"]
+        for call in step.get("tool_calls") or []
+        if call["function_name"] == "exec"
+    ]
+
+
+def test_a_live_codex_trial_puts_every_declared_step_on_the_clients_timeline() -> None:
+    # A captured codex trial declared its steps with `tk create --step` from inside code-mode programs,
+    # one program declaring three at once. The timeline needs the programs' output and the structural
+    # gate needs their command text, so both have to be read out of `exec`.
+    steps = codex_code_mode_trajectory_document()["steps"]
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    declared = [block.split("\n", 1)[1].strip() for block in rendered.split("\n\n") if block.startswith("[PROGRESS")]
+    assert declared == [
+        "Confirm the app’s shape and visual direction",
+        "Set up the to-do app shell",
+        "Create the visual draft",
+        "Open the draft for review",
+    ]
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 4, "is_step_command_run": True}
+
+
+def test_a_command_built_in_a_template_literal_is_read_with_its_placeholders() -> None:
+    # The captured trial read a long file in chunks, building each command in a template literal inside
+    # a loop. The placeholders cannot be resolved without running the program, but the command around
+    # them is still what the scans look for.
+    looping_program = next(
+        program for program in _code_mode_programs(codex_code_mode_trajectory_document()) if "for (const" in program
+    )
+
+    assert _RENDERER.code_mode_commands(looping_program) == ["sed -n '${a},${b}p' docs/system/style_guide.md"]
+
+
+# Small code-mode programs and the commands each one runs, shared by the parse's own test and the
+# parity test between its two copies.
+_CODE_MODE_COMMAND_CASES: list[tuple[str, list[str]]] = [
+    ('tools.exec_command({xcmd: "not a command", cmd: "ls"});', ["ls"]),
+    # The other shell function's key inside the command text is part of the command, not its key.
+    (
+        "tools.exec_command({cmd: \"python3 -c \\\"print({'command': 'ls'})\\\"\"});",
+        ["python3 -c \"print({'command': 'ls'})\""],
+    ),
+    ("tools.exec_command({cmd: 'echo \\'quoted\\''});", ["echo 'quoted'"]),
+    ("tools.exec_command({cmd: `ls ${dir}`});", ["ls ${dir}"]),
+    ('tools.view_image({path: "/home/user/workspace/shot.png"});', []),
+]
+
+
+@pytest.mark.parametrize(("program", "expected"), _CODE_MODE_COMMAND_CASES)
+def test_a_code_mode_command_is_read_from_its_own_key_in_any_string_form(program: str, expected: list[str]) -> None:
+    assert _RENDERER.code_mode_commands(program) == expected
+
+
+def test_a_step_declared_after_its_program_yielded_reaches_the_timeline() -> None:
+    # A code-mode program still running when it yields returns only a cell id; what it prints after
+    # that comes back on the `wait` call that collects the cell.
+    steps = [
+        {"step_id": 1, "source": "user", "message": "Build it"},
+        {
+            "step_id": 2,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {
+                    "tool_call_id": "c1",
+                    "function_name": "exec",
+                    "arguments": {"_raw": _code_mode_program('tk create --step "Set up the to-do app"')},
+                }
+            ],
+            "observation": {
+                "results": [{"source_call_id": "c1", "content": "Script running with cell ID 7\nOutput:\n"}]
+            },
+        },
+        {
+            "step_id": 3,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c2", "function_name": "wait", "arguments": {"cell_id": "7"}}],
+            "observation": {
+                "results": [
+                    {
+                        "source_call_id": "c2",
+                        "content": "Script completed\nOutput:\nCreated wor-step-aaaa: Set up the to-do app\n",
+                    }
+                ]
+            },
+        },
+    ]
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS · step declared]\nSet up the to-do app" in rendered
+
+
+def test_the_verifier_and_the_host_side_worker_scan_read_a_program_identically() -> None:
+    # The code-mode parse lives twice, here in the verifier container's script and in trajectory.py,
+    # because the two cannot share code. Running both over the same programs keeps them from drifting.
+    programs = _code_mode_programs(codex_code_mode_trajectory_document())
+    programs.append(_code_mode_program("ls -la", 'tk close wor-step-aaaa "Set it up and checked it opens."'))
+    programs.extend(program for program, _expected in _CODE_MODE_COMMAND_CASES)
+
+    for program in programs:
+        assert _RENDERER.code_mode_commands(program) == _code_mode_commands(program)

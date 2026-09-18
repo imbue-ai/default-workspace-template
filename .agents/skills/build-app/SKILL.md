@@ -73,6 +73,12 @@ confirmation here, because the data sample confirms the data *shape*, not the UI
 shape. Render the handed-off `sample.json` in the mock so the user judges the UI
 against real data.
 
+If you were **not** sent here and the app reads records that come from outside
+itself -- an upload, an export, an API, a third-party service -- stop and run
+`fetch-process-show` first; come back with its confirmed sample. Reading and
+normalizing those records is its job. An app whose ingestion you wrote here
+instead has no entry point anyone can re-run when the next batch lands.
+
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
@@ -119,10 +125,13 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   label: the tab renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates). Short and
+  prefixes are reserved for workspace hostname coordinates), and it must not
+  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+  `host`, `env`), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
-  already used in `system/supervisord.conf` (`system_interface`,
-  `browser`, etc. are reserved by the scaffolder).
+  already used by an existing program (`system_interface`, `browser`, etc.
+  are reserved by the scaffolder, which also refuses a name any
+  `system/supervisord.conf.d/*.conf` already declares).
 - **Draw the app's icon** -- an `.svg` glyph specific to what *this*
   app does, in the house style (see the CLI reference below);
   `forward_port.py` refuses a brand-new registration without one. The
@@ -130,7 +139,8 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   it.
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
+  `data/.state/apps.toml`; if you're choosing
   manually, avoid `8000` (system_interface), `8010` (the chat app) and
   `8081` (the browser service). Two things do not show up there: the
   `agent-observer` program binds no port at all, and a preview of any app
@@ -187,7 +197,9 @@ What gets generated:
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
-  editing it).
+  editing it). Anything you build for this app outside `system/apps/<package>/`
+  -- a skill that drives it, a script, a doc -- is registered in the same file
+  under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
   the app's own tool environment exposes.
@@ -216,9 +228,14 @@ What gets generated:
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated and installed:
+What gets updated and installed -- no shared file is authored, which is what
+lets two agents scaffold two apps at once (`uv.lock` is the exception: `uv sync`
+regenerates it, but it is derived, so it stays out of a creation's footprint):
 
-- `system/supervisord.conf` -- appends a program block:
+- Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
+  package up and `uv sync --all-packages` installs it, so a scaffolded app
+  needs no root entry at all.
+- `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
   [program:<name>]
@@ -228,6 +245,15 @@ What gets updated and installed:
   autorestart=true
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
+
+  The command ends in the app's own name, not `uv run <name>`; supervisord
+  resolves that name on PATH. The copy it finds is the console script
+  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
+  -e` puts the tool's own entry point under your HOME, which supervisord's
+  children do not have on PATH. So always sync with `--all-packages`: a
+  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
+  root dependency), deletes that script, and the next restart is a spawn error
+  with nothing to recover it.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
@@ -273,7 +299,8 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
-  Invoke the `frontend-design` skill before writing the markup (see Step 2).
+  Invoke the `frontend-design:frontend-design` skill before writing the markup
+  (see Step 2).
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
@@ -321,8 +348,10 @@ by separate threads -- no asyncio needed.
 
 If your service renders HTML that a person will look at (anything
 beyond a pure JSON API, a webhook receiver, or a transparent proxy of
-a third-party tool), you must invoke the `frontend-design` skill **before**
-writing the markup. Always do this before working on UI, regardless of the scope of the work.
+a third-party tool), you must invoke the `frontend-design:frontend-design`
+skill **before** writing the markup. Always do this before working on UI,
+regardless of the scope of the work. It ships as a plugin: the bare name
+`frontend-design` does not resolve.
 
 Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --
@@ -469,7 +498,7 @@ Reading the confirmation signal:
 
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic `harden-worker`,
+task file (set `type: app`), launching the generic worker,
 polling, merging on `done`, and refreshing the tab after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker
@@ -496,10 +525,11 @@ priority = "user"
 program = "<name>"
 ```
 
-Then add a `[program:<name>]` block to `system/supervisord.conf` that runs
-`forward_port.py --manifest` and then your existing start command.
-supervisord runs commands directly (no shell), so wrap any command that
-chains with `&&` in `bash -c "..."`, and prefix the whole thing with
+Then add a `[program:<name>]` block as its own
+`system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
+and then your existing start command. supervisord runs commands directly (no
+shell), so wrap any command that chains with `&&` in `bash -c "..."`, and
+prefix the whole thing with
 `python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
@@ -542,8 +572,8 @@ Two valid shapes:
   autorestart=true
   ```
 
-After editing `system/supervisord.conf`, run `supervisorctl reread &&
-supervisorctl update` to start the new program.
+After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl
+reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the

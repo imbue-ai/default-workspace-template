@@ -24,7 +24,6 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
-from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -32,41 +31,13 @@ from typing import Final
 from loguru import logger
 
 from imbue.imbue_common.logging import setup_logging
+from imbue.mngr_modal.modal_cli import ModalAppListing
+from imbue.mngr_modal.modal_cli import ModalVolumeListing
+from imbue.mngr_modal.modal_cli import parse_modal_app_listings
+from imbue.mngr_modal.modal_cli import parse_modal_volume_listings
 
 DEFAULT_MNGR_DIR: Final[Path] = Path("~/.mngr")
 DEFAULT_PREFIX: Final[str] = "mngr-"
-
-# Keys emitted by `modal app list --json` / `modal volume list --json`. These are
-# the column headers from the Modal CLI's `display_table` (modal/cli/app.py and
-# modal/cli/volume.py); the JSON output keys are exactly those headers.
-_APP_ID_KEY: Final[str] = "App ID"
-_VOLUME_NAME_KEY: Final[str] = "Name"
-
-
-class ModalSchemaError(KeyError):
-    """Raised when Modal's --json output is missing an expected key.
-
-    A destructive tool must never fall back to a placeholder identifier, so we
-    fail loudly (naming the unexpected schema) if Modal renames a field.
-    """
-
-
-def _require_key(resource: Mapping[str, str], key: str, resource_type: str) -> str:
-    if key not in resource:
-        raise ModalSchemaError(
-            f"Modal {resource_type} entry is missing the expected key {key!r}; "
-            f"got keys {sorted(resource.keys())!r}. Refusing to act on an unknown "
-            f"identifier. The Modal CLI may have changed its --json schema."
-        )
-    return resource[key]
-
-
-def _get_app_id(app: Mapping[str, str]) -> str:
-    return _require_key(app, _APP_ID_KEY, "app")
-
-
-def _get_volume_name(volume: Mapping[str, str]) -> str:
-    return _require_key(volume, _VOLUME_NAME_KEY, "volume")
 
 
 def _read_user_id(mngr_dir: Path) -> str | None:
@@ -102,10 +73,10 @@ def _run_modal(args: Sequence[str], environment: str | None) -> subprocess.Compl
     return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
 
-def _list_resources(resource_type: str, environment: str) -> list[dict[str, str]] | None:
+def _list_resources(resource_type: str, environment: str) -> object | None:
     """List all resources of the given type (e.g. 'app', 'volume') in the environment.
 
-    Returns None on failure (CLI error or unparseable output), empty list if no resources found.
+    Returns the decoded JSON body, or None on failure (CLI error or unparseable output).
     """
     result = _run_modal([resource_type, "list", "--json"], environment)
     if result.returncode != 0:
@@ -174,20 +145,18 @@ def _resolve_environment(args: argparse.Namespace) -> str | None:
     return args.environment or _detect_environment(mngr_dir, args.prefix)
 
 
-def _display_resources(apps: Sequence[Mapping[str, str]], volumes: Sequence[Mapping[str, str]]) -> None:
+def _display_resources(apps: Sequence[ModalAppListing], volumes: Sequence[ModalVolumeListing]) -> None:
     if apps:
         logger.info(f"Apps to stop ({len(apps)}):")
         for app in apps:
-            # Description is a non-destructive display label only, so an empty default is fine.
-            description = app.get("Description", "")
-            logger.info(f"  {_get_app_id(app)}  {description}")
+            logger.info(f"  {app.app_id}  {app.description}")
     else:
         logger.info("No apps found.")
 
     if volumes:
         logger.info(f"Volumes to delete ({len(volumes)}):")
         for volume in volumes:
-            logger.info(f"  {_get_volume_name(volume)}")
+            logger.info(f"  {volume.name}")
     else:
         logger.info("No volumes found.")
 
@@ -200,16 +169,14 @@ def _confirm_nuke(is_force: bool) -> bool:
 
 
 def _nuke_resources(
-    resources: Sequence[Mapping[str, str]],
+    identifiers: Sequence[str],
     action_label: str,
-    get_identifier: Callable[[Mapping[str, str]], str],
     execute_action: Callable[[str, str], tuple[bool, str]],
     environment: str,
 ) -> int:
-    """Execute a nuke action on a list of resources. Returns the number of failures."""
+    """Execute a nuke action on each identifier. Returns the number of failures."""
     failure_count = 0
-    for resource in resources:
-        identifier = get_identifier(resource)
+    for identifier in identifiers:
         print(f"{action_label} {identifier}...", end=" ", flush=True)
         is_success, stderr = execute_action(identifier, environment)
         if is_success:
@@ -220,9 +187,11 @@ def _nuke_resources(
     return failure_count
 
 
-def _execute_nuke(apps: Sequence[Mapping[str, str]], volumes: Sequence[Mapping[str, str]], environment: str) -> int:
-    app_failures = _nuke_resources(apps, "Stopping app", _get_app_id, _stop_app, environment)
-    volume_failures = _nuke_resources(volumes, "Deleting volume", _get_volume_name, _delete_volume, environment)
+def _execute_nuke(apps: Sequence[ModalAppListing], volumes: Sequence[ModalVolumeListing], environment: str) -> int:
+    app_failures = _nuke_resources([app.app_id for app in apps], "Stopping app", _stop_app, environment)
+    volume_failures = _nuke_resources(
+        [volume.name for volume in volumes], "Deleting volume", _delete_volume, environment
+    )
     return app_failures + volume_failures
 
 
@@ -241,12 +210,17 @@ def main() -> int:
 
     logger.info(f"Modal environment: {environment}")
 
-    apps = _list_resources("app", environment)
-    volumes = _list_resources("volume", environment)
+    app_rows = _list_resources("app", environment)
+    volume_rows = _list_resources("volume", environment)
 
-    if apps is None or volumes is None:
+    if app_rows is None or volume_rows is None:
         logger.error("Failed to list Modal resources. Cannot proceed.")
         return 1
+
+    # Deliberately unguarded: this tool is destructive, so refusing to act beats
+    # acting on an identifier we could not read.
+    apps = parse_modal_app_listings(app_rows)
+    volumes = parse_modal_volume_listings(volume_rows)
 
     _display_resources(apps, volumes)
     if not apps and not volumes:

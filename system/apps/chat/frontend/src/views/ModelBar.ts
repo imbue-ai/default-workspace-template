@@ -16,21 +16,30 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
+import {
+  getPendingAccountId,
+  getPendingPick,
+  isSwitchTarget,
+  pendingSwitchTarget,
+  setPendingAccount,
+  switchKind,
+} from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
+import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
-import { startChatOnAccount } from "../shell";
 import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
 import { Portal } from "@imbue/workspace-ui/src/portal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
-import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { accountRow, emptyAccountRowState } from "./accountRow";
+import { FastModeModal } from "./FastModeModal";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -71,7 +80,7 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
 }
 
-export function ModelBar(): m.Component<{ agentId: string }> {
+export function ModelBar(): m.Component<{ chatId: string }> {
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
@@ -96,21 +105,18 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
-  // The account whose row was pressed and is waiting for "Launch" or "Cancel". A chat's
-  // account is fixed at create time, so pressing another account's row can only mean a new
-  // chat on it -- asked, not done by surprise. Cleared with the rest of the flyout's state.
-  let launchPromptAccountId: string | null = null;
-  const launchDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
+  // The fast-mode chooser is up (models/FastMode.ts); opened from the fast row, which closes the card.
+  let isFastModeModalOpen = false;
 
-  // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
+  // Recompute the offerable models for `chatId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
   // a fetch failure both leave `offeredModels` null -- the picker then shows the whole
   // catalog rather than an empty list.
-  async function fetchOfferedModels(agentId: string): Promise<void> {
+  async function fetchOfferedModels(chatId: string): Promise<void> {
     offeredLoading = true;
     offeredLoaded = false;
     offeredModels = null;
@@ -119,15 +125,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     try {
       const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/model-options"),
-        params: { agentId },
+        url: apiUrl("/api/chats/:chatId/model-options"),
+        params: { chatId },
       });
       // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness
       // answers with `models` (ids), null meaning "offer the whole catalog".
       offeredModels = response.models == null ? null : new Set(response.models);
       dynamicOptions = response.options ?? null;
     } catch (error) {
-      console.warn(`Failed to load offered models for agent ${agentId}`, error);
+      console.warn(`Failed to load offered models for chat ${chatId}`, error);
       offeredModels = null;
       dynamicOptions = null;
     } finally {
@@ -162,7 +168,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       rowState.confirmingRemoval = null;
       rowState.renamingId = null;
       rowState.renameDraft = "";
-      launchPromptAccountId = null;
     }
     flyout = next;
   }
@@ -183,12 +188,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     m.redraw();
   }
 
-  /** A row's tooltip attrs, or nothing when it has none to give. Spread, not wrapped: the
-   *  bubble lives on <body>, so the row needs no container of its own. */
-  function tooltipAttrs(text: string | null): m.Attributes {
-    return text === null ? {} : hoverTooltipAttrs(text);
-  }
-
   /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
    *  its value and explains, on hover, where it can be changed instead. */
   function menuRow(opts: {
@@ -207,7 +206,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         class: opts.openable ? css.ROW : css.ROW_INERT,
         // A stable hook so a test can address a row by what it is rather than by its classes.
         "data-card-row": opts.which,
-        ...tooltipAttrs(opts.tooltip),
+        ...hoverTooltipAttrs(opts.tooltip),
         // CLICK, not hover. Opening the model flyout fetches this agent's offerable models,
         // which for pi shells out to `pi --list-models` (up to 15s) and for codex connects to
         // its daemon -- on hover that would fire on every pointer sweep across the card.
@@ -276,7 +275,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...hoverTooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
@@ -318,45 +317,39 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     ]);
   }
 
-  /** Fast mode: a switch.
+  /** Fast mode: the chat's mode (off, auto or on) as a row that opens the chooser.
    *
-   * A switch rather than a toggling icon, because a switch says on or off by its shape instead
-   * of by its fill.
+   * The row states the mode rather than a switch position, because auto is neither on nor off:
+   * a chat in auto reads "Auto" while fast, "Auto (off now)" once its fast turns have run. The
+   * chooser is a modal of its own so the card stays a list of one-line facts.
    */
-  function fastRow(opts: {
-    on: boolean;
-    interactive: boolean;
-    tooltip: string | null;
-    onToggle: () => void;
-  }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
-      m("span", { class: css.ROW_LABEL }, "Fast Mode"),
-      m(
-        "span",
-        { class: css.ROW_VALUE_STATIC },
-        m(
-          "button",
-          {
-            type: "button",
-            role: "switch",
-            class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
-            "aria-label": "Fast Mode",
-            "aria-checked": opts.on ? "true" : "false",
-            disabled: !opts.interactive,
-            onclick: () => {
-              if (opts.interactive) opts.onToggle();
-            },
-          },
-          m(
-            "span",
-            { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
-            opts.on
-              ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
-              : null,
-          ),
-        ),
-      ),
-    ]);
+  function fastRow(opts: { chatId: string; interactive: boolean; tooltip: string | null }): m.Vnode {
+    const state = getFastModeState(opts.chatId);
+    if (state === null) void ensureFastModeState(opts.chatId);
+    return m(
+      "button",
+      {
+        type: "button",
+        class: opts.interactive ? css.ROW : css.ROW_INERT,
+        "data-card-row": "fast",
+        ...hoverTooltipAttrs(opts.tooltip),
+        disabled: !opts.interactive,
+        onclick: () => {
+          if (!opts.interactive) return;
+          closeCard();
+          isFastModeModalOpen = true;
+        },
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, "Fast Mode"),
+        m("span", { class: css.ROW_VALUE }, [
+          m("span", { class: css.ROW_TEXT }, state === null ? "..." : fastModeLabel(state)),
+          opts.interactive
+            ? m("span", { class: css.ROW_CHEVRON }, m.trust(icon("chevron-right", { size: 13 })))
+            : null,
+        ]),
+      ],
+    );
   }
 
   /** The card's viewport left, clamped so it cannot hang off either edge. */
@@ -414,7 +407,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
    *  start brings back. No confirmation -- it is one message away from undone. The agent list
    *  catches up through the observe stream. */
-  function stopAgentRow(targetAgentId: string): m.Vnode {
+  function stopAgentRow(targetChatId: string): m.Vnode {
     return m(
       "button",
       {
@@ -424,7 +417,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           closeCard();
-          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
+          void fetch(apiUrl(`/api/chats/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
             .then(async (response) => {
               if (response.ok) return;
               const data = (await response.json().catch(() => ({}))) as { detail?: string };
@@ -447,41 +440,21 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     ]);
   }
 
-  /** The confirmation a pressed account row opens: launch a new chat on it, or not. */
-  function launchPrompt(target: ProviderAccount, current: ProviderAccount | null): m.Children {
-    return m(launchDialog, {
-      title: "Launch a new chat?",
-      body: [
-        `A chat's provider is fixed when it starts, so this one stays on ${current?.label ?? "its provider"}. ` +
-          `Start a new chat on ${target.label}?`,
-      ],
-      dismissLabel: "Cancel",
-      actions: [
-        {
-          label: "Launch",
-          run: () => {
-            closeCard();
-            void startChatOnAccount(target.id);
-          },
-        },
-      ],
-      onDismiss: () => {
-        launchPromptAccountId = null;
-      },
-    });
-  }
-
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Our chats bind to an account when they are created and nothing rebinds them, so pressing
-   * an account that is not this chat's asks to open a new chat on it. Each row also carries
-   * the default toggle: the starred account is the one a new chat opens on when nothing
-   * names one (the New Tab tile, the rail shortcut, an agent's `layout.py open chat`).
+   * Pressing any account but the chat's own begins the switch to it (``beginSwitchTo``): the
+   * dialog for a handoff, which takes the model and offers a new chat instead; armed at once for
+   * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
+   * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
+   * choice back. Each row also carries the default toggle: the starred
+   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
+   * shortcut, an agent's `layout.py open chat`).
    */
-  function providerFlyout(current: ProviderAccount | null): m.Vnode {
+  function providerFlyout(chatId: string, current: ProviderAccount | null): m.Vnode {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
-    const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
+    const pendingId = getPendingAccountId(chatId);
+    const chat = getChatById(chatId);
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -492,23 +465,26 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
+              const isPending = row.id === pendingId;
               return accountRow({
                 row,
                 isCurrent,
                 isDefault: row.id === defaultId,
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                ...(isPending ? { badge: "next" } : {}),
                 onSelect: () => {
-                  if (isCurrent) {
-                    setFlyout(null);
+                  setFlyout(null);
+                  if (isCurrent || isPending || chat === undefined || !isSwitchTarget(chat, row)) {
+                    setPendingAccount(chatId, null);
                     return;
                   }
-                  launchPromptAccountId = row.id;
+                  closeCard();
+                  beginSwitchTo(chatId, row);
                 },
                 state: rowState,
               });
             }),
       ),
-      prompted !== null ? launchPrompt(prompted, current) : null,
       m(
         "button",
         {
@@ -516,7 +492,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           class: css.FLYOUT_ADD,
           onclick: () => {
             closeCard();
-            openProviderChooser({ onSignedIn: (accountId) => startChatOnAccount(accountId) });
+            openProviderChooser({
+              onSignedIn: (accountId) => {
+                // Signed in from inside a chat: the new account is what the user switches this
+                // chat to next, so the switch begins on it.
+                const account = accountForAgent(accountId);
+                if (account !== null) beginSwitchTo(chatId, account);
+                m.redraw();
+              },
+            });
           },
         },
         "+ Add a provider",
@@ -526,7 +510,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** The Model row's menu: the models this account can actually use. */
   function modelFlyout(
-    agentId: string,
+    chatId: string,
     sourceOptions: readonly CatalogModelOption[],
     matched: CatalogModelOption | null,
     currentIdentity: ModelIdentity,
@@ -566,7 +550,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                         effort: clampEffort(option, currentIdentity.effort),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
-                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
                       setFlyout(null);
                     },
                   },
@@ -614,11 +598,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     },
 
     view(vnode) {
-      const agentId = vnode.attrs.agentId;
-      const agent = getAgentById(agentId);
-      const account = accountForAgent(agent?.labels?.account);
-      const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-      const choice = catalog === null ? null : effectiveChoice(agentId, agent?.model_choice);
+      const chatId = vnode.attrs.chatId;
+      const chat = getChatById(chatId);
+      const account = accountForAgent(chat?.active_agent.account_id ?? undefined);
+      const catalog: HarnessCatalog | null = getHarnessCatalog(chat?.active_agent.harness);
+      const choice = catalog === null ? null : effectiveChoice(chatId, chat?.active_agent.model_choice);
       const matched = choice?.matched ?? null;
 
       // THREE states have no model, not one, and the Provider row must render in all of them:
@@ -626,7 +610,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (agent === undefined) return null;
+      if (chat === undefined) return null;
       // Nothing at all to say: no account to name and no model to show.
       if (account === null && matched === null) return null;
 
@@ -640,9 +624,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
 
+      // The account the next send switches the chat to, and the model picked for it: while a
+      // switch is armed the bar reads as the target, since that is what the next message runs on.
+      const pending = pendingSwitchTarget(chatId);
+      const pendingPick = getPendingPick(chatId);
+
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
-      // the model has one to state, and the bolt only when fast is actually on.
+      // the model has one to state, and the bolt only when fast is actually on. An armed switch
+      // replaces all of it with the target's pick and a "next" mark.
       const trigger = m(
         "button",
         {
@@ -663,27 +653,52 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             // fetch is the slow part (pi shells out to `pi --list-models`), and by the time a
             // pointer has crossed the card it is usually already back.
             if (catalog?.picker_mode === "search" || catalog?.picker_mode === "dynamic") {
-              void fetchOfferedModels(agentId);
+              void fetchOfferedModels(chatId);
             }
           },
         },
-        [
-          // Joined by dots between EVERY part, including before the bolt: the three axes are
-          // one reading, and a bolt tacked on without a separator read as a button.
-          m("span", matched?.label ?? account?.provider ?? "Model"),
-          shownEfforts.length > 1 && currentEffort !== null
-            ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
-            : null,
-          currentFast
-            ? [
-                m("span", { class: css.TRIGGER_DOT }, "·"),
-                m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
-              ]
-            : null,
-        ],
+        pending !== null
+          ? [
+              m("span", pendingPick?.label ?? pending.harness_label),
+              m(
+                "span",
+                {
+                  class:
+                    "model-bar-next-badge ml-1.5 rounded-full bg-accent-light px-1.5 " +
+                    "text-(length:--font-size-helper) text-accent",
+                },
+                "next",
+              ),
+            ]
+          : [
+              // Joined by dots between EVERY part, including before the bolt: the three axes are
+              // one reading, and a bolt tacked on without a separator read as a button.
+              m("span", matched?.label ?? account?.provider ?? "Model"),
+              shownEfforts.length > 1 && currentEffort !== null
+                ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
+                : null,
+              currentFast
+                ? [
+                    m("span", { class: css.TRIGGER_DOT }, "·"),
+                    m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
+                  ]
+                : null,
+            ],
       );
 
-      if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
+      // The fast-mode chooser outlives the card it was opened from (the row closes the card), so
+      // it portals on its own while the card is down.
+      const fastModeModal = isFastModeModalOpen
+        ? m(FastModeModal, {
+            chatId,
+            onClose: () => {
+              isFastModeModalOpen = false;
+            },
+          })
+        : null;
+      if (cardAnchor === null) {
+        return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [fastModeModal] })];
+      }
 
       const currentIdentity: ModelIdentity =
         matched === null
@@ -694,6 +709,36 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const dynamic = catalog?.picker_mode === "dynamic";
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
+      // While a switch is armed the card describes the target: the account the next send moves
+      // the chat to and, for a handoff, the model picked for it, which opens the dialog again to
+      // change. A rebind keeps the agent's model, so it has no row to offer.
+      const armedRows: m.Children[] = [
+        menuRow({
+          label: "Provider",
+          value: pending?.provider ?? "",
+          sub: `${pending?.harness_label ?? ""}, after your next message`,
+          which: "providers",
+          openable: true,
+          tooltip: null,
+        }),
+        ...(pending !== null && switchKind(chat, pending) === "handoff"
+          ? [
+              m("div", { class: css.DIVIDER }),
+              menuRow({
+                label: "Model",
+                value: pendingPick?.label ?? "Default model",
+                which: "model",
+                openable: true,
+                tooltip: "Change the model this chat switches to",
+                onOpen: () => {
+                  closeCard();
+                  openSwitchDialog(chatId, pending);
+                },
+              }),
+            ]
+          : []),
+      ];
+
       const card = m(
         "div",
         {
@@ -702,16 +747,20 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           style: cardPlacement(cardAnchor),
         },
         m("div", { class: css.CARD_INNER }, [
-          menuRow({
-            label: "Provider",
-            value: account?.provider ?? "Not signed in",
-            sub: account?.harness_label,
-            which: "providers",
-            openable: true,
-            tooltip: null,
-          }),
-          m("div", { class: css.DIVIDER }),
-          matched !== null
+          ...(pending !== null
+            ? armedRows
+            : [
+                menuRow({
+                  label: "Provider",
+                  value: account?.provider ?? "Not signed in",
+                  ...(account?.harness_label !== undefined ? { sub: account.harness_label } : {}),
+                  which: "providers",
+                  openable: true,
+                  tooltip: null,
+                }),
+                m("div", { class: css.DIVIDER }),
+              ]),
+          pending === null && matched !== null
             ? menuRow({
                 label: "Model",
                 value: matched.label,
@@ -721,11 +770,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 openable: interactive,
                 tooltip: readOnlyTooltip,
                 onOpen: () => {
-                  if (searchable || dynamic) void fetchOfferedModels(agentId);
+                  if (searchable || dynamic) void fetchOfferedModels(chatId);
                 },
               })
             : null,
-          matched !== null
+          pending === null && matched !== null
             ? effortRow({
                 efforts: matched.efforts,
                 current: currentEffort,
@@ -733,36 +782,28 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 tooltip: readOnlyTooltip,
                 onPick: (level) => {
                   const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
               })
             : null,
-          matched !== null && matched.supports_fast
-            ? fastRow({
-                on: currentFast,
-                interactive,
-                tooltip: readOnlyTooltip,
-                onToggle: () => {
-                  const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
-                },
-              })
+          pending === null && matched !== null && matched.supports_fast
+            ? fastRow({ chatId, interactive, tooltip: readOnlyTooltip })
             : null,
           m("div", { class: css.DIVIDER }),
-          stopAgentRow(agentId),
+          stopAgentRow(chatId),
         ]),
       );
 
       const openFlyout =
         flyout === "providers"
-          ? providerFlyout(account)
+          ? providerFlyout(chatId, account)
           : flyout === "model"
-            ? modelFlyout(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
+            ? modelFlyout(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
             : null;
 
       // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
       // clipping overlay, so a card that extends past the panel would be cut off at its edge.
-      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout, fastModeModal] })];
     },
   };
 }

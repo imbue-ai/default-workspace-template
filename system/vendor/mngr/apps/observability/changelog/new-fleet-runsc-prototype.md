@@ -1,0 +1,1 @@
+New box telemetry signal `SLICE_UNIT_OOM_KILLED` (systemd OOM-killed a slice VM's `mngr-slice@` unit -- the hardened unit's `MemoryMax` backstop fired, which must never happen) with its OpenObserve alert rule, provisioned like the other signals.

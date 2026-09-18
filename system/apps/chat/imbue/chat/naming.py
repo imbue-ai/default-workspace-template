@@ -8,9 +8,8 @@ kept matched on rename, so no surface ever shows a machine-minted coolname.
 
 For chat agents the display name lives on the mngr agent itself, as its
 ``display_name`` label, with the canonical form as the agent's mngr name.
-Display names are minted here, server-side, as the first free "<word> N" for
-the harness's word ("Chat 1", "Codex 2", ...), so two clients creating at the
-same time cannot both mint "Chat 1".
+Display names are minted here, server-side, as the first free "Chat N", so two
+clients creating at the same time cannot both mint "Chat 1".
 """
 
 from collections.abc import Iterable
@@ -19,20 +18,12 @@ from typing import Final
 from app_instances.primitives import canonical_name_from_title
 from app_instances.primitives import is_name_conflict as is_title_conflict
 
-from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.imbue_common.pure import pure
 
-# The word a harness's auto-minted chat names count under: a Codex chat is
-# "Codex 1", not "Chat 2", so the fleets number independently and the name says
-# which harness is behind it. Mirrored by the frontend's tab icons; the names
-# themselves are minted only here.
-AUTO_NAME_WORD_BY_HARNESS: Final[dict[HarnessType, str]] = {
-    HarnessType.CLAUDE: "Chat",
-    HarnessType.CODEX: "Codex",
-    HarnessType.PI_CODING: "Pi",
-    HarnessType.OPENCODE: "OpenCode",
-    HarnessType.ANTIGRAVITY: "Agy",
-}
+# The word every auto-minted chat name counts under, whatever harness or lane the
+# chat starts on: a chat can switch harness (docs/system/blueprint/chat-agent-split/),
+# so a name that said "Codex" would be wrong the moment it moved to claude.
+AUTO_NAME_WORD: Final[str] = "Chat"
 
 
 @pure
@@ -41,7 +32,7 @@ def canonical_agent_name(name: str) -> str:
 
     The workspace app model's naming rule, shared with every app through the
     instances library. It mirrors mngr's own canonicalization rather than
-    importing it: a workspace's vendored mngr may predate free-form names, and
+    importing it: a workspace's mngr may predate free-form names, and
     passing it a name it would reject fails the create outright. Sending the
     canonical name (plus the typed one as a ``display_name`` label) is accepted
     by every mngr version. Returns "" when nothing usable remains (e.g. the
@@ -64,7 +55,7 @@ def _canonical_name_key(name: str) -> str:
 
 @pure
 def first_free_numbered_name(word: str, taken_names: Iterable[str]) -> str:
-    """The first free "<word> N" display name: "Chat 1", "Codex 2", ...
+    """The first free "<word> N" display name: "Chat 1", "Chat 2", ...
 
     "First free" fills gaps -- destroying "Chat 1" frees the slot for the next
     create. ``taken_names`` is every name already in use on the machine: agent

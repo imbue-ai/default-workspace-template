@@ -61,15 +61,14 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
-from imbue.mngr.providers.ssh.instance import SSHHostConfig
-from imbue.mngr.providers.ssh.instance import SSHProviderInstance
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr.utils.read_deadline import reads_bounded_for
-from imbue.mngr.utils.testing import build_test_known_hosts_file
+from imbue.mngr.utils.testing import ExecOnlyParamikoServer
 from imbue.mngr.utils.testing import capture_tmux_pane_contents
 from imbue.mngr.utils.testing import generate_ssh_keypair
 from imbue.mngr.utils.testing import local_sshd
+from imbue.mngr.utils.testing import make_local_ssh_host_factory
 from imbue.mngr.utils.testing import tmux_session_cleanup
 from imbue.mngr.utils.thread_cleanup import mngr_executor
 
@@ -98,32 +97,81 @@ def ssh_host_factory(
     public_key_content = public_key.read_text()
 
     with local_sshd(public_key_content, tmp_path) as (port, host_key_path):
-        known_hosts_path = build_test_known_hosts_file(host_key_path, port, tmp_path / "known_hosts")
-
-        current_user = os.environ.get("USER", "root")
-        ssh_config = SSHHostConfig(
-            address="127.0.0.1",
-            port=port,
-            user=current_user,
-            key_file=private_key,
-            known_hosts_file=known_hosts_path,
-        )
-
-        def create_ssh_host(name: str) -> Host:
-            provider = SSHProviderInstance(
-                name=ProviderInstanceName(f"ssh-{name}"),
-                host_dir=temp_dir,
-                mngr_ctx=temp_mngr_ctx,
-                hosts={name: ssh_config},
-            )
-            return provider.get_host(HostName(name))
-
-        yield create_ssh_host
+        yield make_local_ssh_host_factory(port, host_key_path, private_key, temp_dir, temp_mngr_ctx, tmp_path)
 
 
-# =============================================================================
+# Remote File Write Tests
+
+
+# Past paramiko's default 2 MiB channel window, so the write has to ride flow control.
+_LARGE_WRITE_PAYLOAD = bytes(range(256)) * (12 * 1024)
+
+
+@pytest.mark.timeout(60)
+def test_write_file_over_a_real_transport_lands_a_large_file_with_its_mode_through_one_exec_channel(
+    paramiko_ssh_host_factory: tuple[Callable[[str], Host], ExecOnlyParamikoServer],
+    tmp_path: Path,
+) -> None:
+    """Drives the remote write through a real paramiko transport, with the server side in-process.
+
+    This is the guard for the private ``Transport._send_user_message`` call the
+    write relies on (see the paramiko version pin in ``outer_host_test.py``): the
+    exec request leaves without a reply being awaited, the bytes follow on the
+    same channel, and the command lands them under the requested mode.
+    """
+    create_ssh_host, server = paramiko_ssh_host_factory
+    host = create_ssh_host("writer")
+    assert not host.is_local
+    destination = tmp_path / "landing dir" / "con'fig.bin"
+
+    host.write_file(destination, _LARGE_WRITE_PAYLOAD, mode="0600", is_atomic=True)
+
+    assert destination.read_bytes() == _LARGE_WRITE_PAYLOAD
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert [entry.name for entry in destination.parent.iterdir()] == [destination.name]
+    (command,) = server.exec_commands
+    shell, flag, chain = shlex.split(command)
+    assert (shell, flag) == ("sh", "-c")
+    assert chain.startswith(f"mkdir -p {shlex.quote(str(destination.parent))} && cat > ")
+    assert chain.endswith(shlex.quote(str(destination)))
+
+
+@pytest.mark.timeout(60)
+def test_write_file_over_a_real_transport_reports_the_remote_command_failure(
+    paramiko_ssh_host_factory: tuple[Callable[[str], Host], ExecOnlyParamikoServer],
+    tmp_path: Path,
+) -> None:
+    """A command that fails on the far side surfaces its stderr and exit status, read back over the same channel."""
+    create_ssh_host, _server = paramiko_ssh_host_factory
+    host = create_ssh_host("writer")
+    destination = tmp_path / "config.json"
+    destination.mkdir()
+
+    with pytest.raises(MngrError, match=r"\(exit 1\): .*config\.json: Is a directory$"):
+        host.write_file(destination, b"fresh")
+
+    assert destination.is_dir()
+    assert list(tmp_path.glob(".config.json.*")) == []
+
+
+@pytest.mark.acceptance
+@pytest.mark.timeout(60)
+def test_write_file_over_a_real_sshd_lands_a_large_file_with_its_mode(
+    ssh_host_factory: Callable[[str], Host],
+    tmp_path: Path,
+) -> None:
+    """The same write against OpenSSH, which has to accept stdin bytes sent behind an exec request it has not answered."""
+    host = ssh_host_factory("writer")
+    destination = tmp_path / "landing dir" / "con'fig.bin"
+
+    host.write_file(destination, _LARGE_WRITE_PAYLOAD, mode="0600")
+
+    assert destination.read_bytes() == _LARGE_WRITE_PAYLOAD
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert [entry.name for entry in destination.parent.iterdir()] == [destination.name]
+
+
 # Run Shell Command Tests
-# =============================================================================
 
 
 def test_run_simple_command(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -201,9 +249,7 @@ def test_run_command_local_from_worker_thread(
     assert output.stdout == "from_worker"
 
 
-# =============================================================================
 # Read File Tests (Bytes)
-# =============================================================================
 
 
 def test_read_file_returns_bytes(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -223,9 +269,7 @@ def test_read_nonexistent_file_raises(host_with_temp_dir: tuple[Host, Path]) -> 
         host.read_file(Path("/nonexistent/file/path/12345.txt"))
 
 
-# =============================================================================
 # Write File Tests (Bytes)
-# =============================================================================
 
 
 def test_write_file_accepts_bytes(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -253,9 +297,7 @@ def test_write_file_with_mode(host_with_temp_dir: tuple[Host, Path]) -> None:
     assert file_stat.st_mode & stat.S_IXUSR
 
 
-# =============================================================================
 # Read Text File Tests
-# =============================================================================
 
 
 def test_read_text_file_returns_string(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -277,9 +319,7 @@ def test_read_text_file_with_unicode(host_with_temp_dir: tuple[Host, Path]) -> N
     assert "Hello World" in content
 
 
-# =============================================================================
 # Write Text File Tests
-# =============================================================================
 
 
 def test_write_text_file_accepts_string(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -308,9 +348,7 @@ def test_write_text_file_with_mode(host_with_temp_dir: tuple[Host, Path]) -> Non
     assert file_stat.st_mode & stat.S_IXUSR
 
 
-# =============================================================================
 # Activity Configuration Tests
-# =============================================================================
 
 
 def test_get_default_activity_config(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -342,9 +380,7 @@ def test_set_and_get_activity_config(host_with_temp_dir: tuple[Host, Path]) -> N
     assert retrieved.idle_timeout_seconds == 7200
 
 
-# =============================================================================
 # Activity Time Tests
-# =============================================================================
 
 
 def test_record_boot_activity(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -398,9 +434,7 @@ def test_get_activity_content(host_with_temp_dir: tuple[Host, Path]) -> None:
     assert "host_id" in data
 
 
-# =============================================================================
 # Cooperative Locking Tests
-# =============================================================================
 
 
 def test_acquire_and_release_lock(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -549,9 +583,7 @@ def test_remote_lock_cooperatively_releases_lock_on_success(
     assert host.is_lock_held() is False
 
 
-# =============================================================================
 # Certified Data Tests
-# =============================================================================
 
 
 def test_get_empty_certified_data(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -578,9 +610,7 @@ def test_get_nonexistent_plugin_data(host_with_temp_dir: tuple[Host, Path]) -> N
     assert data == {}
 
 
-# =============================================================================
 # Environment Variable Tests
-# =============================================================================
 
 
 def test_get_empty_env_vars(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -624,9 +654,7 @@ def test_get_nonexistent_env_var(host_with_temp_dir: tuple[Host, Path]) -> None:
     assert value is None
 
 
-# =============================================================================
 # Plugin State Files Tests
-# =============================================================================
 
 
 def test_set_and_get_plugin_state_file(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -654,9 +682,7 @@ def test_list_nonexistent_plugin_files(host_with_temp_dir: tuple[Host, Path]) ->
     assert files == []
 
 
-# =============================================================================
 # Host State Tests
-# =============================================================================
 
 
 def test_local_host_always_running(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -712,9 +738,7 @@ def test_reads_bounded_for_clamps_a_slow_command(host_with_temp_dir: tuple[Host,
     assert not result.success
 
 
-# =============================================================================
 # Idle Detection Tests
-# =============================================================================
 
 
 def test_get_idle_seconds_with_boot_activity(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -737,9 +761,7 @@ def test_get_idle_seconds_after_boot_activity(host_with_temp_dir: tuple[Host, Pa
     assert 0 <= idle < 10
 
 
-# =============================================================================
 # Agent Creation and Start Tests
-# =============================================================================
 
 
 @pytest.mark.tmux
@@ -897,9 +919,7 @@ def test_start_agent_runs_command_too_long_to_type_into_the_pane(
         assert host.read_text_file(script_path) == agent_command + "\n"
 
 
-# =============================================================================
 # Agent Start/Stop Process Tests
-# =============================================================================
 
 
 def _collect_pane_pids(host: Host, session_name: str) -> list[str]:
@@ -1630,9 +1650,7 @@ def test_start_agent_starts_process_activity_monitor(
         host.stop_agents([agent.id])
 
 
-# =============================================================================
 # Additional Commands Tests
-# =============================================================================
 
 
 def test_additional_commands_stored_in_agent_data(
@@ -1784,9 +1802,7 @@ def test_start_agent_additional_windows_run_commands(
         host.stop_agents([agent.id])
 
 
-# =============================================================================
 # Provision Agent Tests
-# =============================================================================
 
 
 def test_provision_agent_create_directories(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -2045,9 +2061,7 @@ def test_provision_agent_order_of_operations(host_with_temp_dir: tuple[Host, Pat
     assert log_file.read_text() == "uploaded\n"
 
 
-# =============================================================================
 # Helper Functions for Provision Tests
-# =============================================================================
 
 
 def _create_minimal_agent(host: Host, temp_dir: Path, work_dir: Path | None = None) -> AgentInterface:
@@ -2072,9 +2086,7 @@ def _create_minimal_agent(host: Host, temp_dir: Path, work_dir: Path | None = No
 # section in claude_agent_test.py.
 
 
-# =============================================================================
 # File Transfer Tests (create_agent_work_dir and helpers)
-# =============================================================================
 
 
 def _init_git_repo(path: Path, commit_message: str = "Initial commit") -> None:
@@ -2887,9 +2899,7 @@ def test_create_work_dir_git_mirror_from_remote_source_to_local_target(
     assert log_result.stdout.strip() != ""
 
 
-# =============================================================================
 # Agent Environment Variable Tests
-# =============================================================================
 
 
 def test_provision_agent_writes_env_vars_to_file(host_with_temp_dir: tuple[Host, Path]) -> None:
@@ -3077,7 +3087,6 @@ def test_start_agent_has_access_to_env_vars(
 
 
 @pytest.mark.tmux
-@pytest.mark.timeout(25)
 def test_new_tmux_window_inherits_env_vars(
     temp_host_dir: Path,
     per_host_dir: Path,
@@ -3685,9 +3694,7 @@ def test_create_work_dir_cross_host_generates_unique_paths(
     assert (work_dir_2 / "file.txt").read_text() == "content"
 
 
-# =============================================================================
 # Agent Type Provisioning Integration Tests
-# =============================================================================
 
 
 def test_provision_agent_applies_agent_type_provisioning_fields(

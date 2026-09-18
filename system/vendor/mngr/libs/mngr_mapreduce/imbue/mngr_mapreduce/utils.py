@@ -1,6 +1,7 @@
 """Utility functions for the mngr-mapreduce framework."""
 
 import itertools
+import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -89,3 +90,8 @@ def get_base_commit(source_dir: Path, cg: ConcurrencyGroup) -> str:
     """Get the current HEAD commit hash, used as the base for all agent branches."""
     result = cg.run_process_to_completion(["git", "rev-parse", "HEAD"], cwd=source_dir)
     return result.stdout.strip()
+
+
+def pause(seconds: float) -> None:
+    """Block the calling thread; the one place the framework sleeps, between polls and between launches."""
+    time.sleep(seconds)

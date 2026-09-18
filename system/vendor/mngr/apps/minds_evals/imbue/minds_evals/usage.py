@@ -13,7 +13,7 @@ Two different LLM consumers run during a trial and they must not be conflated:
   transcript stream and both are read: the watcher's ``assistant_message`` records, and the
   ATIF-shaped ``step`` records (``source: "agent"``, token counts under ATIF's ``metrics`` names)
   that mngr's own emitters write. The one reconciliation that matters is the input bucket -- see
-  ``_atif_token_snapshot``.
+  ``atif_token_snapshot``.
 - the **decider**, the harness's simulated-user model. It is a cost of running the eval, not a
   property of the thing being measured, so it is reported separately as metadata.
 
@@ -61,6 +61,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import DeciderResult
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.ui_flows import VerifierUsage
 from imbue.mngr_usage.data_types import TokenSnapshot
 from imbue.mngr_usage.pricing import compute_cost
@@ -100,6 +101,11 @@ _WORKER_LAUNCH_MARKERS: Final[tuple[str, ...]] = ("create_worker.py launch", "mn
 # The proxy log's value for a request served in fast mode; standard-speed requests record null.
 _FAST_SPEED: Final[str] = "fast"
 _SPEED_KEY: Final[str] = "speed"
+# The proxy log's marker for a request that was not served, written by the in-box hooks module
+# (resources/box_proxy_hooks.py, which this project cannot import). A record without an `outcome`
+# key predates failure recording and is a success.
+_OUTCOME_KEY: Final[str] = "outcome"
+_FAILED_OUTCOME: Final[str] = "failed"
 
 
 @pure
@@ -134,7 +140,7 @@ def _legacy_token_snapshot(raw_usage: Mapping[str, Any]) -> TokenSnapshot:
 
 
 @pure
-def _atif_token_snapshot(raw_metrics: Mapping[str, Any]) -> TokenSnapshot:
+def atif_token_snapshot(raw_metrics: Mapping[str, Any]) -> TokenSnapshot:
     """One ATIF step's ``metrics`` block as a TokenSnapshot.
 
     ATIF's ``prompt_tokens`` is cache-*inclusive* -- every input token, cached or not -- where
@@ -176,7 +182,7 @@ def _agent_turn_or_none(event: Mapping[str, Any]) -> tuple[str, TokenSnapshot | 
         raw_metrics = event.get("metrics")
         if not isinstance(raw_metrics, Mapping) or not raw_metrics:
             return model, None
-        return model, _atif_token_snapshot(raw_metrics)
+        return model, atif_token_snapshot(raw_metrics)
     return None
 
 
@@ -240,6 +246,11 @@ class TrialUsage(FrozenModel):
     fast_message_count: int = Field(default=0, description="Requests served in fast mode across all models")
     fast_tokens: TokenSnapshot = Field(
         default_factory=TokenSnapshot, description="The portion of `tokens` spent in fast mode -- a subset"
+    )
+    failed_request_count: int = Field(
+        default=0,
+        description="Requests the proxy logged as failed; none of them is in the usage above "
+        "(always 0 for the transcript, which records no failures)",
     )
 
     @property
@@ -466,6 +477,20 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
 
 
 @pure
+def summarize_turn_usage(events: Sequence[Mapping[str, Any]], start_index: int) -> TrialUsage:
+    """What the workspace agent consumed answering one client message: the same summary over the
+    events from ``start_index`` on, which is where the stream stood when that message was sent.
+
+    Per-turn spend is transcript-sourced by construction. The in-box proxy's log records requests
+    with no way back to the message that provoked them, so it cannot be split per turn however
+    complete it is. That means a per-turn figure carries every transcript caveat: it excludes
+    delegated and worker spend, prices every request at the standard rate whatever tier served it,
+    and is unknown on a codex trial, whose stream reports no usage at all.
+    """
+    return summarize_workspace_usage(events[start_index:])
+
+
+@pure
 def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> DeciderUsage:
     """Aggregate the decider's own calls. Every result in the bucket came from ``model``, the
     configured decider model, so that is what the whole bucket is labelled and priced against; a
@@ -486,13 +511,20 @@ def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> Dec
 
 
 @pure
+def token_buckets(tokens: TokenSnapshot) -> TokenBuckets:
+    """A snapshot in the artifacts' shape: absent counters read as zero, and the cache-creation
+    bucket takes the ``cache_write`` name every usage figure in the trial record uses."""
+    return TokenBuckets(
+        input=tokens.input or 0,
+        output=tokens.output or 0,
+        cache_read=tokens.cache_read or 0,
+        cache_write=tokens.cache_creation or 0,
+    )
+
+
+@pure
 def _token_dict(tokens: TokenSnapshot) -> dict[str, int]:
-    return {
-        "input": tokens.input or 0,
-        "output": tokens.output or 0,
-        "cache_read": tokens.cache_read or 0,
-        "cache_write": tokens.cache_creation or 0,
-    }
+    return token_buckets(tokens).model_dump()
 
 
 @pure
@@ -516,6 +548,8 @@ def workspace_usage_metadata(usage: TrialUsage) -> dict[str, Any]:
         "is_cost_rate_certain": usage.is_cost_rate_certain,
         "fast_message_count": usage.fast_message_count,
         "fast_tokens": _token_dict(usage.fast_tokens),
+        # Requests the proxy saw fail, counted apart from the usage above; zero without a proxy.
+        "failed_request_count": usage.failed_request_count,
         "per_model": [
             {
                 "model": entry.model,
@@ -557,6 +591,12 @@ def verifier_usage_metadata(usage: VerifierUsage) -> dict[str, Any]:
 
 
 @pure
+def is_failed_proxy_record(record: Mapping[str, Any]) -> bool:
+    """Whether a proxy log record is a request the proxy failed rather than served."""
+    return record.get(_OUTCOME_KEY) == _FAILED_OUTCOME
+
+
+@pure
 def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
     """Aggregate the proxy's per-request log.
 
@@ -566,14 +606,18 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
     transcript saw 44 responses and the proxy 69 -- 45% of the real cost was invisible.
 
     The records already carry non-overlapping buckets, normalized by the proxy's own logger.
+
+    Failed requests are counted in ``failed_request_count`` and contribute nothing else: no
+    per-model row, no tokens, no cost, no request count, and no say in ``is_speed_observed``.
     """
+    usage_records = [record for record in records if not is_failed_proxy_record(record)]
     # Kept apart by tier all the way through, because the two are billed at different rates and
     # summing them first would leave nothing to apply the right rate to.
     standard_tokens_by_model: dict[str, TokenSnapshot] = {}
     fast_tokens_by_model: dict[str, TokenSnapshot] = {}
     requests_by_model: dict[str, int] = {}
     fast_requests_by_model: dict[str, int] = {}
-    for record in records:
+    for record in usage_records:
         model = str(record.get("model") or "")
         tokens = TokenSnapshot(
             input=int(record.get("input_tokens") or 0),
@@ -618,9 +662,10 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
         # Every record must carry the key, not merely some of them: a log written before the proxy
         # recorded speed reports no fast requests for the same reason a genuinely all-standard trial
         # does, and only the key's presence separates the two.
-        is_speed_observed=bool(records) and all(_SPEED_KEY in record for record in records),
+        is_speed_observed=bool(usage_records) and all(_SPEED_KEY in record for record in usage_records),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
         fast_tokens=totals.fast_tokens,
+        failed_request_count=len(records) - len(usage_records),
     )
 
 
@@ -663,6 +708,7 @@ def combine_trial_usages(
         is_speed_observed=bool(usages) and all(usage.is_speed_observed for usage in usages),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
         fast_tokens=totals.fast_tokens,
+        failed_request_count=sum(usage.failed_request_count for usage in usages),
     )
 
 

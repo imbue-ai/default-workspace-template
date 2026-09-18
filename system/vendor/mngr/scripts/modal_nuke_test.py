@@ -1,31 +1,28 @@
-import pytest
-
-from scripts.modal_nuke import ModalSchemaError
-from scripts.modal_nuke import _get_app_id
-from scripts.modal_nuke import _get_volume_name
+from scripts.modal_nuke import _nuke_resources
 
 
-def test_get_app_id_reads_modal_key() -> None:
-    assert _get_app_id({"App ID": "ap-123", "Description": "demo"}) == "ap-123"
+def test_nuke_resources_acts_on_every_identifier() -> None:
+    acted_on: list[tuple[str, str]] = []
+
+    def record_success(identifier: str, environment: str) -> tuple[bool, str]:
+        acted_on.append((identifier, environment))
+        return True, ""
+
+    failure_count = _nuke_resources(["ap-h8Kq2vRm", "ap-Zx41pLdT"], "Stopping app", record_success, "mngr-test-4318")
+
+    assert acted_on == [("ap-h8Kq2vRm", "mngr-test-4318"), ("ap-Zx41pLdT", "mngr-test-4318")]
+    assert failure_count == 0
 
 
-def test_get_volume_name_reads_modal_key() -> None:
-    assert _get_volume_name({"Name": "vol-abc", "Created at": "today"}) == "vol-abc"
+def test_nuke_resources_counts_failures_and_keeps_going() -> None:
+    acted_on: list[str] = []
 
+    def fail_the_first(identifier: str, environment: str) -> tuple[bool, str]:
+        del environment
+        acted_on.append(identifier)
+        return identifier != "ap-h8Kq2vRm", "app not found"
 
-def test_get_app_id_raises_on_unexpected_schema() -> None:
-    # A destructive tool must never fall back to a placeholder id; if Modal renames
-    # the key, we fail loudly naming the unexpected schema instead of nuking "unknown".
-    with pytest.raises(ModalSchemaError) as exc_info:
-        _get_app_id({"app_id": "ap-123"})
-    message = str(exc_info.value)
-    assert "App ID" in message
-    assert "app_id" in message
+    failure_count = _nuke_resources(["ap-h8Kq2vRm", "ap-Zx41pLdT"], "Stopping app", fail_the_first, "mngr-test-4318")
 
-
-def test_get_volume_name_raises_on_unexpected_schema() -> None:
-    with pytest.raises(ModalSchemaError) as exc_info:
-        _get_volume_name({"name": "vol-abc"})
-    message = str(exc_info.value)
-    assert "Name" in message
-    assert "name" in message
+    assert acted_on == ["ap-h8Kq2vRm", "ap-Zx41pLdT"]
+    assert failure_count == 1

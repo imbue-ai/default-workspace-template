@@ -1,0 +1,5 @@
+Claude Code and local Codex-managed worktrees now carry this checkout's local agent configuration.
+
+A worktree is a fresh checkout, so gitignored per-checkout config did not exist in one -- including worktrees created for isolated Claude subagents and Codex chats started in Worktree mode. The code-review plugin therefore fell back to the committed `.reviewer/settings.json` there, and Claude permissions had to be re-approved. A root `.worktreeinclude` now names the files to copy in: `.reviewer/settings.local.json` and `.claude/settings.local.json`.
+
+Only paths that are both listed and gitignored are copied, and the list is deliberately limited to configuration. Each isolated Claude subagent or Codex worktree chat can get a separate checkout, so anything listed may be fanned out across dozens of directories; `.mngr/settings.local.toml` is left out for that reason, since its `env_file` points at a token-bearing `.env`. The root `.worktrees/` directory is also ignored for agents that create worktrees inside the repository manually.

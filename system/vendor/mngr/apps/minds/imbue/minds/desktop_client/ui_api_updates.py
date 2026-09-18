@@ -49,8 +49,9 @@ _DISPATCH_MESSAGE_BY_OUTCOME: Final[dict[UpdateDispatchOutcome, str]] = {
         "or create a new machine and migrate your work."
     ),
     UpdateDispatchOutcome.UNREACHABLE: "Couldn't reach this machine to start the update.",
-    # Whatever the machine said travels alongside this, as ``detail``; a spawn
-    # that timed out rather than being refused has nothing to add.
+    # Whatever the machine said travels alongside this, as ``detail`` -- a machine with no
+    # provider account signed in refuses the agent in its own words -- and a spawn that timed
+    # out rather than being refused has nothing to add.
     UpdateDispatchOutcome.SPAWN_FAILED: "Couldn't start the update agent in this machine.",
 }
 

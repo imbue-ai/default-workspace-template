@@ -53,6 +53,8 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Final
 
+from imbue.mngr_modal.modal_cli import parse_modal_app_listings
+
 TRIGGER_NAME: Final[str] = "changelog-consolidation"
 MNGR_ROOT_NAME: Final[str] = "mngr-changelog-schedule"
 # The schedule is deployed against this provider; the changelog-trigger
@@ -92,16 +94,10 @@ def disable_plugin_args() -> list[str]:
     return args
 
 
-# Keys emitted by ``modal environment list --json`` and ``modal app list
-# --json`` (the column headers from the Modal CLI's table output, which are
-# the JSON keys verbatim). The app keys match the working callers in
-# libs/mngr_schedule (testing.py, implementations/modal/deploy.py) and
-# scripts/modal_nuke.py. The environment-name column casing has shifted across
-# Modal versions ("Name" in 1.4.x, "name" in older builds -- see
+# The environment-name key casing has shifted across Modal versions ("Name" in
+# 1.4.x, "name" in older builds -- see
 # apps/minds/imbue/minds/deployment_tests/helpers.py), so we accept either.
 _ENV_NAME_KEYS: Final[tuple[str, ...]] = ("Name", "name")
-_APP_ID_KEY: Final[str] = "App ID"
-_APP_STATE_KEY: Final[str] = "State"
 # App states (lowercased) that mean the app is already not running, so there
 # is nothing to stop.
 _ALREADY_STOPPED_STATES: Final[frozenset[str]] = frozenset({"stopped", "stopping"})
@@ -116,24 +112,15 @@ class ModalCommandError(Exception):
 
 
 class ModalSchemaError(Exception):
-    """``modal ... --json`` output is missing an expected key.
+    """``modal environment list --json`` output is missing an expected key.
 
-    Stopping apps is destructive, so we fail loudly (rather than act on a
-    placeholder identifier) if the Modal CLI changes its ``--json`` schema.
+    Stopping apps is destructive, so we fail loudly (rather than sweep the
+    wrong environment) if the Modal CLI changes its ``--json`` schema.
     """
 
 
 def _run_modal(args: Sequence[str]) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(["modal", *args], capture_output=True, text=True, timeout=60)
-
-
-def _require_key(entry: Mapping[str, object], key: str, kind: str) -> str:
-    if key not in entry:
-        raise ModalSchemaError(
-            f"Modal {kind} entry is missing expected key {key!r}; got keys {sorted(entry)!r}. "
-            "Refusing to act on an unknown identifier; the modal --json schema may have changed."
-        )
-    return str(entry[key])
 
 
 def _require_first_key(entry: Mapping[str, object], keys: Sequence[str], kind: str) -> str:
@@ -187,10 +174,10 @@ def stop_all_apps_in_changelog_envs(
         list_result = run_modal(["app", "list", "--json", "-e", env_name])
         if list_result.returncode != 0:
             raise ModalCommandError(f"`modal app list` failed for env {env_name!r}: {list_result.stderr.strip()}")
-        for app in json.loads(list_result.stdout):
-            if _require_key(app, _APP_STATE_KEY, "app").lower() in _ALREADY_STOPPED_STATES:
+        for app in parse_modal_app_listings(json.loads(list_result.stdout)):
+            if app.state.lower() in _ALREADY_STOPPED_STATES:
                 continue
-            app_id = _require_key(app, _APP_ID_KEY, "app")
+            app_id = app.app_id
             if is_dry_run:
                 print(f"[dry-run] would stop Modal app {app_id} in env {env_name}", file=sys.stderr)
                 stopped.append((env_name, app_id))

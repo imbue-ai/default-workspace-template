@@ -1,0 +1,16 @@
+{
+  "suites": [
+    {
+      "config": "apps/minds_evals/configs/eval-config-small.json",
+      "harness_configs": []
+    },
+    {
+      "config": "apps/minds_evals/configs/eval-config-time-to-mock.json",
+      "harness_configs": [
+        { "name": "opus-standard" },
+        { "name": "codex-sol-low" },
+        { "name": "codex-terra" }
+      ]
+    }
+  ]
+}

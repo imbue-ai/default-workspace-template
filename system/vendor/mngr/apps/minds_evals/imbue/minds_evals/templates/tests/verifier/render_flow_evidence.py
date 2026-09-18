@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 VERIFICATION_DIR = Path("/logs/agent/verification")
-# The case as the generator expanded it, which is where a flow's declared steps and its `expect`
+# The case as the generator expanded it, which is where a flow's declared actions and its `expect`
 # live. Same path outcome/checks.py reads: harbor mounts the task's tests directory there.
 CASE_PATH = Path("/tests/case.json")
 DIGEST_PATH = Path("/logs/agent/judge_flows_digest.txt")
@@ -50,7 +50,9 @@ MAX_SCREENSHOT_BYTES = 1024 * 1024
 MAX_SCREENSHOTS_PER_FLOW = 4
 # The safety valve on a case with many flows. Every shot is inlined as a base64 vision block and
 # rewardkit imposes no total-size limit of its own, so something has to bound the request; this is
-# high enough that the per-flow guarantee is what normally decides the selection.
+# high enough that the per-flow guarantee is what normally decides the selection. A case whose flows
+# ask for more sets its own bound as `expectations.max_judge_screenshots`, which the generator
+# validates and writes into case.json.
 MAX_SCREENSHOTS_TOTAL = 24
 # The digest is inlined as text, and rewardkit drops a file over 1 MiB outright -- which would lose
 # the whole flow record rather than part of it. Cut well below the line.
@@ -73,8 +75,34 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 # How a manifest status reads in the digest. Trial time records whether a flow ran to the end of its
-# declared steps; it does not rule on the `expect`, so the words here must not suggest it did.
+# declared actions; it does not rule on the `expect`, so the words here must not suggest it did.
 _COMPLETION_BY_STATUS = {"passed": "completed", "failed": "incomplete", "error": "not measured"}
+
+# The agent driving a flow may reload only where the declared actions say so; it waits out a
+# pending state instead. A reload it took anyway is its last resort for an app that had stopped
+# responding, and the judge -- which reads the declared actions and can see which reloads they
+# called for -- is told to read it that way.
+_RELOAD_NOTE = (
+    "Note on reloads: the agent driving a flow reloads the page only where the declared actions say "
+    "to. A 'reload the page' step that the declared actions did not call for is the agent's last "
+    "resort after the app stopped responding to it, and is evidence against the app: an app that "
+    "needs a full reload to show its own state has already failed to work."
+)
+
+
+# A step whose record carries a ref acted on a control the page exposes with no accessible name.
+# That is the app's accessibility falling short, and it is kept in the record for a measure of its
+# own. The judge rules on the flow's declared actions and `expect`: where those ask for nothing
+# about accessibility the defect is not theirs to score, and where they do, the judge is not told
+# to look away from evidence the record itself put in front of it.
+_UNNAMED_CONTROL_NOTE = (
+    "Note on unnamed controls: a step marked 'addressed by ref' acted on a control the page exposes "
+    "with no accessible name -- no label, no aria-label -- which the agent could only address by "
+    "its position in the accessibility tree. That is an accessibility defect of the delivered app, "
+    "recorded here for a separate measure of it. Unless the declared actions or the expectation you "
+    "are judging call for accessibility, it is not what this flow measures, and on its own it is not "
+    "meant to lower the score you give here."
+)
 
 
 def _declared_flows(case_path: Path) -> dict[str, dict[str, Any]]:
@@ -92,6 +120,28 @@ def _declared_flows(case_path: Path) -> dict[str, dict[str, Any]]:
         for check in checks
         if isinstance(check, dict) and check.get("check_id")
     }
+
+
+def max_screenshots_total(case_path: Path) -> int:
+    """The case's own bound on the screenshots attached in all, or MAX_SCREENSHOTS_TOTAL when it sets
+    none. A dataset generated before cases could set one carries no such key, and a regrade of it keeps
+    the default."""
+    expectations = _load_json(case_path).get("expectations")
+    case_max = expectations.get("max_judge_screenshots") if isinstance(expectations, dict) else None
+    if isinstance(case_max, int) and not isinstance(case_max, bool) and case_max > 0:
+        return case_max
+    return MAX_SCREENSHOTS_TOTAL
+
+
+def _declared_actions(check: dict[str, Any]) -> str:
+    """What the flow declares it does. Read as `actions`, with `steps` as the name a dataset
+    generated before the rename carries; a regrade of such a trial still has to show the judge the
+    flow it ran.
+
+    CLEANUP: drop the `steps` fallback once no trial generated before 2026-09-11 is regraded any
+    more (after the next minds release ships with the rename).
+    """
+    return str(check.get("actions") or check.get("steps") or "")
 
 
 def _flow_entries(verification_dir: Path) -> list[dict[str, Any]]:
@@ -182,8 +232,14 @@ def _render_step(step: dict[str, Any], max_state_chars: int) -> list[str]:
     """
     lines = [
         "  step {}: {}".format(step.get("step_index"), step.get("action") or "(no action)"),
-        "    agent reasoning: {}".format(step.get("reasoning") or "(none recorded)"),
     ]
+    target_ref = str(step.get("target_ref") or "")
+    if target_ref:
+        lines.append(
+            "    addressed by ref: the page gives this control no accessible name (see the note on "
+            "unnamed controls above)"
+        )
+    lines.append("    agent reasoning: {}".format(step.get("reasoning") or "(none recorded)"))
     expected = str(step.get("expected") or "")
     if expected:
         lines.append("    and expected: {}".format(expected))
@@ -216,7 +272,7 @@ def _flow_header(entry: dict[str, Any], check: dict[str, Any], steps: list[dict[
         "",
     )
     return [
-        "declared steps: {}".format(check.get("steps") or "(not recorded)"),
+        "declared actions: {}".format(_declared_actions(check) or "(not recorded)"),
         "expect (YOU decide whether this holds): {}".format(check.get("expect") or "(not recorded)"),
         "completion: {} ({})".format(
             _COMPLETION_BY_STATUS.get(str(entry.get("status") or ""), "unknown"), entry.get("reason") or "-"
@@ -304,7 +360,9 @@ def render_digest(
             "{} of {} selected screenshot(s) are attached to this judge request; the earliest flows' "
             "frames were dropped to stay within the attachment ceiling.".format(attached_count, chosen_count)
         )
-    index_lines += ["", attachment_line, ""]
+    index_lines += ["", attachment_line, "", _RELOAD_NOTE, ""]
+    if any(step.get("target_ref") for steps in steps_by_flow.values() for step in steps):
+        index_lines += [_UNNAMED_CONTROL_NOTE, ""]
 
     index = "\n".join(index_lines) + "\n"
     # The index is always kept whole: it is what tells the judge how many flows there were and how
@@ -339,7 +397,7 @@ def collect_flow_evidence(
     selected, chosen_count = select_screenshots(
         [_screenshots(flow_dir) for flow_dir in flow_dirs],
         MAX_SCREENSHOTS_PER_FLOW,
-        MAX_SCREENSHOTS_TOTAL,
+        max_screenshots_total(case_path),
         MAX_SCREENSHOT_BYTES,
     )
 

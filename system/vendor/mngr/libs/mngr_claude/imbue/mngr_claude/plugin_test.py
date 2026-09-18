@@ -81,6 +81,7 @@ from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.utils.testing import capture_loguru
 from imbue.mngr.utils.testing import init_git_repo
 from imbue.mngr.utils.testing import make_mngr_ctx
+from imbue.mngr.utils.testing import poll_until_file_contains
 from imbue.mngr_claude.claude_config import ClaudeDirectoryNotTrustedError
 from imbue.mngr_claude.claude_config import ClaudeEffortCalloutNotDismissedError
 from imbue.mngr_claude.claude_config import MAIN_SESSION_ONLY_GUARD
@@ -102,6 +103,7 @@ from imbue.mngr_claude.plugin import ClaudeAgentConfig
 from imbue.mngr_claude.plugin import DialogDetectedError
 from imbue.mngr_claude.plugin import MANAGED_SETTINGS_LAUNCH_ARG
 from imbue.mngr_claude.plugin import ProvisioningContext
+from imbue.mngr_claude.plugin import STDERR_LOG_NAME
 from imbue.mngr_claude.plugin import _build_claude_install_command
 from imbue.mngr_claude.plugin import _build_install_command_hint
 from imbue.mngr_claude.plugin import _build_settings_json
@@ -732,10 +734,11 @@ def test_claude_agent_assemble_command_sets_is_sandbox_for_remote_host(
     assert command == CommandString(
         f"{background_cmd} export IS_SANDBOX=1 && {sid_export}"
         f" && rm -rf $MNGR_AGENT_STATE_DIR/session_started $MNGR_AGENT_STATE_DIR/claude_main_pid"
-        f' && {{ {marker_gate} && claude --resume "$MAIN_CLAUDE_SESSION_ID" ; }}'
+        f' && {{ {{ {marker_gate} && claude --resume "$MAIN_CLAUDE_SESSION_ID" ; }}'
         f' || {{ [ "$MAIN_CLAUDE_SESSION_ID" != "{uuid}" ] && {uuid_gate}'
         f" && export MAIN_CLAUDE_SESSION_ID={uuid} && claude --resume {uuid} ; }}"
-        f" || {{ export MAIN_CLAUDE_SESSION_ID={uuid} && claude --session-id {uuid} ; }}"
+        f" || {{ export MAIN_CLAUDE_SESSION_ID={uuid} && claude --session-id {uuid} ; }} ; }}"
+        f' 2> >(tee -i "$MNGR_AGENT_STATE_DIR/stderr.log" >&2)'
     )
 
 
@@ -928,7 +931,20 @@ def test_claude_agent_assemble_command_falls_back_to_agent_uuid_when_marker_sess
     assert invocations == [
         f"--resume {foreign_sid} ",
         f"--resume {agent_uuid} ",
-    ], f"Expected foreign resume to fail then the UUID fallback to fire, got {invocations!r}"
+    ], f"Expected foreign resume to fire and fail, then the UUID fallback, got {invocations!r}"
+    # The failing branch's own stderr is what says why the fallback happened. It must
+    # reach the pane (the process's stderr here), and it must still be in the file after
+    # the branch that followed it ran -- a redirect on each branch instead of on the whole
+    # chain would have truncated it away.
+    diagnostic = f"No conversation found with session ID: {foreign_sid}"
+    assert diagnostic in result.stderr, f"The failed resume's diagnostic did not reach the pane: {result.stderr!r}"
+    # The shell does not wait for the tee behind the redirect, so the file can trail the
+    # process's exit by a moment.
+    stderr_log = state_dir / STDERR_LOG_NAME
+    assert poll_until_file_contains(stderr_log, diagnostic), (
+        "The failed resume's diagnostic did not survive into stderr.log: "
+        f"{stderr_log.read_text() if stderr_log.exists() else None!r}"
+    )
 
 
 def test_claude_agent_assemble_command_skips_blank_marker_session_without_launching_it(
@@ -1255,6 +1271,26 @@ def test_build_readiness_hooks_config_has_hook(hook_name: str, expected_substrin
         assert any(substring in command for command in commands), (
             f"Expected '{substring}' in a {hook_name} hook command"
         )
+
+
+def test_build_readiness_hooks_config_ends_an_api_error_turn_the_same_way_as_a_normal_one() -> None:
+    """StopFailure must run exactly what Stop runs.
+
+    Stop and StopFailure are Claude Code's two mutually exclusive turn-end
+    paths: a turn that died on an API error (a usage limit, a rate limit, a
+    prompt too long) goes to StopFailure and returns before the Stop pass ever
+    runs. Registering only Stop leaves the 'active' marker UserPromptSubmit
+    created stranded, so the agent reports RUNNING -- not WAITING -- until its
+    claude process restarts, and nothing else clears it: the usage-limit
+    selector fires no PermissionRequest, and Claude Code suppresses the
+    idle_prompt notification while a dialog is on screen.
+    """
+    config = build_readiness_hooks_config()
+
+    stop_commands = [h["command"] for h in config["hooks"]["Stop"][0]["hooks"] if h["type"] == "command"]
+    failure_commands = [h["command"] for h in config["hooks"]["StopFailure"][0]["hooks"] if h["type"] == "command"]
+    assert stop_commands
+    assert failure_commands == stop_commands
 
 
 def test_build_readiness_hooks_config_has_notification_idle_hook() -> None:
@@ -5846,6 +5882,8 @@ def test_build_settings_json_unattended_defaults() -> None:
     assert data["skipDangerousModePermissionPrompt"] is True
     assert "model" not in data
     assert data["fastMode"] is False
+    assert data["feedbackDrafts"] == "off"
+    assert data["feedbackSurveyRate"] == 0
 
 
 def test_build_settings_json_settings_overrides_model() -> None:
@@ -5912,8 +5950,10 @@ def test_build_settings_json_local_context_no_flags() -> None:
     assert data["model"] == "opus[1m]"
     # _generate_claude_home_settings provides skipDangerousModePermissionPrompt
     assert "skipDangerousModePermissionPrompt" in data
-    # Local (attended) context does not force fastMode
+    # Local (attended) context does not force fastMode or the feedback-suppression flags
     assert "fastMode" not in data
+    assert "feedbackDrafts" not in data
+    assert "feedbackSurveyRate" not in data
 
 
 def test_build_settings_json_includes_readiness_hooks() -> None:
@@ -6237,9 +6277,10 @@ def test_compute_claude_json_flags_unattended_also_accepts_permission_mode() -> 
     assert flags["hasCompletedOnboarding"] is True
 
 
-def test_compute_claude_json_flags_attended_no_auto_approve_only_cost() -> None:
+def test_compute_claude_json_flags_attended_no_auto_approve_only_always_on_flags() -> None:
+    """An attended agent without --yes gets only the always-on flags: no dialog dismissals, no permission mode."""
     flags = compute_claude_json_flags(ProvisioningContext(is_unattended=False, is_auto_approve=False))
-    assert flags == {"hasAcknowledgedCostThreshold": True}
+    assert flags == {"hasAcknowledgedCostThreshold": True, "diffSidebarOpen": False}
 
 
 def test_compute_settings_json_flags_auto_approve_does_not_change_permissions() -> None:

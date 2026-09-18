@@ -1,5 +1,6 @@
 import json
 import re
+import stat
 from pathlib import Path
 from typing import cast
 
@@ -7,43 +8,62 @@ import pytest
 from packaging.version import Version
 from pydantic import SecretStr
 
+from imbue.mngr.hosts.outer_host import OuterHost
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
 from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
+from imbue.mngr_latchkey.core import CREDENTIALS_STORE_FILENAME
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
 from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
+from imbue.mngr_latchkey.core import REMOTE_GATEWAY_EXTENSION_FILENAME
+from imbue.mngr_latchkey.core import UPSTREAM_DATA_FORMAT_VERSION_FILENAME
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
 from imbue.mngr_latchkey.remote._mirror import store_machine_encryption_key
+from imbue.mngr_latchkey.remote._mirror import store_machine_gateway_password
 from imbue.mngr_latchkey.remote._mirror import stored_machine_encryption_key
+from imbue.mngr_latchkey.remote._mirror import stored_machine_gateway_password
 from imbue.mngr_latchkey.remote.errors import RemoteGatewayError
 from imbue.mngr_latchkey.remote.mock_outer_host_test import MACHINE_KEY
 from imbue.mngr_latchkey.remote.mock_outer_host_test import StubOuter
 from imbue.mngr_latchkey.remote.mock_outer_host_test import WrittenFile
 from imbue.mngr_latchkey.remote.mock_outer_host_test import as_stub
 from imbue.mngr_latchkey.remote.mock_outer_host_test import stub_outer
+from imbue.mngr_latchkey.remote.provisioning import CONTAINER_TUNNEL_KEY_FILENAME
 from imbue.mngr_latchkey.remote.provisioning import DATALIB_CURL_VERSION
 from imbue.mngr_latchkey.remote.provisioning import DESKTOP_GATEWAY_VPS_PORT
+from imbue.mngr_latchkey.remote.provisioning import DesktopGatewaySecrets
+from imbue.mngr_latchkey.remote.provisioning import GATEWAY_PROGRAM_NAME
+from imbue.mngr_latchkey.remote.provisioning import GATEWAY_RUN_SCRIPT_FILENAME
 from imbue.mngr_latchkey.remote.provisioning import LATCHKEY_VERSION
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_DISK_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_SUPERVISOR_CONF_FILENAMES
+from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_TMPFS_FILENAMES
 from imbue.mngr_latchkey.remote.provisioning import OUTER_PORT
+from imbue.mngr_latchkey.remote.provisioning import REMOTE_EXTENSIONS_DIR_NAME
+from imbue.mngr_latchkey.remote.provisioning import SUPERVISOR_CONFD_DIR
+from imbue.mngr_latchkey.remote.provisioning import TMPFS_SECRETS_DIR
+from imbue.mngr_latchkey.remote.provisioning import TUNNEL_PROGRAM_NAME
 from imbue.mngr_latchkey.remote.provisioning import _CURL_DISPATCH_PATH
 from imbue.mngr_latchkey.remote.provisioning import _CURL_IMPERSONATE_PATH
 from imbue.mngr_latchkey.remote.provisioning import _CURL_STAGED_SUFFIX
 from imbue.mngr_latchkey.remote.provisioning import _CURL_VERSION_STAMP_PATH
-from imbue.mngr_latchkey.remote.provisioning import _GATEWAY_PROGRAM_NAME
 from imbue.mngr_latchkey.remote.provisioning import _MINIMUM_NODE_MAJOR_VERSION
-from imbue.mngr_latchkey.remote.provisioning import _TUNNEL_PROGRAM_NAME
+from imbue.mngr_latchkey.remote.provisioning import _REMOTE_EXTENSION_CANDIDATE_SUFFIX
+from imbue.mngr_latchkey.remote.provisioning import _build_extension_install_script
 from imbue.mngr_latchkey.remote.provisioning import _build_supervisor_program_config
 from imbue.mngr_latchkey.remote.provisioning import _ensure_container_tunnel_keypair
 from imbue.mngr_latchkey.remote.provisioning import _ensure_latchkey_gateway_reachable_from_container
 from imbue.mngr_latchkey.remote.provisioning import (
     _ensure_latchkey_gateway_running as _ensure_latchkey_gateway_running_real,
 )
-from imbue.mngr_latchkey.remote.provisioning import _ensure_latchkey_installed
 from imbue.mngr_latchkey.remote.provisioning import _migrate_legacy_remote_gateway_state
 from imbue.mngr_latchkey.remote.provisioning import _resolve_machine_encryption_key
+from imbue.mngr_latchkey.remote.provisioning import _resolve_machine_gateway_password
+from imbue.mngr_latchkey.remote.provisioning import ensure_latchkey_installed
 from imbue.mngr_latchkey.remote.provisioning import provision_remote_gateway
 from imbue.mngr_latchkey.remote.provisioning import resolve_remote_latchkey_directory
 from imbue.mngr_latchkey.remote.provisioning import sync_permissions
@@ -54,16 +74,27 @@ from imbue.mngr_latchkey.store import plugin_data_dir
 _REMOTE_DIR = Path("/root/.latchkey")
 
 
+# This computer's own gateway secrets, as every provisioning call here hands
+# them over. Distinct strings from the machine's own listen password so a test
+# can tell which secret landed where.
+_DESKTOP_SECRETS = DesktopGatewaySecrets(
+    gateway_password="desktop-password",
+    permissions_override="desktop-override-jwt",
+)
+
+
 def _ensure_latchkey_gateway_running(
     outer: OuterHostInterface,
+    latchkey_directory: Path,
     machine_encryption_key: str,
-    gateway_password: str,
+    machine_gateway_password: str,
 ) -> None:
     _ensure_latchkey_gateway_running_real(
         outer,
+        latchkey_directory,
         SecretStr(machine_encryption_key),
-        gateway_password,
-        "desktop-override-jwt",
+        machine_gateway_password,
+        _DESKTOP_SECRETS,
     )
 
 
@@ -81,13 +112,13 @@ def test_minimum_version_is_not_newer_than_the_version_we_install() -> None:
 
 def test_ensure_latchkey_installed_issues_single_idempotent_command() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     assert len(as_stub(outer).recorded) == 1
 
 
 def test_ensure_latchkey_installed_pins_the_version_in_the_npm_install() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
     assert f"npm install -g latchkey@{LATCHKEY_VERSION}" in command
     # Reinstall is gated behind a version mismatch check, not unconditional.
@@ -96,7 +127,7 @@ def test_ensure_latchkey_installed_pins_the_version_in_the_npm_install() -> None
 
 def test_ensure_latchkey_installed_gates_each_component_behind_a_presence_check() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
     assert "command -v curl" in command
     # Node.js is gated behind a *version* probe, not mere presence: a
@@ -124,7 +155,7 @@ def test_ensure_latchkey_installed_gates_each_component_behind_a_presence_check(
 
 def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
     # Fetches the datalib curl tarball for the VPS arch from the pinned
     # release, verifies it against the published .sha256, and installs both
@@ -175,7 +206,7 @@ def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
 
 def test_ensure_latchkey_installed_probes_installed_version_without_executing_latchkey() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
     # The probe must read the npm-installed package's package.json, not run the
     # CLI: since 2.x, ``latchkey --version`` resolves the encryption key (to
@@ -189,12 +220,12 @@ def test_ensure_latchkey_installed_probes_installed_version_without_executing_la
 
 def test_ensure_latchkey_installed_restarts_gateway_when_version_changed() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
     # A supervisord-managed gateway keeps the old code in memory across an npm
     # upgrade, so the install branch must bounce it -- tolerating hosts where
     # the program is not registered yet.
-    restart_line = f"supervisorctl restart {_GATEWAY_PROGRAM_NAME} || true"
+    restart_line = f"supervisorctl restart {GATEWAY_PROGRAM_NAME} || true"
     assert restart_line in command
     # The restart belongs inside the version-mismatch branch, after the
     # install itself.
@@ -203,20 +234,20 @@ def test_ensure_latchkey_installed_restarts_gateway_when_version_changed() -> No
 
 def test_ensure_latchkey_installed_uses_generous_install_timeout() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_installed(outer)
+    ensure_latchkey_installed(outer)
     assert as_stub(outer).recorded[0].timeout_seconds == 300.0
 
 
 def test_ensure_latchkey_installed_raises_on_failure_with_stderr_in_message() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="E: Unable to locate package nodejs", success=False))
     with pytest.raises(RemoteGatewayError, match="Unable to locate package nodejs"):
-        _ensure_latchkey_installed(outer)
+        ensure_latchkey_installed(outer)
 
 
 def test_ensure_latchkey_installed_falls_back_to_stdout_when_stderr_empty() -> None:
     outer = stub_outer(CommandResult(stdout="npm ERR! network timeout", stderr="", success=False))
     with pytest.raises(RemoteGatewayError, match="npm ERR! network timeout"):
-        _ensure_latchkey_installed(outer)
+        ensure_latchkey_installed(outer)
 
 
 def test_sync_permissions_seeds_a_machine_with_no_policy_from_the_local_file(tmp_path: Path) -> None:
@@ -286,7 +317,7 @@ def _gateway_run_script(outer: OuterHostInterface) -> str:
 
 def _gateway_conf(outer: OuterHostInterface) -> str:
     """Return the content of the gateway supervisord drop-in written to the VPS."""
-    return _written_by_path(outer, f"/etc/supervisor/conf.d/{_GATEWAY_PROGRAM_NAME}.conf").content.decode("utf-8")
+    return _written_by_path(outer, f"/etc/supervisor/conf.d/{GATEWAY_PROGRAM_NAME}.conf").content.decode("utf-8")
 
 
 def _reload_commands(outer: OuterHostInterface) -> list[str]:
@@ -313,12 +344,14 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     tmp_path: Path,
 ) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     run_script = _gateway_run_script(outer)
     conf = _gateway_conf(outer)
     # The wrapper exports the gateway config and execs the gateway. Gateway
     # binds OUTER_PORT on loopback, with counting disabled.
-    assert f"export LATCHKEY_GATEWAY_PORT={OUTER_PORT}" in run_script
+    # The listen port is named the way upstream reads it, so OUTER_PORT is what
+    # the gateway actually binds rather than latchkey's default happening to match.
+    assert f"export LATCHKEY_GATEWAY_LISTEN_PORT={OUTER_PORT}" in run_script
     assert "export LATCHKEY_GATEWAY_LISTEN_HOST=127.0.0.1" in run_script
     assert "export LATCHKEY_DISABLE_COUNTING=1" in run_script
     # The machine renews its own tokens: the store it runs on is its own, so
@@ -336,14 +369,25 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     # exec so supervisord tracks the gateway PID directly, not a wrapping shell,
     # with the same body-size limit the desktop-side gateway uses.
     assert f"exec latchkey gateway --max-body-size {GATEWAY_MAX_BODY_SIZE_BYTES}" in run_script
-    # The encryption key and listen password are read from 0600 files into the
-    # environment (not interpolated), so the literal secret never appears.
+    # The machine's own encryption key and listen password are read from 0600
+    # files into the environment (not interpolated), so the literal secret never
+    # appears.
     assert 'LATCHKEY_ENCRYPTION_KEY="$(cat ' in run_script
     assert 'LATCHKEY_GATEWAY_LISTEN_PASSWORD="$(cat ' in run_script
-    assert 'LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PERMISSIONS_OVERRIDE="$(cat ' in run_script
     assert "export LATCHKEY_ENCRYPTION_KEY LATCHKEY_GATEWAY_LISTEN_PASSWORD" in run_script
-    assert "export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PERMISSIONS_OVERRIDE" in run_script
-    assert "shared-password" not in run_script
+    # The desktop-owned pair is handed to the forwarding extension as file
+    # *paths*: it reads them per request, so a pass from another of the user's
+    # computers takes effect without restarting this gateway.
+    assert (
+        "export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PASSWORD_FILE=/run/mngr-latchkey/desktop_gateway_password"
+        in run_script
+    )
+    assert (
+        "export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PERMISSIONS_OVERRIDE_FILE="
+        "/run/mngr-latchkey/desktop_permissions_override" in run_script
+    )
+    assert "machine-password" not in run_script
+    assert "desktop-password" not in run_script
     assert "desktop-override-jwt" not in run_script
     # Routes latchkey through the bundled dispatch curl. Unconditional export --
     # provisioning installs the pair fail-loud, so reaching this script at all
@@ -351,12 +395,16 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     # sibling, so no second env var is exported.
     assert f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}" in run_script
     assert "FRANKWEILER_IMPERSONATE_CURL" not in run_script
-    # The wrapper refuses to launch a keyless gateway when its tmpfs secrets are
-    # gone (e.g. wiped by a reboot).
+    # The wrapper refuses to launch a keyless gateway when the machine's own
+    # tmpfs secrets are gone (e.g. wiped by a reboot). The desktop-owned pair is
+    # deliberately not part of that gate: without it the extension answers the
+    # desktop-owned routes with a clear 503, while third-party calls, which need
+    # neither secret, keep working.
     assert "exit 1" in run_script
     assert "awaiting re-provision" in run_script
+    assert "desktop_permissions_override ]" not in run_script
     # supervisord keeps it up: autostart + autorestart on crash.
-    assert f"[program:{_GATEWAY_PROGRAM_NAME}]" in conf
+    assert f"[program:{GATEWAY_PROGRAM_NAME}]" in conf
     assert "autostart=true" in conf
     assert "autorestart=true" in conf
     assert "/bin/sh /root/.latchkey/gateway_run.sh" in conf
@@ -364,40 +412,45 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     # wrapper environment take effect even when the supervisord config is unchanged.
     assert _reload_commands(outer) == [
         f"supervisorctl reread && supervisorctl update && "
-        f"(supervisorctl restart {_GATEWAY_PROGRAM_NAME} || supervisorctl start {_GATEWAY_PROGRAM_NAME})"
+        f"(supervisorctl restart {GATEWAY_PROGRAM_NAME} || supervisorctl start {GATEWAY_PROGRAM_NAME})"
     ]
     assert all("nohup" not in r.command for r in as_stub(outer).recorded)
 
 
 def test_ensure_latchkey_gateway_running_writes_secrets_to_0600_tmpfs_files(tmp_path: Path) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     # Secrets go in a RAM-backed dir under /run, never on the persistent disk
     # beside the encrypted credential store; the wrapper stays on the normal disk.
     key_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_encryption_key")
     password_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_listen_password")
+    desktop_password_file = _written_by_path(outer, "/run/mngr-latchkey/desktop_gateway_password")
     desktop_permissions_file = _written_by_path(outer, "/run/mngr-latchkey/desktop_permissions_override")
     run_file = _written_by_path(outer, "/root/.latchkey/gateway_run.sh")
-    # The password file's content is the literal secret; it is never written to
-    # a command (see the wrapper test above).
-    assert password_file.content == b"shared-password"
+    # Each file's content is the literal secret; none is ever written to a
+    # command (see the wrapper test above). The machine's own listen password
+    # and the desktop gateway's are separate secrets in separate files.
+    assert password_file.content == b"machine-password"
+    assert desktop_password_file.content == b"desktop-password"
     assert desktop_permissions_file.content == b"desktop-override-jwt"
     # Secrets are 0600; the wrapper is executable (0700).
     assert key_file.mode == "0600"
     assert password_file.mode == "0600"
+    assert desktop_password_file.mode == "0600"
     assert desktop_permissions_file.mode == "0600"
     assert run_file.mode == "0700"
-    # The wrapper reads back exactly the two tmpfs secret file paths.
+    # The wrapper names every tmpfs secret file it wrote.
     run_script = run_file.content.decode("utf-8")
     assert key_file.path in run_script
     assert password_file.path in run_script
+    assert desktop_password_file.path in run_script
     assert desktop_permissions_file.path in run_script
 
 
-def test_ensure_latchkey_gateway_running_injects_the_machines_own_encryption_key() -> None:
+def test_ensure_latchkey_gateway_running_injects_the_machines_own_encryption_key(tmp_path: Path) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
 
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
 
     key_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_encryption_key")
     assert key_file.content == MACHINE_KEY.encode("utf-8")
@@ -407,7 +460,7 @@ def test_ensure_latchkey_gateway_running_injects_the_machines_own_encryption_key
 
 def test_ensure_latchkey_gateway_running_verifies_secrets_dir_is_ram_backed(tmp_path: Path) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     # Before writing the key, provisioning creates the /run secrets dir (0700)
     # and asserts its filesystem is RAM-backed (tmpfs/ramfs), refusing to
     # persist the key to disk otherwise.
@@ -429,7 +482,7 @@ def test_ensure_latchkey_gateway_running_raises_when_secrets_dir_not_ram_backed(
     # /run is not a tmpfs) must abort before the key is ever written.
     outer = stub_outer(CommandResult(stdout="", stderr="is on a ext4 filesystem", success=False))
     with pytest.raises(RemoteGatewayError, match="RAM-backed secrets directory"):
-        _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+        _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     # Crucially, no secret file was written when the guard failed.
     assert as_stub(outer).written == []
 
@@ -441,7 +494,7 @@ def _remote_config_text(outer: OuterHostInterface) -> str:
 
 def test_ensure_latchkey_gateway_running_hides_builtin_services_in_config(tmp_path: Path) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     # The VPS gateway's config.json hides the same confusing built-in services
     # as the desktop gateway, so an agent sees the same set either way.
     config = json.loads(_remote_config_text(outer))
@@ -451,12 +504,12 @@ def test_ensure_latchkey_gateway_running_hides_builtin_services_in_config(tmp_pa
 def test_ensure_latchkey_gateway_running_registers_custom_services_in_config(tmp_path: Path) -> None:
     """The VPS gateway is given minds' custom-service registrations.
 
-    ``sync_credentials`` ships a granted custom service's credentials here, but a
+    The credential sync ships a granted custom service's credentials here, but a
     gateway that does not know the service cannot resolve a request to it, so it
     would never inject them.
     """
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     config = json.loads(_remote_config_text(outer))
     assert config["registeredServices"] == additional_service_registration_entries()
     # Pinned concretely too: comparing the two projections alone would still pass
@@ -468,7 +521,7 @@ def test_ensure_latchkey_gateway_running_registers_custom_services_in_config(tmp
 def test_ensure_latchkey_gateway_running_preserves_existing_remote_config(tmp_path: Path) -> None:
     existing = json.dumps({"settings": {"theme": "dark"}, "accounts": {"slack": {}}})
     outer = cast(OuterHostInterface, StubOuter(config_json=existing))
-    _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+    _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     config = json.loads(_remote_config_text(outer))
     # Pre-existing remote config content survives the read-merge-write.
     assert config["settings"]["theme"] == "dark"
@@ -479,12 +532,12 @@ def test_ensure_latchkey_gateway_running_preserves_existing_remote_config(tmp_pa
 def test_ensure_latchkey_gateway_running_raises_on_invalid_remote_config(tmp_path: Path) -> None:
     outer = cast(OuterHostInterface, StubOuter(config_json="{not json"))
     with pytest.raises(RemoteGatewayError, match=CONFIG_FILENAME):
-        _ensure_latchkey_gateway_running(outer, MACHINE_KEY, "shared-password")
+        _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
 
 
 def _tunnel_conf(outer: OuterHostInterface) -> str:
     """Return the content of the reverse-tunnel supervisord drop-in written to the VPS."""
-    return _written_by_path(outer, f"/etc/supervisor/conf.d/{_TUNNEL_PROGRAM_NAME}.conf").content.decode("utf-8")
+    return _written_by_path(outer, f"/etc/supervisor/conf.d/{TUNNEL_PROGRAM_NAME}.conf").content.decode("utf-8")
 
 
 def test_ensure_latchkey_gateway_reachable_registers_reverse_tunnel_program() -> None:
@@ -498,7 +551,7 @@ def test_ensure_latchkey_gateway_reachable_registers_reverse_tunnel_program() ->
     conf = _tunnel_conf(outer)
     # The VPS gateway is exposed at the same fixed container port used by
     # local workspaces, so agents always use one LATCHKEY_GATEWAY URL.
-    assert f"[program:{_TUNNEL_PROGRAM_NAME}]" in conf
+    assert f"[program:{TUNNEL_PROGRAM_NAME}]" in conf
     assert "autorestart=true" in conf
     assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:127.0.0.1:{OUTER_PORT}" in conf
     # SSHes into the published container sshd over VPS loopback, as the given
@@ -518,7 +571,7 @@ def test_ensure_latchkey_gateway_reachable_registers_reverse_tunnel_program() ->
     assert "TCPKeepAlive=yes" in conf
     # Applied via reread + update + best-effort start.
     assert _reload_commands(outer) == [
-        f"supervisorctl reread && supervisorctl update && (supervisorctl start {_TUNNEL_PROGRAM_NAME} || true)"
+        f"supervisorctl reread && supervisorctl update && (supervisorctl start {TUNNEL_PROGRAM_NAME} || true)"
     ]
 
 
@@ -585,8 +638,7 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
         container_ssh_user="root",
         container_ssh_port=2222,
         latchkey_directory=tmp_path,
-        gateway_password="shared-password",
-        desktop_permissions_override="desktop-override-jwt",
+        desktop_secrets=_DESKTOP_SECRETS,
     )
     commands = "\n\n".join(r.command for r in as_stub(outer).recorded)
     written = "\n\n".join(w.content.decode("utf-8", "replace") for w in as_stub(outer).written)
@@ -606,18 +658,22 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
     assert '"$HOME/.latchkey/gateway.pid"' in commands
     assert commands.index('"$HOME/.latchkey/gateway.pid"') < commands.index("supervisorctl reread")
     # Both supervisord programs (gateway + tunnel) were written.
-    assert f"[program:{_GATEWAY_PROGRAM_NAME}]" in written
-    assert f"[program:{_TUNNEL_PROGRAM_NAME}]" in written
+    assert f"[program:{GATEWAY_PROGRAM_NAME}]" in written
+    assert f"[program:{TUNNEL_PROGRAM_NAME}]" in written
     assert "exec latchkey gateway" in written
     # The VPS gateway's config.json hides the confusing built-in services and
     # loads only the desktop-gateway forwarding extension.
     assert "hideBuiltinServices" in written and "notion" in written
     assert "Desktop latchkey gateway is unreachable" in written
     assert "-R 127.0.0.1:" in written
-    # The gateway listen password is written to a file, never a command.
-    assert "shared-password" not in commands
-    password_files = [w for w in as_stub(outer).written if w.content == b"shared-password"]
-    assert len(password_files) == 1
+    # Every password is written to a file, never a command. This machine is
+    # brand new, so it takes this computer's password as its own listen
+    # password, which is also what the forwarding extension presents back here.
+    assert "desktop-password" not in commands
+    assert [w.path for w in as_stub(outer).written if w.content == b"desktop-password"] == [
+        "/run/mngr-latchkey/gateway_listen_password",
+        "/run/mngr-latchkey/desktop_gateway_password",
+    ]
 
 
 def test_migrate_legacy_remote_gateway_state_kills_pidfile_processes_and_scrubs_secrets() -> None:
@@ -658,8 +714,7 @@ def test_provision_remote_gateway_raises_when_container_not_found(tmp_path: Path
             container_ssh_user="root",
             container_ssh_port=2222,
             latchkey_directory=tmp_path,
-            gateway_password="shared-password",
-            desktop_permissions_override="desktop-override-jwt",
+            desktop_secrets=_DESKTOP_SECRETS,
         )
 
 
@@ -673,8 +728,7 @@ def test_provision_remote_gateway_is_noop_on_local_outer_host(tmp_path: Path) ->
         container_ssh_user="root",
         container_ssh_port=2222,
         latchkey_directory=tmp_path,
-        gateway_password="shared-password",
-        desktop_permissions_override="desktop-override-jwt",
+        desktop_secrets=_DESKTOP_SECRETS,
     )
     assert as_stub(outer).recorded == []
 
@@ -832,8 +886,7 @@ def test_provisioning_hands_the_gateway_the_machines_own_key(tmp_path: Path) -> 
         container_ssh_user="root",
         container_ssh_port=2222,
         latchkey_directory=latchkey_directory,
-        gateway_password="shared-password",
-        desktop_permissions_override="desktop-override-jwt",
+        desktop_secrets=_DESKTOP_SECRETS,
     )
 
     stored = stored_machine_encryption_key(plugin_data_dir(latchkey_directory), host_id)
@@ -841,6 +894,85 @@ def test_provisioning_hands_the_gateway_the_machines_own_key(tmp_path: Path) -> 
     key_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_encryption_key")
     assert key_file.content == stored.get_secret_value().encode("utf-8")
     assert key_file.content != load_or_create_encryption_key(latchkey_directory).get_secret_value().encode("utf-8")
+
+
+# -- the machine's own gateway listen password ----------------------------------
+
+
+def test_resolve_machine_gateway_password_seeds_a_machine_nobody_has_provisioned_yet(tmp_path: Path) -> None:
+    """A brand-new machine takes this computer's password: it is what its workspaces present."""
+    latchkey_directory = tmp_path / "latchkey"
+    latchkey_directory.mkdir()
+    host_id = HostId.generate()
+
+    password = _resolve_machine_gateway_password(
+        _outer_with_preexisting_latchkey_dir(False), latchkey_directory, host_id, "this-computers-password"
+    )
+
+    assert password == "this-computers-password"
+    # Recorded durably, so a reboot that wipes the machine's copy does not lose it.
+    assert stored_machine_gateway_password(plugin_data_dir(latchkey_directory), host_id) == password
+
+
+def test_resolve_machine_gateway_password_adopts_the_password_the_machine_is_running_under(tmp_path: Path) -> None:
+    """Another of the user's computers created this machine's workspaces; their env file is fixed.
+
+    Writing this computer's own password here would answer every request those
+    workspaces make with a 401, with no way to tell them the new value.
+    """
+    latchkey_directory = tmp_path / "latchkey"
+    latchkey_directory.mkdir()
+    host_id = HostId.generate()
+    outer = _outer_with_preexisting_latchkey_dir(True)
+    as_stub(outer).remote_files["/run/mngr-latchkey/gateway_listen_password"] = b"other-computers-password\n"
+
+    password = _resolve_machine_gateway_password(outer, latchkey_directory, host_id, "this-computers-password")
+
+    assert password == "other-computers-password"
+    assert stored_machine_gateway_password(plugin_data_dir(latchkey_directory), host_id) == password
+
+
+def test_resolve_machine_gateway_password_hands_a_rebooted_machine_its_recorded_password(tmp_path: Path) -> None:
+    """A reboot wipes the machine's tmpfs copy; the record here is what puts it back."""
+    latchkey_directory = tmp_path / "latchkey"
+    latchkey_directory.mkdir()
+    host_id = HostId.generate()
+    store_machine_gateway_password(plugin_data_dir(latchkey_directory), host_id, "the-password-it-was-created-with")
+
+    password = _resolve_machine_gateway_password(
+        _outer_with_preexisting_latchkey_dir(True), latchkey_directory, host_id, "this-computers-password"
+    )
+
+    assert password == "the-password-it-was-created-with"
+
+
+def test_provisioning_keeps_the_machines_password_while_replacing_the_desktops(tmp_path: Path) -> None:
+    """Moving to another computer must not re-key the gateway its workspaces authenticate to.
+
+    The whole point of the split: the machine keeps the listen password its
+    workspaces were created with, while the secrets for the hop back to the
+    user's computer become this computer's.
+    """
+    latchkey_directory = tmp_path / "latchkey"
+    latchkey_directory.mkdir()
+    host_id = HostId.generate()
+    outer = _outer_with_preexisting_latchkey_dir(True)
+    as_stub(outer).remote_files["/run/mngr-latchkey/gateway_listen_password"] = b"other-computers-password"
+
+    provision_remote_gateway(
+        outer,
+        host_id=host_id,
+        container_ssh_user="root",
+        container_ssh_port=2222,
+        latchkey_directory=latchkey_directory,
+        desktop_secrets=_DESKTOP_SECRETS,
+    )
+
+    assert _written_by_path(outer, "/run/mngr-latchkey/gateway_listen_password").content == b"other-computers-password"
+    assert _written_by_path(outer, "/run/mngr-latchkey/desktop_gateway_password").content == b"desktop-password"
+    assert (
+        _written_by_path(outer, "/run/mngr-latchkey/desktop_permissions_override").content == b"desktop-override-jwt"
+    )
 
 
 # -- permission reconciliation --------------------------------------------------
@@ -910,3 +1042,124 @@ def test_sync_permissions_refuses_a_policy_it_cannot_read_rather_than_storing_it
         sync_permissions(outer, latchkey_directory, host_id, _REMOTE_DIR)
 
     assert local_path.read_text() == _GRANTED_HERE
+
+
+def test_machine_latchkey_layout_names_exactly_what_provisioning_writes(tmp_path: Path) -> None:
+    # The migrate carries a machine's latchkey state by these tuples, so a file
+    # provisioning starts writing (or stops writing) without them changing
+    # would be silently dropped (or read as absent) on every migration.
+    outer = cast(OuterHostInterface, StubOuter(container_name="mngr-ws-1"))
+    host_id = HostId()
+    provision_remote_gateway(
+        outer,
+        host_id=host_id,
+        container_ssh_user="root",
+        container_ssh_port=2222,
+        latchkey_directory=tmp_path,
+        desktop_secrets=_DESKTOP_SECRETS,
+    )
+    # The policy is seeded by the reconcile's permissions pass, not the gateway pass.
+    sync_permissions(outer, tmp_path, host_id, _REMOTE_DIR)
+    written_paths = {Path(w.path) for w in as_stub(outer).written}
+    written_disk_names = {
+        path.name
+        for path in written_paths
+        if path.parent == _REMOTE_DIR and not path.name.endswith(".log") and not path.name.endswith(".candidate")
+    }
+    # The credential store and its format stamp arrive with the first credential
+    # handover and the tunnel key pair is minted by ssh-keygen on the machine;
+    # everything else under ~/.latchkey is written by this pass.
+    assert written_disk_names == set(MACHINE_LATCHKEY_DISK_FILENAMES) - {
+        CREDENTIALS_STORE_FILENAME,
+        UPSTREAM_DATA_FORMAT_VERSION_FILENAME,
+        CONTAINER_TUNNEL_KEY_FILENAME,
+        f"{CONTAINER_TUNNEL_KEY_FILENAME}.pub",
+    }
+    assert {path.name for path in written_paths if path.parent == TMPFS_SECRETS_DIR} == set(
+        MACHINE_LATCHKEY_TMPFS_FILENAMES
+    )
+    assert {path.name for path in written_paths if path.parent == SUPERVISOR_CONFD_DIR} == set(
+        MACHINE_LATCHKEY_SUPERVISOR_CONF_FILENAMES
+    )
+    # The wrapper refuses to start without exactly the machine's own pair.
+    run_script = _written_by_path(outer, str(_REMOTE_DIR / GATEWAY_RUN_SCRIPT_FILENAME)).content.decode("utf-8")
+    refusal_line = next(line for line in run_script.splitlines() if line.startswith("if [ ! -s "))
+    for filename in MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES:
+        assert str(TMPFS_SECRETS_DIR / filename) in refusal_line
+    assert refusal_line.count("! -s") == len(MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES)
+
+
+def _staged_extension_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Lay out an empty extensions directory and return it with its destination and staged paths."""
+    extensions_dir = tmp_path / REMOTE_EXTENSIONS_DIR_NAME
+    extensions_dir.mkdir()
+    destination = extensions_dir / REMOTE_GATEWAY_EXTENSION_FILENAME
+    candidate = destination.with_name(destination.name + _REMOTE_EXTENSION_CANDIDATE_SUFFIX)
+    return extensions_dir, destination, candidate
+
+
+def test_extension_install_script_installs_the_staged_extension(local_outer_host: OuterHost, tmp_path: Path) -> None:
+    """The staged extension is moved into place with the restrictive remote file mode."""
+    extensions_dir, destination, candidate = _staged_extension_paths(tmp_path)
+    candidate.write_text("export default 'staged';\n")
+
+    result = local_outer_host.execute_idempotent_command(
+        _build_extension_install_script(extensions_dir, candidate, destination)
+    )
+
+    assert result.success
+    assert destination.read_text() == "export default 'staged';\n"
+    assert not candidate.exists()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def test_replaying_the_extension_install_succeeds_after_it_already_installed(
+    local_outer_host: OuterHost, tmp_path: Path
+) -> None:
+    """The retry that a lost SSH response triggers must not fail an install that already landed.
+
+    ``execute_idempotent_command`` re-runs its command after a transient SSH
+    error, including when the far side had in fact completed it, so running the
+    install twice stands in for that replay.
+    """
+    extensions_dir, destination, candidate = _staged_extension_paths(tmp_path)
+    candidate.write_text("export default 'staged';\n")
+    script = _build_extension_install_script(extensions_dir, candidate, destination)
+
+    assert local_outer_host.execute_idempotent_command(script).success
+    replayed = local_outer_host.execute_idempotent_command(script)
+
+    assert replayed.success
+    assert destination.read_text() == "export default 'staged';\n"
+
+
+def test_replaying_the_extension_install_succeeds_after_it_discarded_an_identical_candidate(
+    local_outer_host: OuterHost, tmp_path: Path
+) -> None:
+    """A replay of the up-to-date branch is a no-op too, and leaves the installed copy alone."""
+    extensions_dir, destination, candidate = _staged_extension_paths(tmp_path)
+    destination.write_text("export default 'installed';\n")
+    candidate.write_text("export default 'installed';\n")
+    script = _build_extension_install_script(extensions_dir, candidate, destination)
+
+    assert local_outer_host.execute_idempotent_command(script).success
+    assert not candidate.exists()
+    replayed = local_outer_host.execute_idempotent_command(script)
+
+    assert replayed.success
+    assert destination.read_text() == "export default 'installed';\n"
+
+
+def test_extension_install_script_fails_when_the_candidate_and_destination_are_both_gone(
+    local_outer_host: OuterHost, tmp_path: Path
+) -> None:
+    """A staged extension that vanished without landing is reported, not passed off as a success."""
+    extensions_dir, destination, candidate = _staged_extension_paths(tmp_path)
+
+    result = local_outer_host.execute_idempotent_command(
+        _build_extension_install_script(extensions_dir, candidate, destination)
+    )
+
+    assert not result.success
+    assert str(destination) in result.stderr
+    assert not destination.exists()

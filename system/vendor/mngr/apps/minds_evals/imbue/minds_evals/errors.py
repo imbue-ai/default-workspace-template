@@ -29,14 +29,52 @@ class WorkspaceCreateError(MindsEvalsError, RuntimeError):
     ...
 
 
+class SeedBuildError(MindsEvalsError, RuntimeError):
+    """Raised when a case's seed cannot be built onto the case base: its merge conflicts, or the merged
+    tree registers it on top of something the template already runs. Raised before any workspace is
+    created, so the trial ends as impossible rather than running against a half-seeded tree."""
+
+    ...
+
+
 class InstructionParseError(MindsEvalsError, ValueError):
     """Raised when the task instruction does not carry a parseable case config block."""
 
     ...
 
 
+class JobReadError(MindsEvalsError, ValueError):
+    """Raised when a harbor job directory cannot be read as a finished run at all.
+
+    Distinct from a run that failed: a job whose artifacts cannot be parsed has not been judged, and
+    reporting it as a failing run would put a harness fault on the eval's record."""
+
+    ...
+
+
 class TrajectoryDocumentError(MindsEvalsError, ValueError):
     """Raised when a trajectory document captured from the workspace is not valid ATIF."""
+
+    ...
+
+
+class CleanupScopeError(MindsEvalsError, ValueError):
+    """Raised when an environment-cleanup request names a scope that could reach environments the
+    caller did not create."""
+
+    ...
+
+
+class ModalNameBudgetError(MindsEvalsError, ValueError):
+    """Raised when a derived Modal name would exceed the length Modal, or mngr on its way there,
+    would silently truncate it to -- which would make the name this app records different from the
+    one that gets created."""
+
+    ...
+
+
+class ModalAdminError(MindsEvalsError, RuntimeError):
+    """Raised when the Modal SDK cannot answer an environment listing or deletion the cleanup needs."""
 
     ...
 
@@ -52,5 +90,33 @@ class AgentKwargError(MindsEvalsError, ValueError):
 
     Raised from the driver's constructor, so a run stops before any box boots rather than after a
     trial has burned a workspace on a setting that was never applied."""
+
+    ...
+
+
+class CiMatrixError(MindsEvalsError, ValueError):
+    """The scheduled run's inputs cannot be turned into a matrix: an unreadable or invalid harness
+    configs file, a selection naming a config it does not hold, or a pairs or markers file that
+    is not shaped as the resolve job writes it."""
+
+    ...
+
+
+class FlowBrowserError(MindsEvalsError, RuntimeError):
+    """The flow lab's local Chromium never came to serve CDP, or exited before it did."""
+
+    ...
+
+
+class ScriptedFlowActionError(MindsEvalsError, ValueError):
+    """Raised when a scripted UI-flow action lacks a field its kind needs, or sets one it does not take."""
+
+    ...
+
+
+class ExpectedFactsTableError(MindsEvalsError, ValueError):
+    """Raised when a self-diagnostic expected-facts table cannot be read, or states an expectation that
+    cannot be checked: an unknown key, a matcher count other than one, or a reference to a fact it
+    cannot name."""
 
     ...

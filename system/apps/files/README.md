@@ -1,9 +1,10 @@
 # files
 
 The workspace's file viewer: the app behind the rail's File Viewer row,
-supervised as the `files` program in `system/supervisord.conf`, which runs the
-`files-app` entry point of this package (installed as its own uv tool by
-`system/scripts/build_workspace.sh`, like every Python app with a manifest).
+supervised as the `files` program, declared in
+`system/supervisord.conf.d/files.conf`, which runs the `files-app` entry point of
+this package (installed as its own uv tool by `system/scripts/build_workspace.sh`,
+like every Python app with a manifest).
 
 The server is [dufs](https://github.com/sigoden/dufs), a single static binary
 installed at image build by `system/scripts/install_dufs.sh` (version and

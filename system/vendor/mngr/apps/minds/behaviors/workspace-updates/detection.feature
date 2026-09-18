@@ -76,11 +76,45 @@ Feature: Detecting an out-of-date workspace
     Then only the workspace confirmed to be out of date is dispatched
 
   @version-sources
-  Rule: A running workspace is read from what it is running, a stopped one from what it was created at
-    The created-at version never changes and is never preferred over the running one, or a workspace that already updated itself would be reported as out of date forever.
+  Rule: A workspace is read from what it is running; only one the app has not yet read is read from what it was created at
+    The created-at version never changes and is never preferred over a version read from the workspace, or a workspace that already updated itself would be reported as out of date forever.
+    A version read from a workspace holds while that workspace cannot be read and past a read that fails, because its version moves only when an update lands in it.
+    A workspace that can be read again is read again before its earlier reading is relied on.
+    A workspace created from a published template descends from a release without carrying that release's name, so the app resolves the name from the template rather than reporting unknown.
+    It resolves a name that way only for a workspace the template could name; any other tree's version stays what its own history and its created-at record say.
 
     @updated-workspace-not-re-offered
     Example: A workspace that already updated itself is not offered the same update again
       Given a workspace created at an earlier template release
       And that workspace is running the supported template release
       Then the app reports that workspace as up to date
+
+    @read-held-while-unreadable
+    Example: A workspace that can no longer be read keeps the version it was read at
+      Given a workspace created at an earlier template release
+      And the app has read that workspace running the supported template release
+      When that workspace can no longer be read
+      Then the app still reports that workspace as up to date
+      And the app does not report that version as what the workspace was created at
+
+    @version-recovered-from-the-template
+    Example: A workspace whose own history does not name its release is read from the template it came from
+      Given the app supports a template release
+      And a workspace created from a published template
+      And that workspace's own history does not name the release it descends from
+      Then the app reports that workspace's version as the release it descends from
+
+    @version-not-recovered-for-an-unrelated-workspace
+    Example: A workspace that did not come from the template is not read from it
+      Given a workspace whose own history does not name a release
+      And that workspace's tree did not come from the workspace template
+      When the app reads that workspace's template version
+      Then the app leaves that workspace's git untouched
+
+    @read-held-past-a-failed-read
+    Example: A read that fails does not displace the version already read
+      Given a workspace created at an earlier template release
+      And the app has read that workspace running the supported template release
+      When the next read of that workspace fails
+      Then the app still reports that workspace as up to date
+      And the app does not report that version as what the workspace was created at

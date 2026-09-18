@@ -41,7 +41,7 @@ def cf_check(response: httpx.Response) -> dict[str, Any]:
     return data
 
 
-# --- R2 bucket + account-token operations ---
+# R2 bucket + account-token operations
 
 
 _R2_READ_PERMISSION_GROUP_NAME = "Workers R2 Storage Bucket Item Read"
@@ -316,9 +316,6 @@ def build_r2_bucket_token_policies(
     ]
 
 
-# ---------------------------------------------------------------------------
-
-
 class CloudflareOps(Protocol):
     """Abstraction over the Cloudflare API calls used by the R2 bucket endpoints and sweeps.
 
@@ -417,9 +414,7 @@ class HttpCloudflareOps:
         return cf_query_r2_storage_by_bucket(self.client, self.account_id)
 
 
-# ---------------------------------------------------------------------------
 # Shared context
-# ---------------------------------------------------------------------------
 
 
 class CloudflareCtx:

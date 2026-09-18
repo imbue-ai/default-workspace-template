@@ -20,11 +20,13 @@ STATE_PATH = Path("/logs/agent/state.json")
 PROGRESS_SUMMARY_PATH = Path("/logs/agent/progress_summary.json")
 CASE_PATH = Path("/tests/case.json")
 
-# An agent that never authenticated (or is otherwise wedged) answers every turn
-# with the same short stub. Matched against the WHOLE reply (fullmatch), so a
-# real reply that merely mentions logging in is not caught -- only a reply that
-# is essentially nothing but the stub (up to ~80 trailing chars of punctuation
-# or a "please run /login" tail).
+# An agent that never authenticated (or is otherwise wedged) answers every turn with the same short
+# stub. The driver waits on the workspace's own claude-auth endpoint before it posts credentials, so
+# this is a second line rather than the only one: it catches a wedge that reached the turn loop
+# anyway, which the distinctness check below cannot see on a run that only ever sent one message.
+# Matched against the WHOLE reply (fullmatch), so a real reply that merely mentions logging in is not
+# caught -- only a reply that is essentially nothing but the stub (up to ~80 trailing chars of
+# punctuation or a "please run /login" tail).
 _STUB_REPLY_PATTERN = re.compile(
     r"\s*(not logged in|please run /login|invalid api key)[\s.·:!-]*(please run /login)?[\s.·:!-]{0,80}",
     re.IGNORECASE,

@@ -30,6 +30,9 @@ license = {text = "MIT"}
 # budgets enforce the per-account monthly LLM spend quota) must not drift
 # under us on a redeploy. Bump only on purpose, re-verifying budget
 # enforcement + the price map for the models in LITELLM_CONFIG (app.py).
+#
+# apps/minds_evals installs this same export into its eval boxes, which is
+# where their in-box proxy is served from, so a bump moves that proxy too.
 [dependency-groups]
 image = [
     "litellm[proxy]==1.93.0",

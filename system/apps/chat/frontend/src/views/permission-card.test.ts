@@ -145,7 +145,7 @@ const PERMISSION_OUTPUT = `  % Total    % Received % Xferd
 // A file-sharing request: payload carries a path and access mode instead.
 const FILE_SHARING_OUTPUT = `{"request_id":"fs-1","rationale":"write the report locally","request_type":"file-sharing","payload":{"path":"/Users/you/Documents/report","access":"WRITE"}}`;
 
-// A workspace request (acting on the user's other Minds workspaces): payload
+// A workspace request (acting on the user's other Mind workspaces): payload
 // carries verb names and a target workspace, neither of which the card renders
 // as details for now -- only the heading and the button.
 const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of the old workspace","request_type":"workspace","payload":{"permissions":["minds-workspaces-backups-export"],"target_workspace_id":"agent-a3b7b469ee8341779c9ede1a798c447f"}}`;
@@ -750,10 +750,10 @@ describe("shell-reported verdicts", () => {
   });
 });
 
-// Delivery through the real endpoint needs the vendored contract to know
+// Delivery through the real endpoint needs the contract snapshot to know
 // PERMISSION_RESOLUTIONS (a stale snapshot's validator drops the type before
 // any handler runs; this repo deliberately does not edit system/vendor by
-// hand). These un-skip themselves the moment the vendor sync lands, and cover
+// hand). These un-skip themselves once a newer mngr carries it, and cover
 // the source and payload checks the shell's messages actually pass through.
 const HAS_RESOLUTIONS_MESSAGE = "PERMISSION_RESOLUTIONS" in embedContract;
 

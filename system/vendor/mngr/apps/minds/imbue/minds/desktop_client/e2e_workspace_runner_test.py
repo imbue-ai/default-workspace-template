@@ -13,6 +13,7 @@ from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceCreateAttem
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceFlowError
 from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_CHAT_TILE_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_TAB_ADD_BUTTON_SELECTOR
+from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_TAB_PAGE_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_TERMINAL_TILE_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _chat_frame
@@ -233,6 +234,9 @@ _WORKSPACE_AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
 _WORKSPACE_SHELL_URL = f"https://{_WORKSPACE_AGENT_ID}.localhost:8421/"
 _CHAT_AGENT_ID = "agent-fedcba9876543210fedcba9876543210"
 _CHAT_PAGE_URL = f"https://chat-x7k9q2w1.{_WORKSPACE_AGENT_ID}.localhost:8421/{_CHAT_AGENT_ID}"
+# The welcome chat the creation page seeded, which a fresh workspace opens on before any tile is pressed.
+_WELCOME_CHAT_ID = "agent-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+_WELCOME_CHAT_PAGE_URL = f"https://chat-x7k9q2w1.{_WORKSPACE_AGENT_ID}.localhost:8421/{_WELCOME_CHAT_ID}"
 _TERMINAL_PAGE_URL = f"https://terminal-x7k9q2w1.{_WORKSPACE_AGENT_ID}.localhost:8421/"
 
 
@@ -287,67 +291,139 @@ def test_chat_frame_raises_when_no_chat_opens_in_time() -> None:
 
 
 class _FakeNewTabWorkspace(_FakeWorkspaceFrame):
-    """A workspace frame whose New Tab page may or may not be showing.
+    """A workspace frame under the many-New-Tabs shell contract.
 
-    As in the shell, the dockview add button is visible only while no New Tab page is showing.
-    Records the selectors clicked; the chat frame appears among the children only after the
-    New Chat tile is pressed, the way the shell docks it.
+    As in the shell, the dockview add button is always shown and every press opens ANOTHER
+    New Tab page, which becomes its pane's visible tab; a background New Tab page keeps its
+    tiles hidden in the DOM, so only a tile wait scoped to a visible page can succeed.
+    Records the selectors clicked; ``existing_chats`` are docked from the start (the welcome chat a
+    fresh workspace opens on), and the chat frame joins them only after the New Chat tile is
+    pressed, the way the shell docks it.
     """
 
-    def __init__(self, *, is_new_tab_showing: bool, chat: _FakeFrame) -> None:
-        super().__init__(child_frame_lists=[[]])
+    def __init__(self, *, is_new_tab_showing: bool, existing_chats: Sequence[_FakeFrame], chat: _FakeFrame) -> None:
+        super().__init__(child_frame_lists=[list(existing_chats)])
         self._is_new_tab_showing = is_new_tab_showing
+        self._existing_chats = list(existing_chats)
         self._chat = chat
         self.clicked: list[str] = []
 
     def query_selector(self, selector: str) -> object | None:
-        is_add_button_visible = not self._is_new_tab_showing
-        return object() if is_add_button_visible and selector == f"{_NEW_TAB_ADD_BUTTON_SELECTOR}:visible" else None
+        if selector == f"{_NEW_TAB_PAGE_SELECTOR}:visible":
+            return object() if self._is_new_tab_showing else None
+        if selector == f"{_NEW_TAB_ADD_BUTTON_SELECTOR}:visible":
+            return object()
+        return None
 
     def wait_for_selector(self, selector: str, state: str, timeout: float) -> None:
-        pass
+        if not selector.startswith(f"{_NEW_TAB_PAGE_SELECTOR}:visible ") or not self._is_new_tab_showing:
+            raise PlaywrightTimeoutError(f"no visible New Tab page carries a tile matching {selector!r}")
 
-    def click(self, selector: str) -> None:
+    def click(self, selector: str, timeout: float | None = None) -> None:
         self.clicked.append(selector)
-        if selector == _NEW_CHAT_TILE_SELECTOR:
-            self._child_frame_lists = [[self._chat]]
+        if selector == _NEW_TAB_ADD_BUTTON_SELECTOR:
+            self._is_new_tab_showing = True
+        if selector == f"{_NEW_TAB_PAGE_SELECTOR}:visible {_NEW_CHAT_TILE_SELECTOR}":
+            self._child_frame_lists = [[*self._existing_chats, self._chat]]
 
 
 class _FakeTerminalNewTabWorkspace(_FakeNewTabWorkspace):
     """The New Tab fake for the terminal tile: records what it waits for, since the terminal docks as a plain iframe."""
 
     def __init__(self, *, is_new_tab_showing: bool) -> None:
-        super().__init__(is_new_tab_showing=is_new_tab_showing, chat=_FakeFrame(urls=[]))
+        super().__init__(is_new_tab_showing=is_new_tab_showing, existing_chats=[], chat=_FakeFrame(urls=[]))
         self.waited_for: list[str] = []
 
     def wait_for_selector(self, selector: str, state: str, timeout: float) -> None:
         self.waited_for.append(selector)
 
 
+_VISIBLE_NEW_CHAT_TILE_SELECTOR = f"{_NEW_TAB_PAGE_SELECTOR}:visible {_NEW_CHAT_TILE_SELECTOR}"
+_VISIBLE_NEW_TERMINAL_TILE_SELECTOR = f"{_NEW_TAB_PAGE_SELECTOR}:visible {_NEW_TERMINAL_TILE_SELECTOR}"
+
+
 def test_open_terminal_presses_the_terminal_tile_and_waits_for_its_frame() -> None:
     workspace = _FakeTerminalNewTabWorkspace(is_new_tab_showing=True)
     open_terminal_from_new_tab(cast(Frame, workspace))
-    assert workspace.clicked == [_NEW_TERMINAL_TILE_SELECTOR]
-    assert workspace.waited_for == [_NEW_TERMINAL_TILE_SELECTOR, _TERMINAL_IFRAME_SELECTOR]
+    assert workspace.clicked == [_VISIBLE_NEW_TERMINAL_TILE_SELECTOR]
+    assert workspace.waited_for == [_VISIBLE_NEW_TERMINAL_TILE_SELECTOR, _TERMINAL_IFRAME_SELECTOR]
 
 
 def test_open_terminal_opens_a_new_tab_page_first_when_none_is_showing() -> None:
     workspace = _FakeTerminalNewTabWorkspace(is_new_tab_showing=False)
     open_terminal_from_new_tab(cast(Frame, workspace))
-    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _NEW_TERMINAL_TILE_SELECTOR]
+    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _VISIBLE_NEW_TERMINAL_TILE_SELECTOR]
 
 
 def test_start_new_chat_presses_the_tile_and_returns_the_chat_frame_it_docks() -> None:
     chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
-    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, chat=chat)
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, existing_chats=[], chat=chat)
     assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
-    assert workspace.clicked == [_NEW_CHAT_TILE_SELECTOR]
+    assert workspace.clicked == [_VISIBLE_NEW_CHAT_TILE_SELECTOR]
+
+
+def test_start_new_chat_leaves_the_add_button_alone_while_a_new_tab_page_is_showing() -> None:
+    # Pressing the add button here would open ANOTHER New Tab page and leave the showing
+    # page's identical tile hidden first in the DOM -- the deterministic MIND-285 failure.
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, existing_chats=[], chat=chat)
+    start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5)
+    assert _NEW_TAB_ADD_BUTTON_SELECTOR not in workspace.clicked
 
 
 def test_start_new_chat_opens_a_new_tab_page_first_when_none_is_showing() -> None:
     # A workspace showing only docked tabs has no tile on screen; the dockview add button
     # opens the New Tab page that carries it.
     chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
-    workspace = _FakeNewTabWorkspace(is_new_tab_showing=False, chat=chat)
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=False, existing_chats=[], chat=chat)
     assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
-    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _NEW_CHAT_TILE_SELECTOR]
+    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _VISIBLE_NEW_CHAT_TILE_SELECTOR]
+
+
+def test_start_new_chat_returns_the_chat_the_tile_docked_and_not_the_welcome_chat_already_open() -> None:
+    # A fresh workspace opens on the welcome chat the creation page seeded, so a chat frame is
+    # docked (and first in frame order) before the tile is pressed; the chat the press starts
+    # is the frame that was not there before.
+    welcome = _FakeFrame(urls=[_WELCOME_CHAT_PAGE_URL])
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=False, existing_chats=[welcome], chat=chat)
+    assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+    assert _chat_frame(cast(Frame, workspace), timeout_seconds=0) is cast(Frame, welcome)
+
+
+def test_start_new_chat_tells_the_welcome_chat_apart_by_its_id_when_its_url_changes_after_the_press() -> None:
+    # The chat page reports its own URL back to the shell, so the welcome chat's frame URL can
+    # pick up a query string or trailing slash between the pre-press snapshot and the poll; it
+    # is still the same chat, and only the tile-minted one is new.
+    welcome = _FakeFrame(urls=[_WELCOME_CHAT_PAGE_URL, f"{_WELCOME_CHAT_PAGE_URL}/?tab=1"])
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, existing_chats=[welcome], chat=chat)
+    assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+
+
+class _FakeNewTabWorkspaceDockingTheWelcomeChatWithTheTile(_FakeNewTabWorkspace):
+    """The New Tab fake on a workspace still booting: the welcome chat docks at the moment the tile comes on screen,
+    since the shell renders both from the same app-list arrival."""
+
+    def __init__(self, *, welcome: _FakeFrame, chat: _FakeFrame) -> None:
+        super().__init__(is_new_tab_showing=True, existing_chats=[], chat=chat)
+        self._welcome = welcome
+
+    def wait_for_selector(self, selector: str, state: str, timeout: float) -> None:
+        super().wait_for_selector(selector, state, timeout)
+        self._existing_chats = [self._welcome]
+        self._child_frame_lists = [[self._welcome]]
+
+
+def test_start_new_chat_does_not_take_a_welcome_chat_docking_during_the_tile_wait_for_the_new_chat() -> None:
+    welcome = _FakeFrame(urls=[_WELCOME_CHAT_PAGE_URL])
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspaceDockingTheWelcomeChatWithTheTile(welcome=welcome, chat=chat)
+    assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+
+
+def test_start_new_chat_raises_when_only_the_welcome_chat_is_open_after_the_press() -> None:
+    welcome = _FakeFrame(urls=[_WELCOME_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, existing_chats=[welcome], chat=welcome)
+    with pytest.raises(WorkspaceFlowError):
+        start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=0)
