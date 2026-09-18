@@ -5044,6 +5044,61 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     ) in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("rung", ["own", "beside-mngr", "pinned"])
+def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
+    rung: str, apply_repo: Path, tmp_path: Path
+) -> None:
+    """A rollback restores each copy over the directory it was taken from. A copy
+    of any environment but the one the reinstall overwrote would put back the
+    wrong thing and leave the rebuilt one standing, so the two must agree at
+    every rung of the destination resolution."""
+    homes = {
+        "own": tmp_path / "own",
+        "beside-mngr": tmp_path / "mngr",
+        "pinned": tool_env.tool_home(),
+    }
+    for name, home in homes.items():
+        env_dir = tool_env.tools_dir(home) / update_layout.TOOL_NAME
+        env_dir.mkdir(parents=True)
+        (env_dir / update_layout.RECEIPT).write_text("[tool]\nrequirements = []\n")
+        (env_dir / "home.txt").write_text(name)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    if rung in ("own", "beside-mngr"):
+        mngr_shim, _ = _install_tool(
+            homes["beside-mngr"],
+            update_layout.MNGR_TOOL_NAME,
+            update_layout.MNGR_EXECUTABLE,
+        )
+        runner.executables[update_layout.MNGR_EXECUTABLE] = str(mngr_shim)
+    if rung == "own":
+        own_shim, _ = _install_tool(
+            homes["own"], update_layout.TOOL_NAME, update_layout.TOOL_NAME
+        )
+        runner.executables[update_layout.TOOL_NAME] = str(own_shim)
+    observed: list[tuple[str, str]] = []
+
+    def _on_install(argv: list[str]) -> None:
+        if argv[:5] == [
+            "uv",
+            "tool",
+            "install",
+            "-e",
+            update_layout.SYSTEM_INTERFACE_DIR,
+        ]:
+            copy = update_apply_contract.snapshots_root(
+                apply_repo
+            ) / update_environment.tool_snapshot_name(update_layout.TOOL_NAME)
+            env = runner.envs[-1]
+            assert env is not None
+            observed.append((env["UV_TOOL_DIR"], (copy / "home.txt").read_text()))
+
+    runner.on_command = _on_install
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert observed == [(str(tool_env.tools_dir(homes[rung])), rung)]
+
+
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # No readable receipt means the tool is not installed (or predates
     # receipts); the refresh must still run as the plain install it would
