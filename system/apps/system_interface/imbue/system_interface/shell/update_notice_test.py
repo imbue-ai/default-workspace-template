@@ -167,6 +167,25 @@ def test_a_rollback_the_script_refuses_is_a_refusal_in_the_scripts_words(tmp_pat
     assert current is not None and not current.is_rolling_back and not current.is_settled
 
 
+def test_a_script_that_settles_the_record_and_exits_before_the_next_read_is_under_way(tmp_path: Path) -> None:
+    """A rollback whose revert refuses at once writes its progress, settles the record with the outcome, and
+    exits 1 within a few milliseconds; landing between the launch's read of the record and its poll of the
+    exit code, that must read as a rollback that ran (its outcome is in the record), not as a refusal."""
+    watch = _watch(tmp_path)
+    write_rollback_point(watch.repo_root)
+    before = watch.current()
+    assert before is not None
+
+    def settle_then_exit() -> int:
+        write_rollback_point(watch.repo_root, outcome="The update could not be reverted, so nothing was changed.")
+        return 1
+
+    watch._wait_until_under_way(settle_then_exit, before, watch.repo_root / "rollback-last.log", 0)
+
+    current = watch.current()
+    assert current is not None and current.is_settled
+
+
 @pytest.mark.timeout(30)
 def test_two_launches_at_once_start_one_script_and_refuse_the_other(tmp_path: Path) -> None:
     """Two windows pressing Roll back together: the second must read the first's progress rather than

@@ -275,9 +275,13 @@ class UpdateNoticeWatch(MutableModel):
         deadline = time.monotonic() + _ROLLBACK_START_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             self._record_changed.clear()
+            # The exit code first, then the record: a script that has exited wrote everything it was
+            # going to, so a record read after the poll says whether it got under way (and, when it
+            # failed straight after, how it went), and only an exit that left the record untouched is
+            # a refusal.
+            returncode = poll()
             if self.current() != before:
                 return
-            returncode = poll()
             if returncode is not None:
                 if returncode == 0:
                     return
