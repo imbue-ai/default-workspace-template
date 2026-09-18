@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import FastModeMode
+from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args

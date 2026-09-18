@@ -291,6 +291,7 @@ describe("Sidebar", () => {
     const restore = markPageAsPreviewShell();
     try {
       const attrs = mount({});
+      expand();
       root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
       expect(attrs.onRunShortcut).not.toHaveBeenCalled();
       root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
@@ -300,7 +301,6 @@ describe("Sidebar", () => {
       );
       expect(shortcutItems).not.toContain("Stop Terminal");
       expect(shortcutItems).not.toContain("New terminal");
-      expand();
       root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
       m.redraw.sync();
       const rowItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
