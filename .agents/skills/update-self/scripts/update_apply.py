@@ -942,10 +942,11 @@ def apply_update(
     _advance(PHASE_MERGED)
 
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
+    app_tools = read_app_tools(repo_root)
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
-        read_app_tools(repo_root),
+        app_tools,
     )
 
     unresolved_frontend_failure: str | None = None
@@ -1044,9 +1045,7 @@ def apply_update(
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
             )
-        for stale in remove_shadowing_app_tool_installs(
-            runner, sweep_homes, read_app_tools(repo_root)
-        ):
+        for stale in remove_shadowing_app_tool_installs(runner, sweep_homes, app_tools):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale app tool install that shadowed the pinned one\n"
             )
