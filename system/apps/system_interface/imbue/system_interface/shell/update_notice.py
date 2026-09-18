@@ -212,10 +212,10 @@ class UpdateNoticeWatch(MutableModel):
         record is left as the script left it either way, and the windows learn of the change
         from the watch.
 
-        A rollback in flight is refused because confirming discards the very copies it is
-        restoring from, leaving it to warn about files it could not restore and then write
-        back the record it was just told to close. The band hides both verbs while a rollback
-        runs, so this catches a window that has not seen the progress yet.
+        A rollback in flight is refused because a confirm would close the record the rollback
+        is writing its progress and outcome into (the script refuses one under the rollback
+        point's lock too). The band hides both verbs while a rollback runs, so this catches a
+        window that has not seen the progress yet.
         """
         notice = self.current()
         if notice is None:
