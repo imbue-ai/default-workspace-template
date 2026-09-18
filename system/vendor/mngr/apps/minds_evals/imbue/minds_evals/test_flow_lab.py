@@ -42,6 +42,14 @@ _FLOW_LAB_APPS_DIR = Path(__file__).parent.parent.parent / "flow_lab_apps"
 _TODO_APP = _FLOW_LAB_APPS_DIR / "todo"
 _ADD_COMPLETE_DELETE_STEPS = "Add a task named 'walk dog'. Mark it complete. Delete 'walk dog'."
 
+# How long the fixture's `?pending=<ms>` knob holds a change wherever a test needs a `wait` to be
+# what resolves it. Two bounds decide it, and they are far apart: the change must not land before
+# the NEXT step is watching for it -- a fresh process, a playwright import and a CDP connection,
+# which a loaded runner stretches to seconds -- and it must land inside the 10 s that a `wait`
+# action gives the page, counted from that same moment. The value below sits several times above
+# the round trip a healthy machine spends and still leaves the whole wait window to spare.
+_PENDING_RESOLVED_BY_WAIT_MS: Final[int] = 8_000
+
 
 def _frame_size(frame_path: Path) -> tuple[int, int]:
     """The pixel dimensions a captured PNG declares, read from the header every PNG opens with."""
@@ -95,7 +103,9 @@ def _ref_on(line: str) -> str:
 
 def _ref_of(state_text: str, line_marker: str) -> str:
     """The ref the captured state prints on the first line holding `line_marker`."""
-    return _ref_on(next(line for line in state_text.splitlines() if line_marker in line))
+    line = next((line for line in state_text.splitlines() if line_marker in line), "")
+    assert line, "no line of the captured state holds {!r}:\n{}".format(line_marker, state_text)
+    return _ref_on(line)
 
 
 def _checkbox_ref_of_row(state_text: str, task_text: str) -> str:
@@ -174,6 +184,32 @@ def test_a_browser_that_exits_before_serving_cdp_is_refused_by_name(
     assert "exited with status 3" in str(exc_info.value)
 
 
+def test_a_browser_that_ignores_sigterm_is_killed_rather_than_failing_the_teardown(
+    flow_lab_group: ConcurrencyGroup, tmp_path: Path
+) -> None:
+    """A loaded machine makes Chromium slow to exit, and a stub that never exits on SIGTERM is that
+    case taken to its limit: leaving the context still has to stop the browser and return quietly,
+    since a raise there replaces whatever the flow itself concluded."""
+    pid_path = tmp_path / "stub.pid"
+    stub_path = tmp_path / "deaf-chromium"
+    stub_path.write_text(
+        "#!/bin/sh\n"
+        "trap '' TERM\n"
+        "echo $$ > {}\n"
+        "echo 'DevTools listening on ws://127.0.0.1:9/devtools/browser/stub' >&2\n"
+        "exec sleep 47193\n".format(pid_path)
+    )
+    stub_path.chmod(0o755)
+
+    with flow_browser.launch_local_browser(stub_path, tmp_path / "profile", flow_lab_group) as cdp_endpoint_url:
+        assert cdp_endpoint_url == "http://127.0.0.1:9"
+        stub_pid = int(pid_path.read_text())
+
+    # The ignored signal survives the exec, so only the kill that follows the grace can have done this.
+    with pytest.raises(ProcessLookupError):
+        os.kill(stub_pid, 0)
+
+
 def test_opening_the_app_captures_its_seed_tasks_and_a_frame(
     local_browser: str, flow_lab_group: ConcurrencyGroup, tmp_path: Path
 ) -> None:
@@ -189,15 +225,23 @@ def test_opening_the_app_captures_its_seed_tasks_and_a_frame(
     assert opening.screenshot_byte_count == frame_path.stat().st_size
     assert opening.is_screenshot_png is True
     # A frame is the viewport, so its size follows the window the launch asks for, less whatever
-    # chrome the platform wraps that window in: macOS and Linux each take a different slice off the
-    # height, and Linux takes some off the width too. So what is pinned is that most of the
-    # asked-for window is there -- exact dimensions would pin whichever platform they were measured
-    # on -- which is enough to catch a launch that lost the size and fell back to a window less than
-    # half as wide.
+    # chrome the platform wraps that window in -- macOS and Linux each take a different slice off
+    # the height, and Linux takes some off the width too -- and times the display's pixel density.
+    # Exact dimensions would pin whichever platform and display they were measured on, so the
+    # density is divided out instead of allowed for: it is read off the width, the one dimension the
+    # window chrome leaves alone, and the height is then held to that same density. Allowing for it
+    # in the bounds would let the 800x600 default that a launch without the flag falls back to pass
+    # as a 1280x800 window captured at 2x, which is the regression this exists to catch.
     window_width, window_height = _launched_window_size()
     frame_width, frame_height = _frame_size(frame_path)
-    assert window_width * 0.9 < frame_width <= window_width
-    assert window_height / 2 < frame_height <= window_height
+    density = round(frame_width / window_width)
+    assert density >= 1, (frame_width, window_width)
+    assert window_width * density * 0.9 < frame_width <= window_width * density, (frame_width, window_width, density)
+    assert window_height * density / 2 < frame_height <= window_height * density, (
+        frame_height,
+        window_height,
+        density,
+    )
 
 
 def test_a_synchronous_render_is_captured_by_the_step_that_caused_it(
@@ -330,11 +374,13 @@ def test_a_pending_state_is_what_the_step_captures_and_a_wait_is_what_resolves_i
 ) -> None:
     # The app answers the click at once with "Saving..." and only applies the add later. The click's
     # capture is that pending state -- the page settled on it -- and the wait action, performing
-    # nothing, gives the page its time and captures the result. The window has to outlast the click's
-    # capture AND the spawn of the next step's process, or the add would land before the wait started
-    # watching for it, so it is set well above what that round trip costs.
+    # nothing, gives the page its time and captures the result.
     _opening, typed, added, waited = _drive_todo(
-        local_browser, flow_lab_group, tmp_path, "?pending=4000", [_type("walk dog"), _click("Add"), _wait()]
+        local_browser,
+        flow_lab_group,
+        tmp_path,
+        "?pending={}".format(_PENDING_RESOLVED_BY_WAIT_MS),
+        [_type("walk dog"), _click("Add"), _wait()],
     )
 
     assert "Saving..." in added.state_text and 'checkbox "walk dog"' not in added.state_text
@@ -389,6 +435,28 @@ def test_a_navigation_that_lands_while_the_watch_is_waiting_is_read_the_same_way
     assert '"Buy milk"' in navigated.state_text
 
 
+def test_a_navigation_to_the_url_the_page_is_already_on_is_read_as_the_new_document_it_is(
+    local_browser: str, flow_lab_group: ConcurrencyGroup, tmp_path: Path
+) -> None:
+    # With `resave` the link reloads the address the page is already on, the shape of an app that
+    # saves and then shows itself again. Nothing about the url marks that as a navigation, so this
+    # is the case the step identifies a document by its loader id for: the reaction is the reloaded
+    # document -- no pending status on it -- and not the page the flow was about to leave.
+    #
+    # What a local static server cannot stage is a commit slow enough to be missed: the reload here
+    # lands within a millisecond of the click, so what this pins is that a navigation the url cannot
+    # reveal is waited for and read at all, not how long it may take to arrive.
+    _opening, navigated = _drive_todo(
+        local_browser, flow_lab_group, tmp_path, "?ticker=1&pending=700&resave=1", [_click("Start over", role="link")]
+    )
+
+    assert navigated.is_ok, navigated.detail
+    assert navigated.reaction is StepReaction.SETTLED
+    assert "resave=1" in navigated.state_text.splitlines()[0]
+    assert "Saving..." not in navigated.state_text
+    assert '"Buy milk"' in navigated.state_text
+
+
 def test_a_nameless_control_is_addressed_by_its_ref_and_the_next_step_reads_fresh_refs(
     local_browser: str, flow_lab_group: ConcurrencyGroup, tmp_path: Path
 ) -> None:
@@ -423,12 +491,14 @@ def test_a_ref_that_no_longer_names_what_the_agent_read_is_a_step_error_the_flow
     # A ref is checked against a fresh snapshot before it is acted on: one that sits on another
     # role now, or on nothing, is refused with the page captured as it stands, so the flow carries
     # on from the current state rather than clicking whatever inherited the number.
-    outcomes = _drive_todo(local_browser, flow_lab_group, tmp_path, "?unnamed=1", [])
-    checkbox_ref = _ref_of(outcomes[0].state_text, "- checkbox")
-
+    # Every step runs while the app is still served: a step reads the page back after acting, and a
+    # page whose origin has gone away is not the page this is about.
     executor = _executor(local_browser, flow_lab_group, tmp_path)
-    moved = asyncio.run(executor.run_step(_click_ref(checkbox_ref, "button"), 1))
-    gone = asyncio.run(executor.run_step(_click_ref("e999", "checkbox"), 2))
+    with flow_lab.serve_static_app(_TODO_APP) as origin:
+        (opening,) = asyncio.run(_drive(executor, origin + "?unnamed=1", []))
+        checkbox_ref = _ref_of(opening.state_text, "- checkbox")
+        moved = asyncio.run(executor.run_step(_click_ref(checkbox_ref, "button"), 1))
+        gone = asyncio.run(executor.run_step(_click_ref("e999", "checkbox"), 2))
 
     assert (moved.is_ok, moved.reason) == (False, ui_flows.REASON_STALE_REF)
     assert not ui_flows.is_instrument_reason(moved.reason)
@@ -597,7 +667,7 @@ _SEED_TASKS_AND_WALK_DOG: Final[list[str]] = ["Buy milk", "Learn React", "walk d
         ),
         pytest.param(
             "pending",
-            "?pending=2000",
+            "?pending={}".format(_PENDING_RESOLVED_BY_WAIT_MS),
             [*_ADD_WALK_DOG, {"kind": "wait"}],
             {
                 # The pending state, captured by the step that caused it: the add has not landed yet.

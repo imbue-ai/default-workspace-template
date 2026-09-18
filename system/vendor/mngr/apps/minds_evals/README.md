@@ -91,27 +91,36 @@ on which the trial gave up.
   plain `uv run harbor` from inside this directory). harbor is a pinned dependency of this app,
   which both fixes the version and makes the driver import path resolvable. A bare `uvx harbor`
   runs in an isolated env that cannot import this package.
-- The `minds-evals-*` recipes below live in `private.just`, which the root `justfile` imports, so
-  grepping `justfile` alone will not find them.
+- The `minds-evals-*` and `test-minds-evals*` recipes live in `private.just`, which the root
+  `justfile` imports, so grepping `justfile` alone will not find them. `justfile` ships to the public
+  mirror and this project does not, so a recipe for it cannot live there.
 
 This app is a **standalone uv project**, not a member of the monorepo's uv workspace: it has its
-own `pyproject.toml`, `uv.lock`, and `.venv`. harbor declares `rich>=14.1.0` and `modal>=1.5.1`,
-and the workspace is held at `rich<14` (by `litellm[proxy]`) and `modal==1.4.3` (by
-`imbue-mngr-modal`); uv allows one version per package per workspace, so a separate lock is the
-only way harbor gets the dependencies it declares. Practical consequences:
+own `pyproject.toml`, `uv.lock`, and `.venv`. harbor declares `rich>=14.1.0`, and the workspace
+is held at `rich<14` by `litellm[proxy]`; uv allows one version per package per workspace, so a
+separate lock is the only way harbor gets the dependencies it declares. Practical consequences:
 
 - `uv sync --all-packages` at the repo root does not install this app; run `uv sync` from this
   directory (or `just test-minds-evals`, which does it for you).
 - `just test-quick` / `just test-offload` skip this directory. This app's tests and type check run
   under `just test-minds-evals`, which the `test-minds-evals` CI job invokes on any PR touching this
   app or the monorepo packages it depends on. With no args it runs two pytest sessions, each
-  across two xdist workers and each held to CI's per-session time limit: the tests marked
-  `chromium` (every test using the `chromium_path` fixture, marked automatically) in one, the
-  rest of the suite in the other, with coverage combined across both. Given args (a path, a node
-  id, a `-m`) it runs the one session they select, on the same two workers; add `-n 0` to the
-  args to run it in-process, as `--pdb` and `-s` need. Tests run in parallel, so a test must not share
-  a fixed path, port or other process-wide state with another: take directories from `tmp_path`
-  and ports from the OS.
+  across two xdist workers: the tests marked `chromium` (every test using the `chromium_path`
+  fixture, marked automatically) in one, the rest of the suite in the other, with coverage
+  combined across both. The rest of the suite is held to CI's per-session time limit; the chromium
+  session gets its own 300 second budget, because its time goes on waits the flow runner makes on
+  purpose (a settle window, a fresh process per step) that stretch with the machine's load rather
+  than with the code under test. Given args (a path, a node id, a `-m`) it runs the one session
+  they select, on the same two workers; add `-n 0` to the args to run it in-process, as `--pdb`
+  and `-s` need. Tests run in parallel, so a test must not share a fixed path, port or other
+  process-wide state with another: take directories from `tmp_path` and ports from the OS.
+- `just test-minds-evals-repeat [passes] [stressed_passes]` runs the whole suite several times over
+  -- the last passes with every core kept busy -- and merges the passes into
+  `test-results/junit.xml` with one testcase per attempt, so a test that failed in some passes and
+  passed in others is told apart from one that failed in all of them. It fails only for the latter.
+  The `minds evals tests (repeated)` workflow is the same run nightly: it reports a test that
+  recovered in another pass as flaky rather than failing whichever PR draws it, and the daily flake
+  sweep reads that result like any offload suite's.
 - Type checking is split, because `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/`
   are shipped as source into environments this project does not itself depend on. `resources/` runs
   in the box against the monorepo venv (importing `mngr_forward` and `playwright`) -- except the

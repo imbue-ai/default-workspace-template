@@ -7,7 +7,6 @@ thing. The block is asserted through `compute_trial_facts`, which is what the ch
 
 import inspect
 import json
-import subprocess
 import tarfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -43,6 +42,7 @@ from imbue.minds_evals.testing import diagnostic_state
 from imbue.minds_evals.testing import diagnostic_step
 from imbue.minds_evals.testing import diagnostic_trajectory
 from imbue.minds_evals.testing import edited_diagnostic_step
+from imbue.minds_evals.testing import run_test_git
 from imbue.minds_evals.testing import write_diagnostic_trial_dir
 from imbue.minds_evals.testing import write_workspace_snapshot
 
@@ -78,7 +78,7 @@ def _stepped_trial_facts(tmp_path: Path, steps: list[DiagnosticStepFiles]) -> Tr
     return compute_trial_facts(trial_dir, tmp_path / "work")
 
 
-# --- the three outcomes ---
+# the three outcomes
 
 
 def test_a_record_that_was_never_due_leaves_its_facts_out_of_the_block(tmp_path: Path) -> None:
@@ -258,7 +258,7 @@ def test_the_manifests_process_and_timing_entries_reach_the_entry_statuses(tmp_p
     assert facts.values["evidence.errored_entries"] == []
 
 
-# --- the trajectory, the steps and the spend ---
+# the trajectory, the steps and the spend
 
 
 def test_the_boundary_markers_name_the_steps_harbor_ran_in_order(tmp_path: Path) -> None:
@@ -407,7 +407,7 @@ def test_every_call_is_answered_once_in_both_directions(steps: list[dict[str, An
     assert is_every_call_answered_once(steps) is is_answered
 
 
-# --- the time to the satisfied goal ---
+# the time to the satisfied goal
 
 _FIRST_SEND_AT: Final[str] = "2026-09-01T00:10:00+00:00"
 _REPLY_SEEN_AT: Final[str] = "2026-09-01T00:10:12+00:00"
@@ -582,7 +582,7 @@ def test_the_feed_span_reads_the_atif_shaped_vintage_of_the_stream_too() -> None
     ]
 
 
-# --- workers ---
+# workers
 
 
 def test_the_worker_lists_are_compared_only_on_a_complete_listing(tmp_path: Path) -> None:
@@ -681,7 +681,7 @@ def test_a_launch_the_caps_left_uncaptured_is_discovered_and_not_captured(tmp_pa
     assert facts.values["workers.captured"] == []
 
 
-# --- the delivered repo ---
+# the delivered repo
 
 
 def test_the_bundle_is_verified_against_the_captured_file(tmp_path: Path) -> None:
@@ -689,22 +689,16 @@ def test_the_bundle_is_verified_against_the_captured_file(tmp_path: Path) -> Non
     accept the missing prerequisite and nothing else."""
     source_dir = tmp_path / "source"
     source_dir.mkdir()
-    _git(source_dir, "init", "--quiet", ".")
-    _git(source_dir, "config", "user.email", "diagnostics@example.com")
-    _git(source_dir, "config", "user.name", "diagnostics")
+    run_test_git(source_dir, "init", "--quiet", ".")
     (source_dir / "index.html").write_text("<title>Todo</title>")
-    _git(source_dir, "add", "-A")
-    _git(source_dir, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "base")
-    base_sha = (
-        subprocess.run(["git", "-C", str(source_dir), "rev-parse", "HEAD"], capture_output=True, check=True)
-        .stdout.decode()
-        .strip()
-    )
+    run_test_git(source_dir, "add", "-A")
+    run_test_git(source_dir, "commit", "--quiet", "-m", "base")
+    base_sha = run_test_git(source_dir, "rev-parse", "HEAD")
     (source_dir / "index.html").write_text("<title>Todo</title><p>walk dog</p>")
-    _git(source_dir, "add", "-A")
-    _git(source_dir, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "bootstrap")
+    run_test_git(source_dir, "add", "-A")
+    run_test_git(source_dir, "commit", "--quiet", "-m", "bootstrap")
     bundle_path = tmp_path / "deliverable.bundle"
-    _git(source_dir, "bundle", "create", str(bundle_path), "{}..HEAD".format(base_sha))
+    run_test_git(source_dir, "bundle", "create", str(bundle_path), "{}..HEAD".format(base_sha))
 
     step = edited_diagnostic_step(
         diagnostic_step(authored_expectations=_MINDS_APP_EXPECTATIONS),
@@ -744,12 +738,12 @@ def test_a_bundle_named_relative_to_the_caller_verifies(tmp_path: Path, monkeypa
     inherits that; verify runs in a repo of its own, where such a path names nothing."""
     source_dir = tmp_path / "source"
     source_dir.mkdir()
-    _git(source_dir, "init", "--quiet", "--initial-branch", "main")
+    run_test_git(source_dir, "init", "--quiet", "--initial-branch", "main")
     _written(source_dir / "first.txt", "first")
-    _git(source_dir, "add", "-A")
-    _git(source_dir, "-c", "user.email=a@b.c", "-c", "user.name=A", "commit", "-q", "-m", "first")
+    run_test_git(source_dir, "add", "-A")
+    run_test_git(source_dir, "commit", "-q", "-m", "first")
     bundle_path = tmp_path / "deliverable.bundle"
-    _git(source_dir, "bundle", "create", str(bundle_path), "HEAD")
+    run_test_git(source_dir, "bundle", "create", str(bundle_path), "HEAD")
     monkeypatch.chdir(tmp_path)
 
     assert fact_sources.is_bundle_verified(Path("deliverable.bundle"), tmp_path / "work") is True
@@ -778,7 +772,7 @@ def test_a_bundle_that_was_due_and_never_captured_is_not_recorded(tmp_path: Path
     assert facts.values["bundle.verified"] is NOT_RECORDED
 
 
-# --- snapshots ---
+# snapshots
 
 
 def test_a_snapshot_the_pull_lost_records_its_zero_and_no_tarball_to_read(tmp_path: Path) -> None:
@@ -846,7 +840,7 @@ def test_the_last_snapshot_pulled_is_the_one_read(tmp_path: Path) -> None:
     assert fact_sources._newest_snapshot_path(snapshots_dir) == snapshots_dir / "post_message_10.tar.gz"
 
 
-# --- flows ---
+# flows
 
 
 def test_a_flows_facts_come_from_its_log_its_frames_and_its_run_record(tmp_path: Path) -> None:
@@ -997,7 +991,7 @@ def test_a_decision_the_executor_could_not_carry_out_is_not_one_of_the_flows_act
     assert facts["flow.plain.record_kinds"] == ["init", "action", "action"]
 
 
-# --- the verifier's reading of the step ---
+# the verifier's reading of the step
 
 
 def test_the_gate_results_name_every_criterion_the_verifier_scored(tmp_path: Path) -> None:
@@ -1112,10 +1106,6 @@ def _listing_json(worker_name: str, agent_type: str) -> str:
             "errors": [],
         }
     )
-
-
-def _git(repo_dir: Path, *arguments: str) -> None:
-    subprocess.run(["git", "-C", str(repo_dir), *arguments], capture_output=True, check=True)
 
 
 def _written(path: Path, contents: str) -> Path:

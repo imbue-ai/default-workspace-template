@@ -148,7 +148,7 @@ _PROFILE_CLEANUP_TIMEOUT_SECONDS: Final[float] = 10.0
 _PROFILE_CLEANUP_POLL_SECONDS: Final[float] = 0.2
 
 
-class _ProfileRemoval(MutableModel):
+class ProfileRemoval(MutableModel):
     """Takes a profile tree down, keeping what the latest attempt ran into so a tree that is left
     behind is reported with its reason rather than a guess.
 
@@ -169,35 +169,39 @@ class _ProfileRemoval(MutableModel):
             self.cause = "{}: {}".format(path, exc)
 
 
-@contextmanager
-def fresh_profile_dir() -> Iterator[Path]:
-    """A browser profile directory of its own, removed on exit once Chromium has let go of it.
+def remove_profile_tree(removal: ProfileRemoval) -> None:
+    """Retry `removal` until the tree it names stays gone.
 
     Terminating the browser waits for the browser process alone. Its renderer, GPU and
     crashpad helpers exit a moment later and can still be writing under ``Default/`` while the
     directory is removed, so one ``rmtree`` can find a directory refilled behind it and fail on
-    the final ``rmdir``. The removal is retried until the tree stays gone; a tree that never
-    does is left behind, with a warning naming what the last attempt ran into, rather than
-    failing the run over a temp directory.
+    the final ``rmdir``. A tree that never goes is left behind, with a warning naming what the last
+    attempt ran into, rather than failing the run over a temp directory.
     """
+    if poll_until(
+        removal.try_remove,
+        timeout=_PROFILE_CLEANUP_TIMEOUT_SECONDS,
+        poll_interval=_PROFILE_CLEANUP_POLL_SECONDS,
+    ):
+        return
+    logger.warning(
+        "Left the browser profile at {} behind after {}s of removals; the last one {}",
+        removal.directory,
+        _PROFILE_CLEANUP_TIMEOUT_SECONDS,
+        "failed with {}".format(removal.cause)
+        if removal.cause
+        else "reported no error, yet the directory is still there",
+    )
+
+
+@contextmanager
+def fresh_profile_dir() -> Iterator[Path]:
+    """A browser profile directory of its own, removed on exit once Chromium has let go of it."""
     profile_dir = Path(tempfile.mkdtemp(prefix="minds-evals-flow-lab-"))
     try:
         yield profile_dir
     finally:
-        removal = _ProfileRemoval(directory=profile_dir)
-        if not poll_until(
-            removal.try_remove,
-            timeout=_PROFILE_CLEANUP_TIMEOUT_SECONDS,
-            poll_interval=_PROFILE_CLEANUP_POLL_SECONDS,
-        ):
-            logger.warning(
-                "Left the browser profile at {} behind after {}s of removals; the last one {}",
-                profile_dir,
-                _PROFILE_CLEANUP_TIMEOUT_SECONDS,
-                "failed with {}".format(removal.cause)
-                if removal.cause
-                else "reported no error, yet the directory is still there",
-            )
+        remove_profile_tree(ProfileRemoval(directory=profile_dir))
 
 
 async def run_lab_flow(

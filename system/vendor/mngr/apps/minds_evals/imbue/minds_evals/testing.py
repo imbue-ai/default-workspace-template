@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -76,35 +77,94 @@ class LocalGitRepo(FrozenModel):
     commit_shas: tuple[str, ...] = Field(description="Every commit sha on 'main', oldest first")
 
 
+# The identity and timestamp every commit these helpers make carries. Fixed so the same content
+# produces the same sha on every machine and in every run, rather than a new one per second.
+_TEST_GIT_IDENTITY: Final[str] = "test"
+_TEST_GIT_EMAIL: Final[str] = "test@test"
+_TEST_GIT_DATE: Final[str] = "2020-01-01T00:00:00+00:00"
+
+
+def hermetic_git_environment() -> dict[str, str]:
+    """The caller's environment with git's own removed: no GIT_* it exported, no user or system config.
+
+    Git takes both its configuration and the repository it acts on from the environment, so a
+    throwaway repo built with whatever the caller had is not the same repo everywhere. A global
+    `core.hooksPath` or `init.templateDir` runs the developer's hooks inside these repos and fails
+    the command; and GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE -- which git exports around every
+    hook, `rebase -x` and `bisect run`, so a suite run from a pre-commit hook has them -- outrank
+    both `-C` and a `cd`, and would point `git add` at the real checkout. Dropping every GIT_* the
+    caller set, and pointing the config files at nothing, leaves git with only what is passed to it.
+
+    Who authors a commit is left open, because a production git command string chooses that for
+    itself; `isolated_git_environment` fixes an identity on top for the repos this module builds.
+    """
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+    )
+    return environment
+
+
+def isolated_git_environment() -> dict[str, str]:
+    """`hermetic_git_environment` plus the identity and timestamp the repos built here commit with."""
+    return {
+        **hermetic_git_environment(),
+        "GIT_AUTHOR_NAME": _TEST_GIT_IDENTITY,
+        "GIT_AUTHOR_EMAIL": _TEST_GIT_EMAIL,
+        "GIT_COMMITTER_NAME": _TEST_GIT_IDENTITY,
+        "GIT_COMMITTER_EMAIL": _TEST_GIT_EMAIL,
+        "GIT_AUTHOR_DATE": _TEST_GIT_DATE,
+        "GIT_COMMITTER_DATE": _TEST_GIT_DATE,
+    }
+
+
+def run_test_git(repo_dir: Path, *arguments: str) -> str:
+    """One git command inside `repo_dir`, run in the isolated environment, returning its stdout.
+
+    Build a test repository through here rather than through a `subprocess.run` of your own, so the
+    repo cannot come up with the developer's git configuration behind it. The exit code is checked,
+    so a command whose failure is the point of the test needs its own call.
+
+    A production git command string (`bash -c "... git commit ..."`) goes through
+    `run_test_git_script` instead, not through here: those strings set their identity with `-c
+    user.email=`, which the GIT_AUTHOR_* variables here outrank, so the test would end up asserting
+    on this identity instead of the one the production command chose.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(repo_dir), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=isolated_git_environment(),
+    )
+    return result.stdout.strip()
+
+
+def run_test_git_script(command: str) -> str:
+    """One production git command string through bash, returning its stdout verbatim.
+
+    The environment is hermetic but carries no identity, so the string's own `-c user.email=` is
+    what authors its commits and a test can assert on the identity the production command chose.
+    What the hermetic environment does take away is GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE, which
+    outrank the `cd` such a string opens with: without that, a suite run from inside a git hook has
+    `git add -A` staging into the real checkout instead of into the repo under test.
+    """
+    result = subprocess.run(
+        ["bash", "-c", command], check=True, capture_output=True, text=True, env=hermetic_git_environment()
+    )
+    return result.stdout
+
+
 def commit_readme_revision(repo_dir: Path, readme_content: str, message: str) -> str:
     """Rewrite README.md, commit it on the repo's current branch, and return the new commit's sha."""
     (repo_dir / "README.md").write_text(readme_content)
-    subprocess.run(["git", "-C", str(repo_dir), "add", "-A"], check=True)
-    # Identity and signing are set per invocation so the commit does not depend
-    # on the developer's global git config (a global commit.gpgsign would try to
-    # sign these throwaway commits and fail).
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo_dir),
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "-m",
-            message,
-        ],
-        check=True,
-    )
-    result = subprocess.run(
-        ["git", "-C", str(repo_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-    )
-    return result.stdout.strip()
+    run_test_git(repo_dir, "add", "-A")
+    run_test_git(repo_dir, "commit", "-q", "-m", message)
+    return run_test_git(repo_dir, "rev-parse", "HEAD")
 
 
 def make_local_git_repo(parent_dir: Path, repo_name: str, commit_count: int) -> LocalGitRepo:
@@ -112,7 +172,7 @@ def make_local_git_repo(parent_dir: Path, repo_name: str, commit_count: int) -> 
     checkout's content identifies which commit it is at."""
     repo_dir = parent_dir / repo_name
     repo_dir.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)], check=True)
+    run_test_git(repo_dir, "init", "-q", "-b", "main", ".")
     commit_shas = [
         commit_readme_revision(
             repo_dir, "{} revision {}\n".format(repo_name, commit_idx), "commit {}".format(commit_idx)
@@ -126,18 +186,12 @@ def tag_commit(repo_dir: Path, tag_name: str, commit_sha: str, *, is_annotated: 
     """Point a tag at a commit. An annotated tag is a tag OBJECT with its own sha, so only that kind
     exercises the peeling a ref resolver has to do to reach the commit."""
     annotation_args = ["-a", "-m", "release {}".format(tag_name)] if is_annotated else []
-    subprocess.run(
-        # Signing is disabled per invocation for the same reason commits disable it: a developer's
-        # global tag.gpgsign would otherwise try to sign these throwaway tags and fail.
-        ["git", "-C", str(repo_dir), "-c", "user.email=test@test", "-c", "user.name=test", "-c", "tag.gpgsign=false"]
-        + ["tag", *annotation_args, tag_name, commit_sha],
-        check=True,
-    )
+    run_test_git(repo_dir, "tag", *annotation_args, tag_name, commit_sha)
 
 
 def create_branch(repo_dir: Path, branch_name: str, commit_sha: str) -> None:
     """Point a new branch at a commit, leaving the checked-out branch alone."""
-    subprocess.run(["git", "-C", str(repo_dir), "branch", branch_name, commit_sha], check=True)
+    run_test_git(repo_dir, "branch", branch_name, commit_sha)
 
 
 def program_block(program: str, *registrations: tuple[str, str]) -> str:
@@ -1243,7 +1297,7 @@ def codex_skill_reading_program() -> str:
     return CODEX_SKILL_READING_PROGRAM_PATH.read_text()
 
 
-# --- one live behaviour cell per harness, as its trimmed job directory holds it ---
+# one live behaviour cell per harness, as its trimmed job directory holds it
 
 # The harnesses the behaviour family runs a cell on, as `configs/diagnostics/behaviour_harness_configs.json`
 # names them and as a checked-in job directory exists for each.

@@ -3,10 +3,11 @@
 
 Everything here runs commands inside the harbor environment (the box) or, bridged one level deeper
 via ``mngr exec``, inside the trial's nested workspace sandbox. The functions are async because
-harbor's environment API is async; this module and driver.py are the only async code in the app.
+harbor's environment API is async. Every wait here reads its deadline from, and sleeps on, the
+``ClockInterface`` its caller hands it rather than the ``time`` module, so a test can spend a budget
+in polls instead of in real seconds.
 """
 
-import asyncio
 import base64
 import json
 import re
@@ -30,6 +31,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.clock import ClockInterface
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
@@ -253,7 +255,8 @@ def build_box_env(
 ) -> dict[str, str]:
     """The env for the backend-start exec and every bridge exec: the minds activation exports (so
     exec'd mngr commands resolve the same Modal environment the backend uses), Modal auth, the
-    per-trial Modal user-id scope, and the provider disables the entrypoint would set."""
+    per-trial Modal user-id scope, the provider disables the entrypoint would set, and the Latchkey
+    counting opt-out."""
     env: dict[str, str] = dict(activation_env)
     env.update(
         {
@@ -265,6 +268,11 @@ def build_box_env(
             # template.
             "MINDS_MODAL_EXTRA_TEMPLATE": EVAL_WORKSPACE_TEMPLATE,
             "SKIP_AUTH": "1",
+            # A box is eval infrastructure, not a Minds install, so it must not count toward
+            # Latchkey's usage. It boots the real desktop stack, which always spawns
+            # "mngr latchkey forward" and, through it, a "latchkey gateway"; that gateway inherits
+            # this env and so skips the per-host daily ping it would otherwise emit.
+            "LATCHKEY_DISABLE_COUNTING": "1",
         }
     )
     for provider in _DISABLED_PROVIDERS:
@@ -450,6 +458,7 @@ async def create_workspace_and_wait(
     env: dict[str, str],
     port: str,
     payload: dict[str, str],
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str:
@@ -466,13 +475,13 @@ async def create_workspace_and_wait(
         raise WorkspaceCreateError("create returned no operation_id: {}".format(body))
 
     last_stage = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         status, info = await _box_curl_json(
             environment, env, "GET", "{}/api/v1/workspaces/operations/create/{}".format(base_url, operation_id), None
         )
         if status == 0:
             # Transient blip (backend busy, connection dropped) -- keep polling.
-            await asyncio.sleep(poll_seconds)
+            await clock.sleep(poll_seconds)
             continue
         stage = str(info.get("status_text") or info.get("status") or "")
         if stage and stage != last_stage:
@@ -487,7 +496,7 @@ async def create_workspace_and_wait(
             return agent_id
         if info.get("error"):
             raise WorkspaceCreateError(str(info["error"]))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     raise WorkspaceCreateError("timed out waiting for workspace create")
 
 
@@ -743,6 +752,7 @@ async def fetch_chat_agent_id(
     env: dict[str, str],
     workspace_agent_id: str,
     display_name: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
@@ -753,7 +763,7 @@ async def fetch_chat_agent_id(
     no chat at all gets its chat from ``create_chat_agent``.
     """
     heartbeat = WaitHeartbeat(label="the workspace chat agent to appear in the agents listing")
-    while time.time() < deadline:
+    while clock.now() < deadline:
         body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
         agents = body.get("agents") if isinstance(body, dict) else None
         if isinstance(agents, list):
@@ -761,7 +771,7 @@ async def fetch_chat_agent_id(
             if chat_agent_id is not None:
                 return chat_agent_id
         heartbeat.tick(describe_agents_listing(body))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return None
 
 
@@ -771,6 +781,7 @@ async def create_chat_agent(
     workspace_agent_id: str,
     display_name: str,
     account_id: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
@@ -798,7 +809,7 @@ async def create_chat_agent(
     payload = json.dumps(request_body)
     heartbeat = WaitHeartbeat(label="the workspace's create-chat endpoint to answer")
     unanswered_detail = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CREATE_CHAT_PATH, payload)
         body = response.body if isinstance(response.body, dict) else {}
         if response.status == 0:
@@ -807,7 +818,7 @@ async def create_chat_agent(
             # failing.
             unanswered_detail = response.text or unanswered_detail
             heartbeat.tick(unanswered_detail or "nothing readable from {}".format(CREATE_CHAT_PATH))
-            await asyncio.sleep(poll_seconds)
+            await clock.sleep(poll_seconds)
             continue
         if response.is_ok:
             chat_id = body.get("chat_id")
@@ -824,7 +835,7 @@ async def create_chat_agent(
                 str(body.get("detail") or "")[:200],
             )
             resolved_agent_id = await fetch_chat_agent_id(
-                environment, env, workspace_agent_id, display_name, deadline, poll_seconds
+                environment, env, workspace_agent_id, display_name, clock, deadline, poll_seconds
             )
             if resolved_agent_id is None:
                 logger.error(
@@ -873,6 +884,7 @@ async def wait_for_auth_endpoint(
     environment: BaseEnvironment,
     env: dict[str, str],
     workspace_agent_id: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -887,12 +899,12 @@ async def wait_for_auth_endpoint(
     less legible.
     """
     heartbeat = WaitHeartbeat(label="the workspace's claude-auth endpoint")
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
         if response.is_ok and isinstance(response.body, dict):
             return True
         heartbeat.tick("status {} from {}".format(response.status, CLAUDE_AUTH_STATUS_PATH))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -1035,6 +1047,7 @@ async def sign_in_via_accounts_flow(
     lane_id: str,
     api_key: str,
     key_provider: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> AccountSignIn:
@@ -1077,9 +1090,9 @@ async def sign_in_via_accounts_flow(
 
     heartbeat = WaitHeartbeat(label="the sign-in on lane {} to settle".format(lane_id))
     sign_in = _read_account_flow_answer(response, lane_id, api_key)
-    while sign_in is None and time.time() < deadline:
+    while sign_in is None and clock.now() < deadline:
         heartbeat.tick(redact_secret(_response_detail(response), api_key)[:200])
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
         response = await workspace_curl(environment, env, workspace_agent_id, flow_path, None)
         sign_in = _read_account_flow_answer(response, lane_id, api_key)
     if sign_in is None:
@@ -1331,6 +1344,7 @@ async def wait_for_proxy(
     environment: BaseEnvironment,
     env: dict[str, str],
     port: int,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -1338,11 +1352,11 @@ async def wait_for_proxy(
     command = "curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 http://127.0.0.1:{}/health/liveliness".format(
         port
     )
-    while time.time() < deadline:
+    while clock.now() < deadline:
         result = await run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
         if (result.stdout or "").strip().endswith("200"):
             return True
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -1390,18 +1404,19 @@ async def wait_for_chat_state(
     chat_agent_id: str,
     *,
     is_waiting_desired: bool,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
     """Block until the chat agent is WAITING (True) or has left WAITING (False), same gating the old
     in-workspace worker used."""
     heartbeat = WaitHeartbeat(label="the chat agent to {} WAITING".format("reach" if is_waiting_desired else "leave"))
-    while time.time() < deadline:
+    while clock.now() < deadline:
         state = await fetch_chat_agent_state(environment, env, workspace_agent_id, chat_agent_id)
         if state is not None and (state == "WAITING") == is_waiting_desired:
             return True
         heartbeat.tick("state={}".format(state or "unreachable"))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -1411,6 +1426,7 @@ async def send_chat_message(
     workspace_agent_id: str,
     chat_agent_id: str,
     message: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -1432,7 +1448,7 @@ async def send_chat_message(
     body_json = json.dumps({"message": message})
     url_path = "/api/chats/{}/message".format(chat_agent_id)
     refusal_detail = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
         if response.is_ok:
             return True
@@ -1448,7 +1464,7 @@ async def send_chat_message(
             logger.warning("The workspace has not taken the message yet ({})", detail)
         # An attempt that says nothing must not erase what an earlier one said.
         refusal_detail = detail or refusal_detail
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     logger.error("The workspace never took the message ({})", refusal_detail or "it never answered")
     return False
 

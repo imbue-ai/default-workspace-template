@@ -6,7 +6,6 @@ bring-up and turn loop can be exercised end to end."""
 
 import asyncio
 import json
-import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -18,6 +17,7 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.testing import hermetic_git_environment
 
 
 class ScriptedExecRule:
@@ -438,11 +438,6 @@ class MockBoxEnvironment(BaseEnvironment):
         return ok_result()
 
 
-# The version-control configuration a local shell command runs with: none of the developer's own, so a
-# global commit-signing setting or hooks path cannot change what a box command does to a test repository.
-_ISOLATED_VCS_ENV: Final[Mapping[str, str]] = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-
-
 class LocalShellEnvironment(BaseEnvironment):
     """A box environment whose exec runs each command in a local bash, for tests that need a box
     command's real effect on a local repository rather than a canned answer."""
@@ -498,7 +493,10 @@ class LocalShellEnvironment(BaseEnvironment):
             "-c",
             command,
             cwd=cwd,
-            env={**os.environ, **_ISOLATED_VCS_ENV, **(env or {})},
+            # Hermetic, so none of the developer's git configuration -- a commit-signing setting, a
+            # hooks path -- and none of the GIT_* a hook exports can change what a box command does
+            # to a test repository. The box env the caller passes still wins over it.
+            env={**hermetic_git_environment(), **(env or {})},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

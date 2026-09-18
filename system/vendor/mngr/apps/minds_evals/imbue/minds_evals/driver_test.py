@@ -20,6 +20,7 @@ from imbue.minds_evals import diagnostic_probe
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.clock import ClockInterface
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -113,6 +114,7 @@ from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.generate import MINDS_EVALS_PROJECT_ROOT
 from imbue.minds_evals.generate import oracle_entry_records
+from imbue.minds_evals.mock_clock_test import ManualClock
 from imbue.minds_evals.mock_environment_test import ConversationModel
 from imbue.minds_evals.mock_environment_test import LocalShellEnvironment
 from imbue.minds_evals.mock_environment_test import MOCK_ACCOUNT_ID
@@ -137,8 +139,11 @@ from imbue.minds_evals.testing import atif_stream_jsonl
 from imbue.minds_evals.testing import captured_transcript_downloads
 from imbue.minds_evals.testing import commit_readme_revision
 from imbue.minds_evals.testing import file_inventory_output
+from imbue.minds_evals.testing import isolated_git_environment
 from imbue.minds_evals.testing import make_local_git_repo
 from imbue.minds_evals.testing import program_block
+from imbue.minds_evals.testing import run_test_git
+from imbue.minds_evals.testing import run_test_git_script
 from imbue.minds_evals.testing import tickets_capture_output
 from imbue.minds_evals.testing import transcript_capture_output
 from imbue.minds_evals.testing import worker_capture_output
@@ -471,11 +476,6 @@ def test_conversation_seconds_is_zero_until_a_turn_has_been_answered() -> None:
     assert conversation_seconds([]) == 0.0
 
 
-def _git_output(repo_dir: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(repo_dir), *args], check=True, capture_output=True, text=True)
-    return result.stdout.strip()
-
-
 def test_build_eval_base_clone_command_lands_the_pinned_sha_on_a_real_branch(tmp_path: Path) -> None:
     # Pinned to the middle commit: a command that resolved the branch instead of
     # the sha would land on the tip.
@@ -489,31 +489,31 @@ def test_build_eval_base_clone_command_lands_the_pinned_sha_on_a_real_branch(tmp
         dwt_sha=pinned_sha,
         eval_base_dir=str(eval_base_dir),
     )
-    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+    run_test_git_script(command)
 
-    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    assert run_test_git(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
     # A named branch, not a detached HEAD: every downstream clone takes its
     # checkout from this HEAD, and the workspace is created with an empty branch
     # field, meaning "whatever HEAD is".
-    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert run_test_git(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
 
     # The per-case clone, then mngr's clone of that, must come out populated at the pin.
     case_clone_dir = tmp_path / "case-clone"
-    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(case_clone_dir)], check=True)
+    run_test_git(case_clone_dir.parent, "clone", "-q", str(eval_base_dir), str(case_clone_dir))
     workspace_clone_dir = tmp_path / "workspace-clone"
-    subprocess.run(["git", "clone", "-q", str(case_clone_dir), str(workspace_clone_dir)], check=True)
+    run_test_git(workspace_clone_dir.parent, "clone", "-q", str(case_clone_dir), str(workspace_clone_dir))
 
     assert (workspace_clone_dir / "README.md").read_text() == "fake-dwt revision 1\n"
-    assert _git_output(workspace_clone_dir, "rev-parse", "HEAD") == pinned_sha
-    assert _git_output(workspace_clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert run_test_git(workspace_clone_dir, "rev-parse", "HEAD") == pinned_sha
+    assert run_test_git(workspace_clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
 def test_build_eval_base_clone_command_pins_a_sha_off_a_non_default_branch(tmp_path: Path) -> None:
     """A dwt branch other than the remote's default must still be reachable in the box clone."""
     source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
-    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "-b", "codex/harness"], check=True)
+    run_test_git(source.repo_dir, "checkout", "-q", "-b", "codex/harness")
     pinned_sha = commit_readme_revision(source.repo_dir, "side branch\n", "side")
-    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "main"], check=True)
+    run_test_git(source.repo_dir, "checkout", "-q", "main")
     eval_base_dir = tmp_path / "eval-base"
 
     command = build_eval_base_clone_command(
@@ -522,10 +522,10 @@ def test_build_eval_base_clone_command_pins_a_sha_off_a_non_default_branch(tmp_p
         dwt_sha=pinned_sha,
         eval_base_dir=str(eval_base_dir),
     )
-    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+    run_test_git_script(command)
 
-    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
-    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "codex/harness"
+    assert run_test_git(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    assert run_test_git(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "codex/harness"
     assert (eval_base_dir / "README.md").read_text() == "side branch\n"
 
 
@@ -538,19 +538,13 @@ def _prepare_eval_base(tmp_path: Path) -> tuple[Path, Path, str]:
     source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
     pinned_sha = commit_readme_revision(source.repo_dir, "pinned\n", "pin")
     eval_base_dir = tmp_path / "eval-base"
-    subprocess.run(
-        [
-            "bash",
-            "-c",
-            build_eval_base_clone_command(
-                dwt_repo=str(source.repo_dir), dwt_branch="main", dwt_sha=pinned_sha, eval_base_dir=str(eval_base_dir)
-            ),
-        ],
-        check=True,
-        capture_output=True,
+    run_test_git_script(
+        build_eval_base_clone_command(
+            dwt_repo=str(source.repo_dir), dwt_branch="main", dwt_sha=pinned_sha, eval_base_dir=str(eval_base_dir)
+        )
     )
     clone_dir = tmp_path / "case-clone"
-    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(clone_dir)], check=True)
+    run_test_git(clone_dir.parent, "clone", "-q", str(eval_base_dir), str(clone_dir))
     return eval_base_dir, clone_dir, pinned_sha
 
 
@@ -559,14 +553,9 @@ def test_clone_prep_answers_both_shas_the_captured_bundle_is_replayed_from(tmp_p
     # eval base's HEAD, which is what makes the bundle's base reproducible from the dwt tip.
     eval_base_dir, clone_dir, pinned_sha = _prepare_eval_base(tmp_path)
 
-    result = subprocess.run(
-        ["bash", "-c", build_clone_probe_command(str(clone_dir), str(eval_base_dir))],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    probe_output = run_test_git_script(build_clone_probe_command(str(clone_dir), str(eval_base_dir)))
 
-    sections = evidence_collection.split_sections(result.stdout)
+    sections = evidence_collection.split_sections(probe_output)
     assert sections["dwt_tip_sha"].strip() == pinned_sha
     assert sections["base_sha"].strip() == pinned_sha
 
@@ -779,6 +768,18 @@ _TRIAL_API_KEY: Final[str] = "sk-eval-test"
 _OPENAI_TRIAL_API_KEY: Final[str] = "sk-eval-test-openai"
 
 
+# What a trial on the real clock polls at: far faster than production, so a test that waits a budget
+# out does not wait it out in real seconds. A trial handed a manual clock polls at the interval
+# production uses instead -- there the wait costs nothing, and its budget then reads as the minutes
+# it stands for.
+_REAL_POLL_SECONDS: Final[float] = 0.01
+_VIRTUAL_POLL_SECONDS: Final[float] = 5.0
+# The budget a trial on virtual time runs under. Time moves only when the driver polls, so this is a
+# count of polls -- enough to carry the whole workspace bring-up and still leave the wait each of
+# these tests is about a long run of polls of its own.
+_VIRTUAL_BUDGET_SECONDS: Final[float] = _VIRTUAL_POLL_SECONDS * 120
+
+
 def _driver_kwargs(
     tmp_path: Path,
     trial_name: str,
@@ -787,6 +788,7 @@ def _driver_kwargs(
     extra_env: dict[str, str] | None = None,
     user_id_prefix: str = "",
     harness_kwargs: dict[str, Any] | None = None,
+    clock: ClockInterface | None = None,
 ) -> dict[str, Any]:
     """The kwargs every driver in this file is built with.
 
@@ -796,13 +798,17 @@ def _driver_kwargs(
     the trial's user id from. Pass `extra_env` only to vary the environment a test is about -- an
     empty mapping is a trial with no key to sign in with -- and `harness_kwargs` only to run the
     trial on a harness config other than the default one, which asks the workspace for nothing.
+
+    Pass a `ManualClock` for any test whose trial is meant to reach a deadline: the poll interval
+    goes with the clock, because the two together are what decides how many polls a budget buys.
     """
     logs_dir = tmp_path / "jobs" / trial_name / "agent"
     logs_dir.mkdir(parents=True)
     return {
         "logs_dir": logs_dir,
         "modal_config_path": str(_write_modal_config(tmp_path)),
-        "poll_seconds": 0.01,
+        "clock": clock,
+        "poll_seconds": _REAL_POLL_SECONDS if clock is None else _VIRTUAL_POLL_SECONDS,
         "proxy": is_proxy_enabled,
         "snapshot_mode": snapshot_mode,
         "user_id_prefix": user_id_prefix,
@@ -819,11 +825,12 @@ def _make_driver(
     extra_env: dict[str, str] | None = None,
     user_id_prefix: str = "",
     harness_kwargs: dict[str, Any] | None = None,
+    clock: ClockInterface | None = None,
 ) -> MindsPersonaDriver:
     """The production driver, for tests that let it resolve its own turn sources."""
     return MindsPersonaDriver(
         **_driver_kwargs(
-            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs
+            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs, clock
         )
     )
 
@@ -837,12 +844,13 @@ def _make_scripted_driver(
     extra_env: dict[str, str] | None = None,
     user_id_prefix: str = "",
     harness_kwargs: dict[str, Any] | None = None,
+    clock: ClockInterface | None = None,
 ) -> ScriptedSourceDriver:
     """The same driver with its turn sources supplied, so the loop runs without any model call."""
     return ScriptedSourceDriver(
         scripted_sources,
         **_driver_kwargs(
-            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs
+            tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix, harness_kwargs, clock
         ),
     )
 
@@ -863,6 +871,7 @@ def _run_driver(
     snapshot_mode: str = "per-turn",
     harness_kwargs: dict[str, Any] | None = None,
     extra_env: dict[str, str] | None = None,
+    clock: ClockInterface | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     driver = (
         _make_driver(
@@ -873,6 +882,7 @@ def _run_driver(
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
             extra_env=extra_env,
+            clock=clock,
         )
         if scripted_sources is None
         else _make_scripted_driver(
@@ -884,6 +894,7 @@ def _run_driver(
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
             extra_env=extra_env,
+            clock=clock,
         )
     )
     environment = MockBoxEnvironment(
@@ -1069,10 +1080,8 @@ def test_driver_marks_timed_out_when_the_created_chat_never_becomes_ready(tmp_pa
         ("Build it",),
         conversation,
         trial_name="todo-app__chat4",
-        # This test asserts the trial got as far as creating the chat, so the whole bring-up has to
-        # fit inside the deadline rather than merely being allowed to. The chat is pinned to
-        # STARTING, so the deadline still ends it.
-        timeout_seconds=2.0,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     assert conversation.is_chat_created
@@ -1111,7 +1120,8 @@ def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path:
         ("Build it",),
         conversation,
         trial_name="todo-app__auth2",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     # An unauthenticated workspace can never take a turn, so the trial fails at the gate rather
@@ -1137,8 +1147,9 @@ def test_driver_records_the_modal_environment_it_leaks_before_the_first_turn(tmp
         ("Build it",),
         conversation,
         trial_name="todo-app__envrec",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         user_id_prefix="ci-20260901t120000z-",
+        clock=ManualClock(),
     )
 
     assert context.metadata is not None
@@ -1161,8 +1172,9 @@ def test_driver_names_the_workspace_after_the_trial_even_under_a_run_wide_prefix
         ("Build it",),
         conversation,
         trial_name="todo-app__hostname",
-        timeout_seconds=30.0,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         user_id_prefix="ci-20260901t120000z-",
+        clock=ManualClock(),
     )
 
     assert context.metadata is not None
@@ -1278,7 +1290,8 @@ def test_driver_records_no_turn_for_a_message_that_never_drew_a_reply(tmp_path: 
         ("Build it",),
         conversation,
         trial_name="todo-app__turns2",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -1381,7 +1394,7 @@ def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Pa
 
 
 def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
-    # The agent echoes the user message but never produces a reply, so the tiny budget expires.
+    # The agent echoes the user message but never produces a reply, so the budget expires.
     conversation = ConversationModel(
         chat_agent_id="chat-1",
         turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
@@ -1391,7 +1404,8 @@ def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
         ("Build it",),
         conversation,
         trial_name="todo-app__timeout1",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -1823,9 +1837,10 @@ def test_driver_writes_no_trajectory_when_the_only_document_cannot_reach_the_box
         ("Build it",),
         conversation,
         trial_name="todo-app__publish2",
-        timeout_seconds=2.0,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         downloadable_content_by_source=captured_transcript_downloads(),
         rejected_upload_content_substring="workspace_note",
+        clock=ManualClock(),
     )
 
     assert context.metadata is not None
@@ -1915,8 +1930,9 @@ def test_driver_skips_the_expectation_probes_on_a_timed_out_trial(tmp_path: Path
         ("Build it",),
         conversation,
         trial_name="todo-app__evidence2",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         expectations=expectations,
+        clock=ManualClock(),
     )
 
     # The gates already zero a timed-out trial, so only the cheap always-on capture runs.
@@ -1971,17 +1987,10 @@ def test_eval_case_commit_is_reproducible(tmp_path: Path) -> None:
     for attempt in ("first", "second"):
         repo = tmp_path / attempt
         repo.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        run_test_git(repo, "init", "-q", "-b", "main", ".")
         (repo / "app.py").write_text("print('hi')\n")
-        subprocess.run(
-            ["bash", "-c", build_eval_case_commit_command(str(repo), "eval case todo-app")],
-            check=True,
-        )
-        shas.append(
-            subprocess.run(
-                ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-            ).stdout.strip()
-        )
+        run_test_git_script(build_eval_case_commit_command(str(repo), "eval case todo-app"))
+        shas.append(run_test_git(repo, "rev-parse", "HEAD"))
 
     assert shas[0] == shas[1]
 
@@ -2194,13 +2203,14 @@ def _run_goal_driver(
     snapshot_mode: str = "per-turn",
     timeout_seconds: float = 1800.0,
     refused_send_index: int | None = None,
+    clock: ClockInterface | None = None,
     events_poll_failing_after_message: int | None = None,
 ) -> tuple[ScriptedTurnSource, MockBoxEnvironment, AgentContext]:
     """Drive a two-entry case -- the opening literal ask, then one scripted goal entry -- through the
     real conversation loop, and hand back the goal source so a test can assert on what it was asked.
 
-    The timing-out paths each have their own knob. A `refused_send_index` plus a tiny `timeout_seconds`
-    reaches the send that never lands: the trial's budget expires retrying it. An
+    The timing-out paths each have their own knob. A `refused_send_index` plus a `ManualClock` reaches
+    the send that never lands: the trial's budget expires, poll by poll, retrying it. An
     `events_poll_failing_after_message` reaches the message that went out and drew no reply with no
     budget in play: the events poll stops answering once that message went out, and the driver gives
     up on the reply after a run of failed polls.
@@ -2223,6 +2233,7 @@ def _run_goal_driver(
         timeout_seconds=timeout_seconds,
         scripted_sources=sources,
         snapshot_mode=snapshot_mode,
+        clock=clock,
     )
     return goal_source, environment, context
 
@@ -2423,9 +2434,10 @@ def test_driver_audits_a_message_that_never_reached_the_workspace_as_unsent(tmp_
         actions=[say("Where is it?")],
         replies=("Building it.", "Nearly."),
         is_decider_call_simulated=True,
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
         # The goal entry's message is the second the run sends, and it is the one the workspace
-        # never accepts, so the trial's tiny budget expires retrying it.
+        # never accepts, so the trial's budget expires retrying it.
         refused_send_index=2,
     )
 
@@ -2704,6 +2716,7 @@ def _run_stepped_driver(
     downloadable_content_by_source: dict[str, str] | None = None,
     harness_kwargs: dict[str, Any] | None = None,
     is_diagnostic_probe_run_by_step: tuple[bool, ...] = (),
+    clock: ClockInterface | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, list[AgentContext]]:
     """Drive the driver the way MultiStepTrial does: one setup, then one run() per step, against the
     same driver instance and a fresh AgentContext each time.
@@ -2713,7 +2726,7 @@ def _run_stepped_driver(
     probe unless `is_diagnostic_probe_run_by_step` says so."""
     probe_by_step = is_diagnostic_probe_run_by_step or tuple(False for _ in step_prompts)
     driver = _make_scripted_driver(
-        tmp_path, trial_name, [], is_proxy_enabled=is_proxy_enabled, harness_kwargs=harness_kwargs
+        tmp_path, trial_name, [], is_proxy_enabled=is_proxy_enabled, harness_kwargs=harness_kwargs, clock=clock
     )
     environment = MockBoxEnvironment(
         tmp_path, rules if rules is not None else _setup_rules(), conversation=conversation
@@ -2913,9 +2926,10 @@ def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Pat
     conversation = ConversationModel(
         chat_agent_id="chat-1",
         turn_reply_events=[_reply_events("On it."), _reply_events("Done.")],
-        # Everything a mock trial does is instant, so without a wait the two figures would round to
-        # the same zero whether or not the per-step clock was ever restarted. The welcome runs
-        # inside the FIRST step, which is exactly the span the second step must not be charged for.
+        # A mock trial does everything instantly, so without a wait the two figures would round to
+        # the same zero whether or not the per-step clock was ever restarted. Waiting the welcome
+        # out is what puts time on the trial, and it runs inside the FIRST step -- exactly the span
+        # the second step must not be charged for.
         welcome_delay_polls=30,
     )
     _driver, environment, _contexts = _run_stepped_driver(
@@ -2923,6 +2937,7 @@ def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Pat
         (("Build it",), ("Ship it",)),
         conversation,
         trial_name="project-roadmap__elapsed1",
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -3123,7 +3138,7 @@ def test_driver_does_not_re_enter_a_later_step_after_giving_up(tmp_path: Path) -
         # No reply to the first message, so the first step times out waiting for one.
         turn_reply_events=[[]],
     )
-    driver = _make_scripted_driver(tmp_path, "project-roadmap__step4", [])
+    driver = _make_scripted_driver(tmp_path, "project-roadmap__step4", [], clock=ManualClock())
     environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=conversation)
     state_uploads_by_step: list[int] = []
 
@@ -3132,10 +3147,10 @@ def test_driver_does_not_re_enter_a_later_step_after_giving_up(tmp_path: Path) -
         for index, prompt in enumerate(("Build it", "Ship it")):
             driver._scripted_sources = [LiteralTurnSource(prompt=prompt)]
             await driver.run(
-                # Matches the file's other timeout tests. The budget also caps workspace
-                # preparation, which happens before the first message, so a tighter one turns a
-                # slow CI box into "the chat agent was never created" instead of "no reply came".
-                _instruction_for(_step_case_config((prompt,), index, 2, timeout_seconds=0.3)),
+                # The budget also caps workspace preparation, which happens before the first
+                # message, so it has to be wide enough for the whole bring-up as well as for the
+                # reply that never comes.
+                _instruction_for(_step_case_config((prompt,), index, 2, timeout_seconds=_VIRTUAL_BUDGET_SECONDS)),
                 environment,
                 AgentContext(),
             )
@@ -3168,8 +3183,9 @@ def test_a_step_that_collected_nothing_does_not_publish_an_earlier_steps_capture
         (("Build it",), ("Ship it",)),
         conversation,
         trial_name="project-roadmap__capture1",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         downloadable_content_by_source=captured_transcript_downloads(),
+        clock=ManualClock(),
     )
 
     assert contexts[0].metadata is not None
@@ -3184,14 +3200,16 @@ def test_a_step_that_gave_up_tears_the_workspace_down_itself(tmp_path: Path) -> 
     run() the moment a step misses its min_reward -- which a timed-out step's zeroed gates do. With
     teardown reserved for the final step, an aborted trial would leave them running for nobody."""
     conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[[]])
-    driver = _make_scripted_driver(tmp_path, "project-roadmap__abort1", [LiteralTurnSource(prompt="Build it")])
+    driver = _make_scripted_driver(
+        tmp_path, "project-roadmap__abort1", [LiteralTurnSource(prompt="Build it")], clock=ManualClock()
+    )
     environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=conversation)
 
     async def _drive() -> None:
         await driver.setup(environment)
         # The FIRST of three steps, so nothing about being last can explain the teardown below.
         await driver.run(
-            _instruction_for(_step_case_config(("Build it",), 0, 3, timeout_seconds=0.3)),
+            _instruction_for(_step_case_config(("Build it",), 0, 3, timeout_seconds=_VIRTUAL_BUDGET_SECONDS)),
             environment,
             AgentContext(),
         )
@@ -3378,7 +3396,12 @@ def test_state_names_the_last_preparation_stage_a_trial_reached(tmp_path: Path) 
     """The welcome never lands, so the chat was created and the trial stopped there."""
     conversation = _one_turn_conversation(welcome_delay_polls=1_000_000)
     _driver, environment, _context = _run_driver(
-        tmp_path, ("Build it",), conversation, trial_name="todo-app__stage1", timeout_seconds=2.0
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__stage1",
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -3399,7 +3422,12 @@ def test_state_names_the_sign_in_as_not_reached_when_the_workspace_refuses_it(tm
     conversation = _one_turn_conversation()
     conversation.is_auth_endpoint_up = False
     _driver, environment, _context = _run_driver(
-        tmp_path, ("Build it",), conversation, trial_name="todo-app__stage3", timeout_seconds=0.5
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__stage3",
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -3484,7 +3512,7 @@ def test_state_records_the_messages_the_client_sent_and_the_decider_calls_behind
     assert state["decider_call_count"] == 2
 
 
-# --- the diagnostic probe and the feed's tool inputs ---
+# the diagnostic probe and the feed's tool inputs
 
 # What the diagnostic probe prints over a workspace that holds nothing, run to its end.
 _EMPTY_PROBE_OUTPUT: Final[str] = (
@@ -3684,7 +3712,12 @@ def test_driver_records_why_it_gave_up_on_a_workspace_that_never_became_usable(t
     # chat the trial would drive can never be created.
     conversation.is_agents_endpoint_up = False
     driver, environment, _context = _run_driver(
-        tmp_path, ("Build it",), conversation, trial_name="todo-app__unready1", timeout_seconds=0.3
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__unready1",
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -3707,7 +3740,12 @@ def test_driver_records_a_welcome_that_never_arrived_as_a_preparation_failure(tm
     # More polls than the budget allows, so the welcome never lands.
     conversation = _one_turn_conversation(welcome_delay_polls=1_000_000)
     driver, environment, _context = _run_driver(
-        tmp_path, ("Build it",), conversation, trial_name="todo-app__welcome1", timeout_seconds=2.0
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__welcome1",
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     assert conversation.is_chat_created
@@ -3753,7 +3791,12 @@ def test_driver_carries_the_timeout_reason_into_the_metadata_and_the_state(tmp_p
         turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
     )
     _driver, environment, context = _run_driver(
-        tmp_path, ("Build it",), conversation, trial_name="todo-app__reason1", timeout_seconds=0.3
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__reason1",
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
+        clock=ManualClock(),
     )
 
     assert context.metadata is not None
@@ -3777,8 +3820,9 @@ def test_driver_captures_what_the_workspace_looked_like_when_it_gave_up(tmp_path
         ("Build it",),
         conversation,
         trial_name="todo-app__diag1",
-        timeout_seconds=0.3,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         rules=rules,
+        clock=ManualClock(),
     )
 
     diagnostics = json.loads((driver.logs_dir / TIMEOUT_DIAGNOSTICS_FILENAME).read_text())
@@ -3800,7 +3844,7 @@ def test_driver_records_a_failed_capture_instead_of_losing_the_whole_bundle(tmp_
         chat_agent_id="chat-1",
         turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
     )
-    driver = _make_driver(tmp_path, "todo-app__diag2")
+    driver = _make_driver(tmp_path, "todo-app__diag2", clock=ManualClock())
     environment = MockBoxEnvironment(
         tmp_path, _setup_rules(), conversation=conversation, raising_substrings=("tail -c",)
     )
@@ -3808,7 +3852,9 @@ def test_driver_records_a_failed_capture_instead_of_losing_the_whole_bundle(tmp_
     async def _drive() -> None:
         await driver.setup(environment)
         await driver.run(
-            _instruction_for(_case_config(("Build it",), timeout_seconds=0.3)), environment, AgentContext()
+            _instruction_for(_case_config(("Build it",), timeout_seconds=_VIRTUAL_BUDGET_SECONDS)),
+            environment,
+            AgentContext(),
         )
 
     asyncio.run(_drive())
@@ -3906,7 +3952,7 @@ def test_concurrent_trials_do_not_write_into_each_others_logs(tmp_path: Path) ->
     assert "Build alpha" not in beta_log.read_text()
 
 
-# --- the step boundary, the driver's own view, and the instruction ---
+# the step boundary, the driver's own view, and the instruction
 
 
 def test_each_step_marks_its_boundary_as_a_system_step(tmp_path: Path) -> None:
@@ -4581,8 +4627,9 @@ def test_driver_gives_up_when_the_chat_never_settles_after_the_switch(tmp_path: 
         ("Build it",),
         conversation,
         trial_name="todo-app__arm5",
-        timeout_seconds=2.0,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         harness_kwargs={"model": "haiku", "effort": "medium"},
+        clock=ManualClock(),
     )
 
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
@@ -4927,7 +4974,7 @@ def test_driver_embeds_an_unidentified_worker_built_from_its_stream(tmp_path: Pa
     ]
 
 
-# --- seeding ---
+# seeding
 
 _SEED_APP = StepBoxSeedApp(name="todo-fixture", port=8090, box_path="/work/step_seeds/instrument")
 _SEED_COMMIT_SHA: Final[str] = "5" * 40
@@ -5065,37 +5112,27 @@ def test_seed_status_command_asks_supervisord_about_the_seeded_program_alone() -
 def _prepare_seed_template_eval_base(tmp_path: Path, supervisord_conf: str) -> tuple[Path, str]:
     template_dir = tmp_path / "template"
     template_dir.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(template_dir)], check=True)
+    run_test_git(template_dir, "init", "-q", "-b", "main", ".")
     (template_dir / "system").mkdir()
     (template_dir / "system" / "supervisord.conf").write_text(supervisord_conf)
     dwt_sha = commit_readme_revision(template_dir, "template\n", "template")
     eval_base_dir = tmp_path / "eval-base"
-    subprocess.run(
-        [
-            "bash",
-            "-c",
-            build_eval_base_clone_command(
-                dwt_repo=str(template_dir), dwt_branch="main", dwt_sha=dwt_sha, eval_base_dir=str(eval_base_dir)
-            ),
-        ],
-        check=True,
-        capture_output=True,
+    run_test_git_script(
+        build_eval_base_clone_command(
+            dwt_repo=str(template_dir), dwt_branch="main", dwt_sha=dwt_sha, eval_base_dir=str(eval_base_dir)
+        )
     )
     return eval_base_dir, dwt_sha
 
 
 def _prepare_case_clone(eval_base_dir: Path, clone_dir: Path, case_base_files: dict[str, str]) -> str:
     """A case clone at its eval-case commit, which also carries `case_base_files`; returns the case base."""
-    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(clone_dir)], check=True)
+    run_test_git(clone_dir.parent, "clone", "-q", str(eval_base_dir), str(clone_dir))
     for relative_path, content in {"system/vendor/mngr/README.md": "the mngr under test\n", **case_base_files}.items():
         (clone_dir / relative_path).parent.mkdir(parents=True, exist_ok=True)
         (clone_dir / relative_path).write_text(content)
-    subprocess.run(
-        ["bash", "-c", build_eval_case_commit_command(str(clone_dir), "eval case instrument")],
-        check=True,
-        capture_output=True,
-    )
-    return _git_output(clone_dir, "rev-parse", "HEAD")
+    run_test_git_script(build_eval_case_commit_command(str(clone_dir), "eval case instrument"))
+    return run_test_git(clone_dir, "rev-parse", "HEAD")
 
 
 def _build_real_seed(
@@ -5116,11 +5153,11 @@ def _build_real_seed(
 
 
 def _assert_clone_is_clean_at(clone_dir: Path, worktree_dir: Path, expected_head: str) -> None:
-    assert _git_output(clone_dir, "rev-parse", "HEAD") == expected_head
-    assert _git_output(clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
-    assert _git_output(clone_dir, "status", "--porcelain") == ""
+    assert run_test_git(clone_dir, "rev-parse", "HEAD") == expected_head
+    assert run_test_git(clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert run_test_git(clone_dir, "status", "--porcelain") == ""
     assert not worktree_dir.exists()
-    assert _git_output(clone_dir, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert run_test_git(clone_dir, "worktree", "list", "--porcelain").count("worktree ") == 1
 
 
 def test_a_clean_seed_build_merges_the_seed_commit_onto_the_case_base_reproducibly(tmp_path: Path) -> None:
@@ -5134,9 +5171,9 @@ def test_a_clean_seed_build_merges_the_seed_commit_onto_the_case_base_reproducib
     assert record.impossible_reason == ""
     _assert_clone_is_clean_at(clone_dir, tmp_path / "seed-worktree", record.seeded_sha)
     # The seeded SHA merges the seed, which is a commit on the template alone, onto the case base.
-    assert _git_output(clone_dir, "rev-parse", "HEAD^1") == case_base_sha
-    assert _git_output(clone_dir, "rev-parse", "HEAD^2") == record.seed_commit_sha
-    assert _git_output(clone_dir, "rev-parse", "{}^".format(record.seed_commit_sha)) == dwt_sha
+    assert run_test_git(clone_dir, "rev-parse", "HEAD^1") == case_base_sha
+    assert run_test_git(clone_dir, "rev-parse", "HEAD^2") == record.seed_commit_sha
+    assert run_test_git(clone_dir, "rev-parse", "{}^".format(record.seed_commit_sha)) == dwt_sha
     for fixture_file in ("index.html", "app.toml", "icon.svg"):
         assert (clone_dir / "system" / "fixtures" / "todo-fixture" / fixture_file).read_bytes() == (
             _TODO_FIXTURE_DIR / fixture_file
@@ -5169,8 +5206,13 @@ def test_a_seed_that_conflicts_with_the_case_base_leaves_the_case_base_untouched
     assert record.seeded_sha == ""
     assert "system/fixtures/todo-fixture/index.html" in record.impossible_reason
     _assert_clone_is_clean_at(clone_dir, tmp_path / "seed-worktree", case_base_sha)
+    # Its non-zero exit is the assertion, which is what keeps it out of `run_test_git`; the
+    # environment still has to be the isolated one, or the probe reads whichever repo GIT_DIR names.
     merge_head = subprocess.run(
-        ["git", "-C", str(clone_dir), "rev-parse", "-q", "--verify", "MERGE_HEAD"], capture_output=True, text=True
+        ["git", "-C", str(clone_dir), "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+        env=isolated_git_environment(),
     )
     assert merge_head.returncode != 0
 
@@ -5255,10 +5297,11 @@ def _run_seeded_step(
     conversation: ConversationModel,
     timeout_seconds: float,
     expected_error: type[Exception] | None,
+    clock: ClockInterface | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment]:
     """One seeded single-step trial against the scripted box, its seed rules ahead of the default ones."""
     tmp_path.mkdir(parents=True, exist_ok=True)
-    driver = _make_driver(tmp_path, trial_name)
+    driver = _make_driver(tmp_path, trial_name, clock=clock)
     environment = MockBoxEnvironment(tmp_path, [*rules, *_setup_rules()], conversation=conversation)
 
     async def _drive() -> None:
@@ -5432,8 +5475,9 @@ def test_a_seeded_trial_names_the_seed_stages_it_reached(tmp_path: Path) -> None
         "instrument__seed4",
         _seed_rules(_clean_seed_merge_output(), [_SEED_RUNNING_STATUS]),
         conversation,
-        timeout_seconds=0.5,
+        timeout_seconds=_VIRTUAL_BUDGET_SECONDS,
         expected_error=None,
+        clock=ManualClock(),
     )
     create_refused = ScriptedExecRule(
         "-X POST http://127.0.0.1:8123/api/v1/workspaces", [ok_result('{"detail": "no capacity"}\n500')]

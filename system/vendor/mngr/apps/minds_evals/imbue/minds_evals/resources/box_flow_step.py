@@ -16,6 +16,7 @@ classifies by the reported reason and a traceback on stderr would read as a brid
 
 import os
 import sys
+import time
 from typing import Any
 from typing import assert_never
 
@@ -80,11 +81,12 @@ _DEFAULT_TIMEOUT_MS = 15_000
 # A navigation waits for the network to settle, since an app that renders from a fetch has nothing
 # on the page at DOMContentLoaded. Capped well under the step's own budget.
 _NAVIGATION_TIMEOUT_MS = 30_000
-# How long a navigation an action started, but that has not replaced the document yet, is given to do
-# so. The commit follows within milliseconds, so this only has to be long enough not to be beaten by
-# a loaded machine; when it expires there was no new url coming and the page as it stands is the one
-# to read.
-_NAVIGATION_COMMIT_TIMEOUT_MS = 2_000
+# How long a navigation an action started, but that has not replaced the document yet, is given to
+# do so. It covers a server that takes its time to answer, since a document commits on the response
+# and not on the request; when it expires, nothing is coming and the page as it stands is the one to
+# read, which is the only case that pays this wait.
+_NAVIGATION_COMMIT_TIMEOUT_MS = 10_000
+_NAVIGATION_COMMIT_POLL_MS = 50
 # How much of an error's text travels back: enough to diagnose, bounded so one exception cannot
 # crowd the page state out of the flow log.
 _MAX_DETAIL_CHARS = 2000
@@ -307,10 +309,9 @@ def _evaluate_in_world(cdp_session: Any, context_id: int, expression: str, is_pr
     return reply["result"].get("value")
 
 
-def _install_reaction_watch(cdp_session: Any) -> int:
+def _install_reaction_watch(cdp_session: Any, frame_id: str) -> int:
     """Create the watch's world on the main frame, install the observer there, and return the
     world's context id for the waiter to address."""
-    frame_id = cdp_session.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
     context_id = cdp_session.send(
         "Page.createIsolatedWorld", {"frameId": frame_id, "worldName": _REACTION_WORLD_NAME}
     )["executionContextId"]
@@ -324,27 +325,41 @@ def _is_context_gone(exc: PlaywrightError) -> bool:
     return any(marker in lowered for marker in _CONTEXT_GONE_MARKERS)
 
 
-def _settle_after_navigation(page: Any, url_before: str) -> None:
+def _main_frame(cdp_session: Any) -> dict[str, Any]:
+    """The page's main frame, carrying its own id and the id of the document it is showing."""
+    return cdp_session.send("Page.getFrameTree")["frameTree"]["frame"]
+
+
+def _main_frame_loader_id(cdp_session: Any) -> str:
+    """The id of the document the main frame is showing, which changes with every document it loads.
+
+    What a document is identified by here, rather than its url: a navigation to the SAME url is a
+    new document too, and an app that saves and reloads itself makes exactly that one.
+    """
+    return str(_main_frame(cdp_session)["loaderId"])
+
+
+def _settle_after_navigation(page: Any, cdp_session: Any, loader_id_before: str) -> None:
     """Wait for the document the action navigated to, and for its network to go quiet.
 
     A world that dies while the waiter is evaluating in it is Chromium failing that evaluation as the
     navigation STARTS: the new document has not committed yet, so the page here is still the one the
-    action is about to replace and waiting on its load state alone would return at once and have the
-    capture record the wrong page. Waiting for the URL to become a different one covers that, and
-    returns immediately when the navigation had already committed before the waiter was asked. A
-    navigation to the SAME url has nothing to wait for either way, which is the expiry the fall-back
-    is for.
+    action is about to replace, and waiting on its load state alone would return at once and have the
+    capture record the page the flow just left as if it were the one it reached. So the commit is
+    waited for first. A navigation that never commits -- one the page abandoned -- leaves the page as
+    it stands, which is then the page to read.
     """
-    try:
-        page.wait_for_url(
-            lambda url: url != url_before, wait_until="networkidle", timeout=_NAVIGATION_COMMIT_TIMEOUT_MS
-        )
-    except PlaywrightTimeoutError:
-        page.wait_for_load_state("networkidle", timeout=_NAVIGATION_TIMEOUT_MS)
+    # Polled rather than awaited as a `framenavigated` event: that event also fires for a
+    # same-document navigation (a pushState on the way out), which would end the wait on the old
+    # document, and an event that lands before its listener is registered is never seen at all.
+    deadline = time.monotonic() + _NAVIGATION_COMMIT_TIMEOUT_MS / 1000
+    while _main_frame_loader_id(cdp_session) == loader_id_before and time.monotonic() < deadline:
+        page.wait_for_timeout(_NAVIGATION_COMMIT_POLL_MS)
+    page.wait_for_load_state("networkidle", timeout=_NAVIGATION_TIMEOUT_MS)
 
 
 def _wait_for_reaction(
-    page: Any, cdp_session: Any, context_id: int, first_cap_ms: int, url_before: str
+    page: Any, cdp_session: Any, context_id: int, first_cap_ms: int, loader_id_before: str
 ) -> StepReaction:
     """What the DOM did after the action, read once it has settled or the caps have run out."""
     waiter = _WAIT_FOR_REACTION_JS % {
@@ -360,7 +375,7 @@ def _wait_for_reaction(
             raise
         # The world died with its document, so the action navigated. The new document is the
         # reaction, read the way an explicit navigation is read: once its network has settled.
-        _settle_after_navigation(page, url_before)
+        _settle_after_navigation(page, cdp_session, loader_id_before)
         return StepReaction.SETTLED
     return StepReaction(verdict)
 
@@ -376,10 +391,13 @@ def _perform_and_watch(page: Any, cdp_session: Any, action: StepAction) -> StepR
     if first_cap_ms is None:
         _perform(page, action)
         return StepReaction.UNOBSERVED
-    context_id = _install_reaction_watch(cdp_session)
-    url_before = page.url
+    # One read of the frame tree serves both: creating an isolated world loads no document, so the
+    # loader id on this reply is still the one standing when the action runs.
+    frame = _main_frame(cdp_session)
+    context_id = _install_reaction_watch(cdp_session, str(frame["id"]))
+    loader_id_before = str(frame["loaderId"])
     _perform(page, action)
-    return _wait_for_reaction(page, cdp_session, context_id, first_cap_ms, url_before)
+    return _wait_for_reaction(page, cdp_session, context_id, first_cap_ms, loader_id_before)
 
 
 def run_step(request: StepRequest) -> StepResult:

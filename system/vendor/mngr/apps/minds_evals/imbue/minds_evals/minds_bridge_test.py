@@ -2,7 +2,6 @@ import asyncio
 import json
 import subprocess
 import threading
-import time
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -74,6 +73,7 @@ from imbue.minds_evals.minds_bridge import switch_model_choice
 from imbue.minds_evals.minds_bridge import wait_for_auth_endpoint
 from imbue.minds_evals.minds_bridge import workspace_curl
 from imbue.minds_evals.minds_bridge import workspace_curl_command
+from imbue.minds_evals.mock_clock_test import ManualClock
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import curl_stdout
@@ -107,6 +107,16 @@ _ACTIVATION_ENV = {
 }
 
 
+def _build_box_env(user_id: str = "trial") -> dict[str, str]:
+    return build_box_env(
+        activation_env=_ACTIVATION_ENV,
+        modal_token_env={"MODAL_TOKEN_ID": "ak", "MODAL_TOKEN_SECRET": "as"},
+        user_id=user_id,
+        mngr_sha="c" * 40,
+        minds_env="staging",
+    )
+
+
 def test_derive_modal_environment_name_is_the_concatenation_mngr_makes() -> None:
     assert derive_modal_environment_name(_ACTIVATION_ENV, "evals-todo-app-cafe1234") == (
         "minds-staging-evals-todo-app-cafe1234"
@@ -119,13 +129,7 @@ def test_derive_modal_environment_name_refuses_a_name_mngr_would_truncate() -> N
 
 
 def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
-    env = build_box_env(
-        activation_env=_ACTIVATION_ENV,
-        modal_token_env={"MODAL_TOKEN_ID": "ak", "MODAL_TOKEN_SECRET": "as"},
-        user_id="trial-1-cafe1234",
-        mngr_sha="c" * 40,
-        minds_env="staging",
-    )
+    env = _build_box_env("trial-1-cafe1234")
 
     assert env["MNGR__PROVIDERS__MODAL__USER_ID"] == "trial-1-cafe1234"
     assert env["MNGR__PROVIDERS__DOCKER__IS_ENABLED"] == "false"
@@ -136,16 +140,18 @@ def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
     assert env["MINDS_MODAL_EXTRA_TEMPLATE"] == "modal_eval"
 
 
+def test_build_box_env_opts_out_of_latchkey_counting() -> None:
+    # The box boots the real desktop stack, whose latchkey gateway would otherwise count this
+    # trial as a Latchkey user.
+    env = _build_box_env()
+
+    assert env["LATCHKEY_DISABLE_COUNTING"] == "1"
+
+
 def test_build_box_env_carries_no_ai_credentials() -> None:
     # Workspaces are signed in after create through the product's own endpoint. A credential in the
     # box env would be forwarded into the workspace host env file, a regime production never enters.
-    env = build_box_env(
-        activation_env=_ACTIVATION_ENV,
-        modal_token_env={"MODAL_TOKEN_ID": "ak", "MODAL_TOKEN_SECRET": "as"},
-        user_id="trial",
-        mngr_sha="c" * 40,
-        minds_env="staging",
-    )
+    env = _build_box_env()
 
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_BASE_URL" not in env
@@ -439,15 +445,36 @@ def test_build_create_payload_matches_the_production_create_form() -> None:
     }
 
 
+# Every wait below runs on a manual clock at this interval. Virtual time moves only when a loop
+# actually waits, so a budget buys exactly `budget / _POLL_SECONDS` attempts however loaded the
+# machine is -- which is what lets these tests say how many attempts a wait that ran out made, and
+# what keeps a wait that never settles from costing the suite any real time.
+_POLL_SECONDS: Final[float] = 1.0
+
+
+def _run_create_workspace(environment: MockBoxEnvironment) -> str:
+    """Create a workspace against a scripted box, on a budget none of these cases reaches."""
+    clock = ManualClock()
+    return asyncio.run(
+        create_workspace_and_wait(
+            environment,
+            {},
+            "8123",
+            {"git_url": "x"},
+            clock=clock,
+            deadline=clock.now() + _POLL_SECONDS * 10,
+            poll_seconds=_POLL_SECONDS,
+        )
+    )
+
+
 def test_create_workspace_and_wait_raises_on_non_202(tmp_path: Path) -> None:
     environment = MockBoxEnvironment(
         tmp_path, [ScriptedExecRule("api/v1/workspaces", [ok_result('{"error": "nope"}\n500')])]
     )
 
     with pytest.raises(WorkspaceCreateError, match="HTTP 500"):
-        asyncio.run(
-            create_workspace_and_wait(environment, {}, "8123", {"git_url": "x"}, deadline=9e12, poll_seconds=0.01)
-        )
+        _run_create_workspace(environment)
 
 
 def test_create_workspace_and_wait_surfaces_operation_errors(tmp_path: Path) -> None:
@@ -460,9 +487,7 @@ def test_create_workspace_and_wait_surfaces_operation_errors(tmp_path: Path) -> 
     )
 
     with pytest.raises(WorkspaceCreateError, match="provision failed"):
-        asyncio.run(
-            create_workspace_and_wait(environment, {}, "8123", {"git_url": "x"}, deadline=9e12, poll_seconds=0.01)
-        )
+        _run_create_workspace(environment)
 
 
 def test_run_in_workspace_parses_the_mngr_exec_json(tmp_path: Path) -> None:
@@ -489,12 +514,10 @@ def _create_chat_rule(*results: ExecResult) -> ScriptedExecRule:
     return ScriptedExecRule("/api/chats/create", list(results))
 
 
-# The budget a create-chat call gets in these tests. Bounded rather than effectively infinite: the
-# tests below assert that the retry loop *stops*, and a scripted rule repeats its last answer
-# forever, so a regression that kept retrying would otherwise hang the suite instead of failing it.
-# Against an in-memory environment answering synchronously this is orders of magnitude more than the
-# one retry any of them needs.
-_CREATE_CHAT_BUDGET_SECONDS: Final[float] = 5.0
+# The budget a create-chat call gets in these tests: ten polls, which is far more than the one retry
+# any case that is meant to succeed needs, and bounded so that a regression which kept retrying fails
+# the suite instead of hanging it (a scripted rule repeats its last answer forever).
+_CREATE_CHAT_BUDGET_SECONDS: Final[float] = _POLL_SECONDS * 10
 # The name the driver asks for (it names the chat after the workspace host) and the account the
 # sign-in minted for it to bind to.
 _CHAT_DISPLAY_NAME: Final[str] = "EVAL-todo-app"
@@ -506,6 +529,7 @@ def _run_create_chat(
     account_id: str = _CHAT_ACCOUNT_ID,
     budget_seconds: float = _CREATE_CHAT_BUDGET_SECONDS,
 ) -> str | None:
+    clock = ManualClock()
     return asyncio.run(
         create_chat_agent(
             environment,
@@ -513,8 +537,9 @@ def _run_create_chat(
             "ws-1",
             _CHAT_DISPLAY_NAME,
             account_id,
-            deadline=time.time() + budget_seconds,
-            poll_seconds=0.01,
+            clock=clock,
+            deadline=clock.now() + budget_seconds,
+            poll_seconds=_POLL_SECONDS,
         )
     )
 
@@ -575,8 +600,9 @@ def test_create_chat_agent_gives_up_when_the_endpoint_never_answers(tmp_path: Pa
         ],
     )
 
-    assert _run_create_chat(environment, budget_seconds=0.2) is None
-    assert _create_chat_call_count(environment) > 1
+    assert _run_create_chat(environment, budget_seconds=_POLL_SECONDS * 5) is None
+    # One attempt per poll the budget bought, and then it stopped.
+    assert _create_chat_call_count(environment) == 5
 
 
 def test_create_chat_agent_gives_up_on_a_refusal(tmp_path: Path) -> None:
@@ -631,7 +657,9 @@ def test_create_chat_agent_gives_up_when_the_taken_name_is_held_by_nothing(tmp_p
         ],
     )
 
-    assert _run_create_chat(environment, budget_seconds=0.2) is None
+    assert _run_create_chat(environment, budget_seconds=_POLL_SECONDS * 5) is None
+    # The create is final, so the whole budget went on looking the name up in the listing.
+    assert len([command for command in environment.exec_commands if AGENTS_PATH in command]) == 5
 
 
 def test_create_chat_agent_fails_when_the_workspace_names_no_agent(tmp_path: Path) -> None:
@@ -644,6 +672,20 @@ def test_create_chat_agent_fails_when_the_workspace_names_no_agent(tmp_path: Pat
     assert _run_create_chat(environment) is None
 
 
+def _run_wait_for_auth_endpoint(environment: MockBoxEnvironment, budget_seconds: float) -> bool:
+    clock = ManualClock()
+    return asyncio.run(
+        wait_for_auth_endpoint(
+            environment,
+            {},
+            "ws-1",
+            clock=clock,
+            deadline=clock.now() + budget_seconds,
+            poll_seconds=_POLL_SECONDS,
+        )
+    )
+
+
 def test_wait_for_auth_endpoint_holds_out_for_an_endpoint_that_can_report_the_state(tmp_path: Path) -> None:
     # Being signed out is a 200 here, so the endpoint's error shapes -- JSON like everything else --
     # all mean it cannot report the state at all. Reading one as ready would post the credentials at
@@ -652,14 +694,13 @@ def test_wait_for_auth_endpoint_holds_out_for_an_endpoint_that_can_report_the_st
     signed_out = ok_result(curl_stdout(json.dumps({"logged_in": False, "auth_mode": "none"})))
     unreportable_only = MockBoxEnvironment(tmp_path, [ScriptedExecRule(CLAUDE_AUTH_STATUS_PATH, [cannot_report])])
 
-    assert (
-        asyncio.run(wait_for_auth_endpoint(unreportable_only, {}, "ws-1", time.time() + 0.2, poll_seconds=0.01))
-        is False
-    )
+    assert _run_wait_for_auth_endpoint(unreportable_only, budget_seconds=_POLL_SECONDS * 5) is False
+    # It asked once per poll the budget bought rather than reading the first refusal as an answer.
+    assert len([command for command in unreportable_only.exec_commands if CLAUDE_AUTH_STATUS_PATH in command]) == 5
 
     recovers = MockBoxEnvironment(tmp_path, [ScriptedExecRule(CLAUDE_AUTH_STATUS_PATH, [cannot_report, signed_out])])
 
-    assert asyncio.run(wait_for_auth_endpoint(recovers, {}, "ws-1", time.time() + 5.0, poll_seconds=0.01)) is True
+    assert _run_wait_for_auth_endpoint(recovers, budget_seconds=_POLL_SECONDS * 5) is True
 
 
 # The key the workspace is signed in with below, and so the one an answer must never be logged
@@ -761,10 +802,10 @@ _LANE_ID: Final[str] = "api-key"
 _KEY_PROVIDER: Final[str] = "anthropic"
 _FLOW_ID: Final[str] = "flow-9"
 _FLOW_PATH: Final[str] = ACCOUNT_FLOW_PATH_TEMPLATE.format(flow_id=_FLOW_ID)
-# The budget a sign-in gets in these tests. Bounded rather than effectively infinite: a scripted
-# rule repeats its last answer forever, so a regression that never stopped polling would hang the
-# suite instead of failing it.
-_ACCOUNTS_BUDGET_SECONDS: Final[float] = 5.0
+# The budget a sign-in gets in these tests: ten polls, well past what any case that settles needs,
+# and bounded so a regression that never stopped polling fails the suite instead of hanging it (a
+# scripted rule repeats its last answer forever).
+_ACCOUNTS_BUDGET_SECONDS: Final[float] = _POLL_SECONDS * 10
 # What the workspace answers when a paste flow starts: the shape it wants the credential in, and the
 # id the key is then submitted against.
 _FLOW_STARTED: Final[str] = json.dumps({"flow_id": _FLOW_ID, "shape": "paste", "url": None, "code": None})
@@ -793,6 +834,7 @@ def _run_accounts_sign_in(
     key_provider: str = _KEY_PROVIDER,
     budget_seconds: float = _ACCOUNTS_BUDGET_SECONDS,
 ) -> AccountSignIn:
+    clock = ManualClock()
     return asyncio.run(
         sign_in_via_accounts_flow(
             environment,
@@ -801,8 +843,9 @@ def _run_accounts_sign_in(
             _LANE_ID,
             _SIGN_IN_API_KEY,
             key_provider,
-            deadline=time.time() + budget_seconds,
-            poll_seconds=0.01,
+            clock=clock,
+            deadline=clock.now() + budget_seconds,
+            poll_seconds=_POLL_SECONDS,
         )
     )
 
@@ -886,7 +929,7 @@ def test_sign_in_via_accounts_flow_reports_a_submit_the_workspace_refused(tmp_pa
     refused = ok_result(curl_stdout(json.dumps({"detail": "the flow has already been used"}), status=409))
     environment = _accounts_environment(tmp_path, refused)
 
-    sign_in = _run_accounts_sign_in(environment, budget_seconds=0.2)
+    sign_in = _run_accounts_sign_in(environment, budget_seconds=_POLL_SECONDS * 5)
 
     assert not sign_in.is_signed_in
     assert "rejected the key for lane api-key" in sign_in.failure
@@ -916,12 +959,13 @@ def test_sign_in_via_accounts_flow_gives_up_on_a_flow_that_never_settles(tmp_pat
     pending = ok_result(curl_stdout(json.dumps({"state": "pending", "detail": None})))
     environment = _accounts_environment(tmp_path, pending)
 
-    sign_in = _run_accounts_sign_in(environment, budget_seconds=0.2)
+    sign_in = _run_accounts_sign_in(environment, budget_seconds=_POLL_SECONDS * 5)
 
     assert (sign_in.is_signed_in, sign_in.account_id) == (False, "")
     assert sign_in.failure == "the sign-in on lane api-key never settled"
     assert sign_in.is_failure_from_waiting
-    assert len(_flow_commands(environment)) > 1
+    # The submit, and then one re-read of the flow per poll the budget bought.
+    assert len(_flow_commands(environment)) == 6
 
 
 def test_sign_in_via_accounts_flow_reports_a_sign_in_that_named_no_account(
@@ -1071,6 +1115,7 @@ _MESSAGE_PATH: Final[str] = "/api/chats/chat-1/message"
 
 
 def _run_send_chat_message(environment: MockBoxEnvironment, budget_seconds: float) -> bool:
+    clock = ManualClock()
     return asyncio.run(
         send_chat_message(
             environment,
@@ -1078,8 +1123,9 @@ def _run_send_chat_message(environment: MockBoxEnvironment, budget_seconds: floa
             "ws-1",
             "chat-1",
             "Build it",
-            deadline=time.time() + budget_seconds,
-            poll_seconds=0.01,
+            clock=clock,
+            deadline=clock.now() + budget_seconds,
+            poll_seconds=_POLL_SECONDS,
         )
     )
 
@@ -1094,7 +1140,7 @@ def test_send_chat_message_waits_out_a_workspace_that_is_not_ready_for_it(tmp_pa
     accepted = ok_result(curl_stdout(json.dumps({"status": "ok"})))
     environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule(_MESSAGE_PATH, [not_found, not_ready, accepted])])
 
-    assert _run_send_chat_message(environment, budget_seconds=5.0) is True
+    assert _run_send_chat_message(environment, budget_seconds=_POLL_SECONDS * 10) is True
     assert len([command for command in environment.exec_commands if _MESSAGE_PATH in command]) == 3
 
 
@@ -1105,7 +1151,9 @@ def test_send_chat_message_reports_a_refusal_rather_than_a_phantom_send(tmp_path
     refused = ok_result(curl_stdout(json.dumps({"detail": "input is blocked", "kind": "input_blocked"}), status=500))
     environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule(_MESSAGE_PATH, [refused])])
 
-    assert _run_send_chat_message(environment, budget_seconds=0.2) is False
+    assert _run_send_chat_message(environment, budget_seconds=_POLL_SECONDS * 5) is False
+    # A refusal that never clears is waited out rather than given up on, one attempt per poll.
+    assert len([command for command in environment.exec_commands if _MESSAGE_PATH in command]) == 5
 
 
 def _events_body(total: int, events: list[dict]) -> ExecResult:

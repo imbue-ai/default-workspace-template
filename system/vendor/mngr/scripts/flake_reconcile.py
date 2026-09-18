@@ -46,7 +46,7 @@ class FlakeReconcileError(Exception):
     """Base exception for the flake-reconcile tool."""
 
 
-# --- Parsing one flake-aware check-run summary --------------------------------
+# Parsing one flake-aware check-run summary
 
 
 class RunOutcome(UpperCaseStrEnum):
@@ -170,7 +170,7 @@ def _unescape(value: str) -> str:
     return html.unescape(value)
 
 
-# --- Windowed flake data (raw; the agent does the clustering) -----------------
+# Windowed flake data (raw; the agent does the clustering)
 
 
 class CheckRunRecord(FrozenModel):
@@ -313,7 +313,7 @@ def preferred_status_for_branches(branches: AbstractSet[str]) -> ClusterStatus:
     return ClusterStatus.BACKLOG
 
 
-# --- Linear tickets (read model) ----------------------------------------------
+# Linear tickets (read model)
 
 
 class FlakeTicket(FrozenModel):
@@ -339,7 +339,7 @@ def tickets_missing_project(tickets: Sequence[FlakeTicket], project_id: str) -> 
     return tuple(ticket for ticket in tickets if ticket.project_id != project_id)
 
 
-# --- I/O boundary: `gh` for CI, `latchkey` for Linear -------------------------
+# I/O boundary: `gh` for CI, `latchkey` for Linear
 
 
 _DEFAULT_REPO: Final[str] = "imbue-ai/mngr-internal"
@@ -348,6 +348,7 @@ _DEFAULT_SUITES: Final[tuple[str, ...]] = (
     "Unit + Integration Tests",
     "Acceptance Tests",
     "Minds Snapshot Resume Tests",
+    "Minds Evals Tests (repeated)",
 )
 _DEFAULT_WINDOW_DAYS: Final[int] = 14
 _DEFAULT_RUN_LIMIT: Final[int] = 2000
@@ -687,7 +688,7 @@ def close_ticket(team_key: str, issue_id: str) -> None:
     logger.info("Closed {}", issue_id)
 
 
-# --- CLI ----------------------------------------------------------------------
+# CLI
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:

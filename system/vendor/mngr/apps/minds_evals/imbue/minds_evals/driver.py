@@ -50,6 +50,8 @@ from imbue.minds_evals import proxy_config
 from imbue.minds_evals import trajectory as trajectory_building
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
+from imbue.minds_evals.clock import ClockInterface
+from imbue.minds_evals.clock import RealClock
 from imbue.minds_evals.data_types import ArmRecord
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
@@ -1629,9 +1631,14 @@ class MindsPersonaDriver(BaseAgent):
         effort: object = "",
         fast: object = "",
         user_id_prefix: object = "",
+        # Where every deadline in a trial is read from and every poll waits. Optional because harbor
+        # builds this agent from `--ak` strings alone and can supply no object; a test passes a
+        # manual one so its budgets are spent in polls rather than raced against the machine.
+        clock: ClockInterface | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        self._clock: ClockInterface = clock if clock is not None else RealClock()
         # Flow driving is mechanical, so a cheaper tier may well do; until that is measured the
         # verification agent runs on the decider's model, with this override to measure it.
         self._verifier_model_override = verifier_model.strip()
@@ -1890,7 +1897,7 @@ class MindsPersonaDriver(BaseAgent):
         # is what decides whether the expensive expectations-driven evidence phase runs.
         if self._test_state == "finished":
             self._test_state = "ongoing"
-        self._step_started_at = time.time()
+        self._step_started_at = self._clock.now()
         if self._started_at == 0.0:
             self._started_at = self._step_started_at
         # Every step gets its own budget, so the deadline is measured from the start of THIS call.
@@ -2169,7 +2176,7 @@ class MindsPersonaDriver(BaseAgent):
         if self._is_workspace_prepared:
             return True
 
-        readiness_deadline = workspace_readiness_deadline(deadline, time.time())
+        readiness_deadline = workspace_readiness_deadline(deadline, self._clock.now())
         workspace_host_name = derive_workspace_host_name(self._trial_name, self._salt)
         try:
             self._workspace_agent_id = await self._create_workspace(
@@ -2226,6 +2233,7 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             workspace_host_name,
             authentication.account_id,
+            self._clock,
             readiness_deadline,
             self._poll_seconds,
         )
@@ -2243,6 +2251,7 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             self._chat_agent_id,
             is_waiting_desired=True,
+            clock=self._clock,
             deadline=readiness_deadline,
             poll_seconds=self._poll_seconds,
         )
@@ -2298,7 +2307,7 @@ class MindsPersonaDriver(BaseAgent):
         )
         logger.info("Creating the workspace for case {}", case.case_id)
         return await minds_bridge.create_workspace_and_wait(
-            environment, self._box_env, self._api_port, payload, readiness_deadline, self._poll_seconds
+            environment, self._box_env, self._api_port, payload, self._clock, readiness_deadline, self._poll_seconds
         )
 
     async def _record_preparation_raise(self, environment: BaseEnvironment, exc: Exception) -> None:
@@ -2340,7 +2349,7 @@ class MindsPersonaDriver(BaseAgent):
         assert self._box_env is not None
         backoff_poll_count = 0
         last_seen = "no answer yet"
-        while time.time() < deadline:
+        while self._clock.now() < deadline:
             is_success, output = await minds_bridge.run_in_workspace(
                 environment,
                 self._box_env,
@@ -2369,7 +2378,7 @@ class MindsPersonaDriver(BaseAgent):
                 last_seen = "program {}, {}".format(
                     reading.program_state or "not listed", "registered" if reading.is_registered else "no registry row"
                 )
-            await asyncio.sleep(self._poll_seconds)
+            await self._clock.sleep(self._poll_seconds)
         return self._readiness_reason(
             "the seeded app {} was never running with its registry row (last seen: {})".format(
                 seed_app.name, last_seen
@@ -2586,6 +2595,7 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             self._chat_agent_id,
             is_waiting_desired=True,
+            clock=self._clock,
             deadline=deadline,
             poll_seconds=self._poll_seconds,
         )
@@ -2612,6 +2622,7 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             self._chat_agent_id,
             text,
+            self._clock,
             deadline,
             self._poll_seconds,
         )
@@ -2786,11 +2797,11 @@ class MindsPersonaDriver(BaseAgent):
             is_probe_token_served=True,
         )
         tunnel_log = minds_bridge.service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)
-        deadline = time.time() + PROXY_PROBE_READY_TIMEOUT_SECONDS
-        while time.time() < deadline:
+        deadline = self._clock.now() + PROXY_PROBE_READY_TIMEOUT_SECONDS
+        while self._clock.now() < deadline:
             if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
                 break
-            await asyncio.sleep(self._poll_seconds)
+            await self._clock.sleep(self._poll_seconds)
         else:
             logger.error(
                 "Reverse-tunnel probe: the tunnel never came up:\n{}",
@@ -2837,7 +2848,8 @@ class MindsPersonaDriver(BaseAgent):
             environment,
             self._box_env,
             PROXY_PORT,
-            time.time() + PROXY_BOOT_TIMEOUT_SECONDS,
+            self._clock,
+            self._clock.now() + PROXY_BOOT_TIMEOUT_SECONDS,
             self._poll_seconds,
         )
         if not is_up:
@@ -2868,13 +2880,13 @@ class MindsPersonaDriver(BaseAgent):
             cross_step_lifetime_seconds(case) + PROXY_TUNNEL_GRACE_SECONDS,
             is_probe_token_served=False,
         )
-        tunnel_deadline = time.time() + PROXY_TUNNEL_READY_TIMEOUT_SECONDS
+        tunnel_deadline = self._clock.now() + PROXY_TUNNEL_READY_TIMEOUT_SECONDS
         tunnel_log = minds_bridge.service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)
-        while time.time() < tunnel_deadline:
+        while self._clock.now() < tunnel_deadline:
             if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
                 logger.info("The proxy is up and reachable inside the workspace on port {}", PROXY_PORT)
                 return True
-            await asyncio.sleep(self._poll_seconds)
+            await self._clock.sleep(self._poll_seconds)
         logger.error(
             "The tunnel to the workspace never came up:\n{}",
             await minds_bridge.read_box_file(environment, self._box_env, tunnel_log),
@@ -2911,7 +2923,7 @@ class MindsPersonaDriver(BaseAgent):
         """
         assert self._box_env is not None
         is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
-            environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
+            environment, self._box_env, self._workspace_agent_id, self._clock, deadline, self._poll_seconds
         )
         if not is_endpoint_ready:
             return WorkspaceAuthentication(failure="the workspace's claude-auth endpoint never came up")
@@ -2959,6 +2971,7 @@ class MindsPersonaDriver(BaseAgent):
             lane,
             self._workspace_key.get_secret_value(),
             self._harness_config.key_provider,
+            self._clock,
             deadline,
             self._poll_seconds,
         )
@@ -3031,6 +3044,7 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             self._chat_agent_id,
             is_waiting_desired=True,
+            clock=self._clock,
             deadline=deadline,
             poll_seconds=self._poll_seconds,
         )
@@ -3113,7 +3127,7 @@ class MindsPersonaDriver(BaseAgent):
         # during a turn that never completes -- because the box or the workspace dies under it --
         # would otherwise exist nowhere on the host. Keep the host copy current as events arrive.
         persisted_event_count = len(self._latest_events)
-        while time.time() < deadline:
+        while self._clock.now() < deadline:
             is_refreshed = await self._refresh_events(environment)
             if is_refreshed and len(self._latest_events) > persisted_event_count:
                 self._partial_reply_texts = tuple(_new_agent_reply_texts(self._latest_events, baseline_event_count))
@@ -3129,7 +3143,7 @@ class MindsPersonaDriver(BaseAgent):
                 # A bridge answering nothing at all is the case the heartbeat exists for, so it ticks
                 # here too rather than only where the bridge answered something unhelpful.
                 heartbeat.tick("nothing at all -- {} consecutive bridge failure(s)".format(consecutive_failures))
-                await asyncio.sleep(self._poll_seconds)
+                await self._clock.sleep(self._poll_seconds)
                 continue
             consecutive_failures = 0
             new_reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
@@ -3147,7 +3161,7 @@ class MindsPersonaDriver(BaseAgent):
                 heartbeat.tick("{} message(s), still not back to WAITING".format(len(new_reply_texts)))
             else:
                 heartbeat.tick("{} event(s), none of them a new agent message".format(len(self._latest_events)))
-            await asyncio.sleep(self._poll_seconds)
+            await self._clock.sleep(self._poll_seconds)
         return False
 
     async def _refresh_events(self, environment: BaseEnvironment) -> bool:
@@ -3328,7 +3342,7 @@ class MindsPersonaDriver(BaseAgent):
         payload = {
             "reason": reason,
             "captured_at": _utc_now_iso(),
-            "elapsed_seconds": round(time.time() - self._started_at, 1),
+            "elapsed_seconds": round(self._clock.now() - self._started_at, 1),
             "waits_done": self._waits_done,
             "workspace_agent_id": self._workspace_agent_id,
             "chat_agent_id": self._chat_agent_id,
@@ -3456,11 +3470,11 @@ class MindsPersonaDriver(BaseAgent):
             "seed": self._seed_build.model_dump(mode="json") if self._seed_build is not None else None,
             "started_at": datetime.fromtimestamp(self._started_at, tz=timezone.utc).isoformat(),
             # The whole trial's, which across a stepped case spans every step so far.
-            "elapsed_seconds": round(time.time() - self._started_at, 1),
+            "elapsed_seconds": round(self._clock.now() - self._started_at, 1),
             # This step's own, which is the span "timeout_seconds" below bounds -- for a stepped
             # case that key is only this step's share of the conversation budget, so the trial-wide
             # figure above would read as an overrun on a perfectly healthy later step.
-            "step_elapsed_seconds": round(time.time() - self._step_started_at, 1),
+            "step_elapsed_seconds": round(self._clock.now() - self._step_started_at, 1),
             # The conversation's own span: first message out to last reply in. Both figures above
             # additionally hold workspace creation, sign-in and the welcome turn.
             "conversation_seconds": conversation_seconds(self._turn_records),

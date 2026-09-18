@@ -332,6 +332,105 @@ minds-test-electron-menu *args:
     cd apps/minds
     xvfb-run -a pnpm exec playwright test --config=test/e2e/playwright.config.js context-menu.spec.js {{args}}
 
+# Type-check and test apps/minds_evals. It is a standalone uv project, not a
+# workspace member (see the root [tool.uv.workspace].exclude), so it has its own
+# lock and venv: the root `uv sync --all-packages`, `just test-quick`, `just
+# test-offload` and the root `ty check` all skip it, and this recipe is the only
+# thing that runs its suite. `--locked` fails rather than silently re-resolving,
+# so a pyproject edit without a matching `uv lock` is caught here.
+#
+# CI caps each pytest session at 150 s, and the tests marked `chromium` (a real
+# headless Chromium each, seconds apiece) would take most of that budget on
+# their own. So a run with no args is two sessions: the rest of the suite, then
+# the chromium tests, each with its own budget; the second appends to the
+# first's coverage data, so its report covers the whole suite. Given args (a
+# path, a node id, a -m), the recipe runs the one session they select.
+#
+# The chromium session's budget is 300 s rather than CI's 150 s. Its time is
+# spent in waits the flow runner makes on purpose (a settle window, a fresh
+# process per step), which stretch with the runner's load rather than with the
+# code under test, and a session that overruns the cap fails with no failing
+# test to point at.
+[group("minds evals")]
+test-minds-evals args="":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  uv run ty check || exit 1
+  if [ -n {{quote(args)}} ]; then
+    exec uv run pytest {{_minds_evals_parallel}} {{args}}
+  fi
+  uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium"
+  rest_exit_code=$?
+  PYTEST_MAX_DURATION_SECONDS="${PYTEST_MAX_DURATION_SECONDS:-300}" uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append
+  chromium_exit_code=$?
+  [ "$rest_exit_code" -eq 0 ] && [ "$chromium_exit_code" -eq 0 ]
+
+# Run the minds_evals suite `passes` times, plus `stressed_passes` more with every core kept
+# busy, and merge the passes into test-results/junit.xml with one testcase per attempt -- the
+# shape an offload run with retries leaves behind. The suite has no retrying runner, so this is
+# what tells a flaky test (failed in some passes) from a broken one (failed in all of them); the
+# recipe fails only for the broken kind, and for a session that never produced a junit. The
+# stressed passes come last, so in the report a test's highest attempts are the starved ones:
+# a test that fails only there has a real-time budget a busy runner can use up.
+#
+# The sessions run under coverage like the PR job's, although nothing reads the data: the point is
+# to draw the flakes a PR would, and the tracer's weight is part of the timing a PR runs with.
+#
+# Each session gets a 15 minute budget in place of CI's 150 s cap: the cap polices how long the
+# suite takes on a PR, and here a slow pass is the point rather than a failure.
+[group("minds evals")]
+test-minds-evals-repeat passes="5" stressed_passes="1":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  repo_root="$PWD"
+  passes_dir="$repo_root/test-results/minds-evals-passes"
+  rm -rf "$passes_dir" "$repo_root/test-results/junit.xml"
+  mkdir -p "$passes_dir"
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  rm -f .test_output/flaky_tests_*.txt
+  export PYTEST_MAX_DURATION_SECONDS=900
+  total_passes=$(( {{passes}} + {{stressed_passes}} ))
+  hog_pids=()
+  # An interrupted stressed pass must not leave its busy loops spinning on a developer's machine.
+  trap 'for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do kill "$hog_pid" 2>/dev/null; done' EXIT
+  for pass in $(seq 1 "$total_passes"); do
+    hog_pids=()
+    if [ "$pass" -gt {{passes}} ]; then
+      for _ in $(seq 1 "$(getconf _NPROCESSORS_ONLN)"); do
+        ( while :; do :; done ) &
+        hog_pids+=("$!")
+      done
+    fi
+    label="$(printf 'pass-%02d' "$pass")"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium" --junitxml="$passes_dir/$label-rest.xml"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append --junitxml="$passes_dir/$label-chromium.xml"
+    for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do
+      kill "$hog_pid"
+    done
+  done
+  # The manifest names tests relative to this project; the merged junit names them from the repo
+  # root. They land beside the passes rather than in test-results/ directly: the reader's glob
+  # (test-results/**/flaky_tests_*.txt) reaches either way, and only this directory is cleared per
+  # run, so a previous run's manifest cannot report a test that is no longer marked flaky.
+  for manifest in .test_output/flaky_tests_*.txt; do
+    [ -f "$manifest" ] && sed "s|^|apps/minds_evals/|" "$manifest" > "$passes_dir/$(basename "$manifest")"
+  done
+  cd "$repo_root"
+  expected_junits=()
+  for pass in $(seq 1 "$total_passes"); do
+    label="$(printf 'pass-%02d' "$pass")"
+    expected_junits+=("$passes_dir/$label-rest.xml" "$passes_dir/$label-chromium.xml")
+  done
+  python3 scripts/junit_merge_passes.py --pass-junit "${expected_junits[@]}" --path-prefix apps/minds_evals --output test-results/junit.xml
+
+# Sized for CI's two-vCPU runner rather than taken from `_parallel`: workers
+# beyond the core count spend the session importing the suite in parallel and
+# starve each other's Chromium.
+_minds_evals_parallel := "-n 2 --dist=worksteal --max-worker-restart=0"
+
 # Generate a harbor task dataset from a minds eval config (one task per persona
 # case). Datasets default OUTSIDE the repo tree: each generated task embeds a
 # full mngr-internal clone, which must not sit under the repo's apps/ scan (it
