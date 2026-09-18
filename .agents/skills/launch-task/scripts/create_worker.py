@@ -285,12 +285,11 @@ def _describe_list_errors(payload: object) -> str:
 def read_worker_branch(name: str, runner: Runner) -> str:
     """Ask mngr which branch the worker's work_dir is actually on.
 
-    Observed, not predicted. This used to re-derive the branch by parsing the
-    ``--branch`` spec the same way mngr's own (private) ``_parse_branch_flag``
-    does, which duplicated logic we do not own and would have drifted silently.
-    mngr now reports it directly as the agent's ``initial_branch`` field, which is
-    populated whether mngr created the branch or checked out one that already
-    existed -- including the ``--branch <existing>`` case this script's callers use.
+    Observed, not predicted: the answer is the agent's ``initial_branch`` field,
+    which mngr reads back from the work_dir and populates whether it created the
+    branch or checked out one that already existed -- including the
+    ``--branch <existing>`` case this script's callers use. Parsing the
+    ``--branch`` spec here instead would restate mngr's own resolution rules.
 
     ``launch-sync`` publishes this as the ref its callers merge from, so a wrong
     answer sends them at a branch the worker never committed to. Raising is
