@@ -513,6 +513,13 @@ def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
+    if args.ff_only and args.keep_rollback_point:
+        # rollback-last reverts the kept point with `git revert -m 1`, which only a merge
+        # commit takes; a fast-forward lands none, so the point could never be taken back.
+        raise SystemExit(
+            "error: --keep-rollback-point needs an ordinary merge to roll back later; "
+            "it cannot be combined with --ff-only."
+        )
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),

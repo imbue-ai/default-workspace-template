@@ -6941,6 +6941,24 @@ def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
         update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
 
 
+def test_a_fast_forward_apply_cannot_keep_a_rollback_point(apply_repo: Path) -> None:
+    """rollback-last reverts the kept point as a merge, which a fast-forward never lands."""
+    with pytest.raises(SystemExit, match="cannot be combined with --ff-only"):
+        update_self.main(
+            [
+                "apply",
+                "--merge-ref",
+                "HEAD",
+                "--ff-only",
+                "--keep-rollback-point",
+                "--repo-root",
+                str(apply_repo),
+            ]
+        )
+    assert update_apply_contract.read_marker(apply_repo) is None
+    assert _rollback_point(apply_repo) is None
+
+
 # --- the kept rollback point and the notice ----------------------------------
 
 
