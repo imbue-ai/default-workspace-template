@@ -305,7 +305,7 @@ def remove_shadowing_app_tool_installs(
     neither the copy PATH runs nor the pinned one is ever the one removed. A tool whose
     only copy is under ``$HOME`` is left where it is.
     """
-    pinned = tool_env.tools_dir(tool_env.tool_home()).resolve()
+    pinned = _pinned_tool_location()[0].resolve()
     removed: list[Path] = []
     for app in app_tools:
         canonical = _installed_tool_location(app.executable, app.tool_name, runner)
