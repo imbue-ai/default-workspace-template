@@ -66,14 +66,15 @@ const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
   fastModeLoads: [] as string[],
   fastModeChoices: [] as [string, string][],
 }));
-vi.mock("../models/FastMode", () => ({
+// Only the backend-backed half is faked. The words -- `fastModeLabel`, `fastModeDetail` and the
+// mode list -- are the real ones, so what the rows read here is what the menu really says.
+vi.mock("../models/FastMode", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/FastMode")>()),
   getFastModeState: () => fastModeState.state,
   ensureFastModeState: (chatId: string) => {
     fastModeLoads.push(chatId);
     return Promise.resolve(fastModeState.state);
   },
-  fastModeLabel: (state: { mode: string; is_switched: boolean }) =>
-    state.mode === "off" ? "Off" : state.mode === "on" ? "On" : state.is_switched ? "Auto (off now)" : "Auto",
 }));
 vi.mock("./fast-mode-limit", () => ({
   chooseFastMode: (chatId: string, mode: string) => {
@@ -626,10 +627,11 @@ describe("the combo card", () => {
     expect(trigger.querySelector("svg")).not.toBeNull();
   });
 
-  it("states the chat's fast mode on the fast row and opens the chooser from it", () => {
+  it("states the chat's fast mode on the fast row and picks another from its submenu", () => {
     // The row says which of the three modes the chat is in rather than showing a switch, since
-    // auto is neither on nor off; pressing it closes the card and opens the chooser modal, where
-    // the modes are picked and auto's turn limit lives.
+    // auto is neither on nor off; the submenu is where the modes are picked and auto's turn
+    // limit lives, and it STAYS UP on a pick, because picking auto is usually followed by
+    // setting the limit it runs to.
     const model = { ...OPUS, supports_fast: true };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
@@ -647,20 +649,87 @@ describe("the combo card", () => {
     expect(row.textContent).toContain("Auto (off now)");
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
-    click('[data-menu-row="fast"] button');
-    const modal = document.querySelector<HTMLElement>('[data-e2e="fast-mode-modal"]');
-    if (modal === null) throw new Error("no fast-mode modal");
-    expect(document.querySelector('[data-menu-row="fast"]')).toBeNull();
-    expect(modal.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(modal.textContent).toContain("Fast for the first 3 turns, then standard speed.");
-    const limit = modal.querySelector<HTMLInputElement>(".fast-limit-input");
-    if (limit === null) throw new Error("no turn-limit field under Auto");
-    expect(limit.value).toBe("3");
+    click('[data-menu-row="fast"]');
+    const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+    if (submenu === null) throw new Error("no fast-mode submenu");
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(submenu.querySelector('[data-fast-mode="on"]')?.getAttribute("aria-checked")).toBe("false");
+    // Auto's own row carries both what auto does and that it has already happened.
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain(
+      "Fast for the first 3 turns, then standard speed.",
+    );
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain("(off now)");
 
+    // Pressing the mode the chat is already in chooses nothing again.
+    click('[data-fast-mode="auto"]');
+    expect(fastModeChoices).toEqual([]);
     click('[data-fast-mode="on"]');
     expect(fastModeChoices).toEqual([["a1", "on"]]);
-    click(".fast-mode-done");
-    expect(document.querySelector('[data-e2e="fast-mode-modal"]')).toBeNull();
+    // The submenu is still up, and the menu with it.
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
+  });
+
+  it("offers auto's turn limit only under auto, and writes a changed one to the settings", () => {
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const limit = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    expect(limit.value).toBe("5");
+
+    limit.value = "2";
+    limit.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    // The field keeps what is being typed across the redraws every keystroke causes.
+    expect(limit.value).toBe("2");
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toEqual([
+      { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
+    ]);
+
+    // An emptied field or a zero is not a limit.
+    limit.value = "";
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    limit.value = "0";
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toHaveLength(1);
+
+    // The limit belongs to auto: no other mode runs to one.
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
+  });
+
+  it("makes the chat's mode the one new chats start in, and says when it already is", () => {
+    const model = { ...OPUS, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const makeDefault = document.querySelector<HTMLElement>("[data-fast-mode-default]");
+    if (makeDefault === null) throw new Error("no default row");
+    expect(makeDefault.textContent).toContain("Use On for new chats");
+    expect(makeDefault.getAttribute("aria-disabled")).toBeNull();
+    click("[data-fast-mode-default]");
+    expect(settingsWrites).toEqual([
+      { fast_mode_default: "on", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false },
+    ]);
+
+    // Auto is the settings' default, so its row says so and there is nothing to press.
+    fastModeState.state = { mode: "auto", is_switched: false };
+    render();
+    const already = document.querySelector<HTMLElement>("[data-fast-mode-default]");
+    expect(already?.textContent).toContain("Use Auto for new chats");
+    expect(already?.getAttribute("aria-disabled")).toBe("true");
+    expect(already?.querySelector("svg")).not.toBeNull();
+    click("[data-fast-mode-default]");
+    expect(settingsWrites).toHaveLength(1);
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {

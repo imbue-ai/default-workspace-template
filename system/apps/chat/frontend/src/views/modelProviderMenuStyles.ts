@@ -192,6 +192,35 @@ export const SUBMENU_EMPTY = "type-helper text-faint px-3 py-2";
 /** "+ Add a provider" under the account list: the shared row, one colour step back. */
 export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-fill-hover cursor-pointer`;
 
+// The fast-mode submenu
+/** A fast-mode row is the only two-line row in these menus: three modes is a short list, and
+ *  what separates them is not their names but what each one DOES ("fast for the first 5 turns,
+ *  then standard speed") -- a sentence that cannot ride the row's own line and would be lost
+ *  entirely in a tooltip on a list you are choosing from. Hence the shared slab and focus ring
+ *  without the fixed height, and `items-start` so the tick lines up with the mode rather than
+ *  floating beside the sentence. */
+const FAST_ROW_SHAPE = `flex w-full items-start gap-1.5 py-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
+export const FAST_ROW = `${FAST_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
+export const FAST_ROW_SELECTED = `${FAST_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
+/** The mode and its sentence, stacked. `min-w-0` so the sentence wraps inside the row instead of
+ *  widening it. */
+export const FAST_ROW_TEXT = "flex min-w-0 flex-col";
+export const FAST_ROW_DETAIL = "type-helper text-faint";
+/** The turn-limit field's row: the same height and padding as a menu row, no highlight -- a
+ *  number you type is not something you pick. `whitespace-nowrap` because the words either side
+ *  of the field are one sentence, and a menu row is one line. */
+export const FAST_LIMIT_ROW = "fast-mode-limit flex h-8 items-center gap-2 whitespace-nowrap px-3 text-secondary";
+/** The field's box. The width lives HERE rather than in the field's own `extra`: the shared input
+ *  recipe is `w-full`, and two width utilities on one element are settled by the order Tailwind
+ *  emits them in rather than by the order the caller wrote them. A box the field fills is
+ *  decided by the caller either way. */
+export const FAST_LIMIT_FIELD = "inline-flex w-14 shrink-0";
+export const FAST_LIMIT_INPUT_EXTRA = "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-row)";
+/** A submenu row that states a fact rather than offering a choice -- "new chats already start in
+ *  this mode". It keeps the row's hover (a row that does not react at all reads as broken rather
+ *  than as settled) and drops the pointer; the tick is what says it is already so. */
+export const SUBMENU_ROW_INERT = `${SUBMENU_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-default`;
+
 /** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
  *  row's reserved right padding. It takes the row's LAST lane, the one the tick occupies at
  *  rest -- the tick hides for the hover, so the three controls end flush with the row's end
