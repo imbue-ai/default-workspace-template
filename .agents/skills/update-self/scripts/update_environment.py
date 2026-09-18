@@ -287,9 +287,7 @@ def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> lis
     canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if canonical is None:
         return []
-    return tool_env.remove_shadowing_installs(
-        canonical[0], homes, MNGR_TOOL_NAME, MNGR_EXECUTABLE
-    )
+    return tool_env.remove_shadowing_installs(canonical[0], homes, MNGR_TOOL_NAME)
 
 
 def remove_shadowing_app_tool_installs(
@@ -312,9 +310,7 @@ def remove_shadowing_app_tool_installs(
         if canonical is None or canonical[0].resolve() != pinned:
             continue
         removed.extend(
-            tool_env.remove_shadowing_installs(
-                canonical[0], homes, app.tool_name, app.executable
-            )
+            tool_env.remove_shadowing_installs(canonical[0], homes, app.tool_name)
         )
     return removed
 
