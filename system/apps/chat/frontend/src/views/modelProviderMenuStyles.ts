@@ -195,11 +195,12 @@ export const SUBMENU_EMPTY = "type-helper text-faint px-3 py-2";
 export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-fill-hover cursor-pointer`;
 
 // The fast-mode submenu
-/** A fast-mode row is the only two-line row in these menus: three modes is a short list, and
- *  what separates them is not their names but what each one DOES ("fast for the first 5 turns,
- *  then standard speed") -- a sentence that cannot ride the row's own line and would be lost
- *  entirely in a tooltip on a list you are choosing from. Hence the shared slab and focus ring
- *  with padding in place of the fixed height.
+/** A fast-mode row is the only two-line row in these menus: three modes is a short list, and what
+ *  separates them is not their names but what each one DOES ("Fast for the first 5 turns, then
+ *  standard") -- a line that cannot ride the row's own and would be lost entirely in a tooltip
+ *  on a list you are choosing from. Hence the shared slab and focus ring with padding in place
+ *  of the fixed height. The lines are kept short enough to hold at 300px, so the three rows are
+ *  one height.
  *
  *  No width of its own: the slab carries one, and a `w-full` beside it wins by however Tailwind
  *  happens to order the two, taking the row 8px past the slab's margins -- which puts its
