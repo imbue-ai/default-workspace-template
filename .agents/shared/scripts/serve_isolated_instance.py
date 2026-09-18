@@ -76,7 +76,7 @@ it knows before calling here.
 Exit codes:
     0  Success (instance is up and healthy / rebooted in place / torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
-       no refreshable instance, the old server would not exit in time, or the
+       no refreshable instance, the old server survived SIGKILL, or the
        rebooted server never became healthy; or, for ``down``, a recorded process
        survived SIGKILL (its state dir is kept so it stays findable); or a bad
        argument / unreadable state file.
@@ -1033,7 +1033,7 @@ def refresh(
     process. The caller reloads the tab's iframe itself (this never touches it).
 
     Returns 0 once the rebooted inner server is healthy; 1 if there is no
-    refreshable instance, the old server would not exit, or the new one did not
+    refreshable instance, the old server survived SIGKILL, or the new one did not
     come up (in which case the preview tab shows an error until the underlying
     build is fixed and refresh is retried -- but nothing else was disturbed).
     """
@@ -1073,12 +1073,9 @@ def refresh(
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
     #    gone -- otherwise the new process fails to bind.
-    runner.kill_process_group(old_pid)
-    if not _wait_process_gone(
-        runner, old_pid, _STOP_ATTEMPTS, _STOP_INTERVAL_SECONDS, sleeper
-    ):
+    if not _kill_process_group_and_wait(runner, old_pid, sleeper):
         sys.stderr.write(
-            f"refresh: inner server pid {old_pid} did not exit in time; its port "
+            f"refresh: inner server pid {old_pid} survived SIGKILL; its port "
             f"{port} may still be held. Aborting rather than risk a bind clash.\n"
         )
         return 1

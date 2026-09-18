@@ -670,6 +670,21 @@ def test_refresh_aborts_when_old_server_will_not_exit(tmp_path: Path) -> None:
     assert not spawner.detached_spawns
 
 
+def test_refresh_escalates_to_sigkill_for_a_server_that_ignores_sigterm(
+    tmp_path: Path,
+) -> None:
+    """A server that traps SIGTERM would otherwise block every refresh of its preview."""
+    assert _up_preview(tmp_path) == 0
+    runner = _SigtermProofRunner(alive_pids={4242})
+    spawner = _FakeSpawner(detached_pid=5555)
+
+    code = _refresh(tmp_path, runner=runner, spawner=spawner)
+
+    assert code == 0
+    assert runner.signals_sent_to(4242) == [signal.SIGTERM, signal.SIGKILL]
+    assert spawner.detached_spawns == [_LAUNCH]
+
+
 def test_refresh_reports_unhealthy_reboot_but_records_new_pid(tmp_path: Path) -> None:
     # The rebooted inner never gets healthy: refresh fails, but the new pid is
     # recorded so a later ``down`` still kills it (no leaked server).
