@@ -1578,8 +1578,9 @@ def rollback_last(
     launches and holds each until the script has written its first progress, but
     a second rollback-last (run by hand, or launched beside a hand-run one) or a
     confirm-last can still land while this one runs; it must refuse without
-    touching the record or the copies, or its failed revert would settle the
-    record and discard the copies the first is restoring from.
+    touching the record or the copies, or it would settle the record over the
+    one this run is writing -- and, once this run has committed its revert,
+    revert that again.
     """
     try:
         with _holding_rollback_point_lock(repo_root):
@@ -1620,8 +1621,9 @@ def _rollback_last_locked(
         return 1
     if record.progress is not None:
         # No rollback holds the lock, so one stopped without settling the record.
-        # Its revert may already be committed; running another would fail and
-        # discard the copies an agent needs to finish the job by hand.
+        # Its revert may already be committed; another run would revert that
+        # again (or conflict on it) and settle the record an agent needs to
+        # finish the job by hand from the kept copies.
         sys.stderr.write(
             f"error: an earlier rollback of this point stopped partway ({record.progress}); "
             "finish it by hand from the kept copies, then close the notice with confirm-last.\n"

@@ -7290,10 +7290,10 @@ def test_a_rollback_whose_revert_conflicts_aborts_it_and_keeps_the_copies(
 def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
     apply_repo: Path, is_other_rollback_running: bool
 ) -> None:
-    """The shell launches rollbacks detached, so a double press starts two; and a
+    """A rollback-last run by hand can land beside the one the shell launched; and a
     rollback killed outright leaves its progress behind unsettled. Either way another
-    run must refuse before it reverts anything: a failed second revert would settle the
-    record and discard the copies the first run (or an agent) is restoring from."""
+    run must refuse before it reverts anything: it would settle the record over the
+    first run's, or revert the revert the first run (or an agent) already committed."""
     assert (
         _apply_keeping_the_rollback_point(
             _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
