@@ -2043,6 +2043,14 @@ def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
     assert _plan([path]).backend_manifest
 
 
+def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
+    # The bundles compile in the embed contract and the service icons fetched from the
+    # pinned commit, so a release whose only change is the pin still re-emits them.
+    plan = _plan([update_layout.PYPROJECT_PATH, "uv.lock"])
+
+    assert plan.frontend_src and plan.backend_manifest
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -2269,6 +2277,30 @@ def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) ->
     ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
+
+
+def test_apply_fetches_the_mngr_assets_the_pin_carries(apply_repo: Path) -> None:
+    # A worker's bundle means no frontend build runs, and the prebuild hook is the only
+    # other caller: without this the fetched tree (and the style-guide symlink into it)
+    # is whatever the last build left.
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/usr/bin/env bash\n")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert runner.ran("bash", str(script))
+
+
+def test_apply_skips_the_asset_fetch_in_a_tree_that_has_no_such_script(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.argvs_starting("bash")
 
 
 def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
@@ -4817,6 +4849,10 @@ def test_a_workspace_that_vendored_mngr_is_refreshed_from_the_pin(
     # manifest at the pin and carries none of the deleted paths along.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     gone = apply_repo / "system" / "vendor" / "mngr"
+    # The merge deletes the tracked tree, but each project's gitignored __pycache__ keeps
+    # its directory on disk: what makes an editable installable is its pyproject.toml.
+    for plugin in ("libs/mngr", "libs/mngr_claude", "libs/mngr_wait"):
+        (gone / plugin / "imbue" / "__pycache__").mkdir(parents=True)
     _with_receipt(
         runner,
         tmp_path / "tools",
@@ -5163,6 +5199,30 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
     location = update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME)
 
     assert location == (tools, bin_dir)
+
+
+def test_tool_location_of_a_symlinked_script_is_the_uv_bin_dir(tmp_path: Path) -> None:
+    # /usr/local/bin/mngr is a symlink to the uv entry point, so non-login shells find it.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    script = bin_dir / update_layout.MNGR_EXECUTABLE
+    script.write_text(
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    )
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+    shared_bin = tmp_path / "usr" / "local" / "bin"
+    shared_bin.mkdir(parents=True)
+    symlink = shared_bin / update_layout.MNGR_EXECUTABLE
+    symlink.symlink_to(script)
+
+    assert update_environment._tool_location(symlink, update_layout.MNGR_TOOL_NAME) == (
+        tools,
+        bin_dir,
+    )
 
 
 @pytest.mark.parametrize(

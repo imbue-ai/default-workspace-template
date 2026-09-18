@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     what.add_argument(
         "--tool",
-        help="print the plugin arguments for this tool: mngr or system-interface",
+        help="print the plugin arguments for this tool: mngr, or an app's manifest name (e.g. chat)",
     )
     parser.add_argument(
         "--repo-root",

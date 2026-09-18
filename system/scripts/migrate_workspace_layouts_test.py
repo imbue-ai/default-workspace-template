@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 from app_instances.data_types import InstanceLifetime
-from conftest import migrate_workspace_layouts as migrate
 from files_app.main import build_files_source
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import (
@@ -24,6 +23,8 @@ from imbue.system_interface.shell.layouts import LayoutStore
 from imbue.system_interface.shell.primitives import Address, DeviceKind, mint_tab_id
 from imbue.system_interface.shell.projects import ProjectStore
 from terminal_app.store import JsonTerminalSessionStore
+
+from conftest import migrate_workspace_layouts as migrate
 
 _NOW = "2026-09-05T12:00:00+00:00"
 _TAB_ID = re.compile(r"^tab-[0-9a-f]{16}$")

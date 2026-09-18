@@ -85,7 +85,7 @@ convention now is "everything visible under `data/` is the user's to organize";
 | `blueprint/`, `specs/` | `docs/system/blueprint/`, `docs/system/specs/` |
 | `changelog/`, `dev/changelog/` | `system/changelog/` |
 | `test_meta_ratchets.py`, `test_mngr_template_stacking.py` | `system/test_meta_ratchets.py`, `system/test_mngr_template_stacking.py` |
-| `vendor/mngr/`, `vendor/tk/` | gone (mngr is installed as packages from the commit `pyproject.toml` pins), `system/vendor/tk/` |
+| `vendor/mngr/`, `vendor/tk/` | `system/vendor/mngr/` (untracked here, and nothing installs from it -- edits to the old copy have no destination and are re-submitted as mngr changes), `system/vendor/tk/` |
 | `apps/system_interface/` | `system/apps/system_interface/` |
 
 The old flat `libs/` split three ways -- `system/apps/` for anything tab-openable,

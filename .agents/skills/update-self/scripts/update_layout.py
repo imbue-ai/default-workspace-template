@@ -60,10 +60,12 @@ FRONTEND_TOOLING_PATHS = frozenset(
 FRONTEND_SOURCE_DIRS = (FRONTEND_DIR, CHAT_FRONTEND_DIR, FRONTEND_LIB_DIR)
 
 # mngr is installed from the public repo at the commit pyproject.toml pins in
-# [tool.uv.sources]. A merge that moves the pin shows up as
-# a pyproject.toml / uv.lock change, which is already a manifest change, so the
-# refresh re-resolves the tools.
+# [tool.uv.sources].
 PYPROJECT_PATH = "pyproject.toml"
+
+# Fetches the files the pinned mngr commit carries that no package does, into the
+# gitignored system/vendor/mngr-assets the frontends and docs/system/style_guide.md read.
+MNGR_ASSETS_SCRIPT = "system/scripts/fetch_mngr_assets.sh"
 
 MNGR_TOOL_NAME = "imbue-mngr"
 

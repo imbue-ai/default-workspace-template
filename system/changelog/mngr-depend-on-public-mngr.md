@@ -19,15 +19,16 @@
 - `system/test_mngr_pin.py` pins the shape: public repo, full commit, every locked
   mngr package at the pin, nothing tracked under `system/vendor/mngr`.
   `system/test_supervisord_layout.py`'s evals-capture release gate, which could
-  only read the capture from a vendored tree, is gone; mngr's own
-  `evidence_collection_test.py` covers the pinned commit's capture.
+  only read the capture from a vendored tree, is gone; mngr-internal's own
+  `evidence_collection_test.py` covers that capture.
 
 - `system/scripts/pull_upstreams.sh` and `push_upstreams.sh` are gone: they existed to
   split vendored-mngr edits from workspace edits, and there is no vendored mngr to
   split. mngr changes are their own PR on the mngr repo.
 
-- `mngr` is symlinked into `/usr/local/bin` like `tk`, so non-login shells (`ssh <workspace> mngr ...`,
-  `mngr exec`) find it without a `PATH` prefix.
+- The image build symlinks `mngr` into `/usr/local/bin` like `tk`, so non-login shells
+  (`ssh <workspace> mngr ...`, `mngr exec`) find it without a `PATH` prefix. A workspace
+  that updates onto this release keeps reaching `mngr` through `PATH` as before.
 
 - The root dev group depends on `imbue-common[testing]` (the extra that declares what
   `imbue_common.ratchet_testing` needs) instead of naming `import-linter` itself.

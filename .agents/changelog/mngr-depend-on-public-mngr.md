@@ -10,3 +10,12 @@
   another mngr there, so mngr changes are developed in an mngr-internal checkout on
   a developer's machine, land as their own mngr PR, and reach the template by a
   pin bump.
+
+- `classify-merge` no longer emits the `editable_tool` path class: no release diff can
+  touch a vendored mngr tree, so nothing classifies as one.
+
+- The `assist` skill treats an mngr issue as report-only: it needs an mngr change and a
+  template pin bump, not a workspace fix or a new desktop-app build.
+
+- The `publish-template` skill drops its Google-OAuth push-protection note: the client id
+  it described lived in the vendored tree, which the template no longer carries.

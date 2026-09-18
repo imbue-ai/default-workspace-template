@@ -162,8 +162,10 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     # see the account the chat is bound to. Outside one -- a supervisord service, a cron
     # job -- nothing sets it and ~/.claude holds no credential, so fall back to the
     # workspace's default account rather than to nothing.
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or _default_account_dir() or os.path.expanduser(
-        "~/.claude"
+    config_dir = (
+        os.environ.get("CLAUDE_CONFIG_DIR", "")
+        or _default_account_dir()
+        or os.path.expanduser("~/.claude")
     )
     settings_path = os.path.join(config_dir, "settings.json")
     try:
