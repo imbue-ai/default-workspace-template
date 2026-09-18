@@ -167,11 +167,19 @@ _KILL_INTERVAL_SECONDS = 0.5
 # bury it.
 _LOG_EXCERPT_LINES = 40
 
+# How much of a health response's body to keep: enough for the whole JSON document
+# a health route answers with, which the probe reads for the app's own verdict on
+# itself (``is_frontend_built``, contracts.md section 5).
+_HEALTH_BODY_READ_BYTES = 4096
 # How much of a failing health response's body to quote. The body is where the
 # diagnosis lives -- a system interface answering 503 names in it exactly which
 # precondition failed -- and that one sentence is the difference between an agent
 # that knows what to fix and one reading a wall of discovery DEBUG chatter.
-_HEALTH_BODY_EXCERPT_BYTES = 400
+_HEALTH_BODY_EXCERPT_CHARS = 400
+# The health route's own word on whether there is a page to serve. An app answering
+# 200 with this false has booted, but a preview of it shows the "not built"
+# placeholder: nothing the user could judge, so it is not a healthy preview.
+_FRONTEND_BUILT_KEY = "is_frontend_built"
 
 # Written into the (append-only, refresh-reused) inner log before every spawn, so
 # an excerpt can be scoped to the boot that just failed. Without it, a boot that
@@ -270,8 +278,17 @@ class ProbeResult(NamedTuple):
     body: str
 
     @property
+    def declares_frontend_unbuilt(self) -> bool:
+        """Whether the body is a health document saying ``is_frontend_built`` is false."""
+        try:
+            document = json.loads(self.body)
+        except ValueError:
+            return False
+        return isinstance(document, dict) and document.get(_FRONTEND_BUILT_KEY) is False
+
+    @property
     def is_healthy(self) -> bool:
-        return self.status == 200
+        return self.status == 200 and not self.declares_frontend_unbuilt
 
     def describe(self) -> str:
         """One unterminated stderr line saying what the probe actually got back.
@@ -284,13 +301,22 @@ class ProbeResult(NamedTuple):
             return "  last probe: no response (connection refused, or timed out)"
         if not self.body:
             return f"  last probe: HTTP {self.status}, empty body"
-        return f"  last probe: HTTP {self.status} {self.body}"
+        if self.declares_frontend_unbuilt:
+            return (
+                f"  last probe: HTTP {self.status}, but the app reports "
+                f"{_FRONTEND_BUILT_KEY}: false -- it serves the 'not built' placeholder, "
+                "so there is nothing to preview (was the bundle built in this worktree?)"
+            )
+        excerpt = self.body[:_HEALTH_BODY_EXCERPT_CHARS]
+        if len(self.body) > _HEALTH_BODY_EXCERPT_CHARS:
+            excerpt += "..."
+        return f"  last probe: HTTP {self.status} {excerpt}"
 
 
 def _read_body_excerpt(response) -> str:
-    """Read at most ``_HEALTH_BODY_EXCERPT_BYTES`` of a response body, as text."""
+    """Read at most ``_HEALTH_BODY_READ_BYTES`` of a response body, as text."""
     try:
-        raw = response.read(_HEALTH_BODY_EXCERPT_BYTES + 1)
+        raw = response.read(_HEALTH_BODY_READ_BYTES + 1)
     except OSError:
         return ""
     # Truncation is judged on the raw bytes, before decoding: the read cap is in
@@ -300,8 +326,8 @@ def _read_body_excerpt(response) -> str:
     # multi-byte sequence contains an ASCII whitespace byte), and slicing may
     # split a trailing multi-byte character, which ``errors="replace"`` absorbs.
     stripped = raw.strip()
-    is_truncated = len(stripped) > _HEALTH_BODY_EXCERPT_BYTES
-    text = stripped[:_HEALTH_BODY_EXCERPT_BYTES].decode("utf-8", errors="replace")
+    is_truncated = len(stripped) > _HEALTH_BODY_READ_BYTES
+    text = stripped[:_HEALTH_BODY_READ_BYTES].decode("utf-8", errors="replace")
     return text + "..." if is_truncated else text
 
 
@@ -1282,7 +1308,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Re-boot the inner server on its existing port (to pick up a rebuild "
         "/ edit) without changing the port, wrapper, or the user's tab.",
     )
-    refresh_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
+    refresh_parser.add_argument(
+        "--name", required=True, help="The name passed to 'up'."
+    )
     _add_repo_root_arg(refresh_parser)
 
     args = parser.parse_args(argv)

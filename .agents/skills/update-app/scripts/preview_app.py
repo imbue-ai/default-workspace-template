@@ -407,7 +407,56 @@ def up(
         # left running rather than torn down here, since the usual next move is a rebuild and
         # a retry, which reuses them.
         _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
+    if code == 0:
+        _reframe_previews_naming(
+            repo_root,
+            app_name,
+            dump_registry
+            if dump_registry is not None
+            else _load_forward_port_module().dump_registry,
+        )
     return code
+
+
+def _reframe_previews_naming(
+    repo_root: Path,
+    sibling: str,
+    dump_registry: Callable[[list[dict[str, object]]], str],
+) -> None:
+    """Rewrite the registry copy of every live preview that frames ``sibling``.
+
+    A framing preview (the shell's) reads its siblings' URLs from a registry copy
+    written when it booted, and it watches that file. A sibling re-upped on its own
+    moves to new ports, and one taken down on its own is gone; either way the copy
+    is rewritten with where every recorded sibling is now, so the framing preview
+    follows without a re-up of its own.
+    """
+    for state_path in sorted(
+        (repo_root / INSTANCES_ROOT).glob(f"*{PREVIEW_STATE_SUFFIX}")
+    ):
+        state = _read_json(state_path)
+        if state is None:
+            continue
+        framing = str(state.get("app") or "")
+        recorded = state.get("with")
+        if (
+            framing == sibling
+            or not isinstance(recorded, list)
+            or sibling not in recorded
+            or live_preview_url(repo_root, framing) is None
+        ):
+            continue
+        registry_copy = _registry_copy_path(repo_root, framing)
+        if not registry_copy.exists():
+            continue
+        preview_url_by_app = {
+            str(name): url
+            for name in recorded
+            if (url := live_preview_url(repo_root, str(name))) is not None
+        }
+        write_registry_copy(
+            registry_path(), registry_copy, preview_url_by_app, dump_registry
+        )
 
 
 def _require_frameable_sibling(worktree: Path, sibling: str) -> None:
@@ -457,8 +506,18 @@ def _recorded_siblings(repo_root: Path, app_name: str) -> list[str]:
     return [str(name) for name in recorded]
 
 
-def down(app_name: str, repo_root: Path, *, runner: Runner) -> int:
-    """Tear the preview down, then the siblings it booted; keep everything a survivor still needs."""
+def down(
+    app_name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
+) -> int:
+    """Tear the preview down, then the siblings it booted; keep everything a survivor still needs.
+
+    A preview that another live preview frames (a chat taken down on its own under a
+    shell preview) leaves that preview's registry copy pointing at the live app again.
+    """
     siblings = _recorded_siblings(repo_root, app_name)
     code = runner.run(
         [
@@ -476,8 +535,15 @@ def down(app_name: str, repo_root: Path, *, runner: Runner) -> int:
         return code
     _registry_copy_path(repo_root, app_name).unlink(missing_ok=True)
     _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
+    _reframe_previews_naming(
+        repo_root,
+        app_name,
+        dump_registry
+        if dump_registry is not None
+        else _load_forward_port_module().dump_registry,
+    )
     for sibling in siblings:
-        code = down(sibling, repo_root, runner=runner)
+        code = down(sibling, repo_root, runner=runner, dump_registry=dump_registry)
         if code != 0:
             return code
     return 0

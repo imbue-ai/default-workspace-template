@@ -43,10 +43,13 @@ files = supervisord.conf.d/*.conf
 # without the main config being scanned at all. Its port is inside the auto-pick
 # range (which starts at 8080) so that the auto pick has to step over it -- a
 # port below the range would be invisible to the auto pick either way.
-_MAIN_CONF_WITH_INLINE_PROGRAM = _MAIN_CONF + """
+_MAIN_CONF_WITH_INLINE_PROGRAM = (
+    _MAIN_CONF
+    + """
 [program:dashboard]
 command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8080 --name dashboard && dashboard"
 """
+)
 
 _ROOT_PYPROJECT = """\
 [project]
@@ -75,7 +78,9 @@ def _make_workspace(
     (root / "system/supervisord.conf").write_text(main_conf)
     (root / "pyproject.toml").write_text(_ROOT_PYPROJECT)
     for name, port in dropins.items():
-        (root / f"system/supervisord.conf.d/{name}.conf").write_text(_dropin(name, port))
+        (root / f"system/supervisord.conf.d/{name}.conf").write_text(
+            _dropin(name, port)
+        )
     return root
 
 
@@ -108,7 +113,9 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     `uv.lock` is the one shared file a real scaffold rewrites, and only because
     `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
     """
-    root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "app-watcher": None})
+    root = _make_workspace(
+        tmp_path / "workspace", {"browser": 8081, "app-watcher": None}
+    )
     before_conf = (root / "system/supervisord.conf").read_text()
     before_pyproject = (root / "pyproject.toml").read_text()
 
@@ -134,7 +141,9 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     free to move one back. Both its port and its name have to be respected.
     """
     root = _make_workspace(
-        tmp_path / "workspace", {"browser": 8081}, main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM
+        tmp_path / "workspace",
+        {"browser": 8081},
+        main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM,
     )
 
     taken_port = _scaffold(root, "news", "--port", "8080")
@@ -143,13 +152,19 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
 
     taken_name = _scaffold(root, "dashboard")
     assert taken_name.returncode != 0
-    assert "supervisord.conf already has a [program:dashboard] section" in taken_name.stderr
+    assert (
+        "supervisord.conf already has a [program:dashboard] section"
+        in taken_name.stderr
+    )
 
     # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
     # lands on 8082 -- it would answer 8080 if the main config went unread.
     ok = _scaffold(root, "news")
     assert ok.returncode == 0, ok.stderr
-    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert (
+        "http://localhost:8082"
+        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
@@ -159,10 +174,15 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
 
-    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert (
+        "http://localhost:8082"
+        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
 
 
-def test_a_directory_matching_the_include_glob_does_not_break_the_scan(tmp_path: Path) -> None:
+def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
+    tmp_path: Path,
+) -> None:
     """A glob matches whatever is on disk, and a directory can be named like a drop-in.
 
     Every consumer of the expansion reads what it is handed, so an unfiltered match turns the
@@ -177,7 +197,10 @@ def test_a_directory_matching_the_include_glob_does_not_break_the_scan(tmp_path:
 
     assert result.returncode == 0, result.stderr
     # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
-    assert "http://localhost:8081" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert (
+        "http://localhost:8081"
+        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
@@ -225,7 +248,13 @@ def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
 
 def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None:
     lib_dir = scaffold_flask_lib._write_lib(
-        tmp_path, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
+        tmp_path,
+        "inbox-status",
+        "inbox status dashboard",
+        "Inbox status",
+        8081,
+        [],
+        _ICON,
     )
 
     manifest = load_manifest(lib_dir / "app.toml")
@@ -241,8 +270,13 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
 
 
 def test_display_name_falls_back_to_the_description() -> None:
-    assert scaffold_flask_lib._display_name("inbox status dashboard", None) == "inbox status dashboard"
-    assert scaffold_flask_lib._display_name("inbox status dashboard", " Inbox ") == "Inbox"
+    assert (
+        scaffold_flask_lib._display_name("inbox status dashboard", None)
+        == "inbox status dashboard"
+    )
+    assert (
+        scaffold_flask_lib._display_name("inbox status dashboard", " Inbox ") == "Inbox"
+    )
 
 
 @pytest.mark.parametrize("candidate", ["", "   ", "x" * 65, 'say "hi"'])
@@ -258,6 +292,22 @@ def test_the_display_name_limit_matches_the_library() -> None:
 
 
 def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
-    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
     assert '"shell:location"' in source
     assert "minds-location" not in source
+
+
+def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> None:
+    """The runner reads its port and data dir from the environment at import; a
+    runner whose imports do not cover that read crashes before serving anything."""
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    namespace: dict[str, object] = {"__name__": "inbox_status.runner"}
+
+    exec(compile(source, str(tmp_path / "runner.py"), "exec"), namespace)
+
+    assert namespace["PORT"] == 8081
+    assert namespace["DATA_DIR"] == Path("data/.apps/inbox-status")

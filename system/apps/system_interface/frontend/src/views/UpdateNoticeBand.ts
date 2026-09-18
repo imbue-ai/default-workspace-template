@@ -16,6 +16,7 @@ import {
   confirmUpdate,
   isNoticeSettled,
   isRollbackRunning,
+  isWorkspaceOnlyNotice,
   rollbackUpdate,
   updateNoticeForApp,
 } from "../models/UpdateNotice";
@@ -34,6 +35,9 @@ export const OPEN_NOTICE_TEXT =
   "This app was updated a moment ago. If something is not working, you can go back to the previous version.";
 export const OPEN_SHELL_NOTICE_TEXT =
   "The workspace interface was updated a moment ago. If something is not working, you can go back to the previous version.";
+/** The apply touched no app's program or bundle (how the workspace starts, say): the banner is the only surface. */
+export const OPEN_WORKSPACE_NOTICE_TEXT =
+  "The workspace was updated a moment ago. If something is not working, you can go back to the previous version.";
 export const SERVICES_RESTART_DETAILS =
   "This update also changed the workspace's own setup, so after the files are restored an agent has to " +
   "restart the workspace before the previous version runs.";
@@ -114,12 +118,15 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
   function text(notice: UpdateNotice, appName: string): string {
     if (isRollbackRunning(notice)) return `Rolling back: ${notice.progress}...`;
     if (isNoticeSettled(notice)) return notice.outcome ?? "";
+    if (isWorkspaceOnlyNotice(notice)) return OPEN_WORKSPACE_NOTICE_TEXT;
     return appName === SHELL_APP_NAME ? OPEN_SHELL_NOTICE_TEXT : OPEN_NOTICE_TEXT;
   }
 
   function dialog(notice: UpdateNotice): m.Children {
     if (!isDialogOpen) return null;
-    const apps = listed(notice.apps.map(displayName));
+    const apps = isWorkspaceOnlyNotice(notice) ? "the workspace" : listed(notice.apps.map(displayName));
+    const restarts =
+      notice.programs.length === 0 ? "no app restarts on its own" : `${listed(notice.programs)} will restart`;
     return m(DestroyConfirmDialog, {
       agentName: apps,
       title: "Roll back this update",
@@ -128,7 +135,7 @@ export function UpdateNoticeBand(): m.Component<UpdateNoticeBandAttrs> {
         m("strong", appliedAtText(notice)),
         " to ",
         m("strong", apps),
-        `? Work saved since then is kept; ${listed(notice.programs)} will restart.`,
+        `? Work saved since then is kept; ${restarts}.`,
       ],
       details: notice.needsServicesRestart ? SERVICES_RESTART_DETAILS : undefined,
       confirmLabel: "Roll back",

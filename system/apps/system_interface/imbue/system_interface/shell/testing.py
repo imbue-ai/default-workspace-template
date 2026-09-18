@@ -250,22 +250,29 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
 STUB_UPDATE_SELF_CALLS_REL: Final[str] = "data/.state/update-apply/stub-calls.jsonl"
 
 # A stand-in for ``update_self.py`` that records its argv, working directory, and session id, closes
-# the record on ``confirm-last`` the way the real script does, and exits as told. Written under the
-# test's workspace root so the shell finds it where it finds the real one.
+# the record on ``confirm-last`` and writes the first progress on ``rollback-last`` the way the real
+# script does (then holds for a moment, as a real rollback would), and exits as told. Written under
+# the test's workspace root so the shell finds it where it finds the real one.
 _STUB_UPDATE_SELF_SCRIPT = """\
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[4]
 record = root / "data/.state/update-apply/last-good.json"
 with (root / "{calls_rel}").open("a") as calls:
     calls.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "sid": os.getsid(0)}}) + "\\n")
-if sys.argv[1:] == ["confirm-last"] and {exit_code} == 0:
-    record.unlink(missing_ok=True)
 if {exit_code} != 0:
     sys.exit("the stub was told to fail")
+if sys.argv[1:] == ["confirm-last"]:
+    record.unlink(missing_ok=True)
+if sys.argv[1:] == ["rollback-last"]:
+    current = json.loads(record.read_text())
+    current["progress"] = "Reverting the update"
+    record.write_text(json.dumps(current))
+    threading.Event().wait({rollback_hold_seconds})
 sys.exit(0)
 """
 
@@ -304,10 +311,14 @@ def write_rollback_point(
     return path
 
 
-def write_stub_update_self_script(repo_root: Path, exit_code: int = 0) -> Path:
+def write_stub_update_self_script(repo_root: Path, exit_code: int = 0, rollback_hold_seconds: float = 0.0) -> Path:
     path = repo_root / UPDATE_SELF_SCRIPT_REL
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_STUB_UPDATE_SELF_SCRIPT.format(calls_rel=STUB_UPDATE_SELF_CALLS_REL, exit_code=exit_code))
+    path.write_text(
+        _STUB_UPDATE_SELF_SCRIPT.format(
+            calls_rel=STUB_UPDATE_SELF_CALLS_REL, exit_code=exit_code, rollback_hold_seconds=rollback_hold_seconds
+        )
+    )
     return path
 
 

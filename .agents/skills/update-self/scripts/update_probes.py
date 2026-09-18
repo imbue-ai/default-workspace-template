@@ -5,6 +5,7 @@ the served-bundle check, and the view refresh that follows a change.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -587,3 +588,39 @@ def refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         return
     if completed.stderr:
         sys.stderr.write(completed.stderr)
+
+
+# The health route (contracts.md section 5) every built-in app with a page answers,
+# and the field on it that says whether that page is the built bundle or the "not
+# built" placeholder.
+APP_HEALTH_PATH = "/api/health"
+FRONTEND_BUILT_KEY = "is_frontend_built"
+
+
+def describe_app_frontend_failure(
+    http: HttpClient, repo_root: Path, app: CriticalInstanceApp
+) -> str | None:
+    """Why ``app`` serves no built frontend by its own account, or ``None``.
+
+    Asks the app's health route on its registry URL and reads ``is_frontend_built``.
+    An app that answers no JSON there, or JSON without the field (the terminal's
+    page is ttyd's), has no verdict to give and is not failed on it: this is the
+    check that a restored copy of a bundle actually restored a page, on top of the
+    instances API answering, which it does whether or not the bundle is there.
+    """
+    base = registry_app_url(repo_root, app.name)
+    if base is None:
+        return None
+    page = http.get_page(f"{base.rstrip('/')}{APP_HEALTH_PATH}", timeout=5.0)
+    if page is None or page.status != 200 or "json" not in page.content_type.lower():
+        return None
+    try:
+        document = json.loads(page.body)
+    except ValueError:
+        return None
+    if not isinstance(document, dict) or document.get(FRONTEND_BUILT_KEY) is not False:
+        return None
+    return (
+        f"the {app.name} app reports {FRONTEND_BUILT_KEY}: false on its health route, so "
+        "it is serving the 'not built' placeholder rather than its page"
+    )

@@ -34,6 +34,14 @@ describe("the update notice over the socket", () => {
     expect(updateNoticeForApp("system_interface")).toBeNull();
   });
 
+  it("goes to the shell's banner when the apply touched no app at all", () => {
+    // A change to how the workspace starts touches no program or bundle; no tab carries a band,
+    // and without the banner the person would have no way to open the rollback dialog.
+    dispatchSocketEventForTesting({ type: "update_notice_changed", notice: noticeWire([]) });
+    expect(updateNoticeForApp("system_interface")).not.toBeNull();
+    expect(updateNoticeForApp("chat")).toBeNull();
+  });
+
   it("tells a running rollback from a settled one", () => {
     dispatchSocketEventForTesting({
       type: "update_notice_changed",

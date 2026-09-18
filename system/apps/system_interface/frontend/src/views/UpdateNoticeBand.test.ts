@@ -12,6 +12,7 @@ import { IframePanel } from "./IframePanel";
 import {
   OPEN_NOTICE_TEXT,
   OPEN_SHELL_NOTICE_TEXT,
+  OPEN_WORKSPACE_NOTICE_TEXT,
   SERVICES_RESTART_DETAILS,
   UpdateNoticeBand,
 } from "./UpdateNoticeBand";
@@ -161,6 +162,25 @@ describe("UpdateNoticeBanner", () => {
     applyUpdateNotice(noticeWire(["system_interface"]));
     m.render(root, m(UpdateNoticeBanner));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(OPEN_SHELL_NOTICE_TEXT);
+  });
+
+  it("carries a notice that touched no app, and its dialog names the workspace", () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    applyUpdateNotice(noticeWire([], { needs_services_restart: true }));
+    const render = (): void => {
+      m.render(root, m(UpdateNoticeBanner));
+    };
+    render();
+    expect(root.querySelector(".update-notice-banner")?.textContent).toContain(OPEN_WORKSPACE_NOTICE_TEXT);
+
+    click(root, ".update-notice-rollback");
+    render();
+
+    const dialog = root.querySelector(".modal-message");
+    expect(dialog?.textContent).toContain("the workspace");
+    expect(dialog?.textContent).toContain("no app restarts on its own");
+    expect(root.textContent).toContain(SERVICES_RESTART_DETAILS);
   });
 });
 

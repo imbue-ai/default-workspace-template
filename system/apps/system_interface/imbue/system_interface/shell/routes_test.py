@@ -1127,6 +1127,20 @@ def test_rolling_back_the_pending_update_starts_the_script_and_answers_accepted(
     assert read_stub_update_self_calls(_repo_root(app))[0]["argv"] == ["rollback-last"]
 
 
+@pytest.mark.timeout(30)
+def test_a_rollback_the_script_refuses_answers_conflict_with_the_scripts_reason(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    refused = client.post("/api/updates/pending/rollback")
+
+    assert refused.status_code == 409
+    assert "told to fail" in refused.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json()["progress"] is None
+
+
 def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
     write_stub_update_self_script(_repo_root(app))
     assert client.post("/api/updates/pending/rollback").status_code == 409

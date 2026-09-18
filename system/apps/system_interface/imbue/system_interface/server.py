@@ -31,6 +31,7 @@ from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
+from imbue.system_interface.shell.routes import HTTP_NOT_FOUND
 from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
@@ -412,7 +413,10 @@ def _frontend_not_built_response() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
-    # Every other path is a client-side route and renders the app shell.
+    # Every other path is a client-side route and renders the app shell -- except an
+    # unknown API path, whose caller wants an answer it can parse, not a page.
+    if path == API_PREFIX.strip("/") or path.startswith(API_PREFIX):
+        return json_response({"detail": f"No such API route: /{path}"}, status_code=HTTP_NOT_FOUND)
     return _index()
 
 
@@ -421,6 +425,9 @@ def _health_endpoint() -> Response:
     is_frontend_built = (get_state().static_directory / "index.html").exists()
     return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
 
+
+# Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
+API_PREFIX: Final[str] = "api/"
 
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"

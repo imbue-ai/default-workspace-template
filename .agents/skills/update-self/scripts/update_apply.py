@@ -102,6 +102,8 @@ from update_ledger import LedgerCommitError, write_version_history_entry
 from update_probes import (
     HEALTH_PATH,
     SHELL_PROGRAM,
+    CriticalInstanceApp,
+    describe_app_frontend_failure,
     describe_frontend_failure,
     has_chat_program,
     preflight,
@@ -1219,11 +1221,21 @@ def apply_update(
         elif plan.provisioner:
             clear_provision_incomplete(repo_root)
         clear_marker(repo_root)
-        if keep_rollback_point:
+        if keep_rollback_point and not name_status:
+            # A merge that changed nothing landed no commit: ``rollback_to`` is
+            # HEAD, and a record naming it would offer to revert whatever merge
+            # HEAD already was.
+            sys.stderr.write(
+                "note: the merge changed no files, so there is no rollback point to keep.\n"
+            )
+            discard_snapshots(repo_root)
+        elif keep_rollback_point:
             # The copies stay where they are, and the record says what this apply
             # touched, so the shell can offer the previous version back until a
             # person confirms the update or the next apply replaces the point.
-            touched = _touched_critical_apps(plan, name_status, repo_root)
+            touched = _touched_critical_apps(
+                plan, name_status, repo_root, marker.snapshots
+            )
             write_last_good(
                 LastGoodRecord(
                     merge_sha=git_out(runner, repo_root, ["rev-parse", "HEAD"]),
@@ -1401,20 +1413,29 @@ def apply_update(
 
 
 def _touched_critical_apps(
-    plan: ApplyPlan, name_status: Sequence[tuple[str, str]], repo_root: Path
+    plan: ApplyPlan,
+    name_status: Sequence[tuple[str, str]],
+    repo_root: Path,
+    snapshots: Sequence[SnapshotRecord],
 ) -> list[tuple[str, str]]:
     """The critical apps whose program or bundle this apply changed: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
-    under its directory, or when the frontend was rebuilt and the app owns one of
-    the bundles (a shared-library change rebuilds both), or, for the shell, when
-    anything the shell's process runs changed.
+    under its directory, when the bundle it owns changed, or, for the shell, when
+    anything the shell's process runs changed. One build at the npm root rewrites
+    every bundle, so "rebuilt" is not "changed": a bundle is changed when its
+    source stamp differs from the pre-apply copy's, and, with no stamp to compare
+    (a build with no git repo), whenever the frontend was rebuilt at all.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
         return []
-    bundle_owners = {bundle.app for bundle in FRONTEND_BUNDLES}
+    changed_bundle_owners = {
+        bundle.app
+        for bundle in FRONTEND_BUNDLES
+        if plan.frontend and _bundle_changed(repo_root, bundle, snapshots)
+    }
     touched: list[tuple[str, str]] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
@@ -1434,7 +1455,7 @@ def _touched_critical_apps(
         app_prefix = f"{APPS_DIR}/{directory.name}/"
         is_touched = (
             any(path.startswith(app_prefix) for path in paths)
-            or (plan.frontend and name in bundle_owners)
+            or name in changed_bundle_owners
             or (name == SHELL_PROGRAM and plan.backend)
         )
         if not is_touched:
@@ -1444,6 +1465,27 @@ def _touched_critical_apps(
             (name, program if isinstance(program, str) and program else name)
         )
     return touched
+
+
+def _bundle_changed(
+    repo_root: Path, bundle: FrontendBundle, snapshots: Sequence[SnapshotRecord]
+) -> bool:
+    """Whether the installed bundle was built from other source than the kept copy was."""
+    copy = next(
+        (
+            Path(record.copy)
+            for record in snapshots
+            if record.name == bundle.snapshot_name
+        ),
+        None,
+    )
+    if copy is None:
+        return True
+    before = _read_bundle_stamp(copy)
+    after = _read_bundle_stamp(repo_root / bundle.static_dir)
+    if before is None or after is None:
+        return True
+    return before != after
 
 
 # The trees a rollback cannot undo by restarting programs: the bootstrap and the
@@ -1698,21 +1740,26 @@ def _run_rollback(
         return 0
 
     programs = list(record.programs)
-    _record_rollback_progress(
-        record, repo_root, f"{_ROLLBACK_PROGRESS_RESTARTING} {', '.join(programs)}"
-    )
-    restarted = runner.run(
-        ["supervisorctl", "restart", *programs],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if getattr(restarted, "returncode", 0) != 0:
-        stderr = (
-            getattr(restarted, "stderr", "") or getattr(restarted, "stdout", "") or ""
-        ).strip()
-        sys.stderr.write(f"warning: supervisorctl restart reported: {stderr}\n")
+    if programs:
+        # An update that touched no program's code or bundle (a supervisord drop-in
+        # alone, say) has nothing to restart; supervisorctl refuses a bare restart.
+        _record_rollback_progress(
+            record, repo_root, f"{_ROLLBACK_PROGRESS_RESTARTING} {', '.join(programs)}"
+        )
+        restarted = runner.run(
+            ["supervisorctl", "restart", *programs],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if getattr(restarted, "returncode", 0) != 0:
+            stderr = (
+                getattr(restarted, "stderr", "")
+                or getattr(restarted, "stdout", "")
+                or ""
+            ).strip()
+            sys.stderr.write(f"warning: supervisorctl restart reported: {stderr}\n")
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_CHECKING)
     instance_apps = [
         app for app in read_critical_instance_apps(repo_root) if app.name in record.apps
@@ -1725,8 +1772,12 @@ def _run_rollback(
         shell_url=f"{resolved_base}{HEALTH_PATH}",
         programs=sorted({SHELL_PROGRAM, *programs}),
         instance_apps=instance_apps,
-        require_stable_pid=True,
+        require_stable_pid=bool(programs),
     )
+    if unsettled is None:
+        unsettled = _describe_restored_frontend_failure(
+            http, repo_root, resolved_base, sleeper, programs, instance_apps
+        )
     if unsettled is not None:
         write_emergency(
             repo_root,
@@ -1735,11 +1786,14 @@ def _run_rollback(
             record.driven_by,
             now,
         )
-        _finish_rollback(
+        # The copies stay: they are what an agent finishes the recovery from, and
+        # the emergency record names where they are.
+        _settle_rollback_record(
             record,
             repo_root,
             f"The previous version is restored, but the workspace did not come back healthy: "
-            f"{unsettled}. Ask your agent to look at it.",
+            f"{unsettled}. The previous version's copies are still kept. Ask your agent to "
+            "look at it.",
         )
         sys.stderr.write(f"rollback did not restore health: {unsettled}\n")
         return 3
@@ -1747,6 +1801,32 @@ def _run_rollback(
     _finish_rollback(record, repo_root, "Rolled back to the previous version.")
     sys.stderr.write("rolled back: the previous version is restored and healthy.\n")
     return 0
+
+
+def _describe_restored_frontend_failure(
+    http: HttpClient,
+    repo_root: Path,
+    resolved_base: str,
+    sleeper: Callable[[float], None],
+    programs: Sequence[str],
+    instance_apps: Sequence[CriticalInstanceApp],
+) -> str | None:
+    """Why a restored app serves no page, or ``None`` when every restored one does.
+
+    The settled verdict asks the shell's health and each app's instances API, both
+    of which answer over a missing bundle: a restored copy that did not restore the
+    page (the copy emptied, say) would otherwise read as a rollback that worked,
+    and the copies would be discarded on that word.
+    """
+    if SHELL_PROGRAM in programs:
+        shell_failure = describe_frontend_failure(http, resolved_base, sleeper)
+        if shell_failure is not None:
+            return shell_failure
+    for app in instance_apps:
+        app_failure = describe_app_frontend_failure(http, repo_root, app)
+        if app_failure is not None:
+            return app_failure
+    return None
 
 
 def confirm_last(repo_root: Path) -> int:

@@ -1,6 +1,8 @@
 """Tests for the update notice: reading the kept rollback point, announcing its changes, and the verbs that close it."""
 
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -131,20 +133,66 @@ def test_confirm_reports_a_failing_script(tmp_path: Path) -> None:
 
 @pytest.mark.timeout(30)
 def test_the_rollback_launches_the_script_detached_in_its_own_session(tmp_path: Path) -> None:
-    """The launch answers before the script runs, and the script is in a session of its own: it restarts the
-    shell's own supervisord program group when the shell was touched, which would take a child of this
-    process down with it."""
+    """The launch answers once the script is under way (its first progress is in the record), not once it
+    is done, and the script is in a session of its own: it restarts the shell's own supervisord program
+    group when the shell was touched, which would take a child of this process down with it."""
     watch = _watch(tmp_path)
-    write_stub_update_self_script(watch.repo_root)
+    write_stub_update_self_script(watch.repo_root, rollback_hold_seconds=5.0)
     write_rollback_point(watch.repo_root, apps=["system_interface"])
 
+    started_at = time.monotonic()
     watch.launch_rollback()
 
-    assert wait_until(lambda: len(read_stub_update_self_calls(watch.repo_root)) == 1, timeout_seconds=10)
+    assert time.monotonic() - started_at < 5.0, "the launch waited for the script to finish"
+    current = watch.current()
+    assert current is not None and current.is_rolling_back
     (call,) = read_stub_update_self_calls(watch.repo_root)
     assert call["argv"] == ["rollback-last"]
     assert Path(call["cwd"]).resolve() == watch.repo_root.resolve()
     assert call["sid"] != os.getsid(0)
+
+
+@pytest.mark.timeout(30)
+def test_a_rollback_the_script_refuses_is_a_refusal_in_the_scripts_words(tmp_path: Path) -> None:
+    """The script refuses on its own grounds (a dirty tree, an apply in flight) before writing any
+    progress; the launch reads that exit rather than answering as if a rollback were under way."""
+    watch = _watch(tmp_path)
+    write_stub_update_self_script(watch.repo_root, exit_code=1)
+    write_rollback_point(watch.repo_root)
+
+    with pytest.raises(UpdateNoticeRefusedError, match="told to fail"):
+        watch.launch_rollback()
+
+    current = watch.current()
+    assert current is not None and not current.is_rolling_back and not current.is_settled
+
+
+@pytest.mark.timeout(30)
+def test_two_launches_at_once_start_one_script_and_refuse_the_other(tmp_path: Path) -> None:
+    """Two windows pressing Roll back together: the second must read the first's progress rather than
+    start a second script, whose failed revert would settle the record under the first."""
+    watch = _watch(tmp_path)
+    write_stub_update_self_script(watch.repo_root, rollback_hold_seconds=5.0)
+    write_rollback_point(watch.repo_root)
+    outcomes: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def press() -> None:
+        barrier.wait()
+        try:
+            watch.launch_rollback()
+            outcomes.append("started")
+        except UpdateNoticeRefusedError as e:
+            outcomes.append(str(e))
+
+    presses = [threading.Thread(target=press) for _ in range(2)]
+    for thread in presses:
+        thread.start()
+    for thread in presses:
+        thread.join(timeout=20)
+
+    assert sorted(outcomes) == sorted(["started", "A rollback is already running."])
+    assert len(read_stub_update_self_calls(watch.repo_root)) == 1
 
 
 def test_the_rollback_is_refused_without_a_point_while_one_runs_and_once_it_settled(tmp_path: Path) -> None:

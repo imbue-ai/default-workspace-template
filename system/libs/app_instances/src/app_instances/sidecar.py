@@ -110,9 +110,15 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
 
 
 def _load_sidecar_manifest(
-    manifest_path: Path, instances_url: InstancesUrl
+    manifest_path: Path, instances_url: InstancesUrl, is_registered: bool
 ) -> AppManifest:
-    """The manifest, checked to declare the instances API at the port this sidecar will serve."""
+    """The manifest, checked to declare the instances API at the port this sidecar will serve.
+
+    The manifest's ``instances_url`` is where the shell reaches the *registered* app's
+    API, so a registered sidecar must serve exactly there. An unregistered boot (a
+    preview on free ports) serves the API wherever it was told to and points no
+    registry row at it, so the manifest's declaration is not its to match.
+    """
     try:
         manifest = load_manifest(manifest_path)
     except ManifestLoadError as e:
@@ -121,6 +127,8 @@ def _load_sidecar_manifest(
         raise SidecarError(
             f"manifest {manifest_path} does not declare instances = true"
         )
+    if not is_registered:
+        return manifest
     if manifest.instances_url is None:
         raise SidecarError(
             f"manifest {manifest_path} declares no instances_url; "
@@ -232,7 +240,7 @@ def run_sidecar_app(
         )
     if not child_argv:
         raise SidecarError("cannot start the wrapped server: no command given")
-    manifest = _load_sidecar_manifest(manifest_path, instances_url)
+    manifest = _load_sidecar_manifest(manifest_path, instances_url, is_registered)
     nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
     host, port = split_instances_url(instances_url)
     with serve_in_background(host, port, build_app(manifest, nudger)):

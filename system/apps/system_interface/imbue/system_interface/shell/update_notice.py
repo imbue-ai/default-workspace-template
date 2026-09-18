@@ -18,6 +18,9 @@ child in the shell's group would die halfway through its own work.
 import json
 import subprocess
 import sys
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -47,6 +50,11 @@ UPDATE_SELF_SCRIPT_REL: Final[str] = ".agents/skills/update-self/scripts/update_
 # so a wedged script cannot hold a request thread forever.
 _CONFIRM_TIMEOUT_SECONDS: Final[float] = 120.0
 _CONFIRM_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 5.0
+
+# How long a launched rollback gets to write its first progress into the record (its checks before
+# that are a lock, a few file reads, and one ``git status``), and how often the record is re-read.
+_ROLLBACK_START_TIMEOUT_SECONDS: Final[float] = 30.0
+_ROLLBACK_START_POLL_SECONDS: Final[float] = 0.1
 
 
 class UpdateNotice(FrozenModel):
@@ -123,11 +131,15 @@ def read_update_notice(record_path: Path) -> UpdateNotice | None:
         return None
 
 
-def _launch_detached(argv: list[str], cwd: Path, log_path: Path) -> None:
-    """Start ``argv`` in its own session with its output appended to ``log_path``, and forget it."""
+def _launch_detached(argv: list[str], cwd: Path, log_path: Path) -> Callable[[], int | None]:
+    """Start ``argv`` in its own session with its output appended to ``log_path``.
+
+    Answers a poll: the child's exit code once it has exited, ``None`` while it runs. That is all
+    a caller gets, since the child is meant to outlive this process and nothing here waits on it.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_file:
-        subprocess.Popen(
+        process = subprocess.Popen(
             argv,
             cwd=cwd,
             stdin=subprocess.DEVNULL,
@@ -135,6 +147,19 @@ def _launch_detached(argv: list[str], cwd: Path, log_path: Path) -> None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    return process.poll
+
+
+def _log_tail_since(log_path: Path, offset: int) -> str:
+    """The last line the script wrote past ``offset``: its refusal, in its own words."""
+    try:
+        with log_path.open("rb") as log_file:
+            log_file.seek(offset)
+            written = log_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        return f"see {log_path}"
+    lines = [line.strip() for line in written.splitlines() if line.strip()]
+    return lines[-1] if lines else f"see {log_path}"
 
 
 class UpdateNoticeWatch(MutableModel):
@@ -147,6 +172,10 @@ class UpdateNoticeWatch(MutableModel):
 
     _observer: Any | None = PrivateAttr(default=None)
     _last_announced: UpdateNotice | None = PrivateAttr(default=None)
+    _launch_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Set by the watch on every change to the record: what a launch waits on for the script's
+    # first progress. Without a running watch the launch re-reads the record on its own cadence.
+    _record_changed: threading.Event = PrivateAttr(default_factory=threading.Event)
 
     @property
     def record_path(self) -> Path:
@@ -166,6 +195,7 @@ class UpdateNoticeWatch(MutableModel):
     def _on_record_changed(self) -> None:
         """Announce the record as it now reads. A write raises several events (created, modified,
         closed), so the announcement is made once per distinct reading."""
+        self._record_changed.set()
         notice = self.current()
         if notice == self._last_announced:
             return
@@ -206,25 +236,55 @@ class UpdateNoticeWatch(MutableModel):
             )
 
     def launch_rollback(self) -> None:
-        """Start the rollback and answer at once; its progress and outcome reach the windows through
-        the record it rewrites as it goes.
+        """Start the rollback and answer once it is under way; its progress and outcome reach the
+        windows through the record it rewrites as it goes.
 
-        Raises ``UpdateNoticeRefusedError`` when there is nothing to roll back, a rollback is already
-        running, or the point was already taken back (a settled record is closed, not re-run), and
-        ``UpdateNoticeCommandError`` when the script could not be started.
+        Under way means the script has written its first progress into the record (or has
+        already finished): two presses of the button from two windows land here together, and
+        the second must read the first's progress rather than start a second script. The
+        launches are serialized for that, and each one holds until the record says so.
+
+        Raises ``UpdateNoticeRefusedError`` when there is nothing to roll back, a rollback is
+        already running, the point was already taken back (a settled record is closed, not
+        re-run), or the script refused (a dirty tree, an apply in flight), and
+        ``UpdateNoticeCommandError`` when the script could not be started or never got under way.
         """
-        notice = self.current()
-        if notice is None:
-            raise UpdateNoticeRefusedError("There is no update to roll back.")
-        if notice.is_rolling_back:
-            raise UpdateNoticeRefusedError("A rollback is already running.")
-        if notice.is_settled:
-            raise UpdateNoticeRefusedError("This update was already rolled back; close the notice instead.")
-        try:
-            _launch_detached(
-                [sys.executable, str(self.repo_root / UPDATE_SELF_SCRIPT_REL), "rollback-last"],
-                cwd=self.repo_root,
-                log_path=self.repo_root / ROLLBACK_LOG_REL,
-            )
-        except OSError as e:
-            raise UpdateNoticeCommandError(f"The rollback could not be started: {e}") from e
+        with self._launch_lock:
+            notice = self.current()
+            if notice is None:
+                raise UpdateNoticeRefusedError("There is no update to roll back.")
+            if notice.is_rolling_back:
+                raise UpdateNoticeRefusedError("A rollback is already running.")
+            if notice.is_settled:
+                raise UpdateNoticeRefusedError("This update was already rolled back; close the notice instead.")
+            log_path = self.repo_root / ROLLBACK_LOG_REL
+            log_offset = log_path.stat().st_size if log_path.exists() else 0
+            try:
+                poll = _launch_detached(
+                    [sys.executable, str(self.repo_root / UPDATE_SELF_SCRIPT_REL), "rollback-last"],
+                    cwd=self.repo_root,
+                    log_path=log_path,
+                )
+            except OSError as e:
+                raise UpdateNoticeCommandError(f"The rollback could not be started: {e}") from e
+            self._wait_until_under_way(poll, notice, log_path, log_offset)
+
+    def _wait_until_under_way(
+        self, poll: Callable[[], int | None], before: UpdateNotice, log_path: Path, log_offset: int
+    ) -> None:
+        deadline = time.monotonic() + _ROLLBACK_START_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            self._record_changed.clear()
+            if self.current() != before:
+                return
+            returncode = poll()
+            if returncode is not None:
+                if returncode == 0:
+                    return
+                raise UpdateNoticeRefusedError(
+                    f"The rollback was refused (exit {returncode}): {_log_tail_since(log_path, log_offset)}"
+                )
+            self._record_changed.wait(timeout=_ROLLBACK_START_POLL_SECONDS)
+        raise UpdateNoticeCommandError(
+            f"The rollback did not get under way within {_ROLLBACK_START_TIMEOUT_SECONDS:g}s; see {log_path}."
+        )

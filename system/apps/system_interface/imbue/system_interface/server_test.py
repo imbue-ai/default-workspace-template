@@ -428,10 +428,20 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     handle_exception and surfaced every 404/405 as a 500 (observed live on a
     method-not-allowed destroy call).
     """
-    # Non-GET probes are the observable cases: the SPA catch-all intentionally
-    # serves the frontend for any unknown GET, so those return 200 by design.
     assert client.post("/api/definitely-not-a-route").status_code == 405
     assert client.put("/api/layout/broadcast").status_code == 405
+
+
+def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
+    """The SPA catch-all serves the app shell for any unknown GET, which is right for a
+    client-side route and wrong for a caller of the API: a 200 page where JSON was expected
+    reads as success to a script and as a parse error to a browser."""
+    response = client.get("/api/definitely-not-a-route")
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route"
+    assert client.get("/api").status_code == 404
+    # A client-side route still renders the shell.
+    assert client.get("/some/client/route").status_code == 200
 
 
 @pytest.mark.flaky
