@@ -1,1 +1,0 @@
-The connector's Modal web function now attaches custom domains at deploy time: `minds env deploy` threads the tier's `[origins]` hosts through `MINDS_CONNECTOR_CUSTOM_DOMAINS`, and the app passes them to `modal.asgi_app(custom_domains=...)`. Unset (dev/ci, or a bare `modal deploy`) keeps only the `*.modal.run` URL, exactly as before.

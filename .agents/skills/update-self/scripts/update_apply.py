@@ -658,7 +658,9 @@ def _recover_running_state(
                 repo_root, None, live_service_restarted=False, bundles=frontend.bundles
             )
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
-            refresh_backend_dependencies(repo_root, runner, keep_protected)
+            refresh_backend_dependencies(
+                repo_root, runner, keep_protected, is_mngr_source_required=False
+            )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
         )

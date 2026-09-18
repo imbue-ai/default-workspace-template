@@ -1,1 +1,0 @@
-specs/atif-transcript-alignment/spec.md: the stream header's `event_id` is now specified as `header-<sha256(agent_id:emitter)[:32]>` rather than the fixed `"header"`. A fixed id repeats identically across the fleet, and analytics' event-id dedupe collapsed every agent's header to one row per account.

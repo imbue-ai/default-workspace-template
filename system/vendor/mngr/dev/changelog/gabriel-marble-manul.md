@@ -1,1 +1,0 @@
-The detached-destroy-flow spec now matches the desktop client: the destroy runs through a shell wrapper that records the `mngr destroy` exit status beside the pid file, and the status table derives from four signals, with a non-zero exit status reading as failed whatever the host reads as.

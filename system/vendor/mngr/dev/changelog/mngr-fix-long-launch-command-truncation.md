@@ -1,3 +1,0 @@
-Split the minds snapshot-resume offload run into `all` and `flaky` groups so retries apply only to flaky-marked tests.
-
-The config previously used a single group with no retries, and its comments explained that the two-group split could not be enabled while the suite had no `@pytest.mark.flaky` test: offload runs `pytest --collect-only` per group, and a group matching zero tests exits 5, which offload treats as a discovery failure. The suite now has one flaky-marked test, so the split is safe and has been enabled as those comments prescribed. Real failures in the other tests still surface immediately rather than being masked by a retry.

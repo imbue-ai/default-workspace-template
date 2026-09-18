@@ -1,1 +1,0 @@
-Added the `TMR host cleanup` workflow (`.github/workflows/tmr-cleanup.yml`), a daily 06:00 UTC sweep that destroys the hosts of past TMR runs in the shared `tmr-ci` namespace, keeping each variant's most recent run. It runs ahead of both scheduled TMR variants so each starts against a small provider state volume. Dispatch it manually with `dry_run` to see what it would destroy.

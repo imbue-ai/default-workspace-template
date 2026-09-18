@@ -1,1 +1,0 @@
-`just test-minds-evals` with no args runs the minds_evals suite as two pytest sessions across two xdist workers each: the real-browser `chromium` tests in one, everything else in the other, with coverage appended across both. Each session gets its own 150 s CI budget. With args (`just test-minds-evals <path>::<test>`, a `-m`, ...) it runs the one session they select.

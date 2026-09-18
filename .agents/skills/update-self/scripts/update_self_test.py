@@ -536,7 +536,6 @@ def test_classify_path_reveal_classes() -> None:
         # it needs the same services-agent restart to take effect.
         "system/supervisord.conf.d/app-watcher.conf": update_classification.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_classification.CLASS_SERVICE,
-        "system/vendor/mngr/libs/mngr/foo.py": update_classification.CLASS_EDITABLE_TOOL,
         "system/scripts/forward_port.py": update_classification.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_classification.CLASS_SHARED_RUNTIME,
         "system/services/oom_priority/src/oom_priority/ledger.py": update_classification.CLASS_SHARED_RUNTIME,
@@ -558,7 +557,6 @@ def test_classify_path_reveal_classes() -> None:
         # restart for system/libs/bootstrap/README.md).
         "system/libs/bootstrap/README.md": update_classification.CLASS_DOCS,
         "system/apps/system_interface/README.md": update_classification.CLASS_DOCS,
-        "system/vendor/mngr/README.md": update_classification.CLASS_DOCS,
         # Changelog entries likewise, in every project's bucket -- a release
         # ships them under runtime prefixes, so without this nearly every update
         # would restart a service (or run an impact analysis) over markdown.
@@ -587,10 +585,6 @@ def test_classify_path_project_mapping() -> None:
         == "system/apps/chat"
     )
     assert (
-        update_classification.classify_path("system/vendor/mngr/x.py").project
-        == "system/vendor/mngr"
-    )
-    assert (
         update_classification.classify_path("system/scripts/forward_port.py").project
         == "."
     )
@@ -600,9 +594,7 @@ def test_classify_path_manifest_flag() -> None:
     assert update_classification.classify_path(
         "system/apps/system_interface/pyproject.toml"
     ).is_manifest
-    assert update_classification.classify_path(
-        "system/vendor/mngr/libs/mngr/pyproject.toml"
-    ).is_manifest
+    assert update_classification.classify_path("pyproject.toml").is_manifest
     assert not update_classification.classify_path(
         "system/scripts/forward_port.py"
     ).is_manifest
@@ -636,24 +628,24 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
 def test_classify_merge_summary_fields() -> None:
     upstream_changed = [
         "system/apps/system_interface/src/App.tsx",  # merged
-        "system/vendor/mngr/libs/mngr/foo.py",  # merged
+        "system/apps/chat/imbue/chat/server.py",  # merged
         "system/scripts/forward_port.py",  # pulled in
     ]
     local_changed = [
         "system/apps/system_interface/src/App.tsx",
-        "system/vendor/mngr/libs/mngr/foo.py",
+        "system/apps/chat/imbue/chat/server.py",
     ]
     result = update_classification.classify_merge(upstream_changed, local_changed)
     assert result.reveal_classes_merged == [
-        update_classification.CLASS_EDITABLE_TOOL,
+        update_classification.CLASS_SHARED_RUNTIME,
         update_classification.CLASS_SYSTEM_INTERFACE,
     ]
     assert result.reveal_classes_pulled_in == [
         update_classification.CLASS_SHARED_RUNTIME
     ]
     assert result.projects_to_validate == [
+        "system/apps/chat",
         "system/apps/system_interface",
-        "system/vendor/mngr",
     ]
 
 
@@ -822,8 +814,8 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # bucket, not only the legacy top-level ``changelog/``. The command must
     # surface entries from every bucket -- else the update-self "what's new"
     # digest silently drops everything on the current (bucketed) convention --
-    # while ignoring the vendored subtree's separate changelog system and files
-    # that only happen to sit next to a changelog dir.
+    # while ignoring system/vendor's separate changelog system and files that
+    # only happen to sit next to a changelog dir.
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
@@ -843,14 +835,13 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
 
-    # Target commit: newly-added entries across every bucket, a vendored-subtree
+    # Target commit: newly-added entries across every bucket, a system/vendor
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
     _write("system/apps/browser/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
     _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
     _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
@@ -1406,6 +1397,17 @@ def _installed_stamp(repo_root: Path) -> str | None:
     return update_apply._read_bundle_stamp(repo_root / update_layout.STATIC_DIR)
 
 
+_MNGR_GIT = "https://github.com/imbue-ai/mngr"
+_MNGR_REV = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _mngr_requirement(package: str, subdirectory: str) -> str:
+    """The ``--with`` requirement a plugin resolves to at the apply repo's pin."""
+    return f"{package} @ git+{_MNGR_GIT}@{_MNGR_REV}#subdirectory={subdirectory}"
+
+
+_MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
+
 # The Python apps a workspace tree carries, as the apply discovers them
 # (``read_app_tools``): the shell (critical) and the browser daemon (not).
 _APP_FIXTURES = (
@@ -1433,6 +1435,11 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
     (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
+    # The workspace's mngr pin, as build_workspace.sh and the refresh both read it.
+    (repo_root / update_layout.PYPROJECT_PATH).write_text(
+        "[tool.uv.sources]\n"
+        f'imbue-mngr = {{ git = "{_MNGR_GIT}", rev = "{_MNGR_REV}", subdirectory = "libs/mngr" }}\n'
+    )
     for package, tool_name, executable, is_critical in _APP_FIXTURES:
         _write_app(repo_root, package, tool_name, executable, is_critical)
     return repo_root
@@ -1847,7 +1854,6 @@ _PROVISION = ("bash", update_layout.PROVISIONER_SCRIPT)
 
 _FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
 _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
-_VENDORED_DIFF = "M\tsystem/vendor/mngr/libs/mngr/imbue/mngr/api/list.py\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
 _BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
@@ -1976,10 +1982,9 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         # harmless, and cheaper than a per-app exception to the rule.
         ("system/apps/files/assets/index.js", {"files-app"}),
         # A shared backend manifest is part of every app tool's closure: the
-        # vendored packages an app depends on editable, and the plugin table
-        # that assigns plugins to its tool.
+        # pinned mngr packages an app depends on, and the plugin table that
+        # assigns plugins to its tool.
         ("system/apps/system_interface/pyproject.toml", _EVERY_APP_TOOL),
-        ("system/vendor/mngr/libs/mngr/pyproject.toml", _EVERY_APP_TOOL),
         (update_layout.PLUGIN_MANIFEST_PATH, _EVERY_APP_TOOL),
         ("uv.lock", _EVERY_APP_TOOL),
     ],
@@ -2025,10 +2030,6 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
         "system/apps/system_interface/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
-        # The vendored mngr is an editable install the backend imports, so its
-        # workspace root and each of its libraries move the same closure.
-        "system/vendor/mngr/pyproject.toml",
-        "system/vendor/mngr/libs/mngr/pyproject.toml",
         # Not a Python manifest, but it is what the refresh unions into each
         # tool's reinstall, so it decides which packages the tool environments
         # carry. A release that only re-assigns an existing plugin to another
@@ -2042,13 +2043,21 @@ def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
     assert _plan([path]).backend_manifest
 
 
+def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
+    # The bundles compile in the embed contract and the service icons fetched from the
+    # pinned commit, so a release whose only change is the pin still re-emits them.
+    plan = _plan([update_layout.PYPROJECT_PATH, "uv.lock"])
+
+    assert plan.frontend_src and plan.backend_manifest
+
+
 @pytest.mark.parametrize(
     "path",
     [
         # Not a manifest: a source file nested where one would be.
-        "system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py",
-        # A pyproject one level deeper than a vendored library's own root.
-        "system/vendor/mngr/libs/mngr/imbue/pyproject.toml",
+        "system/apps/system_interface/imbue/system_interface/server.py",
+        # A pyproject that is not one of the roots the environment resolves from.
+        "system/apps/system_interface/imbue/pyproject.toml",
     ],
 )
 def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
@@ -2219,23 +2228,6 @@ def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
     assert spawner.spawns == [[update_layout.TOOL_NAME]]
 
 
-def test_apply_vendored_source_change_restarts_without_building(
-    apply_repo: Path,
-) -> None:
-    # The geebspace lesson: vendored-mngr source is imported in-process by the
-    # live system interface, so "picked up live" was never true -- it restarts.
-    runner = _apply_runner(_VENDORED_DIFF, apply_repo)
-    spawner = _FakeSpawner()
-
-    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
-
-    assert code == 0
-    assert runner.ran(*_RESTART)
-    assert spawner.spawns  # pre-flighted before the restart
-    assert not runner.ran("npm", "run", "build")
-    assert not runner.ran("uv", "tool", "install")  # source-only: no env refresh
-
-
 def test_apply_apt_snapshot_change_provisions_before_any_restart(
     apply_repo: Path,
 ) -> None:
@@ -2265,8 +2257,8 @@ def test_apply_settings_change_restarts_without_a_provisioner_run(
 
 
 def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) -> None:
-    # A backend manifest moves every environment's closure: the vendored mngr
-    # tool, the root venv, and each app's own tool (the vendored packages and
+    # A backend manifest moves every environment's closure: the mngr tool,
+    # the root venv, and each app's own tool (the pinned mngr packages and
     # the plugin table are part of what those resolve).
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
@@ -2274,13 +2266,41 @@ def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) ->
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == [
-        update_layout.MNGR_DIR,
+    assert [argv[3] for argv in installs] == [
+        _MNGR_BASE,
+        "-e",
+        "-e",
+    ]
+    assert [argv[4] for argv in installs[1:]] == [
         "system/apps/browser",
         update_layout.SYSTEM_INTERFACE_DIR,
     ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
+
+
+def test_apply_fetches_the_mngr_assets_the_pin_carries(apply_repo: Path) -> None:
+    # A worker's bundle means no frontend build runs, and the prebuild hook is the only
+    # other caller: without this the fetched tree (and the style-guide symlink into it)
+    # is whatever the last build left.
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/usr/bin/env bash\n")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert runner.ran("bash", str(script))
+
+
+def test_apply_skips_the_asset_fetch_in_a_tree_that_has_no_such_script(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.argvs_starting("bash")
 
 
 def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
@@ -4713,34 +4733,35 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     # A bare --reinstall rebuilds a tool from its base package alone. For the
     # mngr tool the extras ARE its plugins, so dropping them leaves a CLI that
     # cannot parse its own plugin config -- an update that breaks the workspace
-    # in a new way while reporting success.
+    # in a new way while reporting success. uv records a git plugin in the
+    # receipt in its query form; the refresh hands it back in PEP 508 form.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    receipt_git = f"{_MNGR_GIT}?subdirectory=libs%2F{{sub}}&rev={_MNGR_REV}"
     _with_receipt(
         runner,
         tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
-        """
+        f"""
         [tool]
         requirements = [
-            { name = "imbue-mngr", editable = "/repo/system/vendor/mngr/libs/mngr" },
-            { name = "imbue-mngr-claude", editable = "/repo/system/vendor/mngr/libs/mngr_claude" },
-            { name = "imbue-mngr-wait", editable = "/repo/system/vendor/mngr/libs/mngr_wait" },
+            {{ name = "imbue-mngr", git = "{receipt_git.format(sub="mngr")}" }},
+            {{ name = "imbue-mngr-claude", git = "{receipt_git.format(sub="mngr_claude")}" }},
+            {{ name = "imbue-mngr-wait", git = "{receipt_git.format(sub="mngr_wait")}" }},
         ]
         """,
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
-        "--with-editable",
-        "/repo/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        "/repo/system/vendor/mngr/libs/mngr_wait",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
         "--reinstall",
     ]
 
@@ -4753,8 +4774,10 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     # its agent type needs, and a reinstall from the receipt alone leaves an
     # mngr that rejects its own config at the restart -- so the merged tree's
     # manifest is unioned in, for every tool, without repeating what the
-    # receipt already has.
+    # receipt already has -- and, since the release moved the pin, the
+    # manifest's commit replaces the receipt's stale one for a plugin both name.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    stale_rev = "f" * 40
     _with_receipt(
         runner,
         tmp_path / "tools",
@@ -4762,8 +4785,8 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         f"""
         [tool]
         requirements = [
-            {{ name = "imbue-mngr", editable = "{apply_repo}/system/vendor/mngr/libs/mngr" }},
-            {{ name = "imbue-mngr-claude", editable = "{apply_repo}/system/vendor/mngr/libs/mngr_claude" }},
+            {{ name = "imbue-mngr", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr&rev={stale_rev}" }},
+            {{ name = "imbue-mngr-claude", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr_claude&rev={stale_rev}" }},
         ]
         """,
     )
@@ -4772,33 +4795,35 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     manifest.write_text(
         """
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_claude"
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
         tools = ["mngr", "system_interface"]
 
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_opencode"
+        package = "imbue-mngr-opencode"
+        subdirectory = "libs/mngr_opencode"
         tools = ["mngr", "system_interface"]
 
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_wait"
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
         tools = ["mngr"]
         """
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_wait",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
         "--reinstall",
     ]
     assert _install_argv(runner, update_layout.SYSTEM_INTERFACE_DIR) == [
@@ -4807,10 +4832,67 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         "install",
         "-e",
         update_layout.SYSTEM_INTERFACE_DIR,
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
+        "--reinstall",
+    ]
+
+
+def test_a_workspace_that_vendored_mngr_is_refreshed_from_the_pin(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A workspace built before mngr was pinned was installed editable from the
+    # tree at system/vendor/mngr, which the merge onto the pin deletes. Its
+    # receipt still names those paths; the refresh takes every plugin from the
+    # manifest at the pin and carries none of the deleted paths along.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    gone = apply_repo / "system" / "vendor" / "mngr"
+    # The merge deletes the tracked tree, but each project's gitignored __pycache__ keeps
+    # its directory on disk: what makes an editable installable is its pyproject.toml.
+    for plugin in ("libs/mngr", "libs/mngr_claude", "libs/mngr_wait"):
+        (gone / plugin / "imbue" / "__pycache__").mkdir(parents=True)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_layout.MNGR_TOOL_NAME,
+        f"""
+        [tool]
+        requirements = [
+            {{ name = "imbue-mngr", editable = "{gone / "libs/mngr"}" }},
+            {{ name = "imbue-mngr-claude", editable = "{gone / "libs/mngr_claude"}" }},
+            {{ name = "imbue-mngr-wait", editable = "{gone / "libs/mngr_wait"}" }},
+        ]
+        """,
+    )
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        """
+        [[plugins]]
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
+        tools = ["mngr"]
+
+        [[plugins]]
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
+        tools = ["mngr"]
+        """
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, _MNGR_BASE) == [
+        "uv",
+        "tool",
+        "install",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
         "--reinstall",
     ]
 
@@ -4818,9 +4900,9 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
 def test_the_refresh_repins_the_base_to_the_in_tree_source(
     apply_repo: Path, tmp_path: Path
 ) -> None:
-    # A receipt that has lost its editable marker must not make us re-resolve
-    # the base from the index -- that would silently swap the workspace's own
-    # vendored code for a published release.
+    # A receipt that has lost its git source must not make us re-resolve the
+    # base from the index -- that would silently swap the pinned commit for a
+    # published release.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
         runner,
@@ -4831,12 +4913,11 @@ def test_the_refresh_repins_the_base_to_the_in_tree_source(
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
+        _MNGR_BASE,
         "--reinstall",
     ]
 
@@ -4866,12 +4947,12 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     envs = {
-        argv[4]: env
+        (argv[4] if argv[3] == "-e" else argv[3]): env
         for argv, env in zip(runner.calls, runner.envs)
-        if argv[:4] == ["uv", "tool", "install", "-e"] and env is not None
+        if argv[:3] == ["uv", "tool", "install"] and env is not None
     }
-    assert envs[update_layout.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
-    assert envs[update_layout.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    assert envs[_MNGR_BASE]["UV_TOOL_DIR"] == str(tools)
+    assert envs[_MNGR_BASE]["UV_TOOL_BIN_DIR"] == str(bin_dir)
     # A tool that is not on PATH at all has no installation to target: it is
     # installed beside the mngr tool, whose bin directory the program lines
     # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
@@ -5090,12 +5171,11 @@ def test_the_refresh_reports_a_receipt_it_cannot_read(
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
+        _MNGR_BASE,
         "--reinstall",
     ]
     reported = capsys.readouterr().err

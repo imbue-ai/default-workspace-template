@@ -1,1 +1,0 @@
-Doc-only: the README, CLI docstrings, and collector-install module docs now describe the box collector install as rendered in-process by `minds-admin server prep` / `setup` (issue #496 Phase 3); `observability render-collector-install` remains as the ad-hoc `--extra-prep-script` escape hatch, and relay installs are unchanged.

@@ -69,7 +69,11 @@ def _is_tail_fill_converged(debug):
     if debug is None or debug["totalEvents"] is None:
         return False
     loaded = debug["extent"]["endIndex"] - debug["extent"]["firstIndex"]
-    if debug["extent"]["firstIndex"] == 0 and debug["spacerTopPx"] == 0 and debug["spacerBottomPx"] == 0:
+    if (
+        debug["extent"]["firstIndex"] == 0
+        and debug["spacerTopPx"] == 0
+        and debug["spacerBottomPx"] == 0
+    ):
         return True
     return (
         debug["spacerBottomPx"] == 0
@@ -239,7 +243,11 @@ def main():
             top_row = state["topRow"] if state else None
             if top_row is None:
                 continue
-            if witness == top_row["id"] and last_top is not None and top_row["top"] < last_top - 5:
+            if (
+                witness == top_row["id"]
+                and last_top is not None
+                and top_row["top"] < last_top - 5
+            ):
                 early_violations.append((step, last_top, top_row["top"]))
             witness = top_row["id"]
             last_top = top_row["top"]
@@ -318,7 +326,9 @@ def main():
             "(() => { const el = document.querySelector('.transcript-scroll'); el.scrollTop = el.scrollHeight; })()"
         )
         page.wait_for_timeout(700)
-        appender3 = threading.Thread(target=stream_appender, args=(30, 0.08), daemon=True)
+        appender3 = threading.Thread(
+            target=stream_appender, args=(30, 0.08), daemon=True
+        )
         appender3.start()
         # Frame-rate churn like a live streaming message: grow the last row's
         # text every frame so positioning re-runs continuously.
@@ -465,13 +475,18 @@ def main():
                 after = page.evaluate(GET_STATE)
                 if before["topRow"] and after["topRow"]:
                     same = before["topRow"]["id"] == after["topRow"]["id"]
-                    delta = abs(after["topRow"]["top"] - before["topRow"]["top"]) if same else 999
+                    delta = (
+                        abs(after["topRow"]["top"] - before["topRow"]["top"])
+                        if same
+                        else 999
+                    )
                     expand_checks.append((same, round(delta, 2)))
             if len(expand_checks) >= 6:
                 break
         check(
             "E4 expanding/collapsing a block at the top keeps the top message put",
-            len(expand_checks) >= 2 and all(same and delta <= 4 for same, delta in expand_checks),
+            len(expand_checks) >= 2
+            and all(same and delta <= 4 for same, delta in expand_checks),
             expand_checks,
         )
 
@@ -523,7 +538,9 @@ def main():
             # final tenth of the content but clearly not snapped to the bottom.
             page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
             page.mouse.down()
-            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.95, steps=8)
+            page.mouse.move(
+                el_box["x"], el_box["top"] + el_box["height"] * 0.95, steps=8
+            )
             page.mouse.up()
             page.wait_for_timeout(4000)
             state = page.evaluate(GET_STATE)
@@ -601,7 +618,12 @@ def main():
             check(
                 "H6 a click detaches FOLLOW and later growth does not re-pin",
                 detached and held and after["bottomGap"] > 300,
-                (debug["positionKind"], before["topRow"], after["topRow"], round(after["bottomGap"])),
+                (
+                    debug["positionKind"],
+                    before["topRow"],
+                    after["topRow"],
+                    round(after["bottomGap"]),
+                ),
             )
             # H drags park the pointer below the track (over the composer);
             # F's wheel events must land on the transcript.

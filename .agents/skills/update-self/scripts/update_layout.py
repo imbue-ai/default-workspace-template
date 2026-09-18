@@ -1,4 +1,4 @@
-"""Where the served workspace lives: the system interface, the vendored mngr and its
+"""Where the served workspace lives: the system interface, the pinned mngr and its
 uv tool, the Python apps and their tools, the frontend bundle, and the provisioner
 the apply re-runs.
 """
@@ -59,13 +59,13 @@ FRONTEND_TOOLING_PATHS = frozenset(
 # Every directory whose change re-emits a bundle: the two frontends and the library they share.
 FRONTEND_SOURCE_DIRS = (FRONTEND_DIR, CHAT_FRONTEND_DIR, FRONTEND_LIB_DIR)
 
-# The vendored mngr the workspace runs on, and the uv tool built from it. An
-# editable install pins the *source path*, not the dependency closure -- so the
-# moment a merge advances this tree, the ``mngr`` CLI starts running new code
-# against whatever was resolved for the old code.
-MNGR_VENDOR_DIR = "system/vendor/mngr"
+# mngr is installed from the public repo at the commit pyproject.toml pins in
+# [tool.uv.sources].
+PYPROJECT_PATH = "pyproject.toml"
 
-MNGR_DIR = f"{MNGR_VENDOR_DIR}/libs/mngr"
+# Fetches the files the pinned mngr commit carries that no package does, into the
+# gitignored system/vendor/mngr-assets the frontends and docs/system/style_guide.md read.
+MNGR_ASSETS_SCRIPT = "system/scripts/fetch_mngr_assets.sh"
 
 MNGR_TOOL_NAME = "imbue-mngr"
 

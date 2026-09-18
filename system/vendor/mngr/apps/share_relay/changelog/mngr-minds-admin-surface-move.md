@@ -1,1 +1,0 @@
-Docs and a CLI help string updated for the operator-CLI consolidation: `mngr imbue_cloud admin relays list` is now `minds-admin relays list`, and `minds env` is now `minds-admin env`. No behavior change.

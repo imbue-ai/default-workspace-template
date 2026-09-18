@@ -255,7 +255,9 @@ def test_primary_lookup_selects_by_is_primary_alone() -> None:
 
     refresh_workspace_view.refresh(runner=runner, http=http, base_url=_BASE_URL)
 
-    assert runner.commands == [["mngr", "ls", "--include", "has(labels.is_primary)", "--ids"]]
+    assert runner.commands == [
+        ["mngr", "ls", "--include", "has(labels.is_primary)", "--ids"]
+    ]
 
 
 def test_a_failed_broadcast_still_refreshes_the_app() -> None:

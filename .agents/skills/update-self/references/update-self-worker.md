@@ -160,9 +160,10 @@ is true, run all of it.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
-path. The vendored mngr is the largest surface an update moves; its changelog
-directories (`system/vendor/mngr/**/changelog/`) announce removed behavior in
-prose that no test failure surfaces -- read the merged entries and grep the
+path. A move of the mngr pin (`pyproject.toml`, `[tool.uv.sources]`) is the
+largest surface an update moves; mngr's changelog entries between the two
+commits announce removed behavior in prose that no test failure surfaces --
+read them (in the public repo at https://github.com/imbue-ai/mngr) and grep the
 workspace for every name they retire (an environment variable, a port, a
 command).
 
@@ -226,8 +227,8 @@ in your report.
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
   and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
   or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
-  test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
-  `uv run pytest`.
+  test` at `system/`, the npm workspace root). mngr's own suite runs in its
+  repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a

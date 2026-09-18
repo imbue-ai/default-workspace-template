@@ -1,1 +1,0 @@
-The slice-fleet cutover rollout plan (phase 5.5) notes that <= 0.6.0 desktop clients need an app restart for latchkey to work after their workspace is migrated (imbue-ai/mngr-internal#970), so 0.6.1+ cohorts migrate first.

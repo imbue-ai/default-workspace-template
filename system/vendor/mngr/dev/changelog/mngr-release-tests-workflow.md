@@ -1,5 +1,0 @@
-`release-tests.yml` now runs the release suite, and its shards are no longer killed before they finish.
-
-Two independent bugs, either of which alone guaranteed a red run. The Linux branch of the sharded `test-mngr-release` job carried no `-m` marker filter, so each of its 12 shards ran every unit, integration, acceptance and release test it was handed -- 17177 collected instead of 430 -- under the 90-second per-test timeout meant for release tests. Separately, the job exported `IS_RELEASE=1` and nothing else, which `conftest_hooks` reads as a 600-second whole-suite budget; observed shard durations are 753-1846s, so every shard exited non-zero regardless of results, and the cap fired before pytest printed its failure summary, leaving red shards with no tracebacks at all.
-
-Both platforms now select `release and not docker and not docker_sdk`, and the suite deadline is budgeted per shard. Docker-marked release tests keep running in `test-mngr-release-docker`, which provisions the daemon and registry mirror they need.

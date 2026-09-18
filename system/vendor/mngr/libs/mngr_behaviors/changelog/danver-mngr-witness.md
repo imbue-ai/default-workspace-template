@@ -1,1 +1,0 @@
-The mandated corpus README incipit now names the `behaviors` skill, the language reference, instead of the retired `tmr-behaviors` runbook: `REQUIRED_README_INCIPIT` is "Understanding this behavior corpus calls for the behaviors skill; consult it when reading this file." Every corpus README in the repository was rewritten in the same change.

@@ -1,1 +1,0 @@
-Marked `test_every_mngr_plugin_isolates_home_in_tests` (a repo-wide conftest scan in `test_meta_ratchets.py`) as `@pytest.mark.flaky` with a 60s timeout, following the existing pattern for repo-wide scans that occasionally exceed the default 10s pytest-timeout under CI load (observed at 10.169s on an offload sandbox).

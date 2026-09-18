@@ -242,7 +242,7 @@ parent_type = "command"
 command = "sleep infinity"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
-# its own base type (registered by the vendored imbue-mngr-codex plugin, installed
+# its own base type (registered by the imbue-mngr-codex plugin, installed
 # with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
@@ -325,7 +325,7 @@ If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKIL
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
-# Registered by the vendored imbue-mngr-pi-coding plugin; the pi binary is baked
+# Registered by the imbue-mngr-pi-coding plugin; the pi binary is baked
 # into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
 # is off.
 #
@@ -364,7 +364,7 @@ If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKIL
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
-# is its own base type (registered by the vendored imbue-mngr-opencode plugin, installed
+# is its own base type (registered by the imbue-mngr-opencode plugin, installed
 # with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
@@ -395,7 +395,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
 # the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
-# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# claude/codex. Its own base type (registered by the imbue-mngr-antigravity
 # plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
@@ -462,8 +462,8 @@ host_log_dir = "/var/log/mngr"
 # client always talks to a local daemon and connects to 127.0.0.1, so nothing
 # needs the container reachable from the machine's LAN. This is also mngr's
 # default for a local daemon; it is pinned here so the workspace's exposure does
-# not depend on that default. (Requires the vendored mngr to know the field:
-# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+# not depend on that default. (Requires an mngr pin that knows the field: an
+# older one rejects it as an unknown provider setting.)
 ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
@@ -598,7 +598,7 @@ type = "main"
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
-# `apply_create_template` in system/vendor/mngr/.../common_opts.py), so the
+# `apply_create_template` in mngr's cli/common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
 #
 # `mouse on` keeps wheel scroll and in-app mouse working in the browser

@@ -1,1 +1,0 @@
-The 0.4.0 wire-compat snapshot's support window is extended to 2026-10-13 to cover minds 0.6.0, whose connector wire changes since 0.5.2 are all additive optional fields (box generation, machine sizing) plus one tolerantly parsed route.

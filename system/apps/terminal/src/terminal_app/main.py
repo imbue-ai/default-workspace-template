@@ -24,6 +24,7 @@ from terminal_app.dispatch import (
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
+    load_ttyd_web_client,
 )
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.primitives import Workdir
@@ -38,9 +39,6 @@ APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
 INSTANCES_URL: Final[InstancesUrl] = InstancesUrl("http://127.0.0.1:7682")
 STATE_DIR: Final[Path] = Path("data/.state/terminal")
 STORE_PATH: Final[Path] = app_store_path(APP_NAME)
-TTYD_WEB_CLIENT_ARCHIVE: Final[Path] = Path(
-    "system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
-)
 TTYD_EXECUTABLE: Final[str] = "ttyd"
 # The tagging wrapper every terminal session runs its shell through (the terminal-session band).
 OOM_TAG_SCRIPT: Final[Path] = Path("system/services/oom_priority/bin/oom_tag_service.py")
@@ -59,8 +57,8 @@ class TerminalAppArguments(FrozenModel):
     instances_url: InstancesUrl = Field(description="Where the instances API is served")
     state_dir: Path = Field(description="The app's state directory")
     store_path: Path = Field(description="The instances.json of remembered terminals")
-    ttyd_web_client_archive: Path = Field(
-        description="The vendored, gzip-compressed OSC 52-capable ttyd web client"
+    ttyd_web_client_archive: Path | None = Field(
+        description="A gzip-compressed ttyd web client to serve instead of the packaged one"
     )
     ttyd_executable: str = Field(description="The ttyd binary to run")
     oom_tag_script: Path = Field(
@@ -88,8 +86,9 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
         )
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
         install_dispatch_scripts(paths, oom_tag_script)
-    is_client_installed = install_ttyd_web_client(
-        arguments.ttyd_web_client_archive, paths.ttyd_index_path
+    compressed_client = load_ttyd_web_client(arguments.ttyd_web_client_archive)
+    is_client_installed = compressed_client is not None and install_ttyd_web_client(
+        compressed_client, paths.ttyd_index_path
     )
     if arguments.agent_state_dir is not None:
         with log_span("Writing the discovery event for {}", arguments.app_url):
@@ -174,9 +173,8 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     "--ttyd-web-client",
     "ttyd_web_client_archive",
     type=click.Path(path_type=Path),
-    default=TTYD_WEB_CLIENT_ARCHIVE,
-    show_default=True,
-    help="The gzip-compressed OSC 52-capable ttyd web client to serve",
+    default=None,
+    help="A gzip-compressed ttyd web client to serve instead of the one the imbue-mngr-ttyd package ships",
 )
 @click.option(
     "--ttyd",
@@ -199,7 +197,7 @@ def main(
     instances_url: str,
     state_dir: Path,
     store_path: Path,
-    ttyd_web_client_archive: Path,
+    ttyd_web_client_archive: Path | None,
     ttyd_executable: str,
     oom_tag_script: Path,
 ) -> None:

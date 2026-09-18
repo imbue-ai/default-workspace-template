@@ -33,13 +33,12 @@ dev = [
     "ruff>=0.4",
     "pyright>=1.1",
     "inline-snapshot>=0.31",
-    # The vendored ratchet library (imbue_common.ratchet_testing) imports it at module level,
-    # so every project's test_ratchets.py needs it even where no import contract is declared.
-    "import-linter>=2.0",
+    # What imbue_common.ratchet_testing needs (every project's test_ratchets.py imports it).
+    "imbue-common[testing]",
     "tomlkit>=0.12",
     "pyyaml>=6",
     # used by test_mngr_template_stacking.py to verify .mngr/settings.toml
-    # composes correctly with system/vendor/mngr's apply_create_template logic
+    # composes correctly with mngr's apply_create_template logic
     "imbue-mngr",
     # imbue-mngr-claude isn't imported by any /home/user/workspace/ python -- it's here so
     # `uv sync --all-packages` registers it in /home/user/workspace/.venv. Without it,
@@ -48,7 +47,7 @@ dev = [
     # entry points, so settings.toml fields like `isolate_local_config_dir`,
     # `auto_allow_permissions`, etc. fail to parse as "Unknown fields".
     # Keeping the venv's mngr in lockstep with the tool-installed mngr
-    # (which has --with-editable mngr_claude on the chat app's tool install)
+    # (which gets its plugins from the same pinned commit via system/config/mngr_plugins.toml)
     # avoids a cwd-dependent divergence.
     "imbue-mngr-claude",
     # imbue-mngr-codex: same rationale as imbue-mngr-claude above -- registers the
@@ -104,16 +103,16 @@ app-instances = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
-imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
-imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
-imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }
-imbue-mngr-codex = { path = "system/vendor/mngr/libs/mngr_codex", editable = true }
-imbue-mngr-pi-coding = { path = "system/vendor/mngr/libs/mngr_pi_coding", editable = true }
-imbue-mngr-opencode = { path = "system/vendor/mngr/libs/mngr_opencode", editable = true }
-imbue-mngr-antigravity = { path = "system/vendor/mngr/libs/mngr_antigravity", editable = true }
-imbue-mngr-autocompact = { path = "system/vendor/mngr/libs/mngr_autocompact", editable = true }
-resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
-concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/imbue_common" }
+imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr" }
+imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_claude" }
+imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_codex" }
+imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_pi_coding" }
+imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_opencode" }
+imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_autocompact" }
+concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "e27a5b3066892e08507195c431397f48bde96cb3", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
@@ -158,7 +157,6 @@ markers = [
 ]
 addopts = [
     "--timeout=10",
-    "--ignore=system/vendor/mngr",
     "--ignore=system/vendor/tk",
     # system/apps/system_interface and system/apps/chat have their own pytest config (coverage,
     # slow-test reporting, ratchets) that conflicts with the root config; each is run from
@@ -174,7 +172,7 @@ addopts = [
 
 [tool.ruff]
 target-version = "py311"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
+exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
@@ -183,4 +181,4 @@ select = ["F", "I", "UP006", "UP007"]
 pythonVersion = "3.11"
 # apps and skills are the top-level discoverability symlinks; excluding them
 # keeps pyright from analyzing the same files twice via the symlink paths.
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "system/apps/chat", "apps", "skills"]
+exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat", "apps", "skills"]

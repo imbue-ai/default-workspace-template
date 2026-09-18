@@ -1,1 +1,0 @@
-The `test-minds-evals` CI job installs playwright's Chromium (with its system dependencies) before running the suite, because the minds_evals flow lab tests drive a real headless browser. A job that lost the step is red rather than quiet: those tests fail rather than skip when the browser is missing under `CI`.

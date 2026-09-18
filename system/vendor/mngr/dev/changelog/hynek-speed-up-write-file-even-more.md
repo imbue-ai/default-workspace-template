@@ -1,1 +1,0 @@
-The workspace lock (`uv.lock`) now records `imbue-mngr`'s paramiko requirement as the exact pin `paramiko==3.5.1` (it was `>=3.2`). The pin exists because the remote `write_file` in `libs/mngr` sends its SSH exec request through a private paramiko method - see the `mngr` changelog entry for this branch. The resolved paramiko version is unchanged.
