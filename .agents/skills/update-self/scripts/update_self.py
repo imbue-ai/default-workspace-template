@@ -828,7 +828,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     confirm_parser = sub.add_parser(
         "confirm-last",
-        help="Close the notice: discard the kept copies and the rollback-point record.",
+        help="Close the notice: drop the rollback-point record, and the kept copies "
+        "with it unless a rollback already ran on the point (it discarded them if it "
+        "worked, and kept them for an agent if it did not).",
         parents=[common],
     )
     confirm_parser.set_defaults(func=_cmd_confirm_last)

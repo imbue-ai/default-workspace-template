@@ -380,7 +380,8 @@ outcome, and goes away on every window without a reload.
 
 Both verbs are the update-self script's own subcommands, run rather than
 reimplemented (`POST /api/updates/pending/confirm` runs `confirm-last`, which
-discards the copies and the record; `POST /api/updates/pending/rollback` starts
+drops the record, and the copies with it when no rollback ran, since a failed
+rollback keeps its copies for an agent; `POST /api/updates/pending/rollback` starts
 `rollback-last`, which reverts the merge forward, restores the copies, restarts
 only the recorded programs, and writes its progress and outcome back into the
 record). The rollback is launched detached in its own session: it restarts the
