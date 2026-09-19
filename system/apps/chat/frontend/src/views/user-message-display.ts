@@ -11,12 +11,13 @@
  */
 
 import m from "mithril";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
-import { classifyUserMessage } from "./message-classification";
+import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
-import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
+import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
@@ -90,6 +91,19 @@ function renderStatusMessage(label: string, body: string, expansionKey: string):
   );
 }
 
+/** A one-line notice on the agent's rail: a tick, the lead, and the summary. The lead carries
+ *  the weight because it is what the eye is scanning for down a long transcript; the summary is
+ *  ordinary prose beside it. */
+function renderNotice(label: string, body: string): m.Vnode {
+  return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
+    m("span", { class: "mt-px shrink-0 text-accent" }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 }))),
+    m("span", { class: "min-w-0 text-secondary" }, [
+      m("span", { class: "font-medium text-primary" }, `${label}:`),
+      body ? ` ${body}` : null,
+    ]),
+  ]);
+}
+
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
   return {
@@ -111,6 +125,9 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
+      if (cls.kind === UserMessageKind.Notice) {
+        return renderNotice(cls.label ?? "Background task completed", cls.body);
+      }
       if (cls.kind === UserMessageKind.StatusMessage) {
         const label = cls.label ?? (cls.body || "Context was compacted");
         const body = cls.body && cls.body !== label ? cls.body : "";
@@ -130,16 +147,14 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
 }
 
 /**
- * Render a `user_message` as a top-level row, or `null` when it produces no
- * user-rail row (hidden `/welcome`, or a skill expansion folded into its Skill
- * tool block). A `SystemChip` row gets the collapsed-system class; a genuine
- * prompt gets the user-bubble class; a status message gets the status-row class.
+ * Render a `user_message` as a top-level row, or `null` when it produces no row of its own
+ * (hidden `/welcome`, or a skill expansion folded into its Skill tool block). A `SystemChip`
+ * row gets the collapsed-system class; a genuine prompt gets the user-bubble class; a status
+ * message gets the status-row class; a notice sits on the agent's rail instead.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
-  // A kind that does not render on the User rail (hidden /welcome + is_meta, or a
-  // skill expansion relocated to the assistant rail) produces no row here.
-  if (KIND_SPEC[kind].rail !== Rail.User) {
+  if (isHiddenUserMessage(event)) {
     return null;
   }
   const messageClass =
@@ -147,7 +162,9 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
       ? "message message-system-collapsed mb-1 flex flex-col items-end"
       : kind === UserMessageKind.StatusMessage
         ? "message message-system-status-row"
-        : `${USER_MESSAGE_ROW_CLASS} mb-5`;
+        : kind === UserMessageKind.Notice
+          ? "message message-notice-row mb-2"
+          : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
