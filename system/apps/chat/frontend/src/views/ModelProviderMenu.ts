@@ -28,7 +28,14 @@ import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
-import { FAST_MODES, ensureFastModeState, fastModeDetail, fastModeLabel, getFastModeState } from "../models/FastMode";
+import {
+  FAST_MODES,
+  FAST_MODE_LABELS,
+  ensureFastModeState,
+  fastModeDetail,
+  fastModeLabel,
+  getFastModeState,
+} from "../models/FastMode";
 import {
   DEFAULT_CHAT_SETTINGS,
   ensureChatSettings,
@@ -369,12 +376,12 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     const state: ChatFastModeState = known ?? { mode: effective.fast_mode_default, is_switched: false };
     const limit = effective.fast_mode_turn_limit;
     const isDefault = effective.fast_mode_default === state.mode;
-    const currentLabel = FAST_MODES.find((option) => option.mode === state.mode)?.label ?? "";
+    const currentLabel = FAST_MODE_LABELS[state.mode];
     return [
       m(
         "div",
         { class: "fast-mode-options", role: "radiogroup", "aria-label": "Fast mode" },
-        FAST_MODES.map(({ mode, label }) => {
+        FAST_MODES.map((mode) => {
           const isCurrent = state.mode === mode;
           return m(
             "button",
@@ -399,7 +406,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             [
               m("span", { class: css.FAST_ROW_TEXT }, [
                 m("span", { class: css.SUBMENU_ROW_NAME }, [
-                  label,
+                  FAST_MODE_LABELS[mode],
                   // These rows are the bare mode names, so auto carries its own "(off now)":
                   // without it this row would read "Auto" while the row that opened the submenu,
                   // which states the same mode through `fastModeLabel`, reads "Auto (off now)".
