@@ -248,7 +248,7 @@ def build_pages_blueprint(
 
     def session_page(name: TmuxSessionName, tab_id: TerminalTabId | None) -> SessionPage:
         listed = next((instance for instance in source.list_instances() if instance.key == name), None)
-        record = next((record for record in source.store.list_records() if record.name == name), None)
+        record = source.remembered_record(name)
         return SessionPage(
             name=name,
             title=listed.title if listed is not None else derive_terminal_title(name),
