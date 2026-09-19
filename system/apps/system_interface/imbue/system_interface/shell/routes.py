@@ -740,12 +740,15 @@ def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | No
     requested = _requested_view(args_raw)
     if requested is not None:
         return _find_view(shell, requested)
-    connected_views = {info["active_view"] for info in shell.broadcaster.get_connected_client_infos()}
+    # A desktop-shell client is on no view: it registers an empty one and its record holds none.
+    connected_views = {
+        info["active_view"] for info in shell.broadcaster.get_connected_client_infos() if info["active_view"]
+    }
     if len(connected_views) == 1:
         return next(iter(connected_views)), None
-    clients = shell.clients.list_clients()
-    if clients:
-        return str(clients[0].active_view), None
+    viewed = next((client for client in shell.clients.list_clients() if client.active_view is not None), None)
+    if viewed is not None:
+        return str(viewed.active_view), None
     return None, None
 
 

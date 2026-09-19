@@ -1435,6 +1435,19 @@ def test_desktop_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: Flas
     assert _desktop_op(client, "wallpaper", {"wallpaper": None}, requester).get_json()["desktop"]["wallpaper"] is None
 
 
+def test_inspect_answers_no_view_when_only_desktop_clients_are_known(client: FlaskClient, app: Flask) -> None:
+    """A desktop-shell client is on no view, so the address verbs' ``inspect`` settles on none rather than on the
+    empty view it registered or the ``None`` its record holds: with two of them connected, and with only their
+    records left."""
+    queues = [_register_desktop_client(app, "c1", "home"), _register_desktop_client(app, "c2", "home")]
+    connected = _broadcast(client, "inspect").get_json()
+    assert connected["view_id"] is None and connected["client_id"] is None
+    for client_queue in queues:
+        _shell(app).broadcaster.unregister(client_queue)
+    recorded = _broadcast(client, "inspect").get_json()
+    assert recorded["view_id"] is None and recorded["client_id"] is None
+
+
 def test_a_desktop_op_with_no_client_to_target_is_a_412(client: FlaskClient) -> None:
     refused = _desktop_op(client, "open", {"app": "terminal"}, None)
     assert refused.status_code == 412 and "--client" in refused.get_json()["detail"]
