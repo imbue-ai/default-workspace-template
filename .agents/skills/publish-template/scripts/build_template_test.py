@@ -225,6 +225,7 @@ def test_an_included_mcp_config_ships_renamed_so_nothing_activates_before_its_se
     assert '"demo-mcp"' in (built_snapshot / ".mcp.template.json").read_text()
 
 
+@_needs_scanners
 def test_the_manifest_trio_is_written(built_snapshot: Path) -> None:
     # The three files an adopter's tooling looks for. Absence of the TOML is
     # what marks a repo as the older v1 format, so a missing one is not a
