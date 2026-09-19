@@ -208,7 +208,7 @@ function connectRootToShell(): void {
 function bootstrap(): void {
   initChatUnread();
   initChats();
-  void loadAccountsWithRetry();
+  const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
   connectRootToShell();
@@ -222,7 +222,7 @@ function bootstrap(): void {
   if (isNew) {
     const params = newChatParamsFromSearch(window.location.search);
     // Accounts decide where the chat starts; a create before they load would run on none.
-    void loadAccountsWithRetry().then(() => startNewChat(params.accountId, params.message));
+    void accountsLoaded.then(() => startNewChat(params.accountId, params.message));
   }
 }
 
