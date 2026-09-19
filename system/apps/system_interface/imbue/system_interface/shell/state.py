@@ -10,6 +10,7 @@ from typing import Final
 
 import httpx
 from app_instances.data_types import InstanceLifetime
+from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -266,6 +267,18 @@ class ShellState(MutableModel):
     def seed_shortcuts(self) -> tuple[DesktopShortcut, ...]:
         return seed_desktop_shortcuts([entry.row for entry in self.inventory.entries()])
 
+    def require_app_entry(self, app: str) -> AppInventoryEntry:
+        """The inventory entry of a registered app; raises DesktopValueError (a 400) for any other name."""
+        entry = self.inventory.entry(app)
+        if entry is None:
+            raise DesktopValueError(f"No registered app named {app!r}")
+        return entry
+
+    def require_launch_path(self, entry: AppInventoryEntry, launch: LaunchPathId) -> None:
+        """Raises DesktopValueError (a 400) unless the app offers the launch path (the synthesized ``open`` included)."""
+        if launch not in {launch_path.id for launch_path in effective_launch_paths(entry.row)}:
+            raise DesktopValueError(f"App {str(entry.row.name)!r} declares no launch path {str(launch)!r}")
+
     def get_desktop(self, desktop_id: str) -> Desktop:
         for desktop in self.list_desktops():
             if desktop.id == desktop_id:
@@ -323,13 +336,9 @@ class ShellState(MutableModel):
         requesting client's layout; with ``if_present`` focus, a window of the app already at that exact path is
         restored and raised there instead (desktop plan section 4.1)."""
         desktop = self.get_desktop(desktop_id)
-        entry = self.inventory.entry(str(request.app))
-        if entry is None:
-            raise DesktopValueError(f"No registered app named {str(request.app)!r}")
-        if request.launch is not None and request.launch not in {
-            launch_path.id for launch_path in effective_launch_paths(entry.row)
-        }:
-            raise DesktopValueError(f"App {str(request.app)!r} declares no launch path {str(request.launch)!r}")
+        entry = self.require_app_entry(str(request.app))
+        if request.launch is not None:
+            self.require_launch_path(entry, request.launch)
         if request.if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, request.app, request.path)
             if existing is not None:
