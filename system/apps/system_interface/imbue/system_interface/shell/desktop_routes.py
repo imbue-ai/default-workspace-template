@@ -51,6 +51,7 @@ from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktops import find_desktop_by_name_or_id
+from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
@@ -292,18 +293,15 @@ def desktop_inventory_fields(shell: ShellState, clients: Sequence[Mapping[str, A
     with ``shown``, the windows of its active desktop that its layout does not minimize."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
+    live_ids_by_desktop_id = {desktop.id: {window.id for window in desktop.windows} for desktop in desktops}
     clients_with_shown: list[dict[str, Any]] = []
     for client in clients:
-        active = shell.active_desktop_of_client(str(client["id"]))
-        desktop = desktops_by_id.get(active) if active is not None else None
-        shown = (
-            _shown_window_ids(
-                desktop,
-                shell.placements.read_layout(desktop.id, str(client["id"]), {window.id for window in desktop.windows}),
-            )
-            if desktop is not None
-            else []
-        )
+        client_id = str(client["id"])
+        active = resolve_active_desktop(shell.clients.get_client(client_id), desktops)
+        shown: list[str] = []
+        if active is not None:
+            layout = shell.placements.read_layout(active, client_id, live_ids_by_desktop_id[active])
+            shown = _shown_window_ids(desktops_by_id[active], layout)
         clients_with_shown.append(
             {**client, "active_desktop": str(active) if active is not None else None, "shown": shown}
         )
