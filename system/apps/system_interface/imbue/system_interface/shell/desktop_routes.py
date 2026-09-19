@@ -25,7 +25,6 @@ from pydantic import ValidationError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
@@ -53,7 +52,6 @@ from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktops import find_desktop_by_name_or_id
 from imbue.system_interface.shell.errors import DesktopNotFoundError
-from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
@@ -150,18 +148,9 @@ def _wallpaper_directories() -> WallpaperDirectories:
     )
 
 
-def _entry_or_raise(shell: ShellState, app: str) -> AppInventoryEntry:
-    entry = shell.inventory.entry(app)
-    if entry is None:
-        raise DesktopValueError(f"No registered app named {app!r}")
-    return entry
-
-
 def _validated_target(shell: ShellState, target: ShortcutTarget) -> ShortcutTarget:
     """A shortcut target whose launch path the app declares (or the synthesized ``open``); a 400 otherwise."""
-    entry = _entry_or_raise(shell, str(target.app))
-    if target.launch not in {launch_path.id for launch_path in effective_launch_paths(entry.row)}:
-        raise DesktopValueError(f"App {str(target.app)!r} declares no launch path {str(target.launch)!r}")
+    shell.require_launch_path(shell.require_app_entry(str(target.app)), target.launch)
     return target
 
 
@@ -509,7 +498,7 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
     """What an ``open`` op opens: an explicit path, else the launch path it names, the app's default, or its first,
     with the params as the query string."""
     app = _app_name_or_raise(arguments.app, "app")
-    entry = _entry_or_raise(shell, str(app))
+    entry = shell.require_app_entry(str(app))
     if arguments.path:
         if arguments.launch is not None or arguments.params:
             raise LayoutOpError("an open names a path or a launch path, not both")
@@ -685,7 +674,7 @@ def _op_refresh(
     )
     if arguments.app:
         app = _app_name_or_raise(arguments.app, "app")
-        _entry_or_raise(shell, str(app))
+        shell.require_app_entry(str(app))
         shell.broadcaster.broadcast_layout_op(
             "refresh", {"app": str(app)}, requester=requester_wire, target_client_id=None
         )
