@@ -1,0 +1,1 @@
+Added `docs/system/blueprint/desktop-interface/geometry_vectors.json`, the shared test vectors for the desktop interface's geometry rules (cascade, clamping, snap frames, fit, snap zones, un-snap, the grid, reading order, nearest free cell, shortcut placement) that both the shell's Python editor and the desktop frontend's TypeScript geometry run.

@@ -58,9 +58,7 @@ def test_the_registry_read_synthesizes_single_instance_records(
     assert [message["type"] for message in drain_messages(client_queue)] == ["apps_updated"]
 
 
-def test_a_fetched_list_replaces_the_apps_instances(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster
-) -> None:
+def test_a_fetched_list_replaces_the_apps_instances(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
     fetcher.list(
         TEST_TERMINAL_URL, instance_record("terminal-1", "Terminal 1"), instance_record("terminal-2", "Terminal 2")
