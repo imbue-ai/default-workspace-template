@@ -22,8 +22,9 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``instances``,
 ``instances_url``, ``critical``, ``priority``, ``program`` (default: the name),
-``internal``, ``launcher_rank``, ``default_shortcut``, and ``actions`` (id,
-label, and the names of the params); the icon is read from the file the
+``internal``, ``launcher_rank``, ``default_shortcut``, ``actions`` (id,
+label, and the names of the params), and ``launch_paths`` (id, label, path,
+and the names of the params); the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -140,8 +141,9 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# two structured keys (``default_shortcut``, ``actions``) are handled on their
-# own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``actions``, ``launch_paths``) are
+# handled on their own. ``program`` defaults to the name when the manifest
+# omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
 _MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
@@ -160,6 +162,7 @@ _MANIFEST_OWNED_KEYS = (
     "launcher_rank",
     "default_shortcut",
     "actions",
+    "launch_paths",
 )
 
 # The TOML basic-string escapes for the characters that have a short form;
@@ -514,10 +517,36 @@ def _read_manifest(
                 None,
                 f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
             )
-        fields["default_shortcut"] = {
+        copied_shortcut: dict[str, object] = {
             "action": shortcut["action"],
             "mode": shortcut["mode"],
         }
+        launch = shortcut.get("launch")
+        if launch is not None:
+            if not isinstance(launch, str):
+                return (
+                    {},
+                    None,
+                    f"manifest {str(path)!r}: default_shortcut.launch must be a string",
+                )
+            copied_shortcut["launch"] = launch
+        fields["default_shortcut"] = copied_shortcut
+
+    launch_paths = raw.get("launch_paths")
+    if launch_paths is not None:
+        if not isinstance(launch_paths, list):
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: launch_paths must be an array of tables",
+            )
+        copied_launch_paths: list[dict[str, object]] = []
+        for launch_path in launch_paths:
+            copied_launch_path, launch_path_error = _copied_launch_path(launch_path, path)
+            if copied_launch_path is None:
+                return {}, None, launch_path_error
+            copied_launch_paths.append(copied_launch_path)
+        fields["launch_paths"] = copied_launch_paths
 
     actions = raw.get("actions")
     if actions is not None:
@@ -569,6 +598,43 @@ def _copied_action(
         return (
             None,
             f"manifest {str(path)!r}: every action param needs a string 'name'",
+        )
+    if params:
+        copied["params"] = [param["name"] for param in params]
+    return copied, None
+
+
+def _copied_launch_path(
+    launch_path: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, and
+    ``params`` (the param names) when it declares any. Returns ``(copied, None)``, or
+    ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    if not (
+        isinstance(launch_path, dict)
+        and isinstance(launch_path.get("id"), str)
+        and isinstance(launch_path.get("label"), str)
+        and isinstance(launch_path.get("path"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every launch path needs a string 'id', 'label', and 'path'",
+        )
+    copied: dict[str, object] = {
+        "id": launch_path["id"],
+        "label": launch_path["label"],
+        "path": launch_path["path"],
+    }
+    params = launch_path.get("params")
+    if params is None:
+        return copied, None
+    if not isinstance(params, list) or not all(
+        isinstance(param, dict) and isinstance(param.get("name"), str)
+        for param in params
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every launch path param needs a string 'name'",
         )
     if params:
         copied["params"] = [param["name"] for param in params]

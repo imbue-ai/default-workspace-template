@@ -10,7 +10,18 @@ launcher_rank = 10
 
 [default_shortcut]
 action = "new"
+launch = "new"
 mode = "new"
+
+# The desktop interface opens a window at a launch path; the params ride as query parameters.
+[[launch_paths]]
+id = "new"
+label = "New Chat"
+path = "/new"
+params = [
+    {name = "account_id", label = "Provider account", required = false},
+    {name = "message", label = "First message", required = false},
+]
 
 [[actions]]
 id = "new"

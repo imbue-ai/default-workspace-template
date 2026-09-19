@@ -20,6 +20,8 @@ from app_manifest.primitives import DisplayName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import LaunchPathId
+from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 from app_manifest.primitives import ReferenceNote
@@ -36,6 +38,8 @@ DEFAULT_PRIORITY: Final[PriorityName] = PriorityName("user")
 # The one action every single-instance app has; the shell synthesizes it, so a
 # manifest never declares it but may name it as its default shortcut.
 OPEN_ACTION_ID: Final[ActionId] = ActionId("open")
+# The one launch path an app that declares none has, at its root; synthesized the same way.
+OPEN_LAUNCH_PATH_ID: Final[LaunchPathId] = LaunchPathId("open")
 
 
 class ShortcutMode(LowerCaseStrEnum):
@@ -59,6 +63,17 @@ class AppAction(FrozenModel):
     id: ActionId = Field(description="The id shortcuts and layout.py refer to")
     label: NonEmptyStr = Field(description="The action's user-facing label")
     params: tuple[ActionParam, ...] = Field(default=(), description="The create body's documented params")
+
+
+class LaunchPath(FrozenModel):
+    """A path under the app's origin that the desktop interface opens a window at (desktop-interface contracts.md section 2)."""
+
+    id: LaunchPathId = Field(description="The id shortcuts and layout.py refer to")
+    label: NonEmptyStr = Field(description="The launch path's user-facing label")
+    path: LaunchPathValue = Field(description="The path under the app origin, without a query string")
+    params: tuple[ActionParam, ...] = Field(
+        default=(), description="The query parameters the shell may append, documented"
+    )
 
 
 class AppReference(FrozenModel):
@@ -89,9 +104,15 @@ class WiringRules(FrozenModel):
 
 
 class DefaultShortcut(FrozenModel):
-    """The rail row a new project is seeded with for this app."""
+    """The shortcut a new project (or desktop) is seeded with for this app."""
 
     action: ActionId = Field(description="A declared action id, or 'open' for a single-instance app")
+    # CLEANUP: make ``launch`` required and drop ``action`` once the desktop interface's shell has
+    # replaced the tabbed one (desktop-interface plan, phase 6).
+    launch: LaunchPathId | None = Field(
+        default=None,
+        description="A declared launch path id, or 'open' when the app declares none; the desktop interface's spelling",
+    )
     mode: ShortcutMode = Field(description="focus or new")
 
 
@@ -109,6 +130,9 @@ class AppManifest(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
     actions: tuple[AppAction, ...] = Field(default=(), description="The declared create actions")
+    launch_paths: tuple[LaunchPath, ...] = Field(
+        default=(), description="The paths the desktop interface opens windows at, with their labels and params"
+    )
     launcher_rank: int | None = Field(
         default=None,
         ge=1,
@@ -158,11 +182,23 @@ class AppManifest(FrozenModel):
         action_ids = [action.id for action in self.actions]
         if len(set(action_ids)) != len(action_ids):
             raise InvalidManifestValueError(f"action ids must be unique, got {action_ids}")
+        launch_path_ids = [launch_path.id for launch_path in self.launch_paths]
+        if len(set(launch_path_ids)) != len(launch_path_ids):
+            raise InvalidManifestValueError(f"launch path ids must be unique, got {launch_path_ids}")
+        if OPEN_LAUNCH_PATH_ID in launch_path_ids:
+            raise InvalidManifestValueError(
+                f"launch path id {str(OPEN_LAUNCH_PATH_ID)!r} is reserved for the synthesized root launch path"
+            )
         if self.default_shortcut is not None:
             allowed_ids = set(action_ids) if self.instances else {OPEN_ACTION_ID}
             if self.default_shortcut.action not in allowed_ids:
                 raise InvalidManifestValueError(
                     f"default_shortcut.action {self.default_shortcut.action!r} is not one of {sorted(allowed_ids)}"
+                )
+            allowed_launch_ids = set(launch_path_ids) if launch_path_ids else {OPEN_LAUNCH_PATH_ID}
+            if self.default_shortcut.launch is not None and self.default_shortcut.launch not in allowed_launch_ids:
+                raise InvalidManifestValueError(
+                    f"default_shortcut.launch {self.default_shortcut.launch!r} is not one of {sorted(allowed_launch_ids)}"
                 )
         return self
 
