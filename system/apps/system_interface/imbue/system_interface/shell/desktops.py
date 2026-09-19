@@ -175,12 +175,6 @@ class DesktopStore(MutableModel):
             )
             return list(seeded.desktops)
 
-    def get_desktop(self, desktop_id: str) -> Desktop:
-        for desktop in self.list_desktops():
-            if desktop.id == desktop_id:
-                return desktop
-        raise DesktopNotFoundError(desktop_id)
-
     def create_desktop(self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut]) -> Desktop:
         """Register a new desktop with no windows and no wallpaper; two names that shorten to one id conflict."""
         desktop = Desktop(
