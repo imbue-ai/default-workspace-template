@@ -46,7 +46,6 @@ def _aged(
 _BUILTIN_SERVICE_ORDER = (
     "owner-exec",
     "terminal",
-    "terminal-pty",
     "system_interface",
     "chat",
     "share-gateway",
