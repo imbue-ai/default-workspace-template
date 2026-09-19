@@ -30,6 +30,7 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import InventoryInstance
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import LayoutSaveRequest
+from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
@@ -299,18 +300,26 @@ class ShellState(MutableModel):
                 str(stored.desktop_id), str(stored.client_id), mint_save_id()
             )
 
+    def _edit_placements(
+        self, desktop: Desktop, client_id: ClientId, transform: Callable[[DesktopLayout], DesktopLayout]
+    ) -> PlacementsEditOutcome:
+        return self.placements.edit_layout(
+            desktop.id, client_id, {window.id for window in desktop.windows}, transform, datetime.now(timezone.utc)
+        )
+
+    def _announce_placements_edit(self, desktop: Desktop, client_id: ClientId, outcome: PlacementsEditOutcome) -> None:
+        if outcome.is_written:
+            self._broadcast_placements_written(
+                [StoredDesktopLayout(desktop_id=desktop.id, client_id=client_id, layout=outcome.layout)]
+            )
+
     def edit_desktop_layout(
         self, desktop: Desktop, client_id: ClientId, transform: Callable[[DesktopLayout], DesktopLayout]
     ) -> DesktopLayout:
         """Apply the shell's own edit (an open, an agent op) to one client's layout of the desktop, and announce a
         write with a save id the shell minted; an edit that changes nothing writes and announces nothing."""
-        outcome = self.placements.edit_layout(
-            desktop.id, client_id, {window.id for window in desktop.windows}, transform, datetime.now(timezone.utc)
-        )
-        if outcome.is_written:
-            self._broadcast_placements_written(
-                [StoredDesktopLayout(desktop_id=desktop.id, client_id=client_id, layout=outcome.layout)]
-            )
+        outcome = self._edit_placements(desktop, client_id, transform)
+        self._announce_placements_edit(desktop, client_id, outcome)
         return outcome.layout
 
     def save_browser_placements(self, desktop_id: str, request: PlacementsSaveRequest) -> DesktopLayout | None:
@@ -355,10 +364,13 @@ class ShellState(MutableModel):
             is_settling=request.launch is not None,
         )
         opened_on = self.desktops.open_window(desktop.id, window)
-        self.edit_desktop_layout(
+        placed = self._edit_placements(
             opened_on, request.client_id, lambda layout: with_window_placed_on_open(layout, window.id)
         )
+        # The window is announced before the placement that arranges it, so no client reads the placement as one of
+        # a window its desktop does not hold.
         self.broadcast_desktops_updated()
+        self._announce_placements_edit(opened_on, request.client_id, placed)
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
         return WindowOpenOutcome(window=window, is_new=True)
 

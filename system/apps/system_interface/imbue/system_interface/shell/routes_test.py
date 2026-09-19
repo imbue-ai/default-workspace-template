@@ -1170,6 +1170,9 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
     assert placed["window_id"] == window["id"] and placed["is_minimized"] is False and placed["state"] == "NORMAL"
     assert placed["frame"] == {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}
     assert _placements(client, "c2") == []
+    # The opener hears of the window before the placement that arranges it.
+    announced = [message["type"] for message in drain_messages(first_queue) if message["type"] != "active_desktop_changed"]
+    assert announced == ["desktops_updated", "placements_updated"]
 
     # The same app at the same path is answered rather than opened, and raised in the requesting client's layout.
     focused = _open_window(client, "terminal", "/new?workdir=%2Ftmp", client_id="c2")
