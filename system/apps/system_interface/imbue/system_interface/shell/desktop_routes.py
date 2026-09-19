@@ -640,9 +640,9 @@ def _op_window(
 def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
-    """Apply one desktop verb (desktop contracts.md section 8): the read-only ones answer the desktops or the
-    inventory, a whole-app ``refresh`` reaches every client; the rest resolve their client and desktop, edit the
-    files, and answer the resulting state."""
+    """Apply one desktop verb (desktop contracts.md section 8): the read-only ones answer the desktops, a
+    whole-app ``refresh`` reaches every client; the rest resolve their client and desktop, edit the files, and
+    answer the resulting state."""
     if op in DESKTOP_READ_OPS:
         desktops = [desktop_wire_json(desktop) for desktop in shell.list_desktops()]
         logger.info("layout op={} requester={} desktops={}", op, requester, len(desktops))
