@@ -26,8 +26,10 @@ from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import Window
+from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import instance_panel_params_json
+from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
@@ -39,6 +41,7 @@ from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
+from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -267,6 +270,13 @@ def window_record(window_id: WindowId, app: str, path: str, is_settling: bool = 
         opened_at=TEST_NOW,
         is_settling=is_settling,
     )
+
+
+def placement_record(
+    window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL
+) -> WindowPlacement:
+    """A placement at the first cascade frame; shown and normal unless told otherwise."""
+    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
 
 
 def desktop_with_windows(*windows: Window) -> Desktop:
