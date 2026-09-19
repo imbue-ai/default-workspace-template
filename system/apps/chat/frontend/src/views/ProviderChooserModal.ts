@@ -45,9 +45,9 @@ import {
   clearFlow,
   deleteAccount,
   getAccounts,
-  getBrokenAccountId,
   getFlow,
   getLanes,
+  getUnpickableAccount,
   isPickingAccount,
   loadAccounts,
   pickAccount,
@@ -253,8 +253,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  // --- chooser ---------------------------------------------------------------------------
-
   /** IntroChooserModal's ChooserRow. */
   function laneRow(candidate: Lane): m.Vnode {
     return m(
@@ -328,22 +326,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
    *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
    *  the row itself also picks it; the account the caller is leaving is listed but not
-   *  pickable. Re-auth stays reachable because an expired credential is otherwise a
-   *  dead end: without it the only way back is to delete the account, which orphans every chat
-   *  bound to it rather than reviving them. */
+   *  pickable, with the caller's note beside it. Re-auth stays reachable because an expired
+   *  credential is otherwise a dead end: without it the only way back is to delete the account,
+   *  which orphans every chat bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
     const confirming = signedIn.find((account) => account.id === confirmingDelete) ?? null;
     const picking = isPickingAccount();
-    const brokenAccountId = getBrokenAccountId();
+    const unpickable = getUnpickableAccount();
     return m("div", [
       m("div", { class: css.SECTION_LABEL }, "Signed in"),
       m(
         "div",
         { class: css.ROW_STACK },
         signedIn.map((account) => {
-          const isBroken = account.id === brokenAccountId;
+          const isUnpickable = account.id === unpickable?.accountId;
           const identity = [
             m(
               "span",
@@ -359,14 +357,20 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   {
                     type: "button",
                     class: css.ACCOUNT_PICK,
-                    disabled: isBroken,
+                    disabled: isUnpickable,
                     "data-e2e": `pick-account-${account.id}`,
                     onclick: () => pickAccount(account.id),
                   },
                   identity,
                 )
               : identity,
-            picking && isBroken ? m("span", { class: css.ACCOUNT_BROKEN_NOTE }, "Not working") : null,
+            picking && isUnpickable
+              ? m(
+                  "span",
+                  { class: unpickable.isFailing ? css.ACCOUNT_FAILING_NOTE : css.ACCOUNT_UNPICKABLE_NOTE },
+                  unpickable.note,
+                )
+              : null,
             m(
               Button,
               {
@@ -409,8 +413,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : null,
     ]);
   }
-
-  // --- sign-in bodies --------------------------------------------------------------------
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
   function openLinkStep(url: string, label: string, title = "Open the sign-in page"): m.Vnode {

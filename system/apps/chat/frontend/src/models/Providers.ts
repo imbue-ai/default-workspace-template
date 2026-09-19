@@ -359,19 +359,25 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
-// What to do once a sign-in succeeds or a signed-in account is picked. Opening the chooser from
-// the page of a chat that awaits an account means the user was trying to start that chat, so it
-// launches on the account they end up with. Signing in from inside a running chat means they
-// were adding a provider for later and should not be moved. The caller knows which it is;
-// nothing here can tell.
+// What to do once a sign-in succeeds or a signed-in account is picked: launch a chat waiting for
+// an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
+// can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // What to do if the chooser closes with the sign-in hook still armed: the caller that was
 // waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
-let chooserBrokenAccountId: string | null = null;
+let chooserUnpickable: UnpickableAccount | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
+}
+
+/** A signed-in account the chooser lists but will not pick, with the word shown beside it. */
+export interface UnpickableAccount {
+  accountId: string;
+  note: string;
+  /** The caller is leaving it because it failed, so the note reads as an error. */
+  isFailing: boolean;
 }
 
 export interface ProviderChooserIntent {
@@ -382,8 +388,8 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
-  /** The account the caller is moving away from because it failed. Listed, but not pickable. */
-  brokenAccountId?: string;
+  /** The account the caller is moving away from: listed, but not pickable. */
+  unpickable?: UnpickableAccount;
 }
 
 /** Open the chooser, optionally saying why it was opened. */
@@ -393,7 +399,7 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
-  chooserBrokenAccountId = intent.brokenAccountId ?? null;
+  chooserUnpickable = intent.unpickable ?? null;
   m.redraw();
 }
 
@@ -402,8 +408,8 @@ export function isPickingAccount(): boolean {
   return chooserOnSignedIn !== null;
 }
 
-export function getBrokenAccountId(): string | null {
-  return chooserBrokenAccountId;
+export function getUnpickableAccount(): UnpickableAccount | null {
+  return chooserUnpickable;
 }
 
 /** Use an account that is already signed in: what a finished sign-in does, minus the sign-in. */
@@ -433,7 +439,7 @@ export function closeProviderChooser(): void {
   const dismissed = chooserOnSignedIn !== null ? chooserOnDismissed : null;
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
-  chooserBrokenAccountId = null;
+  chooserUnpickable = null;
   dismissed?.();
   m.redraw();
 }

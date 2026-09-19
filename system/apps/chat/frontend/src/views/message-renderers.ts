@@ -8,8 +8,9 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { openProviderChooser } from "../models/Providers";
-import { openSubagentTab, startChatOnAccount } from "../shell";
+import { accountForAgent, openProviderChooser } from "../models/Providers";
+import { openSubagentTab } from "../shell";
+import { beginSwitchTo } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -422,7 +423,8 @@ export function renderToolCallBlock(
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
 function renderReauthAction(chatId: string): m.Children {
-  const accountId = getChatById(chatId)?.active_agent.account_id ?? "";
+  const chat = getChatById(chatId);
+  const accountId = chat?.active_agent.account_id ?? "";
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
@@ -434,25 +436,32 @@ function renderReauthAction(chatId: string): m.Children {
       },
       "Sign in again",
     ),
-    // Two ways out, because only the first one revives THIS conversation: a chat binds to its
-    // account when it is created and nothing rebinds it, so "switch provider" cannot mean
-    // moving this chat -- it means starting a fresh one somewhere that works. Both are offered
-    // because the right choice depends on whether the credential is fixable, which the user
-    // knows and we do not: an expired login is, a spent quota mostly is not.
-    " or ",
-    m(
-      "button",
-      {
-        type: "button",
-        class: REAUTH_ACTION_CLASS,
-        onclick: () =>
-          openProviderChooser({
-            onSignedIn: (chosen) => startChatOnAccount(chosen),
-            brokenAccountId: accountId || undefined,
-          }),
-      },
-      "switch to another provider",
-    ),
+    // Two ways out, because the right one depends on whether the credential is fixable, which
+    // the user knows and we do not: an expired login is, a spent quota mostly is not. The second
+    // moves this chat to the account picked: a rebind for another account on the same harness and
+    // lane, a handoff otherwise. It waits for the chat list, which can land after the transcript:
+    // the move needs the chat, and the chooser fixes which account it refuses when it opens.
+    chat === undefined
+      ? null
+      : [
+          " or ",
+          m(
+            "button",
+            {
+              type: "button",
+              class: REAUTH_ACTION_CLASS,
+              onclick: () =>
+                openProviderChooser({
+                  onSignedIn: (chosen) => {
+                    const account = accountForAgent(chosen);
+                    if (account !== null) beginSwitchTo(chatId, account);
+                  },
+                  ...(accountId ? { unpickable: { accountId, note: "Not working", isFailing: true } } : {}),
+                }),
+            },
+            "switch to another provider",
+          ),
+        ],
     ".",
   ]);
 }

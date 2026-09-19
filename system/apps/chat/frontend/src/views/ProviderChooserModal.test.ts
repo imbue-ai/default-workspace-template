@@ -53,6 +53,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import { ProviderChooserModal } from "./ProviderChooserModal";
+import { ACCOUNT_FAILING_NOTE, ACCOUNT_UNPICKABLE_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
  *
@@ -262,7 +263,7 @@ describe("picking a signed-in account", () => {
 
   it("hands a working account to the caller and closes the chooser", () => {
     const onSignedIn = vi.fn();
-    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    openProviderChooser({ onSignedIn, unpickable: { accountId: OPENAI.id, note: "Not working", isFailing: true } });
     const { root } = mount();
 
     pickTarget(root, ANTHROPIC.id)!.click();
@@ -274,7 +275,7 @@ describe("picking a signed-in account", () => {
 
   it("lists the failing account without letting it be picked, keeping its actions", () => {
     const onSignedIn = vi.fn();
-    openProviderChooser({ onSignedIn, brokenAccountId: OPENAI.id });
+    openProviderChooser({ onSignedIn, unpickable: { accountId: OPENAI.id, note: "Not working", isFailing: true } });
     const { root, draw } = mount();
 
     const broken = pickTarget(root, OPENAI.id)!;
@@ -287,6 +288,22 @@ describe("picking a signed-in account", () => {
     (root.querySelector('[aria-label="Remove OpenAI (Pi)"]') as HTMLElement).click();
     draw();
     expect(root.textContent).toContain("Remove account");
+  });
+
+  it("reads the note as an error only for an account the caller is leaving because it failed", () => {
+    // An account is refused for two unrelated reasons -- it just failed, or the chat already runs
+    // on it -- and only the first is bad news, so the two must not look alike.
+    function noteClassFor(note: string, isFailing: boolean): string {
+      openProviderChooser({ onSignedIn: vi.fn(), unpickable: { accountId: OPENAI.id, note, isFailing } });
+      const { root } = mount();
+      const row = pickTarget(root, OPENAI.id)!.closest("div")!;
+      const rendered = [...row.querySelectorAll("span")].find((span) => span.textContent === note)!;
+      closeProviderChooser();
+      return rendered.className;
+    }
+
+    expect(noteClassFor("Not working", true)).toBe(ACCOUNT_FAILING_NOTE);
+    expect(noteClassFor("Current", false)).toBe(ACCOUNT_UNPICKABLE_NOTE);
   });
 
   it("re-authenticates rather than picks when Sign in again is pressed on a pickable row", () => {

@@ -493,6 +493,9 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           onclick: () => {
             closeCard();
             openProviderChooser({
+              ...(current !== null
+                ? { unpickable: { accountId: current.id, note: "Current", isFailing: false } }
+                : {}),
               onSignedIn: (accountId) => {
                 // Signed in from inside a chat: the new account is what the user switches this
                 // chat to next, so the switch begins on it.
