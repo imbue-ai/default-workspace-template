@@ -115,6 +115,21 @@ def _registered_rows(current_apps: list[dict[str, object]]) -> dict[str, _AppRow
     return rows
 
 
+def _diff_rows(
+    current_rows: dict[str, _AppRow],
+    previous_rows: dict[str, _AppRow],
+) -> tuple[list[str], list[str]]:
+    """The names whose row changed and the names that left, in emission order.
+
+    Registrations keep the registry's own order; deregistrations are sorted.
+    """
+    changed = [
+        name for name, row in current_rows.items() if previous_rows.get(name) != row
+    ]
+    gone = sorted(set(previous_rows) - set(current_rows))
+    return changed, gone
+
+
 def _write_events(
     events_dir: Path,
     current_rows: dict[str, _AppRow],
@@ -129,11 +144,11 @@ def _write_events(
     """
     events_dir.mkdir(parents=True, exist_ok=True)
     events_path = events_dir / "events.jsonl"
+    changed, gone = _diff_rows(current_rows, previous_rows)
 
     with open(events_path, "a") as f:
-        for name, row in current_rows.items():
-            if previous_rows.get(name) == row:
-                continue
+        for name in changed:
+            row = current_rows[name]
             event = ServiceRegisteredEvent(
                 timestamp=_now_iso(),
                 type=_EVENT_TYPE_REGISTERED,
@@ -146,7 +161,7 @@ def _write_events(
             )
             f.write(event.model_dump_json() + "\n")
 
-        for name in sorted(set(previous_rows) - set(current_rows)):
+        for name in gone:
             event = ServiceDeregisteredEvent(
                 timestamp=_now_iso(),
                 type=_EVENT_TYPE_DEREGISTERED,
@@ -239,12 +254,7 @@ def main() -> None:
         if new_mtime != last_mtime:
             last_mtime = new_mtime
             current_rows = _registered_rows(_load_apps())
-            changed = [
-                name
-                for name, row in current_rows.items()
-                if previous_rows.get(name) != row
-            ]
-            gone = sorted(set(previous_rows) - set(current_rows))
+            changed, gone = _diff_rows(current_rows, previous_rows)
 
             if changed or gone:
                 print(
