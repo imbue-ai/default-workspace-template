@@ -128,7 +128,7 @@ class AppManifest(FrozenModel):
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new project (or desktop) is seeded with")
     actions: tuple[AppAction, ...] = Field(default=(), description="The declared create actions")
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at, with their labels and params"
