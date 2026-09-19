@@ -89,6 +89,7 @@ from imbue.system_interface.shell.layout_ops import is_document_op
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import is_transient_op
 from imbue.system_interface.shell.layout_ops import layout_inspect
+from imbue.system_interface.shell.layout_ops import op_requester_of_address
 from imbue.system_interface.shell.layout_ops import parse_op_requester
 from imbue.system_interface.shell.layout_ops import requester_address
 from imbue.system_interface.shell.layouts import layout_wire_json
@@ -863,9 +864,7 @@ def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
 @pure
 def _op_requester_of(requester: Address | None) -> OpRequester | None:
     """The address verbs' requester as the client resolution reads it."""
-    if requester is None:
-        return None
-    return OpRequester(app=requester.app, marker=str(requester.key) if requester.key is not None else "")
+    return op_requester_of_address(requester) if requester is not None else None
 
 
 def _resolve_op_address(raw: str, requester: Address | None) -> Address:

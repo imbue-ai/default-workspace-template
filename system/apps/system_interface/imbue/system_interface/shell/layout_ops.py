@@ -134,8 +134,7 @@ def parse_op_requester(raw: Any) -> OpRequester | None:
     if raw is None or raw == "":
         return None
     if isinstance(raw, str):
-        address = Address(raw)
-        return OpRequester(app=address.app, marker=str(address.key) if address.key is not None else "")
+        return op_requester_of_address(Address(raw))
     if isinstance(raw, dict) and isinstance(raw.get("app"), str):
         raw_marker = raw.get("marker")
         marker = "" if raw_marker is None else raw_marker
@@ -143,6 +142,12 @@ def parse_op_requester(raw: Any) -> OpRequester | None:
             raise LayoutOpError("``requester.marker`` must be a string")
         return OpRequester(app=AppName(raw["app"]), marker=marker)
     raise LayoutOpError("``requester`` must be an address or an object with ``app`` and ``marker``")
+
+
+@pure
+def op_requester_of_address(address: Address) -> OpRequester:
+    """The requester an address names: its app, with its instance key as the marker (empty for a bare app)."""
+    return OpRequester(app=address.app, marker=str(address.key) if address.key is not None else "")
 
 
 @pure
