@@ -1,8 +1,9 @@
 # Test plan: exercising the critical-app-editing branch end to end
 
-Companion to `plan-critical-app-editing.md`, whose "Manual scenario" section records
-that the scenario was never run. This plan covers everything on the branch that can be
-tested without an agent following the skill prose: every subcommand and flag of the
+Companion to `plan-critical-app-editing.md`, whose "Manual scenario" section describes
+the original, then-unrun scenario. The completed testing is recorded here. This plan
+covers everything on the branch that can be tested without an agent following the
+skill prose: every subcommand and flag of the
 scripts, every app change, the manifest library, the memory bands, and the vendored
 mngr read side. The skills' prose (which step an agent takes when) is out of scope; the
 commands the prose names are in scope, and the end-to-end scenarios run them in the
@@ -11,6 +12,37 @@ order the prose prescribes.
 Each scenario lists its steps and its pass criteria: things that are true if and only if
 the feature worked. Record findings under a `## Findings` heading at the end of this
 file, one entry per scenario id, so the plan doubles as the run's record.
+
+<a id="current-status"></a>
+
+## Current status — 2026-09-18
+
+**Testing is complete under the agreed practical acceptance criteria. No known blocking
+fixes or decisions remain from these runs.** The follow-up round verified the recovery
+fix and completed the outstanding command-level live coverage in `minds-staging-criticaltest`.
+
+| Thread | Current disposition |
+|---|---|
+| Incomplete restoration could report rollback success | Fixed in `3e36fbe17`: fail before restarting services, explain the incomplete restoration, and preserve recovery copies. Regression tests and live failure/recovery checks passed. |
+| Remaining live coverage | Completed: preview controls and account protection (C1/C3), refusal diagnostics (B7/C13), freshness and abandoned progress (E1/E13), unhealthy apply recovery (E14), another preview with a kept point (E18), in-flight rollback refusal (E23), real per-app tool restoration and failed recovery (E20/F3/E15/E24), and abandoned-owner takeover (X6). |
+| Shared tmux sessions, extra frontend restarts, observer transients, banner on reload | Accepted behavior under the standard below. Removed the bundle-stamp comparison used solely to minimize frontend rollback restarts; kept build validation and recovery protections. |
+| Concurrent `uv run` environment synchronization during recovery | Outside the supported contract. Recovery commands must serialize through an existing interpreter. The failed-copy handling defect was fixed independently. |
+| Intermittent unlisted-instance browser test | Passed isolated reruns, including the follow-up round. The initial failure remains documented; no speculative timing fix was added. |
+
+Latest automated verification: **342 update-self tests passed**; all `.agents` tests
+passed on macOS (**770 passed, 8 skipped**) and staging Linux (**777 passed, 1 skipped**).
+Ruff passed and the final code review reported no issues. Broader Python/frontend suite
+results are retained with the second run; they are not fresh follow-up suite counts.
+
+At handback, staging was healthy with the fix deployed, original launch settings restored,
+and active test fixtures and recovery state cleaned up. Final staging HEAD:
+`7605ae48811b66e8691a3e08c1a41217d846b58a`; its tracked tree equals the fixed deployment
+baseline `d82b937b32e1255f52143b8817737f2f4faab23b`.
+
+See [the completed follow-up report](#completed-follow-up) for evidence and cleanup details.
+The older run reports preserve failures and partial coverage **as observed at the time**;
+their verdicts and pending reruns are superseded by this status. Evaluation of an agent
+following the skill prose remains outside this plan's scope.
 
 ## Acceptance standard
 
@@ -39,8 +71,8 @@ observations, not all release gates:
   ...`), not `uv run` that can synchronize the environment before reaching the lock.
   Concurrent package installation into an environment being restored is outside this contract.
 
-The findings below preserve what earlier runs observed against their then-current criteria;
-the reassessment at the start of Findings explains which observations remain blockers.
+The findings below preserve what earlier runs observed against their then-current criteria.
+The current status above gives the final disposition; the reassessment explains the relaxed criteria.
 
 ## 0. Environment and preconditions
 
@@ -633,7 +665,12 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 
 ## Findings
 
-### 2026-09-18 — follow-up fixes and remaining live coverage
+Reports below are newest first. Earlier failures and coverage gaps are historical;
+use [Current status](#current-status) for the overall verdict.
+
+<a id="completed-follow-up"></a>
+
+### 2026-09-18 — completed follow-up fixes and live coverage
 
 **Result: the remaining command-level live checks passed under the practical acceptance criteria.**
 
@@ -720,7 +757,8 @@ scenarios A4/A5, C15, E2–E7, E15, E19, E21 and E24 now reflect that goal.
   evidence, not a blocker requiring support for concurrent environment installation.
   Supported recovery entrypoints must still serialize apply/rollback/confirm operations.
   Reporting success after a failed copy is a separate recovery defect: the follow-up
-  fix below makes that outcome a failure and preserves the recovery copies.
+  fix in the completed follow-up above makes that outcome a failure and preserves the
+  recovery copies.
 - Known-list behavior and fast observer recovery are acceptable without the exact transient
   status and wording the earlier plan prescribed.
 
@@ -728,20 +766,21 @@ Earlier findings below are historical observations, not the current release verd
 Recovery-copy retention, frontend usability checks, detached rollback, mutation locks,
 and restart coverage for shared dependencies remain required and implemented.
 
-Verification of the simplification: the update-self script suite passed (340 tests),
+Verification at the simplification stage: the update-self script suite passed (340 tests),
 and the full `.agents` suite passed on macOS (768 passed, 8 skipped) and in criticaltest
 Linux (775 passed, 1 skipped). Ruff checks passed. A real chat-only frontend apply in
 criticaltest named both chat and shell; rollback restarted both, restored built pages,
 and left the observer healthy. Confirm removed the notice and copies, the two test
 worktrees were removed, and only the original Welcome chat remained. The deployed
-script simplification remains in staging at `a17d5ac8c2a12195d29ffdf8dacf74c1d454d990`;
+script simplification was deployed at `a17d5ac8c2a12195d29ffdf8dacf74c1d454d990`;
 the chat fixture was rolled back. Evidence: `data/.tasks/critical-simplify-test` in the
 container and `.test_output/critical-simplify-test` in the local mngr worktree.
 
-### 2026-09-18 — second `criticaltest` acceptance run
+### 2026-09-18 — second `criticaltest` acceptance run (historical)
 
-**Result: not an unconditional pass.** The first-round fixes and the new rollback/UI
-scenarios mostly worked. Two remaining issues and an emergency-banner limitation require attention: terminal previews
+**Result at the time: not an unconditional pass. Superseded by the reassessment and
+completed follow-up above.** The first-round fixes and the new rollback/UI scenarios
+mostly worked. Two issues and an emergency-banner limitation were flagged: terminal previews
 still expose their new tmux sessions to the live terminal list (C15), and overlapping
 `uv run` commands during a root-venv rollback can interfere with environment restoration
 (E20/E11/E12). No production-code fixes were made during this round.
@@ -771,7 +810,7 @@ still expose their new tmux sessions to the live terminal list (C15), and overla
   counterparts for pytest. Python suites used explicit paths and separate `/private/tmp`
   basetemps; the apps run included the release browser tests.
 
-#### Remaining findings and expectation corrections
+#### Findings and expectation corrections at the time
 
 1. **C15 — terminal preview isolation is incomplete, reproduced twice.** Preview boot
    and refresh no longer append server-discovery events; creating a session leaves the
@@ -948,10 +987,10 @@ container) and includes the XML, logs, JSON evidence, drivers, and screenshots. 
 artifact: `.test_output/criticaltest-round2-2026-09-18.tar.gz` in the mngr worktree.
 
 
-### 2026-09-18 — `criticaltest` Docker staging acceptance run
+### 2026-09-18 — first `criticaltest` Docker staging acceptance run (historical)
 
-**Result: automated coverage passed after environment corrections; live acceptance
-found blockers. This is not a clean acceptance pass. No product fixes were made.**
+**Result at the time: automated coverage passed after environment corrections; live acceptance
+found blockers. Superseded by the fixes and later runs above.** No product fixes were made during this run.
 Test-only edits, deliberate failures, and recovery commits were confined to staging.
 
 #### Target and evidence
@@ -1016,8 +1055,10 @@ npm test
 
 #### Fixes landed after this run (2026-09-18)
 
-Each numbered finding below maps to a change on the branch, verified by unit and
-code-level tests only; the live scenarios were not re-run.
+This subsection records the state immediately after the first fixes: verification then
+covered unit and code-level tests only. Subsequent live verification is recorded in the
+later runs above; the pending reruns below are historical. Item 5's narrow restart
+targeting was subsequently removed as part of the acceptance reassessment.
 
 1. An unregistered sidecar boot (`terminal-app --no-register`) is no longer held to
    the manifest's `instances_url`, so the terminal preview boots (B1, C6, X4 owed a re-run).
@@ -1044,7 +1085,7 @@ code-level tests only; the live scenarios were not re-run.
 11. A rollback with no recorded program skips the restart; a merge that changed no files
     keeps no rollback point.
 
-#### Findings requiring attention
+#### Findings requiring attention at the time
 
 1. **B1/C6 — terminal preview cannot boot.** The sidecar manifest declares
    `http://127.0.0.1:7682`, while `--instances-url` uses an allocated preview port.
