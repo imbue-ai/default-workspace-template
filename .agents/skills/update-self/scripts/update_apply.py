@@ -65,7 +65,9 @@ from update_environment import (
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
+    remove_shadowing_app_tool_installs,
     remove_shadowing_mngr_installs,
+    resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
@@ -657,13 +659,18 @@ def _recover_running_state(
             _assert_bundles_built(
                 repo_root, None, live_service_restarted=False, bundles=frontend.bundles
             )
+        destinations = resolve_tool_destinations(plan, runner)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
-            refresh_backend_dependencies(repo_root, runner, keep_protected)
+            refresh_backend_dependencies(
+                repo_root, runner, keep_protected, destinations
+            )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
         )
         if rebuildable_app_tools:
-            refresh_app_tools(rebuildable_app_tools, repo_root, runner, keep_protected)
+            refresh_app_tools(
+                rebuildable_app_tools, repo_root, runner, keep_protected, destinations
+            )
         if live_service_restarted:
             run_checked(
                 runner,
@@ -803,8 +810,8 @@ def apply_update(
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
 
-    ``sweep_homes`` are the homes swept for a stale mngr install after the
-    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
+    ``sweep_homes`` are the homes swept for stale mngr and app tool installs
+    after the refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -935,10 +942,11 @@ def apply_update(
     _advance(PHASE_MERGED)
 
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
+    app_tools = read_app_tools(repo_root)
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
-        read_app_tools(repo_root),
+        app_tools,
     )
 
     unresolved_frontend_failure: str | None = None
@@ -1002,7 +1010,10 @@ def apply_update(
 
     failure: ApplyFailed | None = None
     try:
-        marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
+        destinations = resolve_tool_destinations(plan, runner)
+        marker.snapshots = take_snapshots(
+            plan, repo_root, destinations, marker.snapshots
+        )
         _advance(PHASE_SNAPSHOTTED)
 
         if plan.frontend_manifest and usable_worker_bundles is None:
@@ -1015,7 +1026,11 @@ def apply_update(
             )
         if plan.backend_manifest:
             refresh_backend_dependencies(
-                repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+                repo_root,
+                runner,
+                expend,
+                destinations,
+                ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
         if plan.app_tools:
             refresh_app_tools(
@@ -1023,11 +1038,16 @@ def apply_update(
                 repo_root,
                 runner,
                 expend,
+                destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
+            )
+        for stale in remove_shadowing_app_tool_installs(runner, sweep_homes, app_tools):
+            sys.stderr.write(
+                f"refresh: removed {stale}, a stale app tool install that shadowed the pinned one\n"
             )
         _advance(PHASE_REFRESHED)
 
