@@ -1110,7 +1110,8 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     papered = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "file", "name": "mine"}})
     assert papered.status_code == 200 and papered.get_json()["wallpaper"] == {"kind": "file", "name": "mine"}
     assert client.get("/wallpapers/file/mine").status_code == 200
-    assert client.get("/wallpapers/file/nope").status_code == 404
+    missing = client.get("/wallpapers/file/nope")
+    assert missing.status_code == 404 and "nope" in missing.get_json()["detail"]
     assert client.get("/wallpapers/odd/mine").status_code == 404
     assert client.post("/api/desktops/research/wallpaper", json={"wallpaper": None}).get_json()["wallpaper"] is None
 
