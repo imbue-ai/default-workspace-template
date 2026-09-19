@@ -51,9 +51,9 @@ PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 HTTP_FOUND: Final[int] = 302
 HTTP_NOT_FOUND: Final[int] = 404
 
-# What the page reads off itself: the session it frames (or none), the tab id the shell put in
-# the URL, and what it needs to derive the two origins. Keys are camelCase because the page's
-# script reads them.
+# The JSON script element the page reads off itself: the session it frames (or none), the tab
+# id the shell put in the URL, and the origin labels it derives the two origins from, as
+# ``PageConfig`` dumps them.
 _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
