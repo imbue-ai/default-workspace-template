@@ -5,6 +5,7 @@ from typing import Final
 
 import click
 from app_instances.blueprint import build_instances_app
+from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.json_store import app_store_path
 from app_instances.nudge import ShellNudger, shell_base_url
 from app_instances.sidecar import (
@@ -81,14 +82,14 @@ def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) 
     )
 
 
-def build_pages_app(source: TmuxSessionSource, nudger: ShellNudger) -> Flask:
+def build_pages_app(source: TmuxSessionSource, nudger: InstanceNudgerInterface) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.register_blueprint(build_pages_blueprint(source=source, nudger=nudger, registry_path=registry_path()))
     return app
 
 
 def build_instances_api_app(
-    source: TmuxSessionSource, nudger: ShellNudger, paths: TerminalPaths, app_name: AppName
+    source: TmuxSessionSource, nudger: InstanceNudgerInterface, paths: TerminalPaths, app_name: AppName
 ) -> Flask:
     app = build_instances_app(source, nudger)
     app.register_blueprint(
