@@ -186,6 +186,28 @@ def test_nearest_free_cell_without_a_grid_searches_the_unbounded_plane() -> None
     assert nearest_free_cell(GridCell(column=3, row=3), occupied, None) == GridCell(column=3, row=3)
 
 
+def test_nearest_free_cell_without_a_grid_prefers_a_nearer_cell_outside_the_first_square_with_a_free_one() -> None:
+    """With the 7x7 square around the target full but for a corner, the corner (distance 3*sqrt(2)) loses to the
+    cells one column past the square's edge on the target's row (distance 4), the lower column winning the tie;
+    with the 9x9 square full but for that corner, the corner wins over everything at distance 5 and beyond."""
+    target = GridCell(column=10, row=10)
+    corner = GridCell(column=13, row=13)
+    seven_square = {
+        GridCell(column=column, row=row)
+        for column in range(7, 14)
+        for row in range(7, 14)
+        if not (column == 13 and row == 13)
+    }
+    assert nearest_free_cell(target, seven_square, None) == GridCell(column=6, row=10)
+    nine_square = {
+        GridCell(column=column, row=row)
+        for column in range(6, 15)
+        for row in range(6, 15)
+        if not (column == 13 and row == 13)
+    }
+    assert nearest_free_cell(target, nine_square, None) == corner
+
+
 # Desktops: windows
 
 
