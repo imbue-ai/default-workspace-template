@@ -510,29 +510,9 @@ def _read_manifest(
 
     shortcut = raw.get("default_shortcut")
     if shortcut is not None:
-        if not (
-            isinstance(shortcut, dict)
-            and isinstance(shortcut.get("action"), str)
-            and isinstance(shortcut.get("mode"), str)
-        ):
-            return (
-                {},
-                None,
-                f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
-            )
-        copied_shortcut: dict[str, object] = {
-            "action": shortcut["action"],
-            "mode": shortcut["mode"],
-        }
-        launch = shortcut.get("launch")
-        if launch is not None:
-            if not isinstance(launch, str):
-                return (
-                    {},
-                    None,
-                    f"manifest {str(path)!r}: default_shortcut.launch must be a string",
-                )
-            copied_shortcut["launch"] = launch
+        copied_shortcut, shortcut_error = _copied_default_shortcut(shortcut, path)
+        if copied_shortcut is None:
+            return {}, None, shortcut_error
         fields["default_shortcut"] = copied_shortcut
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
@@ -565,6 +545,31 @@ def _copied_tables(
         if copied_entry is None:
             return None, entry_error
         copied.append(copied_entry)
+    return copied, None
+
+
+def _copied_default_shortcut(
+    shortcut: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """The manifest's ``default_shortcut`` (any TOML value) as the registry row carries
+    it: ``action``, ``mode``, and ``launch`` when the manifest names one. Returns
+    ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
+    requires."""
+    if not (
+        isinstance(shortcut, dict)
+        and isinstance(shortcut.get("action"), str)
+        and isinstance(shortcut.get("mode"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
+        )
+    copied: dict[str, object] = {"action": shortcut["action"], "mode": shortcut["mode"]}
+    launch = shortcut.get("launch")
+    if launch is not None:
+        if not isinstance(launch, str):
+            return None, f"manifest {str(path)!r}: default_shortcut.launch must be a string"
+        copied["launch"] = launch
     return copied, None
 
 
