@@ -86,8 +86,10 @@ package = false
 # same versions, and a user-built app never has to edit this file; an app's own
 # tool environment keeps it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
-# system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python package.
-exclude = ["system/libs/workspace_ui"]
+# system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
+# package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose
+# program is an entry point of system/apps/terminal.
+exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

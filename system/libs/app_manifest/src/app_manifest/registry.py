@@ -116,3 +116,21 @@ def read_registry(path: Path) -> list[RegistryRow]:
                 describe_validation_error(e),
             )
     return rows
+
+
+def read_origin_label(path: Path, name: AppName) -> str:
+    """The origin label of the app registered as ``name``, or "" when none is, or the registry cannot be read.
+
+    Read per page load rather than watched: a label is minted once per workspace and the
+    registry is one small file, and an unreadable registry costs the page the origin it wanted
+    to derive, never the page.
+    """
+    try:
+        rows = read_registry(path)
+    except RegistryReadError as e:
+        logger.warning("Could not read the app registry for the origin label of {}: {}", name, e)
+        return ""
+    for row in rows:
+        if row.name == name:
+            return row.label
+    return ""

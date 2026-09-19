@@ -11,7 +11,7 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChat = vi.fn();
 const getChatById = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat, getChatById }));
+vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener: vi.fn() }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -82,7 +82,7 @@ describe("connectChatToShell", () => {
   it("reports the chat's presence from the shell's messages on the chat's own page", async () => {
     const parent = framed();
     const { connectChatToShell, presence } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: true });
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
 
     deliver(HANDSHAKE, parent);
     deliver({ type: SHELL_SHOWN }, parent);
@@ -97,7 +97,7 @@ describe("connectChatToShell", () => {
   it("reports nothing from a subagent view of the chat", async () => {
     const parent = framed();
     const { connectChatToShell, presence } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
 
     deliver(HANDSHAKE, parent);
     deliver({ type: SHELL_SHOWN }, parent);
@@ -110,7 +110,7 @@ describe("connectChatToShell", () => {
   it("still tells the shell where its tab is from a subagent view", async () => {
     const parent = framed();
     const { connectChatToShell } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
 
     window.dispatchEvent(new Event("focus"));
 
@@ -122,7 +122,7 @@ describe("startChatOnAccount", () => {
   it("asks the shell to open the new chat beside this one", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
@@ -136,7 +136,7 @@ describe("startChatOnAccount", () => {
   it("files the new chat in the project this one is shown in", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver({ ...HANDSHAKE, viewId: "project-7" }, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
@@ -148,7 +148,7 @@ describe("startChatOnAccount", () => {
   it("passes a first message through and reports whether the chat opened", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
     expect(await startChatOnAccount("account-1", "Carry on here")).toBe(true);
@@ -163,7 +163,7 @@ describe("startChatOnAccount", () => {
   it("tells the user when the create fails rather than opening nothing silently", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     createChat.mockRejectedValueOnce(new Error("no usable account"));
 
@@ -197,7 +197,7 @@ describe("openSubagentTab", () => {
     // page's last snapshot showed.
     const fetchSpy = acceptingInstancesRoute("agent-1.agent-7.sess-3");
     const { connectChatToShell, openSubagentTab } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { active_agent: { agent_id: "agent-9" } }));
 
@@ -223,7 +223,7 @@ describe("openSubagentTab", () => {
     const parent = framed();
     refusingInstancesRoute();
     const { connectChatToShell, openSubagentTab } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { active_agent: { agent_id: "agent-9" } }));
 
@@ -239,7 +239,7 @@ describe("openSubagentTab", () => {
     const parent = framed();
     refusingInstancesRoute();
     const { connectChatToShell, openSubagentTab } = await loadShell();
-    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
 
     await openSubagentTab("agent-1", "sess-3", "Explore the repo");

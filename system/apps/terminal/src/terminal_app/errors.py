@@ -15,3 +15,11 @@ class TmuxCommandError(TerminalAppError):
 
 class UnsafeDispatchPathError(TerminalAppError):
     """A path that would be baked into a dispatch script needs shell quoting, which the scripts do not do."""
+
+
+class TtydStartError(TerminalAppError):
+    """ttyd could not be started in place of the pty program."""
+
+
+class UnknownSessionPageError(TerminalAppError):
+    """The wrapper was asked for the page of a session name that cannot be one."""
