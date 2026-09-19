@@ -112,12 +112,22 @@ export function fastModeLabel(state: ChatFastModeState): string {
   return state.mode === "auto" && state.is_switched ? `${label} (off now)` : label;
 }
 
-/** The line under a mode in the chooser; auto's names the limit it runs to. */
+/** The line under a mode in the chooser; auto's names the limit it runs to.
+ *
+ *  A switch with auto NAMED rather than two checks and a fall-through: the fall-through was
+ *  what a mode added to `FastModeMode` would have landed in, and it would have been handed
+ *  auto's sentence. Named, a missing case is a compile error instead. */
 export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
-  if (mode === "off") return "Standard speed always";
-  if (mode === "on") return "Fast mode always";
-  const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
-  return `Fast for the first ${turns}, then standard`;
+  switch (mode) {
+    case "off":
+      return "Standard speed always";
+    case "on":
+      return "Fast mode always";
+    case "auto": {
+      const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
+      return `Fast for the first ${turns}, then standard`;
+    }
+  }
 }
 
 /** Forget every chat's state, so a test starts clean. */
