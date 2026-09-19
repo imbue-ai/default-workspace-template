@@ -767,7 +767,7 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "instances, instances_url, critical, priority, program, internal, default_shortcut, "
-            "actions) are copied onto the row on every call."
+            "actions, launch_paths) are copied onto the row on every call."
         ),
     )
     parser.add_argument(
