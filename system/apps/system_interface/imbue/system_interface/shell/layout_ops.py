@@ -137,9 +137,8 @@ def parse_op_requester(raw: Any) -> OpRequester | None:
         address = Address(raw)
         return OpRequester(app=address.app, marker=str(address.key) if address.key is not None else "")
     if isinstance(raw, dict) and isinstance(raw.get("app"), str):
-        marker = raw.get("marker", "")
-        if marker is None:
-            marker = ""
+        raw_marker = raw.get("marker")
+        marker = "" if raw_marker is None else raw_marker
         if not isinstance(marker, str):
             raise LayoutOpError("``requester.marker`` must be a string")
         return OpRequester(app=AppName(raw["app"]), marker=marker)
