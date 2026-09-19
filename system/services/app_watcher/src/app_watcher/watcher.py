@@ -3,6 +3,9 @@
 Watches data/.state/apps.toml for changes. On startup and on every change,
 writes service_registered / service_deregistered events to
 events/services/events.jsonl so the desktop client can discover available services.
+A registration event goes out only for an app whose registered fields changed --
+the whole file is rewritten whenever any app registers, so a write says nothing
+about which apps moved. The first pass remembers nothing and so announces them all.
 
 Uses both inotify (when available) and mtime polling (5-second fallback).
 """
