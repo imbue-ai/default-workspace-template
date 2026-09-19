@@ -437,20 +437,28 @@ def next_shortcut_cell(desktop: Desktop) -> GridCell:
 
 
 @pure
+def default_launch_path_id(row: RegistryRow) -> LaunchPathId | None:
+    """The launch path an app's ``default_shortcut`` names, when the app offers it: its ``launch``, else (for a
+    manifest written for the tabbed shell alone) its ``action`` when a launch path has that id; None otherwise."""
+    if row.default_shortcut is None:
+        return None
+    offered = {launch_path.id for launch_path in effective_launch_paths(row)}
+    launch = row.default_shortcut.launch
+    if launch is None and str(row.default_shortcut.action) in offered:
+        launch = LaunchPathId(str(row.default_shortcut.action))
+    return launch if launch is not None and launch in offered else None
+
+
+@pure
 def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut, ...]:
-    """A new desktop's shortcuts: every registered, non-internal app's ``default_shortcut``, in registry order,
-    laid out in reading order from the grid origin. A default shortcut names its launch path; one from a
-    manifest written for the tabbed shell alone names an action instead, and is taken when that id is a
-    launch path the app offers."""
+    """A new desktop's shortcuts: every registered, non-internal app's ``default_shortcut`` (``default_launch_path_id``),
+    in registry order, laid out in reading order from the grid origin."""
     shortcuts: list[DesktopShortcut] = []
     for row in rows:
         if row.internal or row.default_shortcut is None:
             continue
-        offered = {launch_path.id for launch_path in effective_launch_paths(row)}
-        launch = row.default_shortcut.launch
-        if launch is None and str(row.default_shortcut.action) in offered:
-            launch = LaunchPathId(str(row.default_shortcut.action))
-        if launch is None or launch not in offered:
+        launch = default_launch_path_id(row)
+        if launch is None:
             continue
         shortcuts.append(
             DesktopShortcut(

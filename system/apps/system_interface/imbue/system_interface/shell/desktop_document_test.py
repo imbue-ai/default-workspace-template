@@ -24,6 +24,7 @@ from imbue.system_interface.shell.desktop_document import GridDimensions
 from imbue.system_interface.shell.desktop_document import GridMetrics
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
+from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import fit_frame_to_backdrop
@@ -303,6 +304,15 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         ("files", "open", "focus"),
     ]
     assert [shortcut.cell for shortcut in seeded] == [GridCell(column=0, row=0), GridCell(column=0, row=1)]
+    # The same rule answers what a bare ``open`` op runs: the declared launch, the action that doubles as one,
+    # or nothing for an action no launch path matches and for an app with no default shortcut.
+    assert {str(row.name): default_launch_path_id(row) for row in rows} == {
+        "chat": "new",
+        "hidden": "open",
+        "plain": None,
+        "files": "open",
+        "odd": None,
+    }
 
 
 # Layouts

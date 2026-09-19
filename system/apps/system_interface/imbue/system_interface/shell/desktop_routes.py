@@ -40,6 +40,7 @@ from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_wire_json
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
@@ -516,7 +517,7 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
             app=app, path=WindowPath(arguments.path), client_id=client_id, if_present=arguments.if_present, launch=None
         )
     offered = effective_launch_paths(entry.row)
-    default_launch = entry.row.default_shortcut.launch if entry.row.default_shortcut is not None else None
+    default_launch = default_launch_path_id(entry.row)
     launch_id = (
         arguments.launch
         if arguments.launch is not None
