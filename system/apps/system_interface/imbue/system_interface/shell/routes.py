@@ -553,8 +553,8 @@ def layout_broadcast() -> ResponseReturnValue:
     # cost the op its attribution.
     try:
         requester = parse_op_requester(body.get("requester"))
-    except (InvalidAddressError, LayoutOpError, ValueError) as e:
-        return detail_response(f"``requester`` is not an address: {e}", HTTP_BAD_REQUEST)
+    except ValueError as e:
+        return detail_response(f"``requester`` is not an address or an {{app, marker}} object: {e}", HTTP_BAD_REQUEST)
     if not isinstance(op, str) or not is_known_op(op):
         return detail_response(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
     if not isinstance(args_raw, dict):
