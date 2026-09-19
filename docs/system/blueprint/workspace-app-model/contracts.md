@@ -54,10 +54,10 @@ Built-in manifests:
 | App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
 |---|---|---|---|---|---|---|
 | `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
-| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
-| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
+| `chat` | true | app URL | true | `chat` | `{action = "new", launch = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
+| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
+| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
+| `browser` | true | app URL | false | `browser` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
 
 Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
