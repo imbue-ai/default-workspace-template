@@ -369,8 +369,10 @@ informs only; acting on it stays with the agent.
 The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
 "Updating the running UI") does not discard its snapshots on success: it leaves
 `data/.state/update-apply/last-good.json`, a record of the merge it landed, the
-copies it kept, and the critical apps and supervisord programs it touched. The
-shell turns that record into a notice only a person closes (`shell/update_notice.py`):
+copies it kept, and the critical apps and supervisord programs included in rollback.
+A frontend apply includes both chat and shell, even if only one app's source changed,
+because it replaces both bundles. The shell turns that record into a notice only a
+person closes (`shell/update_notice.py`):
 every tab of an app the record names carries a band above its page, and the shell
 itself a top banner beside the staleness one, saying the app was updated a moment
 ago and offering "Roll back" and "Everything seems good". The shell watches the

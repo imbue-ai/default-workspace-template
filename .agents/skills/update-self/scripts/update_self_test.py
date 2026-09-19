@@ -7528,34 +7528,31 @@ def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
 # --- what the kept point names, and what a rollback checks -------------------
 
 
-def test_a_bundle_rebuilt_from_unchanged_source_does_not_make_its_owner_touched(
+@pytest.mark.parametrize("diff", [_CHAT_FRONTEND_DIFF, _FRONTEND_DIFF])
+def test_a_frontend_apply_keeps_both_bundle_owners_in_its_rollback(
     apply_repo: Path,
+    diff: str,
 ) -> None:
-    """One build at the npm root rewrites both bundles, so a chat frontend change rebuilds
-    the shell's too; the record names the shell only when its bundle's source changed,
-    which the stamps say."""
+    """Either frontend edit replaces both bundles. Include both apps even when a
+    source stamp is unchanged, and restart both when their copies are restored."""
     _write_instances_app(apply_repo, "chat")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     # The pre-apply bundle carries the stamp the emulated build will write again.
     _write_bundle(apply_repo, stamp="same-source")
-    runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
+    runner = _apply_runner(diff, apply_repo)
     runner.build_stamp = "same-source"
 
     assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
 
     record = _rollback_point(apply_repo)
     assert record is not None
-    assert record.apps == ["chat"]
-    assert record.programs == ["chat"]
-
-    # A build whose stamps differ, or that has none to compare, touches every owner.
-    for build_stamp in ("other-source", None):
-        _write_bundle(apply_repo, stamp="same-source")
-        runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
-        runner.build_stamp = build_stamp
-        assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
-        record = _rollback_point(apply_repo)
-        assert record is not None and record.apps == ["chat", "system_interface"]
+    assert record.apps == ["chat", "system_interface"]
+    assert record.programs == ["chat", "system_interface"]
+    rollback_runner = _rollback_runner(apply_repo)
+    assert _rollback(rollback_runner, apply_repo) == 0
+    assert rollback_runner.argvs_starting("supervisorctl", "restart") == [
+        ["supervisorctl", "restart", "chat", "system_interface"]
+    ]
 
 
 def test_a_merge_that_changed_nothing_keeps_no_rollback_point(apply_repo: Path) -> None:

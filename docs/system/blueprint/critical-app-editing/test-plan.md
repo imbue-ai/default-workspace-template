@@ -12,6 +12,36 @@ Each scenario lists its steps and its pass criteria: things that are true if and
 the feature worked. Record findings under a `## Findings` heading at the end of this
 file, one entry per scenario id, so the plan doubles as the run's record.
 
+## Acceptance standard
+
+The goal is a reasonably safe editing process: unfinished code stays out of the served
+tree, previews do not replace live configuration or service registration, an apply checks
+that usable pages came back, and a failed rollback leaves recovery copies and an
+actionable explanation. Serialization, preserving work, and recoverability are required.
+
+The scenarios also record diagnostics and presentation details. Those are useful
+observations, not all release gates:
+
+- Previews may interact with real agents and tmux sessions. Their saved app metadata is
+  separate, but a new preview terminal appearing in the live list is expected.
+- A rollback may conservatively include an unchanged app. Frontend applies replace both
+  chat and shell bundles, so both apps are included in the notice and restarted on rollback.
+  Minimal restart scope and exact PID counts are not independent safety requirements;
+  the recorded programs must restart, existing sessions must survive, and health must recover.
+- Observer outage wording and transient status codes depend on whether a list is already
+  known. Preserve a known list and recover when the writer returns; do not require a
+  sampled degraded interval during a fast respawn.
+- Progress wording and delivery timing need not be exact across windows. A failed rollback
+  must explain the failure and retain its copies; the persistent emergency banner may
+  appear on reload after the outcome notice is closed.
+- Concurrent apply/rollback/confirm commands must refuse safely through the supported
+  entrypoints. Invoke the script with an existing interpreter (`python3 update_self.py
+  ...`), not `uv run` that can synchronize the environment before reaching the lock.
+  Concurrent package installation into an environment being restored is outside this contract.
+
+The findings below preserve what earlier runs observed against their then-current criteria;
+the reassessment at the start of Findings explains which observations remain blockers.
+
 ## 0. Environment and preconditions
 
 Run in a real workspace on this branch: the flows need supervisord, the app registry,
@@ -85,13 +115,15 @@ that survives SIGKILL, a rollback that dies from an exception mid-run, an unread
   own; the list matches `mngr ls` (the opening full snapshot replaced the folded view,
   including the chat created during the outage).
 - **A4 Observer killed, not stopped.** `kill -9 <observer pid>`. supervisord respawns it
-  (`startretries` is effectively unbounded); the chat flips degraded then healthy without
-  a chat restart. `supervisorctl status chat` shows the same pid throughout.
+  (`startretries` is effectively unbounded); the chat recovers without a chat restart.
+  A short degraded interval need not be observable. `supervisorctl status chat` shows
+  the same pid throughout.
 - **A5 Chat booted before the observer.** `supervisorctl stop agent-observer chat`, then
   `supervisorctl start chat`, wait for its health, then `start agent-observer`. Between the
-  two starts the chat's `/_instances` answers 503 (agent list unknown) and health says
-  "Waiting for the first full-state snapshot" (never "exited"); after the observer starts
-  it answers 200 with the full list. This is the `require_writer=False` start.
+  two starts the chat's `/_instances` may answer 503 if the list is unknown, or 200 with
+  a known list from discovery or the existing stream. Health reports the absent writer;
+  after the observer starts it recovers and answers 200 with the full list. This is the
+  `require_writer=False` start; exact outage wording is diagnostic.
 - **A6 Work dir fallback.** `supervisorctl tail agent-observer stderr`: no
   "MNGR_AGENT_WORK_DIR names no directory" line in the normal case. Then test the
   fallback: set the program's env to a missing dir (temporary edit of the drop-in, or run
@@ -296,41 +328,36 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   it. The check is a command, not a script, so this is the whole test.
 - **E2 Chat-only apply keeps its point.** Apply with `--keep-rollback-point` and both
   `--worker-bundle` args pointing at the worktree (stand-in for the worker's work_dir).
-  Pass: exit 0; `last-good.json` has `apps: ["chat"]`, `programs: ["chat"]`,
+  Pass: exit 0; `last-good.json` includes chat and shell in `apps` and `programs`,
   `needs_system_services_restart: false`, `snapshots` non-empty and every `copy` path present on
-  disk; `marker.json` gone; the chat's pid changed and the shell's did not (only the
-  services agent restart is expected to turn both over: record which actually happened,
-  since the apply restarts the services agent). Every chat tab carries the band with the
-  app text; the shell has no top banner; the terminal's tabs have none. Open a second
-  browser window: it has the band too. `GET /api/updates/pending` on the live shell
+  disk; `marker.json` gone; the live apps recover after the services restart. Every chat
+  tab carries the band and the shell carries the top banner: both bundles were replaced.
+  The terminal's tabs have none. Open a second browser window: it has the band too. `GET /api/updates/pending` on the live shell
   matches the file.
 - **E3 Everything seems good.** Click it in one window: `POST .../confirm` answers 204;
   the band disappears in every window without a reload (socket); `last-good.json` and the
   snapshots dir are gone. Click it again in a window that missed the update: 409 "no
   update notice to confirm", shown as the band's error text.
 - **E4 Roll back the chat.** Re-apply a chat change as in E2. Click Roll back: the dialog
-  names the applied time, "Chat", and "chat will restart". Confirm. Pass: the route
-  answers 202; the band shows "Rolling back: Reverting the update..." then the later
-  progress strings; both verbs are hidden while it runs; `data/.state/update-apply/rollback-last.log`
+  names the applied time and the apps it will restart (chat and shell for this frontend
+  apply). Confirm. Pass: the route answers 202; the notice shows rollback progress;
+  both verbs are hidden while it runs; `data/.state/update-apply/rollback-last.log`
   captures the script's stderr; `git log -1` is the "Rolled back on the user's request"
-  revert commit and the served chat is the previous build; the chat's pid changed and the
-  shell's and terminal's did not; `last-good.json` has `outcome: "Rolled back to the
+  revert commit and the served chat is the previous build; the recorded programs restarted
+  and the workspace recovered; `last-good.json` has `outcome: "Rolled back to the
   previous version."`, `progress: null`, and the snapshots dir is gone; the band shows the
   outcome with a single Close button; Close removes it everywhere. During the run,
   pressing Roll back in another window answers 409 "already running"; after, it answers
   409 "already rolled back".
 - **E5 Shell change: banner, rollback restarts the shell.** Apply a New Tab copy change
-  with the flag. Pass: `apps` includes `system_interface`, the top banner shows the shell
-  text, no tab bands unless the chat bundle also changed (a `workspace_ui`-free edit
-  under the shell's frontend should rebuild both bundles at the npm root: record whether
-  `apps` lists the chat too, and whether that matches the spec's "program or bundle
-  changed"). Roll back: the shell restarts under the browser; the window reconnects and
-  the banner shows the outcome (the socket seeds the notice on connect); the chat's pid
-  is unchanged.
+  with the flag. Pass: `apps` includes chat and `system_interface`, the top banner and
+  chat bands appear because both bundles were replaced. Roll back: the recorded programs
+  restart; the window reconnects and the banner shows the outcome (the socket seeds the
+  notice on connect).
 - **E6 workspace_ui change.** A shared-library edit: `apps` is both, band on chat tabs
-  and banner on the shell, `programs` is both; rollback restarts both and nothing else.
+  and banner on the shell, `programs` is both; rollback restarts both and restores health.
 - **E7 Terminal change.** Apply a terminal edit: band on terminal tabs; rollback restarts
-  the terminal program only; the tmux sessions behind the tabs survive (ttyd restarted,
+  the recorded terminal program; the tmux sessions behind the tabs survive (ttyd restarted,
   tmux did not) and the tabs reconnect.
 - **E8 Services-restart case.** A change under `system/libs/bootstrap/` (a comment):
   `needs_system_services_restart: true`; the dialog carries the extra details paragraph. Roll
@@ -364,8 +391,8 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   afford to break: after an apply of a chat change with the flag, sabotage the kept
   snapshot copy of the chat's tool environment (or the bundle) so the restore yields an
   unbootable chat, then Roll back. Pass: the outcome says "did not come back healthy",
-  `emergency.json` exists, the staleness banner takes over, exit 3 in the log. Recover by
-  hand (`git revert` of the revert, rebuild) and confirm the banner clears.
+  `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
+  log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
   on a trivial fast-forward: no `last-good.json`, no band, `run.json` updated as before.
 - **E17 Settled verdict.** In E2's apply output, the phase timings show the post-restart
@@ -457,10 +484,10 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 
 ### Plan corrections
 
-- **E2's pid criterion is for the rollback, not the apply.** The forward apply restarts
+- **PID observations distinguish rollback from apply.** The forward apply restarts
   every critical program through the services agent, so after an apply every critical pid
-  has changed whatever the record names. The scoped restart is the rollback's: after Roll
-  back, only the recorded `programs`' pids have changed. Read E2, E5, E6, E7 that way.
+  has changed whatever the record names. Rollback restarts the recorded `programs`;
+  conservative inclusion of another app is acceptable. See the acceptance standard above.
 - **`rollback-last` now also asks whether a page is served.** After the restart it reads
   the shell's health and each restored app's health route for `is_frontend_built`; a
   restored copy that serves no page is an emergency (exit 3, copies kept), not a success.
@@ -496,14 +523,15 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   still lists `chat` under `with`. Then `up --app chat --instance-key ...` again: the copy
   names the new preview port (C5's gap, now expected closed), and `down --app system_interface`
   takes both down.
-- **C15 A terminal preview touches nothing of the live workspace.** Note the line count of
+- **C15 A terminal preview preserves live configuration.** Note the line count of
   the lead agent's `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl`. `up --app terminal`,
   then `refresh --app terminal`: the count is unchanged (before: each boot appended a
   `server_registered` event naming a throwaway loopback URL). Create a session through the
   preview's sidecar: the live shell receives no `POST /api/apps/terminal/changed` from it
-  (the shell's access log, or the live terminal's tab list in a live window, which must not
-  refetch) and the live terminal's `/_instances` is unchanged. Before, the preview's
-  nudger posted to the live shell, which refetched the live terminal on the preview's word.
+  (check the shell's access log), and the live terminal store and registration are unchanged.
+  The preview shares the real tmux server: its session may appear in the live terminal's
+  `/_instances`, and closing that session from either surface closes the real session.
+  Delete only the session created for this test when cleaning up.
 - **C16 An unbuilt sibling fails the boot.** C10 again with the fix in place: hide the
   worktree chat's `static/`, `up --app system_interface --with chat --instance-key ...`: the
   chat fails with the probe's line saying its health reports the page unbuilt, the shell
@@ -512,18 +540,19 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 
 ### E. The apply, the rollback point, and the rollback
 
-- **E19 Bundle ownership by source stamp.** Both bundles carry `.source-tree-hash`
+- **E19 Conservative bundle ownership and worker validation.** Both bundles carry `.source-tree-hash`
   (`static/.source-tree-hash` under `system/apps/chat/imbue/chat/` and
   `system/apps/system_interface/imbue/system_interface/`), the hashes of the app's frontend
   tree, `system/libs/workspace_ui`, and the npm lockfile. Three applies with the flag:
-  - chat-only frontend edit: `apps: ["chat"]`, `programs: ["chat"]`; the kept shell copy's
-    stamp equals the live shell bundle's, the chat's differ; band on chat tabs only.
-  - shell-only frontend edit (New Tab copy): `apps: ["system_interface"]`; chat tabs carry
-    no band.
+  - chat-only frontend edit: `apps` and `programs` name chat and shell; both bundles are
+    replaced, so both owners are included even if the shell's source stamp is unchanged.
+    Chat bands and the shell banner describe the apps the rollback will restart.
+  - shell-only frontend edit (New Tab copy): both apps are included for the same reason.
   - the chat-only edit again with the worker bundle's `.source-tree-hash` deleted before
-    the apply: both apps named, and the apply's stderr carries the "carries no
-    .source-tree-hash stamp" note. A build outside a git checkout has no stamp, so this is
-    what a bundle from such a build does.
+    the apply: the worker bundle is rejected with the "carries no .source-tree-hash stamp"
+    note and rebuilt from merged source. Both apps are included because both bundles were
+    replaced, not because the missing stamp affects rollback targeting. Stamp checks still
+    prevent installing worker bundles built from stale or unverified source.
 - **E20 A shared backend manifest touches every critical app.** Apply a harmless edit to
   `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
   Pass: the plan reinstalls every app's tool environment (`plan.app_tools` names all three;
@@ -538,7 +567,7 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   `needs_system_services_restart: true`; the shell's top banner reads "The workspace was
   updated..."; no tab carries a band; the dialog names "the workspace", says "no app
   restarts on its own", and carries the details paragraph. Press Roll back: this rollback
-  settles within a second (nothing to restart, no probe), and the route must still answer
+  settles promptly (nothing to restart, no probe), and the route must still answer
   202 and the banner show the outcome naming `mngr start --restart system-services`, with a
   single Close. Before, a script that settled and exited between the shell's two reads was
   answered as a 409 refusal beside an already-settled notice. `rollback-last.log` ends
@@ -562,8 +591,8 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   - E15's bundle variant: empty the kept chat bundle copy, Roll back. Pass: the outcome
     says the previous version did not come back healthy and that the copies are kept,
     `emergency.json` exists, exit 3 in the log, the snapshots dir is still there, the
-    staleness banner takes over. From the CLI, `rollback-last` again is refused (exit 1)
-    with a reason that says the point was rolled back and the copies kept. Press Close:
+    staleness banner appears on shell reload. From the CLI, `rollback-last` again is refused
+    (exit 1) with a reason that says the point was rolled back and the copies kept. Press Close:
     the record is gone, `emergency.json` and the snapshots dir remain. Recover by hand and
     confirm the banner clears; the next apply (any) discards the leftover copies.
   - the revert-conflict variant: after an apply with the flag, commit an edit on the
@@ -593,6 +622,39 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 | empty program list, no-op merge | E25 |
 
 ## Findings
+
+### Acceptance reassessment after the second run
+
+The user clarified that this flow should make critical-app editing reasonably safe;
+complexity needs a meaningful reliability benefit. The acceptance standard above and
+scenarios A4/A5, C15, E2–E7, E15, E19, E21 and E24 now reflect that goal.
+
+- The terminal's shared tmux sessions are expected behavior, not an isolation defect.
+  Live configuration/store/registration protections remain.
+- Extra frontend app restarts are acceptable. Removed the kept-versus-installed bundle
+  stamp comparison used solely for targeting. Both frontend bundle owners now participate
+  in rollback; verification that worker bundles match merged source is unchanged.
+- The emergency banner appearing on reload is sufficient; the failure outcome and
+  preservation of recovery copies remain requirements.
+- The root-venv failure during overlapping `uv run` synchronization is retained as staging
+  evidence, not a blocker requiring support for concurrent environment installation.
+  Supported recovery entrypoints must still serialize apply/rollback/confirm operations.
+- Known-list behavior and fast observer recovery are acceptable without the exact transient
+  status and wording the earlier plan prescribed.
+
+Earlier findings below are historical observations, not the current release verdict.
+Recovery-copy retention, frontend usability checks, detached rollback, mutation locks,
+and restart coverage for shared dependencies remain required and implemented.
+
+Verification of the simplification: the update-self script suite passed (340 tests),
+and the full `.agents` suite passed on macOS (768 passed, 8 skipped) and in criticaltest
+Linux (775 passed, 1 skipped). Ruff checks passed. A real chat-only frontend apply in
+criticaltest named both chat and shell; rollback restarted both, restored built pages,
+and left the observer healthy. Confirm removed the notice and copies, the two test
+worktrees were removed, and only the original Welcome chat remained. The deployed
+script simplification remains in staging at `a17d5ac8c2a12195d29ffdf8dacf74c1d454d990`;
+the chat fixture was rolled back. Evidence: `data/.tasks/critical-simplify-test` in the
+container and `.test_output/critical-simplify-test` in the local mngr worktree.
 
 ### 2026-09-18 — second `criticaltest` acceptance run
 

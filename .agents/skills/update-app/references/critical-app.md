@@ -326,10 +326,12 @@ interleave.
      conflicted merge); nothing was changed.
 
 3. **The notice is the user's.** After a successful apply, every tab of a
-   critical app whose program or bundle changed carries a band (a top banner
+   critical app included in the rollback carries a band (a top banner
    for the shell itself): recently updated, with "Roll back" and "Everything
-   seems good". Tell the user it is there and what it does. **Never confirm or
-   roll back on the user's behalf.** Only a person closes it: confirming
+   seems good". Frontend applies include both chat and shell because both bundles
+   are replaced; an extra app restart is acceptable. Tell the user it is there and
+   what it does. **Never confirm or roll back on the user's behalf.** Only a person
+   closes it: confirming
    discards the kept snapshots, rolling back restores them and restarts only the
    touched programs, and the outcome shows in the notice (and stays in its
    record, `data/.state/update-apply/last-good.json`, until they close it; a
