@@ -240,8 +240,15 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   directory=/home/user/workspace
   autostart=true
   autorestart=true
+  startsecs=30
+  startretries=5
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
+
+  `startsecs`/`startretries` bound a crash loop: an app that dies before it has
+  stayed up 30s counts as a failed start, so supervisord backs off and ends in
+  FATAL rather than restarting a broken app several times a second for the life
+  of the workspace. Built-in services deliberately retry forever instead.
 
   The command ends in the app's own name, not `uv run <name>`; supervisord
   resolves that name on PATH. The copy it finds is the console script
@@ -280,7 +287,10 @@ supervisorctl reread && supervisorctl update
 supervisorctl status <name>
 ```
 
-If it isn't `RUNNING`, read its log
+`update` does not wait for the start, so a healthy new app reads `STARTING`
+for its first 30 seconds -- that is the `startsecs` window the program block
+sets, not a failure. `BACKOFF` or `FATAL` is the failure signal, and a broken app reaches
+it well before the window is up. On either, read its log
 (`/var/log/supervisor/<name>-stderr.log`) or run
 `supervisorctl tail <name> stderr`.
 
@@ -537,6 +547,8 @@ command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c
 directory=/home/user/workspace
 autostart=true
 autorestart=true
+startsecs=30
+startretries=5
 ```
 
 Two valid shapes:
@@ -549,6 +561,8 @@ Two valid shapes:
   directory=/home/user/workspace
   autostart=true
   autorestart=true
+  startsecs=30
+  startretries=5
   ```
 
 - **Wrapper script** (preferred for multi-step bootstrap or env exports):
@@ -567,6 +581,8 @@ Two valid shapes:
   directory=/home/user/workspace
   autostart=true
   autorestart=true
+  startsecs=30
+  startretries=5
   ```
 
 After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl

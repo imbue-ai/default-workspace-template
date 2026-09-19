@@ -138,6 +138,37 @@ def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     assert _read_apps(apps_file) == []
 
 
+def test_a_registration_that_changes_nothing_leaves_the_file_untouched(
+    tmp_path: Path,
+) -> None:
+    """Re-registering identical values must not touch the registry at all.
+
+    Every app re-registers on each start, and the watchers key off the file's
+    mtime, so a program restarting in a loop used to make them re-announce every
+    app in the registry several times a second (measured on a real workspace:
+    46,371 rewrites in a day, fanned out to 602,823 service events).
+    """
+    apps_file = tmp_path / "apps.toml"
+    args = ["--name", "web", "--url", "http://localhost:5000", "--no-icon"]
+    assert _run(args, apps_file).returncode == 0
+
+    before = apps_file.stat()
+    contents_before = apps_file.read_text()
+
+    for _ in range(3):
+        result = _run(args, apps_file)
+        assert result.returncode == 0, result.stderr
+
+    after = apps_file.stat()
+    assert (after.st_mtime_ns, after.st_ino) == (before.st_mtime_ns, before.st_ino)
+    assert apps_file.read_text() == contents_before
+
+    # A real change still lands.
+    assert _run(["--name", "web", "--url", "http://localhost:5001"], apps_file).returncode == 0
+    assert _read_apps(apps_file)[0]["url"] == "http://localhost:5001"
+    assert apps_file.stat().st_ino != before.st_ino
+
+
 def test_name_over_the_length_cap_is_rejected(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     too_long = "a" * 33

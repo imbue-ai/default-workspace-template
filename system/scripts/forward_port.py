@@ -435,6 +435,15 @@ def _load_apps(path: Path) -> list[dict[str, object]]:
 
 
 def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
+    rendered = dump_registry(apps)
+
+    # A registration that changes nothing leaves the file alone. Every app
+    # re-registers on each start, so a program that restarts in a loop would
+    # otherwise hand the watchers a new mtime several times a second for a
+    # registry whose bytes never changed.
+    if path.exists() and path.read_text(encoding="utf-8") == rendered:
+        return
+
     # Atomic write: write to a temp file in the same directory, then os.replace()
     # into place. This guarantees that readers (like app-watcher) never observe
     # a truncated/partial file during the write window.
@@ -444,7 +453,7 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
     )
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(dump_registry(apps))
+            f.write(rendered)
         os.replace(tmp_path, path)
     except Exception:
         if os.path.exists(tmp_path):
