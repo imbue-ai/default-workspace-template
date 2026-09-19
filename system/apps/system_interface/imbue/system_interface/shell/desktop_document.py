@@ -33,6 +33,7 @@ from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
@@ -277,7 +278,7 @@ def nearest_free_cell(
             best = nearest
         if best is not None and radius + 1 > _cell_distance(best, target):
             return best
-    raise AssertionError("the unbounded grid always holds a free cell")
+    raise GridSearchExhaustedError("the unbounded grid always holds a free cell")
 
 
 @pure
