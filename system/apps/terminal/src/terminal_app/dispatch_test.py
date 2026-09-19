@@ -4,10 +4,9 @@ from pathlib import Path
 
 import pytest
 from inline_snapshot import snapshot
-
-from terminal_app.data_types import TerminalPaths
 from loguru import logger
 
+from terminal_app.data_types import TerminalPaths
 from terminal_app.dispatch import (
     build_session_command,
     build_ttyd_argv,
@@ -165,7 +164,9 @@ def test_session_command_tags_the_login_shell_into_the_terminal_session_band() -
     ]
 
 
-def test_a_missing_tag_wrapper_is_warned_about_and_a_present_one_is_not(tmp_path: Path) -> None:
+def test_a_missing_tag_wrapper_is_warned_about_and_a_present_one_is_not(
+    tmp_path: Path,
+) -> None:
     present = tmp_path / "oom_tag_service.py"
     present.write_text("")
     captured: list[str] = []
