@@ -36,7 +36,11 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`).
+  `forward_port.py` and `layout.py`). `read_origin_label(path, name)` answers
+  one app's origin label, or `""` when no such app is registered or the registry
+  cannot be read (logged as a warning), for a page that derives another app's
+  origin; `SHELL_APP_NAME` is the shell's registered name, the row such a page
+  reads to import the app contract module from the shell's origin.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
