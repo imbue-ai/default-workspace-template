@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from app_instances.blueprint import parse_request_body
 from app_manifest.manifest import ShortcutMode
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from flask import Flask
@@ -402,7 +403,7 @@ def _parse_desktop_arguments(args_raw: Mapping[str, Any]) -> DesktopOpArguments:
     try:
         return DesktopOpArguments.model_validate(op_only_args(args_raw))
     except ValidationError as e:
-        raise LayoutOpError(f"bad op arguments: {e.errors()[0]['msg']}") from e
+        raise LayoutOpError(f"bad op arguments: {describe_validation_error(e)}") from e
 
 
 def _requested_desktop(args_raw: Mapping[str, Any]) -> str | None:
@@ -509,7 +510,7 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
     app = _app_name_or_raise(arguments.app, "app")
     entry = _entry_or_raise(shell, str(app))
     if arguments.path:
-        if arguments.launch or arguments.params:
+        if arguments.launch is not None or arguments.params:
             raise LayoutOpError("an open names a path or a launch path, not both")
         return WindowOpenRequest(
             app=app, path=WindowPath(arguments.path), client_id=client_id, if_present=arguments.if_present, launch=None
@@ -517,8 +518,8 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
     offered = effective_launch_paths(entry.row)
     default_launch = entry.row.default_shortcut.launch if entry.row.default_shortcut is not None else None
     launch_id = (
-        LaunchPathId(arguments.launch)
-        if arguments.launch
+        arguments.launch
+        if arguments.launch is not None
         else (default_launch if default_launch is not None else offered[0].id)
     )
     launch = next((candidate for candidate in offered if candidate.id == launch_id), None)
@@ -548,6 +549,13 @@ def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | N
     )
 
 
+@pure
+def _required_launch(arguments: DesktopOpArguments, op: str) -> LaunchPathId:
+    if arguments.launch is None:
+        raise LayoutOpError(f"{op} needs a launch path id in args.launch")
+    return arguments.launch
+
+
 def _op_shortcuts(shell: ShellState, op: str, arguments: DesktopOpArguments, target: _DesktopOpTarget) -> None:
     desktop_id = target.desktop.id
     match op:
@@ -556,11 +564,11 @@ def _op_shortcuts(shell: ShellState, op: str, arguments: DesktopOpArguments, tar
         case "shortcut_set":
             shortcut_target = _validated_target(
                 shell,
-                ShortcutTarget(app=_app_name_or_raise(arguments.app, "app"), launch=LaunchPathId(arguments.launch)),
+                ShortcutTarget(app=_app_name_or_raise(arguments.app, "app"), launch=_required_launch(arguments, op)),
             )
             cell = _parse_cell(arguments.cell) if arguments.cell else next_shortcut_cell(target.desktop)
             shell.desktops.set_shortcut(
-                desktop_id, DesktopShortcut(target=shortcut_target, mode=ShortcutMode(arguments.mode), cell=cell)
+                desktop_id, DesktopShortcut(target=shortcut_target, mode=arguments.mode, cell=cell)
             )
         case "shortcut_move":
             if not arguments.cell:
@@ -568,16 +576,15 @@ def _op_shortcuts(shell: ShellState, op: str, arguments: DesktopOpArguments, tar
             shell.desktops.move_shortcut(
                 desktop_id,
                 _app_name_or_raise(arguments.app, "app"),
-                LaunchPathId(arguments.launch),
+                _required_launch(arguments, op),
                 _parse_cell(arguments.cell),
             )
         case "shortcut_remove":
             shell.desktops.remove_shortcut(
-                desktop_id, _app_name_or_raise(arguments.app, "app"), LaunchPathId(arguments.launch)
+                desktop_id, _app_name_or_raise(arguments.app, "app"), _required_launch(arguments, op)
             )
         case "wallpaper":
-            wallpaper = Wallpaper.model_validate(arguments.wallpaper) if arguments.wallpaper is not None else None
-            shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(wallpaper))
+            shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(arguments.wallpaper))
         case _:
             raise LayoutOpError(f"Op {op!r} has no shortcut handler")
     shell.broadcast_desktops_updated()
