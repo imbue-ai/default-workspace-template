@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
@@ -288,16 +289,20 @@ def _shown_window_ids(desktop: Desktop, layout: DesktopLayout) -> list[str]:
     ]
 
 
-def desktop_inventory_fields(shell: ShellState, clients: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def desktop_inventory_fields(
+    shell: ShellState, records: Sequence[ClientRecord], clients: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
     """The inventory document's desktop fields (desktop contracts.md section 5.5): every desktop, and each client
-    with ``shown``, the windows of its active desktop that its layout does not minimize."""
+    with ``shown``, the windows of its active desktop that its layout does not minimize; ``records`` are the
+    client records the wire ``clients`` were built from."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
     live_ids_by_desktop_id = {desktop.id: {window.id for window in desktop.windows} for desktop in desktops}
+    record_by_id = {str(record.id): record for record in records}
     clients_with_shown: list[dict[str, Any]] = []
     for client in clients:
         client_id = str(client["id"])
-        active = resolve_active_desktop(shell.clients.get_client(client_id), desktops)
+        active = resolve_active_desktop(record_by_id.get(client_id), desktops)
         shown: list[str] = []
         if active is not None:
             layout = shell.placements.read_layout(active, client_id, live_ids_by_desktop_id[active])
