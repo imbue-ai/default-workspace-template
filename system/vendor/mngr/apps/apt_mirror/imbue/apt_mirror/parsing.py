@@ -1,4 +1,8 @@
-"""Pure helpers for Debian archive metadata: Release/Packages parsing, path validation, R2 keys."""
+"""Pure helpers for Debian archive metadata: Release/Packages parsing, path validation, R2 keys.
+
+Also the rootfs side of the template pin check: dpkg status and Dockerfile
+FROM parsing, and the comparison of installed packages against a frozen index.
+"""
 
 import gzip
 import lzma
@@ -10,9 +14,12 @@ from typing import Final
 from debian.debian_support import Version
 
 from imbue.apt_mirror.data_types import ARTIFACTS_PREFIX
+from imbue.apt_mirror.data_types import InstalledPackage
 from imbue.apt_mirror.data_types import PackagesIndexEntry
 from imbue.apt_mirror.data_types import ReleaseFileEntry
+from imbue.apt_mirror.data_types import SnapshotPackageMismatch
 from imbue.apt_mirror.errors import AptMirrorInvalidTimestampError
+from imbue.apt_mirror.errors import AptMirrorTemplateBaseImageError
 from imbue.apt_mirror.errors import AptMirrorUnsafePathError
 from imbue.imbue_common.pure import pure
 
@@ -21,6 +28,8 @@ _ARCHIVE_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]*$")
 # Artifact names and versions are single path segments of the characters that
 # appear in release names (``gvisor``, ``20260601``, ``0.11.7``, ``v1.2.1``).
 _ARTIFACT_SEGMENT_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+# An image reference pinned by content digest: ``<name>[:tag]@sha256:<64 hex digits>``.
+_DIGEST_PINNED_IMAGE_REF_RE: Final[re.Pattern[str]] = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 # Index files under dists/ that are never frozen: source packages, installer
 # images, and pdiff histories (apt falls back to the full index when pdiffs
@@ -35,6 +44,12 @@ _DISTS_FILENAME_PREFIX: Final[str] = "dists/"
 # The Packages index spellings tried in order when resolving names: Debian
 # publishes all three, Docker only the plain and gzip forms.
 PACKAGES_INDEX_NAMES: Final[tuple[str, ...]] = ("Packages.xz", "Packages.gz", "Packages")
+
+# The state words of a dpkg ``Status`` (``<want> <flag> <state>``) under which
+# the package is unpacked and configured, so apt holds its version and will
+# not downgrade it, whatever the selection (install or hold). The trigger
+# states only defer post-configuration trigger processing.
+_DPKG_STATES_HOLDING_A_VERSION: Final[tuple[str, ...]] = ("installed", "triggers-awaited", "triggers-pending")
 
 
 @pure
@@ -159,6 +174,21 @@ def decompress_packages_index(packages_data: bytes, packages_path: str) -> str:
 
 
 @pure
+def _parse_stanza_fields(control_text: str, field_names: tuple[str, ...]) -> list[dict[str, str]]:
+    """The named single-line fields present in each blank-line-separated stanza of a Debian control-style file."""
+    field_prefixes = tuple(f"{name}: " for name in field_names)
+    fields_by_stanza: list[dict[str, str]] = []
+    for stanza in control_text.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in stanza.splitlines():
+            if line.startswith(field_prefixes):
+                key, value = line.split(": ", 1)
+                fields[key] = value.strip()
+        fields_by_stanza.append(fields)
+    return fields_by_stanza
+
+
+@pure
 def parse_packages_index_entries(packages_data: bytes, packages_path: str) -> list[PackagesIndexEntry]:
     """Extract the (name, version, Filename) of every stanza in a (compressed) Packages index.
 
@@ -167,12 +197,7 @@ def parse_packages_index_entries(packages_data: bytes, packages_path: str) -> li
     """
     text = decompress_packages_index(packages_data, packages_path)
     entries: list[PackagesIndexEntry] = []
-    for stanza in text.split("\n\n"):
-        fields: dict[str, str] = {}
-        for line in stanza.splitlines():
-            if line.startswith(("Package: ", "Version: ", "Filename: ")):
-                key, value = line.split(": ", 1)
-                fields[key] = value.strip()
+    for fields in _parse_stanza_fields(text, ("Package", "Version", "Filename")):
         if {"Package", "Version", "Filename"} <= fields.keys():
             entries.append(
                 PackagesIndexEntry(
@@ -180,6 +205,76 @@ def parse_packages_index_entries(packages_data: bytes, packages_path: str) -> li
                 )
             )
     return entries
+
+
+@pure
+def parse_dpkg_status_installed_packages(status_text: str) -> list[InstalledPackage]:
+    """The (name, version) of every package a ``/var/lib/dpkg/status`` file reports as installed and configured.
+
+    Held packages count (``hold ok installed``), as do packages only awaiting
+    trigger processing. Stanzas in any other state (not-installed,
+    config-files, half-installed, unpacked, half-configured) are skipped: apt
+    does not hold their version, so they cannot conflict with a frozen index.
+    """
+    installed: list[InstalledPackage] = []
+    for fields in _parse_stanza_fields(status_text, ("Package", "Version", "Status")):
+        status_words = fields.get("Status", "").split()
+        if not status_words or status_words[-1] not in _DPKG_STATES_HOLDING_A_VERSION:
+            continue
+        if {"Package", "Version"} <= fields.keys():
+            installed.append(InstalledPackage(name=fields["Package"], version=fields["Version"]))
+    return installed
+
+
+@pure
+def find_packages_newer_than_or_absent_from_index(
+    installed: Sequence[InstalledPackage], index_entries: Sequence[PackagesIndexEntry]
+) -> list[SnapshotPackageMismatch]:
+    """The installed packages a frozen index cannot serve: newer than every version it lists, or not listed at all.
+
+    apt never downgrades, so a rootfs shipping such a package makes any install
+    that depends on the index's version of it unsatisfiable. Older installed
+    versions are fine: apt upgrades them to what the index lists.
+    """
+    newest_by_name: dict[str, str] = {}
+    for entry in index_entries:
+        listed = newest_by_name.get(entry.package_name)
+        if listed is None or Version(entry.version) > Version(listed):
+            newest_by_name[entry.package_name] = entry.version
+    mismatches: list[SnapshotPackageMismatch] = []
+    for package in installed:
+        newest = newest_by_name.get(package.name)
+        if newest is None or Version(package.version) > Version(newest):
+            mismatches.append(
+                SnapshotPackageMismatch(
+                    name=package.name, installed_version=package.version, newest_index_version=newest
+                )
+            )
+    return mismatches
+
+
+@pure
+def parse_dockerfile_base_image(dockerfile_text: str) -> str:
+    """The digest-pinned image reference of a Dockerfile's first ``FROM`` line.
+
+    Raises AptMirrorTemplateBaseImageError when there is no ``FROM`` or the
+    reference floats (no ``@sha256:`` digest): a tag can move to a newer
+    Debian point release under a frozen apt snapshot, which is exactly the
+    breakage the pin exists to prevent.
+    """
+    for line in dockerfile_text.splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0].upper() != "FROM":
+            continue
+        # FROM may carry options (``--platform=...``) ahead of the reference.
+        operands = [token for token in tokens[1:] if not token.startswith("--")]
+        image_ref = operands[0] if operands else ""
+        if not _DIGEST_PINNED_IMAGE_REF_RE.match(image_ref):
+            raise AptMirrorTemplateBaseImageError(
+                f"Dockerfile base image {image_ref!r} is not digest-pinned (expected image@sha256:<64 hex digits>)"
+            )
+        return image_ref
+    raise AptMirrorTemplateBaseImageError("Dockerfile has no FROM line")
 
 
 @pure

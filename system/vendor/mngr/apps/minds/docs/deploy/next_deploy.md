@@ -15,6 +15,23 @@ deploy was deliberately not done.
 
 ## Must happen in this release
 
+- [ ] **Ship the digest-pinned workspace base image** (imbue-ai/mngr-internal#1138;
+  DWT PR #634). Docker Hub moved the unpinned `python:3.12-slim-trixie` tag to
+  a Debian 13.7 build on 2026-09-19, past the `20260725T000000Z` snapshot every
+  0.6.x template pins, so every fresh image build failed: first-of-tag seed
+  bakes, new desktop Docker creates, and CI's `build-minds-snapshot` job. The
+  fix pins the 13.6 index digest (`57cd7c3a…`, whose packages are exactly the
+  snapshot's -- no version change for any workspace) and is already on DWT
+  `main`-bound PR #634; the next tag cut carries it, and step 0 now bumps the
+  digest together with the timestamp. **A new release is not required for
+  this.** Production keeps baking `minds-v0.6.2` by copying a verified
+  `default-workspace-template-minds-v0.6.2.tar` from a seeded box into
+  `/srv/mngr-slices/image-cache/` on any box that lacks one (sha256-checked
+  over the operator tunnel; the bake then skips the seed), and the gen-2
+  migration stays on `minds-v0.6.2`. Cut 0.6.3 only when something else
+  needs a release; until then new desktop installs that have no cached base
+  image cannot create local Docker workspaces on 0.6.2.
+
 - [ ] **SSH certificates replace the static management key on gen-2 boxes**
   (imbue-ai/mngr-internal#850; branch `mngr/ssh-authority-in-vault`). Order,
   per tier, dev first (dev and ci: steps 1 and 2 done 2026-09-09; the mounts are
