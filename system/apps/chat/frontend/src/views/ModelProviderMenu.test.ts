@@ -682,7 +682,6 @@ describe("the combo card", () => {
     expect(fastModeChoices).toEqual([]);
     click('[data-fast-mode="on"]');
     expect(fastModeChoices).toEqual([["a1", "on"]]);
-    // The submenu is still up, and the menu with it.
     expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
     expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
   });
@@ -733,7 +732,6 @@ describe("the combo card", () => {
     limit.dispatchEvent(new Event("input", { bubbles: true }));
     render();
 
-    // Well past the menu's leave grace, which is the shared menu's own constant.
     leaveSubmenu();
     expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
 
