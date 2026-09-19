@@ -172,6 +172,15 @@ def render_workdir_script() -> str:
     return _WORKDIR_SCRIPT
 
 
+def warn_if_oom_tag_script_is_missing(oom_tag_script: Path) -> None:
+    """Every session's shell runs through the tag wrapper, so a missing one exits every pane at once."""
+    if not oom_tag_script.is_file():
+        logger.warning(
+            "The memory-shedding tag wrapper {} does not exist; terminal sessions will not start a shell",
+            oom_tag_script,
+        )
+
+
 @pure
 def build_session_command(oom_tag_script: Path) -> list[str]:
     """The command a terminal session runs: the login shell, tagged into the terminal-session band first."""
