@@ -149,7 +149,7 @@ class LaunchPathId(str):
 
 
 @pure
-def describe_launch_path_problem(value: str) -> str | None:
+def _describe_launch_path_problem(value: str) -> str | None:
     """Return why ``value`` cannot be a launch path, or None when it can."""
     if not value.startswith("/") or value.startswith("//"):
         return f"invalid launch path {value!r}: a launch path starts with a single '/'"
@@ -166,7 +166,7 @@ class LaunchPathValue(str):
     """A path under an app's origin that a window opens at: rooted, no query string, nothing to escape."""
 
     def __new__(cls, value: str) -> Self:
-        problem = describe_launch_path_problem(value)
+        problem = _describe_launch_path_problem(value)
         if problem is not None:
             raise InvalidManifestValueError(problem)
         return super().__new__(cls, value)
