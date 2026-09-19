@@ -1311,12 +1311,12 @@ def _desktop_op(client: FlaskClient, op: str, args: dict[str, Any], requester: d
     return client.post("/api/layout/broadcast", json={"op": op, "args": args, "requester": requester})
 
 
-def test_desktop_ops_are_told_apart_by_shape_and_edit_the_target_clients_layout(
-    client: FlaskClient, app: Flask
-) -> None:
-    shell = _shell(app)
+_TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
+
+
+def test_desktop_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskClient, app: Flask) -> None:
     client_queue = _register_desktop_client(app, "c1", "home")
-    requester = {"app": "terminal", "marker": "terminal-7"}
+    requester = _TERMINAL_REQUESTER
 
     listed = _desktop_op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
@@ -1388,9 +1388,15 @@ def test_desktop_ops_are_told_apart_by_shape_and_edit_the_target_clients_layout(
     assert _broadcast(client, "close", {"address": str(_TERMINAL_1)}).status_code == 412
     assert _broadcast(client, "close", {"address": str(_TERMINAL_1), "view": "everything"}).status_code == 404
 
-    # Desktops: ``--desktop`` edits that desktop and switches the client; ``load`` switches alone.
+
+def test_a_desktop_op_targets_the_named_desktop_and_load_switches_the_client(client: FlaskClient, app: Flask) -> None:
+    """``--desktop`` edits that desktop and switches the client to it; ``load`` switches alone."""
+    shell = _shell(app)
+    client_queue = _register_desktop_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
     client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
     drain_messages(client_queue)
+
     on_research = _desktop_op(client, "open", {"app": "files", "desktop": "Research"}, requester)
     assert on_research.status_code == 200 and on_research.get_json()["desktop_id"] == "research"
     recorded = shell.clients.get_client("c1")
@@ -1401,7 +1407,11 @@ def test_desktop_ops_are_told_apart_by_shape_and_edit_the_target_clients_layout(
     assert _desktop_op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
     assert _desktop_op(client, "load", {}, requester).status_code == 400
 
-    # Shortcuts and the wallpaper.
+
+def test_desktop_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient, app: Flask) -> None:
+    _register_desktop_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+
     shortcuts = _desktop_op(client, "shortcuts", {}, requester).get_json()["desktop"]["shortcuts"]
     assert [entry["target"]["app"] for entry in shortcuts] == ["terminal", "files"]
     added = _desktop_op(
@@ -1463,6 +1473,6 @@ def test_a_malformed_desktop_op_argument_is_a_400_naming_the_argument(
     client: FlaskClient, app: Flask, op: str, args: dict[str, Any], fragment: str
 ) -> None:
     _register_desktop_client(app, "c1", "home")
-    refused = _desktop_op(client, op, args, {"app": "terminal", "marker": "terminal-7"})
+    refused = _desktop_op(client, op, args, _TERMINAL_REQUESTER)
     assert refused.status_code == 400
     assert fragment in refused.get_json()["detail"]
