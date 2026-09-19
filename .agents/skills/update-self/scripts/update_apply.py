@@ -1233,9 +1233,7 @@ def apply_update(
             # The copies stay where they are, and the record says what this apply
             # touched, so the shell can offer the previous version back until a
             # person confirms the update or the next apply replaces the point.
-            touched = _touched_critical_apps(
-                plan, name_status, repo_root, marker.snapshots
-            )
+            touched = _touched_critical_apps(plan, name_status, repo_root)
             write_last_good(
                 LastGoodRecord(
                     merge_sha=git_out(runner, repo_root, ["rev-parse", "HEAD"]),
@@ -1416,28 +1414,24 @@ def _touched_critical_apps(
     plan: ApplyPlan,
     name_status: Sequence[tuple[str, str]],
     repo_root: Path,
-    snapshots: Sequence[SnapshotRecord],
 ) -> list[tuple[str, str]]:
-    """The critical apps whose program or bundle this apply changed: ``(name, program)``.
+    """The critical apps included in this apply's rollback: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
-    under its directory, when the bundle it owns changed, when the apply reinstalled
+    under its directory, when the bundle it owns was rebuilt, when the apply reinstalled
     its tool environment (a shared backend manifest moves every tool's closure, so
     ``plan.app_tools`` then names every app), or, for the shell, when anything the
-    shell's process runs changed. One build at the npm root rewrites every bundle,
-    so "rebuilt" is not "changed": a bundle is changed when its source stamp differs
-    from the pre-apply copy's, and, with no stamp to compare (a build with no git
-    repo), whenever the frontend was rebuilt at all.
+    shell's process runs changed. A frontend apply replaces both bundles, so include
+    both owners even if one app's source was unchanged. An extra restart is acceptable;
+    rollback targeting does not need to compare installed and kept source stamps.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
         return []
-    changed_bundle_owners = {
-        bundle.app
-        for bundle in FRONTEND_BUNDLES
-        if plan.frontend and _bundle_changed(repo_root, bundle, snapshots)
-    }
+    rebuilt_bundle_owners = (
+        {bundle.app for bundle in FRONTEND_BUNDLES} if plan.frontend else set()
+    )
     reinstalled_tool_directories = {tool.directory for tool in plan.app_tools}
     touched: list[tuple[str, str]] = []
     for directory in sorted(apps_dir.iterdir()):
@@ -1458,7 +1452,7 @@ def _touched_critical_apps(
         app_directory = f"{APPS_DIR}/{directory.name}"
         is_touched = (
             any(path.startswith(f"{app_directory}/") for path in paths)
-            or name in changed_bundle_owners
+            or name in rebuilt_bundle_owners
             or app_directory in reinstalled_tool_directories
             or (name == SHELL_PROGRAM and plan.backend)
         )
@@ -1469,27 +1463,6 @@ def _touched_critical_apps(
             (name, program if isinstance(program, str) and program else name)
         )
     return touched
-
-
-def _bundle_changed(
-    repo_root: Path, bundle: FrontendBundle, snapshots: Sequence[SnapshotRecord]
-) -> bool:
-    """Whether the installed bundle was built from other source than the kept copy was."""
-    copy = next(
-        (
-            Path(record.copy)
-            for record in snapshots
-            if record.name == bundle.snapshot_name
-        ),
-        None,
-    )
-    if copy is None:
-        return True
-    before = _read_bundle_stamp(copy)
-    after = _read_bundle_stamp(repo_root / bundle.static_dir)
-    if before is None or after is None:
-        return True
-    return before != after
 
 
 # The trees a rollback cannot undo by restarting programs: the bootstrap and the

@@ -4,6 +4,17 @@ Paired branches: `gabriel/critical-app-editing` in this repo and in the mngr rep
 
 This plan replaces an unmerged pair of branches and their spec: `submit/system-interface-live-editing-plan` in this repo (spec `docs/system/blueprint/system-interface-live-editing/`) and `gabriel/denim-pigeon` in the mngr repo. Those branches were written against a system interface that still contained the chat; the workspace app model (`../workspace-app-model/`) has since split the chat into its own app, which changes what "editing the workspace UI safely" means. The parts of that branch that still apply are carried here and named in the Implementation plan.
 
+## Reliability target
+
+Make editing critical apps reasonably safe without requiring perfect isolation or
+minimal disruption. Preserve the served tree during iteration, check that deployed
+pages work, serialize recovery operations, and keep recovery copies when rollback
+fails. Prefer a conservative restart over extra machinery to identify the smallest
+possible restart set. Preview chat messages and terminal sessions may be real; protect
+live configuration and registration. Exact transient health wording and immediate
+emergency-banner delivery are not release requirements. The test plan's acceptance
+standard applies to future changes; historical findings retain their original context.
+
 ## Refined prompt
 
 Fresh paired branches in mngr and default-workspace-template, replacing the system-interface-live-editing branch, with a new spec for editing the workspace's critical apps.
@@ -14,7 +25,7 @@ Fresh paired branches in mngr and default-workspace-template, replacing the syst
 * The observer becomes `agent-observer`, a manifest-less supervised service in the chat's memory band; every chat instance follows it, using the follower landed in the mngr branch first. `--stream-events` stays in mngr. While the observer is down the chat serves its last known list and reports degraded.
 * One chat preview mechanism: a `--secondary` chat built from the worktree (no account reconcile, no OOM writes, no nudges, no registration, scratch data dir, live accounts read), tracking everything the live chat tracks, opened on the user's current conversation, with real sends allowed. When both bundles changed, the preview shell's copied registry points at that secondary chat.
 * A preview shell gets a seeded copy of the live state dir plus a copied registry, refuses mutating relay verbs, and hides them.
-* After an apply from the careful flow, the shell shows a notice per critical app whose program or bundle changed, or a top banner for the shell itself: recently updated, roll back or everything seems good. Only a person closes it. The rollback point and its snapshots are kept whole until it is closed, a rollback runs, or the next apply replaces it. Rollback restores the kept point and restarts only the touched programs through supervisorctl; a rollback that needs the services agent restarted restores the files and names the command for an agent. The outcome goes into the notice's own record, not to the driving agent. update-self keeps its own run record and raises no notice.
+* After an apply from the careful flow, the shell shows a notice per critical app included in its rollback (both frontend bundle owners when both bundles are replaced), or a top banner for the shell itself: recently updated, roll back or everything seems good. Only a person closes it. The rollback point and its snapshots are kept whole until it is closed, a rollback runs, or the next apply replaces it. Rollback restores the kept point and restarts only the touched programs through supervisorctl; a rollback that needs the services agent restarted restores the files and names the command for an agent. The outcome goes into the notice's own record, not to the driving agent. update-self keeps its own run record and raises no notice.
 * Carry forward all of the old branch's fixes that still apply: serve_isolated_instance refresh, verified teardown, OOM band and boot logs; create_worker `--branch` and reading the worker's branch from mngr; the settled post-restart verdict; the unknown-`/api` 404; the three doc defects; the prototype taxonomy; the "layout.py open shows the user" rule; the update-app verify timing. Only the FOLLOW-mode health gate and the pre-flight FOLLOW environment are dropped.
 * mngr side: the observe read side including the follower, the `initial_branch` widening, and notify's probe, merged from the old mngr branch.
 * Done means the automated suites plus a scripted manual scenario in a real workspace, with findings recorded in this folder.
