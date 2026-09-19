@@ -23,6 +23,7 @@ import {
   requestAppLifecycle,
   requestInstanceLifecycle,
 } from "./DockviewWorkspace";
+import { PresenceStrip } from "./PresenceStrip";
 import { Sidebar } from "./Sidebar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { SidebarTabRow } from "./Sidebar";
@@ -113,6 +114,7 @@ export function App(): m.Component {
             // this row wider than the window.
             m("div", { class: "min-w-0 flex-1" }, m(DockviewWorkspace)),
           ]),
+          m(PresenceStrip),
         ],
       );
     },

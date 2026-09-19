@@ -21,6 +21,8 @@ import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/sr
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { applyPresence } from "./Presence";
+import type { PresentUser } from "./Presence";
 
 /** What an instance is doing, as its app reports it (contracts.md section 4.1). */
 export type InstanceStatus = "idle" | "working" | "attention" | "stopped" | "error";
@@ -143,6 +145,7 @@ export interface TabReboundEvent {
 type WsEvent =
   | { type: "apps_updated"; apps: AppRecord[] }
   | { type: "projects_updated"; projects: ProjectInfo[] }
+  | { type: "presence_updated"; users: PresentUser[] }
   | {
       type: "layout_op";
       op: LayoutOpName;
@@ -300,6 +303,9 @@ function handleEvent(event: WsEvent): void {
       break;
     case "projects_updated":
       applyProjects(event.projects);
+      break;
+    case "presence_updated":
+      applyPresence(event.users);
       break;
     case "layout_op":
       // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app, the

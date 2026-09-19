@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,7 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.presence import IDENTITY_HEADER
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
@@ -433,6 +435,85 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert [message["type"] for message in messages] == ["apps_updated", "projects_updated"]
     assert messages[0]["apps"] == []
     assert messages[1]["projects"] == []
+
+
+_VISITOR_IDENTITY = json.dumps(
+    {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com", "display_name": "Bob"}
+)
+_OWNER_IDENTITY = json.dumps({"owner": True, "user_id": "user-owner-9c21", "email": "owner@example.com"})
+
+
+def _heartbeat(client: FlaskClient, identity: str | None, session_id: str = "tab-0001-aaaa") -> Any:
+    headers = {} if identity is None else {IDENTITY_HEADER: identity}
+    return client.post("/api/presence/heartbeat", json={"session_id": session_id}, headers=headers)
+
+
+def test_presence_heartbeat_records_the_requester_and_answers_their_identity(client: FlaskClient) -> None:
+    response = _heartbeat(client, _VISITOR_IDENTITY)
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "identity": {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com", "display_name": "Bob"}
+    }
+    listed = client.get("/api/presence").get_json()
+    (user,) = listed["users"]
+    assert user["user_id"] == "user-bob-4471"
+    assert user["session_count"] == 1
+    assert user["owner"] is False
+
+
+def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(client: FlaskClient) -> None:
+    assert _heartbeat(client, None).status_code == 204
+    assert _heartbeat(client, json.dumps({"owner": True})).status_code == 204
+    assert client.get("/api/presence").get_json() == {"users": []}
+
+
+def test_presence_heartbeat_rejects_a_bad_session_id(client: FlaskClient) -> None:
+    assert _heartbeat(client, _VISITOR_IDENTITY, session_id="bad").status_code == 400
+    assert client.post("/api/presence/heartbeat", json={"session_id": 7}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}).status_code == 400
+    assert client.post("/api/presence/heartbeat", data="not json", headers={IDENTITY_HEADER: _VISITOR_IDENTITY}).status_code == 400
+
+
+def test_presence_leave_removes_the_session_and_broadcasts_the_change(app: Flask) -> None:
+    client = app.test_client()
+    shell = state_of(app).shell
+    client_queue = shell.broadcaster.register()
+    try:
+        _heartbeat(client, _VISITOR_IDENTITY)
+        _heartbeat(client, _OWNER_IDENTITY, session_id="tab-0002-bbbb")
+        joined = [json.loads(client_queue.get_nowait() or "") for _ in range(2)]
+        assert [message["type"] for message in joined] == ["presence_updated", "presence_updated"]
+        assert [user["user_id"] for user in joined[1]["users"]] == ["user-bob-4471", "user-owner-9c21"]
+
+        left = client.post(
+            "/api/presence/leave", json={"session_id": "tab-0001-aaaa"}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+        )
+
+        assert left.status_code == 204
+        message = json.loads(client_queue.get_nowait() or "")
+        assert message["type"] == "presence_updated"
+        assert [user["user_id"] for user in message["users"]] == ["user-owner-9c21"]
+        # A heartbeat that changes nothing about who is here broadcasts nothing.
+        _heartbeat(client, _OWNER_IDENTITY, session_id="tab-0002-bbbb")
+        assert client_queue.empty()
+    finally:
+        shell.broadcaster.unregister(client_queue)
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
+    client = app.test_client()
+    _heartbeat(client, _VISITOR_IDENTITY)
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+        finally:
+            close_ws(ws)
+
+    assert messages[2]["type"] == "presence_updated"
+    assert [user["user_id"] for user in messages[2]["users"]] == ["user-bob-4471"]
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:

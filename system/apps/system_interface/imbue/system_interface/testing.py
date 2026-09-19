@@ -35,6 +35,7 @@ from pydantic import Field
 
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.template_catalog import TemplateCatalogFetcherInterface
@@ -212,6 +213,7 @@ def build_test_state(
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
     template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
+    presence_directory: Path | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -221,8 +223,12 @@ def build_test_state(
     and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
     is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
     the network for it; with one, the store fetches the config's URL through it.
+    ``presence_directory`` is where the presence files go (a fresh temp directory by default).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
+    resolved_presence_directory = (
+        presence_directory if presence_directory is not None else _fresh_shell_state_directory() / "presence"
+    )
     resolved_config = config if config is not None else Config()
     shell = build_shell_state(
         state_directory=state_directory,
@@ -237,7 +243,12 @@ def build_test_state(
         state_directory=state_directory,
         fetcher=template_catalog_fetcher,
     )
-    return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
+    return SystemInterfaceState(
+        config=resolved_config,
+        shell=shell,
+        template_catalog=template_catalog,
+        presence=PresenceStore(directory=resolved_presence_directory),
+    )
 
 
 def _find_free_port() -> int:

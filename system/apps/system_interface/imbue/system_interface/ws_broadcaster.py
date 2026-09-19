@@ -177,6 +177,10 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast every project after a project write (contracts.md section 8)."""
         self.broadcast({"type": "projects_updated", "projects": projects})
 
+    def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
+        self.broadcast({"type": "presence_updated", "users": users})
+
     def broadcast_tab_rebound(self, client_id: str, view_id: str, tab_id: str, address: str) -> None:
         """Tell the owning client that one of its tabs now shows another instance (the tab route)."""
         self.broadcast(
