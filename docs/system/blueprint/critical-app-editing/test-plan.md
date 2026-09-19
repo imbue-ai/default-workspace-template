@@ -594,6 +594,216 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 
 ## Findings
 
+### 2026-09-18 — second `criticaltest` acceptance run
+
+**Result: not an unconditional pass.** The first-round fixes and the new rollback/UI
+scenarios mostly worked. Two remaining issues and an emergency-banner limitation require attention: terminal previews
+still expose their new tmux sessions to the live terminal list (C15), and overlapping
+`uv run` commands during a root-venv rollback can interfere with environment restoration
+(E20/E11/E12). No production-code fixes were made during this round.
+
+#### Target, method, and automated verification
+
+- Container: `minds-staging-criticaltest`, workspace `/home/user/workspace`.
+- Reviewed mngr `198df9eec7` and paired template `aef245dd1ecb` before deploying the
+  template source. Staging deployment baseline: `5ee2e333f4aaaddf9fe9e402350a595825289888`.
+  Test changes were committed in isolated worktrees and applied through the real script;
+  rollbacks used forward commits. Existing staging history was preserved.
+- Two independent Playwright clients exercised the real shell, dialogs, sockets, nested
+  previews, and reconnects. A private local proxy supplied the workspace hostnames.
+  Drivers, command output, screenshots, pytest XML, and `components.jsonl` are retained
+  in `data/.tasks/critical-test-round2` and the local round-two evidence archive.
+- Core scripts/manifests/instances/OOM: **1188 passed, 1 skipped**.
+- Chat, shell backend and browser tests, terminal: **2248 passed, 1 failed, 3 skipped**
+  initially. `test_a_tab_whose_instance_goes_unlisted_stays_open_idle_and_reconnects_when_it_is_listed_again`
+  timed out opening the fixture's `stub-1` launcher row; its isolated rerun **passed**.
+  This is recorded as an intermittent test failure, not erased by the rerun. The real
+  chat-observer system test and shell rollback-point browser test ran, rather than skipped.
+- Vendored mngr observer/hosts/notifications: **447 passed**.
+- Frontend: **1015 passed** (87 + 280 + 648, across 97 files).
+- Total: **3884 Python tests and 1015 frontend tests passed**, with four Python skips
+  and the one initial failure above. Commands and suite-specific output are in
+  `core.log`, `apps.log`, `apps-rerun.log`, `mngr.log`, and `frontend.log`, with XML
+  counterparts for pytest. Python suites used explicit paths and separate `/private/tmp`
+  basetemps; the apps run included the release browser tests.
+
+#### Remaining findings and expectation corrections
+
+1. **C15 — terminal preview isolation is incomplete, reproduced twice.** Preview boot
+   and refresh no longer append server-discovery events; creating a session leaves the
+   live terminal store byte-identical and emits no live-shell changed POST. Nevertheless,
+   the new `terminal-1` appears in live `GET :7682/_instances`. Both processes enumerate
+   the default tmux server, so copying the store does not isolate session discovery.
+   Evidence: `C15-detail`, `C15-repeat-result`, and terminal preview logs. Test sessions
+   were deleted through the preview sidecar after capture.
+2. **E20 with E11/E12 — environment restoration is not protected from CLI startup.**
+   A shared manifest edit correctly named and restarted all three critical apps. During
+   its rollback, a second `uv run ... apply` and `uv run ... confirm-last` were refused
+   as required. The rollback nevertheless logged many `copytree` `FileExistsError`s
+   restoring `.venv`, warned that it could not restore that copy, then reported success.
+   A later restart failed chat and shell imports (`No module named 'app_instances'`).
+   A RECORD inventory found 95 missing files across six packages. Manual package
+   reinstalls restored the environment. Concurrent uv synchronization recreating files
+   during `rmtree`/`copytree` is a plausible cause; the run does not prove the exact
+   interleaving. The root-venv image and deliberately overlapping commands are material
+   conditions. Do not generalize this observation to an untested uv-tool image.
+   A serial repeat using the existing interpreter, with no overlapping CLI startup,
+   restored the copy without warnings and passed imports for all three critical apps
+   (`E20-serial-copy-restored`, `E20-serial-imports`).
+   Evidence: `E20-rollback-settled`, `E20-recovery-correction`,
+   `E20-missing-environment-files.json`, `E20-later-*-startup-errors.log`.
+3. **E19 — missing worker stamp safely falls back to a live build.** The unstamped
+   worker bundle was rejected with the expected diagnostic, then rebuilt from merged
+   source. The resulting stamps allowed `apps: ["chat"]`; the shell was not named.
+   The plan's expectation that a missing *worker* stamp necessarily names both apps is
+   incorrect for this path. Distinguish it from a missing stamp in the installed/kept
+   bundles used to infer ownership. Evidence: `E19-unstamped-result`, `E19-safe-rebuild`.
+4. **A5 — a warm stream can serve an already-known list.** Even with every test browser
+   disconnected, starting chat before the observer returned 200 with the known list and
+   an unhealthy “no observer holds the lock” detail, then recovered when the observer
+   started. The 503/waiting criterion requires a genuinely unknown list, not merely a
+   stopped writer in this warm workspace. A4's fast supervisor respawn also completed
+   between samples; recovery and unchanged chat PID were observed, but a degraded sample
+   was not captured.
+5. **E24 — emergency staleness banner requires a page reload.** The failed rollback
+   outcome appeared in both clients and copies/emergency state survived Close. The
+   already-open tabs then showed no warning. Replaying the captured emergency record
+   after manual repair and reloading showed the correct staleness banner. The banner
+   reads a server-injected meta tag at page load; it is not updated by the notice socket.
+   Thus the plan's “banner takes over” expectation is not established for existing tabs
+   without reload. Evidence: `E24-after-close-emergency-ui`, `E24-banner-on-reload`.
+
+#### Live scenario ledger
+
+“Partial” identifies a subcriterion or alternate variant not established by this round;
+prior-run results and automated coverage are not substituted for a fresh live observation.
+
+| ID | Round-two result |
+|---|---|
+| S0 | Deployed source, compatible follower, critical services and initial health checked; isolated fixtures prepared. |
+| A1 | Healthy follower and real chat creation/listing observed. |
+| A2 | 60-second observer outage preserved the list; a later outage allowed creation and immediate listing of a new chat. |
+| A3 | Restarted observer recovered without restarting chat; new chat remained listed. |
+| A4 | SIGKILL caused observer respawn, unchanged chat PID; degraded interval not sampled. |
+| A5 | Warm-stream result differs from 503 expectation; see correction above. |
+| A6 | Missing work directory logged the fallback and observer stayed running. |
+| A7 | Notify reused the observer, then started its own when the program was stopped; test watcher shut down and program restored. |
+| A8 | Preflight health served with follower “not been started”; no extra observer. |
+| A9 | Terminal 10, shell 20, observer 24, chat 25. |
+| B1 | Real terminal booted on two assigned ports with a copied store and resolved placeholders. |
+| B2 | Missing source produced an empty copy and booted. |
+| B3 | Unknown port/copy and duplicate declarations refused cleanly. |
+| B4 | Wrapper and inner registrations, path, PIDs and browser framing checked. |
+| B5 | Refresh replaced inner PID and retained wrapper, ports and registrations. |
+| B6 | Failed refresh retained teardown state and wrapper, reported current boot output; valid refresh recovered. |
+| B7 | Immediate `boom` exit retained failure log and removed state; HTTP-404 body variant not repeated. |
+| B8 | TERM-resistant process required SIGKILL after about 15 seconds; teardown succeeded. |
+| B9 | Deregistration, state removal and idempotent teardown passed. |
+| B10 | Refresh without an active instance refused. |
+| B11 | Invalid inner path refused before spawn and left no state. |
+| B12 | HTTP 200 with `is_frontend_built: false` failed with diagnosis; true booted. |
+| C1 | Real transcript and preview send/reply worked; live chat store stayed identical. Account-switch and agent-band sweep subchecks not repeated. |
+| C2 | Missing instance key refused. |
+| C3 | Ten mutation routes returned 403; unknown API returned JSON 404; preview New Tab Chat tile had `aria-disabled=true`. Full menu/drag/stopped-placeholder matrix not repeated. |
+| C4 | Composed shell framed chat from the preview origin; registry remap checked. |
+| C5 | Bringing chat up again refreshed the live shell preview's registry and nested origin; nudger targeted preview shell. |
+| C6 | Terminal preview boot/refresh/create/delete worked; isolation exception is C15. |
+| C7 | Unsupported terminal sibling refused. |
+| C8 | Another worktree could not hijack the existing preview. |
+| C9 | Re-up retained siblings; teardown removed both apps and registrations. |
+| C10 | Missing built chat frontend rejected composed preview. |
+| C11 | Composer edit visibly rendered; chat/shell/terminal refresh state checked. |
+| C12 | Custom preview title visibly rendered. |
+| C13 | Invalid app refused; not every argument variant repeated. |
+| C14 | Removing only chat retargeted the shell's actual iframe to live chat; re-up restored preview origin. |
+| C15 | FAIL: live session list changes despite no live-store write, no discovery append, and no live nudge. |
+| C16 | Unbuilt chat prevented shell boot, diagnosed false frontend health, and left clean teardown state. |
+| D1 | Checked-out branch refused without leaving an agent. |
+| D2 | Real worker launched on the requested existing branch with matching initial branch and reported done. |
+| D3 | Dirty worktree removal refused. |
+| D4 | Destroy preserved adopted branch, including explicit delete-branches invocation. |
+| D5 | Clean synchronous worker completed with done report, correct branch, `timed_out:false`, `destroy_failed:false`. |
+| D6 | Missing work directory restart refused with the correct branch hint. |
+| E1 | Standalone freshness-race command variant not repeated. |
+| E2 | Chat-only kept point, copies, band in two clients, no shell banner. |
+| E3 | Confirm returned 204, cleared both clients and untouched copies; repeat returned 409. |
+| E4 | Actual UI rollback succeeded, one forward rollback commit and clean tree; only chat restarted. |
+| E5 | Shell-only point/banner and scoped rollback passed. |
+| E6 | Shared UI point named chat+shell; rollback restarted those two only. |
+| E7 | Terminal-only rollback restarted only terminal and preserved exact post-apply tmux sessions. |
+| E8 | Startup-only point had no apps/programs and named required services restart in its outcome. |
+| E9 | Drop-in rollback used reread/update without an empty restart command. |
+| E10 | Later kept point replaced earlier point; plain and no-op applies removed prior copies. |
+| E11 | Real rollback lock refused another apply. See E20 environment-race finding. |
+| E12 | Confirm refused during rollback; second rollback of settled point refused. |
+| E13 | Synthetic partway progress refused rollback and hid action verbs. CLI confirm variant not repeated. |
+| E14 | Invalid Python failed preflight, exit 2, forward recovery, no notice and unchanged critical PIDs. Never-healthy instances variant not repeated. |
+| E15 | See E24 bundle variant. |
+| E16 | Plain fast-forward apply kept no point and wrote UPDATED run status. |
+| E17 | Clean repeat succeeded in 26 seconds after a deliberate chat restart reset the settling window; earlier 149-second attempt needed manual repair and is not an independent pass. |
+| E18 | Previews coexisted with kept points, but fresh second-pass boot variant not separately repeated. |
+| E19 | Chat/shell ownership passed; unstamped worker was safely rebuilt, expectation correction above. |
+| E20 | All-app classification/restart passed; overlapping-command environment restore failed, see finding. |
+| E21 | Actual dialog wording verified; fast startup-only rollback returned 202, unchanged PIDs, correct outcome. |
+| E22 | Exactly one 202 and one 409 from two simultaneous dialogs; refusal cleared as progress arrived; both showed outcome. |
+| E23 | Dirty-tree 409 and script's exact explanation appeared in band with no progress; subsequent rollback passed. Real apply-in-flight UI variant not repeated. |
+| E24 | Both failure variants retained copies, refused repeats and preserved copies on Close. Conflict aborted cleanly; fresh retry succeeded. Missing bundle returned 3 and kept emergency state; manual restoration and next-apply cleanup passed. Emergency banner required reload; see finding. |
+| E25 | Drop-in and no-op cases passed; prior snapshots removed, no empty restart diagnostic. |
+| F1 | Inner/wrapper memory scores matched user band. |
+| F2 | Zero clients returned HTTP 412; explicit reconnected client opened preview. Two unidentified clients also correctly require `--client`. |
+| F3 | Kept frontend bundle snapshots totaled 1020 KiB in the final chat apply; shared manifest also copied the root venv. |
+| F4 | Registry and actual nested frame used preview origin. |
+| F5 | Scaffolded app imported `os`, validated manifest, booted with copied data and served its page. |
+| F6 | All five invalid manifest shapes rejected with named diagnostics. |
+| X1 | Chat preview/edit, worker handoff, apply, rollback and confirm exercised with controlled fixture changes. |
+| X2 | Shell preview/edit/apply/rollback exercised; semantic hardening by an independent worker not evaluated. |
+| X3 | Shared UI composed preview, apply and rollback exercised. |
+| X4 | Terminal preview/apply/rollback exercised, with C15 failure. |
+| X5 | Abandoned branch could not be recreated with `-b`; resume and clean removal passed. |
+| X6 | Cross-chat stale-lease takeover not repeated. |
+
+#### Harness qualifications
+
+- The test browser required `--disable-dev-shm-usage` for this image's 64 MB shared-memory
+  mount. Closing all pages also ended the initial driver (it waited on a closed page);
+  restarting that private driver restored testing. Neither is an app regression.
+- Initial UI assertions ran before socket delivery or on a client without a chat tab;
+  repeats used the intended tabs and waited for delivery. “Close” propagated without
+  reload. Native `disabled` was the wrong assertion for the preview tile's `aria-disabled`.
+- The first D5 attempt inherited the services-agent identity and was interrupted by an
+  overlapping services restart. It was replaced by a clean, independently identified run.
+- Terminal session preservation must compare immediately after apply with after rollback;
+  apply itself recreates the services-agent tmux session. The corrected comparison passed.
+- Browser response listeners accumulated in later drivers; duplicate log entries in those
+  arrays are duplicate callbacks, not duplicate network requests. E22's original isolated
+  two-window assertion observed exactly one 202 and one 409.
+- Rollback logs append across invocations. Old first-round exit-128 output and earlier
+  E20 restore warnings must not be attributed to later successful rollbacks.
+- Active critical launchers in this image use the root venv. Per-app uv-tool snapshot
+  variants were unavailable, as the apply's locator diagnostics explicitly report.
+
+#### Final restoration
+
+Restored the deployed source with forward commit
+`0d8411769ae35211df9fdd66adbf651c206bb451`; its tracked tree exactly matches deployment
+baseline `5ee2e333f4aaaddf9fe9e402350a595825289888`. Rebuilt the frontends and restarted
+observer/chat/shell/terminal. Both page-health routes report built frontends, the chat
+follower is healthy, chat instances contain only the original Welcome chat, and terminal
+instances are empty. An installed-file audit found no missing files after recovery.
+
+All round-two worktrees, previews, workers, test chat/session, and kept/emergency/active
+update state were removed; fixture branches and evidence remain for diagnosis. The
+original Welcome and system-services tmux sessions remain. The critical-app editing
+lease was released. The workspace tree is clean and only its main worktree remains.
+Fresh log output contained only expected chat-to-shell connection refusals during the
+brief ordered restart, with no new traceback. One-shot env-converge and vm-exec-register
+are EXITED as expected; the long-running programs are RUNNING.
+
+The archive excludes the 92 MB pre-deployment source tar (still retained in the
+container) and includes the XML, logs, JSON evidence, drivers, and screenshots. Local
+artifact: `.test_output/criticaltest-round2-2026-09-18.tar.gz` in the mngr worktree.
+
+
 ### 2026-09-18 — `criticaltest` Docker staging acceptance run
 
 **Result: automated coverage passed after environment corrections; live acceptance
