@@ -6,6 +6,7 @@ from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.template_catalog import TemplateCatalogStore
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
@@ -38,6 +39,8 @@ class SystemInterfaceState(MutableModel):
     shell: ShellState
     # The New Tab page's template catalog: fetched from its URL, cached under the shell's state.
     template_catalog: TemplateCatalogStore
+    # Who is connected right now: the per-user files under data/.state/presence and their event log.
+    presence: PresenceStore
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).
     # A factory (not a shared default): the HEAD read happens per state build,

@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
+from share_gateway.identity import RequesterIdentity
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 
@@ -27,10 +28,12 @@ def _token(
     ttl_seconds: int = 60,
     email: str = "a@b.co",
     is_owner: bool = False,
+    sub: str | None = "u1",
+    display_name: str | None = None,
+    avatar_url: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
-    payload = {
-        "sub": "u1",
+    payload: dict[str, object] = {
         "email": email,
         "owner": is_owner,
         "aud": _DOMAIN,
@@ -39,13 +42,30 @@ def _token(
         "iat": now,
         "exp": now + timedelta(seconds=ttl_seconds),
     }
+    if sub is not None:
+        payload["sub"] = sub
+    if display_name is not None:
+        payload["display_name"] = display_name
+    if avatar_url is not None:
+        payload["avatar_url"] = avatar_url
     return jwt.encode(payload, _KEY, algorithm="RS256", headers={"kid": kid})
 
 
-def test_valid_token_returns_email_and_not_owner_by_default() -> None:
+def test_valid_token_returns_the_identity_record_and_not_owner_by_default() -> None:
     result = verify_handoff_token(_token(), "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
-    assert result.email == "a@b.co"
-    assert result.is_owner is False
+    assert result == RequesterIdentity(user_id="u1", email="a@b.co", is_owner=False)
+
+
+def test_valid_token_carries_the_optional_profile_claims() -> None:
+    token = _token(display_name="Ada", avatar_url="https://accounts.example.com/users/u1/avatar/9a7b")
+    result = verify_handoff_token(token, "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
+    assert result.display_name == "Ada"
+    assert result.avatar_url == "https://accounts.example.com/users/u1/avatar/9a7b"
+
+
+def test_token_without_a_subject_is_rejected() -> None:
+    with pytest.raises(HandoffVerificationError):
+        verify_handoff_token(_token(sub=None), "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
 
 
 def test_valid_token_carries_owner_claim() -> None:

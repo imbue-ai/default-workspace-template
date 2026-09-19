@@ -26,9 +26,18 @@ from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
 from imbue.system_interface.documents import inject_meta_tag
+from imbue.system_interface.presence import IDENTITY_HEADER
+from imbue.system_interface.presence import PresenceOutcome
+from imbue.system_interface.presence import PresenceSessionId
+from imbue.system_interface.presence import parse_identity_header
+from imbue.system_interface.presence import present_user_wire_json
+from imbue.system_interface.presence import utc_now
+from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
+from imbue.system_interface.request_helpers import parse_json_object_body
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
@@ -436,6 +445,72 @@ def _templates_catalog_endpoint() -> Response:
             assert_never(unreachable)
 
 
+PRESENCE_PATH: Final[str] = "/api/presence"
+PRESENCE_HEARTBEAT_PATH: Final[str] = "/api/presence/heartbeat"
+PRESENCE_LEAVE_PATH: Final[str] = "/api/presence/leave"
+
+
+def _presence_endpoint() -> Response:
+    """The connected users right now (one entry per user), for backends and tests that prefer HTTP to the files."""
+    users = get_state().presence.connected_users(utc_now())
+    return json_response({"users": [present_user_wire_json(user) for user in users]})
+
+
+def _parse_presence_session_id() -> PresenceSessionId | Response:
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    raw_session_id = body.get("session_id")
+    if not isinstance(raw_session_id, str):
+        return error_response("session_id must be a string", 400)
+    try:
+        return PresenceSessionId(raw_session_id)
+    except InvalidShellValueError as e:
+        return error_response(str(e), 400)
+
+
+def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
+    if outcome.is_membership_changed:
+        _shell().broadcaster.broadcast_presence_updated([present_user_wire_json(user) for user in outcome.users])
+
+
+def _presence_heartbeat_endpoint() -> Response:
+    """One shell tab's heartbeat: record the requester's presence and answer their own identity record.
+
+    Answers 204 and records nothing when the identity carries no user id (an unshared
+    workspace's owner, or a request that came through no current proxy): there is nobody
+    to name, and the page then shows no account.
+    """
+    session_id = _parse_presence_session_id()
+    if isinstance(session_id, Response):
+        return session_id
+    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
+    if identity.user_id is None:
+        return Response(status=204)
+    try:
+        outcome = get_state().presence.heartbeat(identity, session_id, utc_now())
+    except InvalidShellValueError as e:
+        return error_response(str(e), 400)
+    _broadcast_presence_if_changed(outcome)
+    return json_response({"identity": identity.model_dump(exclude_none=True)})
+
+
+def _presence_leave_endpoint() -> Response:
+    """One shell tab is going away (the page's unload beacon): drop its session."""
+    session_id = _parse_presence_session_id()
+    if isinstance(session_id, Response):
+        return session_id
+    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
+    if identity.user_id is None:
+        return Response(status=204)
+    try:
+        outcome = get_state().presence.leave(identity, session_id, utc_now())
+    except InvalidShellValueError as e:
+        return error_response(str(e), 400)
+    _broadcast_presence_if_changed(outcome)
+    return Response(status=204)
+
+
 def _serve_app_contract() -> Response:
     """Serve the browser-side contract module (contracts.md section 10) for any origin's app page."""
     contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
@@ -468,7 +543,12 @@ def _serve_asset(filename: str) -> Response:
 
 def _ws_endpoint(websocket: Any) -> None:
     """The one WebSocket per window (contracts.md section 8)."""
-    _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
+    state = get_state()
+    _run_ws_broadcast_loop(
+        websocket=websocket,
+        shell=state.shell,
+        initial_presence=[present_user_wire_json(user) for user in state.presence.connected_users(utc_now())],
+    )
 
 
 def _handle_client_state_message(
@@ -539,13 +619,17 @@ def _handle_client_state_message(
     return True
 
 
-def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
+def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]]) -> None:
     """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
     this loop blocks on the per-client queue and forwards messages. flask-sock's keepalive
     closes a half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the broadcaster
     can also evict a hopelessly-behind client by pushing the shutdown sentinel (``None``).
+
+    The connect sends the inventory, the projects, and the connected users
+    (``initial_presence``, read by the caller before the loop starts) so a window paints from
+    one snapshot; later changes arrive as broadcasts.
 
     Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
@@ -563,6 +647,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
                 }
             )
         )
+        websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
 
         is_client_registered = False
         shutdown = False
@@ -616,6 +701,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
+    application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
+    application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
+    application.add_url_rule(PRESENCE_LEAVE_PATH, view_func=_presence_leave_endpoint, methods=["POST"])
     register_shell_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 

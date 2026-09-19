@@ -12,6 +12,8 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
+from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
+from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
@@ -38,10 +40,16 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=DEFAULT_STATE_DIRECTORY,
         help="Where the shell keeps its projects, layouts, and client records (contracts.md section 7)",
     )
+    parser.add_argument(
+        "--presence-dir",
+        type=Path,
+        default=DEFAULT_PRESENCE_DIRECTORY,
+        help="Where the shell keeps the per-user presence files and their event log",
+    )
     return parser.parse_args(argv)
 
 
-def build_production_state(config: Config, state_directory: Path) -> SystemInterfaceState:
+def build_production_state(config: Config, state_directory: Path, presence_directory: Path) -> SystemInterfaceState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together. It builds but
@@ -56,12 +64,15 @@ def build_production_state(config: Config, state_directory: Path) -> SystemInter
         template_catalog=build_template_catalog_store(
             catalog_url=config.system_interface_template_catalog_url, state_directory=state_directory
         ),
+        presence=PresenceStore(directory=presence_directory),
     )
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args: the state over the state directory, and the routes over it."""
-    return create_application(build_production_state(config, state_directory=args.state_dir))
+    return create_application(
+        build_production_state(config, state_directory=args.state_dir, presence_directory=args.presence_dir)
+    )
 
 
 def main() -> None:

@@ -1,9 +1,16 @@
 """The workspace session: one HS256 JWT, delivered as two cookies scoped ``Domain=<workspace-domain>``.
 
-Set once by the login callback, verified (and its email re-checked against the
+Set once by the login callback, verified (and its identity re-checked against the
 grants) on every request. 24 hours, fixed. The signing secret is generated in
 the workspace and never leaves it, so a relay or connector compromise cannot
 mint sessions.
+
+The payload is the requester's whole identity record -- ``user_id``, ``email``,
+``display_name``, ``avatar_url`` -- plus the ``owner`` flag, because the cookie
+is the only per-request source the gateway has: nothing polls the connector
+for profile data, and the record only changes when the user re-runs the
+handoff (sign-in, or the ``/_auth/refresh`` route). A cookie minted before the
+record carried a user id is treated as no session at all.
 
 The same value is set twice, under two names, because no single cookie works
 in both places a visitor reaches a shared workspace from:
@@ -27,10 +34,6 @@ Safari 18.5 through 26.1 rejects a cookie carrying ``Partitioned`` outright
 instead of storing it unpartitioned (WebKit bug 292975), so a lone
 partitioned cookie leaves an iOS visitor with no session at all. Verification
 accepts whichever copy the browser sends.
-
-The payload carries an ``owner`` flag (the visitor is the workspace owner, per
-the broker's handoff), which rides along for the owner-only in-workspace exec
-service.
 """
 
 from collections.abc import Mapping
@@ -41,6 +44,8 @@ from datetime import timezone
 import jwt
 from flask import Response
 
+from share_gateway.identity import RequesterIdentity
+
 SESSION_COOKIE_NAME = "imbue_machine_session"
 PARTITIONED_SESSION_COOKIE_NAME = "imbue_machine_session_partitioned"
 SESSION_LIFETIME_SECONDS = 24 * 3600
@@ -49,33 +54,32 @@ _SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME)
 _SESSION_ALGORITHM = "HS256"
 
 
-class SessionIdentity:
-    """The verified contents of a workspace session cookie."""
-
-    def __init__(self, email: str, is_owner: bool) -> None:
-        self.email = email
-        self.is_owner = is_owner
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SessionIdentity):
-            return NotImplemented
-        return self.email == other.email and self.is_owner == other.is_owner
-
-
-def mint_session_cookie_value(signing_secret: str, email: str, workspace_domain: str, is_owner: bool) -> str:
+def mint_session_cookie_value(signing_secret: str, identity: RequesterIdentity, workspace_domain: str) -> str:
     now = datetime.now(timezone.utc)
-    payload = {
-        "email": email,
-        "owner": is_owner,
+    payload: dict[str, object] = {
+        "user_id": identity.user_id,
+        "email": identity.email,
+        "owner": identity.is_owner,
         "aud": workspace_domain,
         "iat": now,
         "exp": now + timedelta(seconds=SESSION_LIFETIME_SECONDS),
     }
+    if identity.display_name:
+        payload["display_name"] = identity.display_name
+    if identity.avatar_url:
+        payload["avatar_url"] = identity.avatar_url
     return jwt.encode(payload, signing_secret, algorithm=_SESSION_ALGORITHM)
 
 
-def verify_session_cookie_value(signing_secret: str, cookie_value: str, workspace_domain: str) -> "SessionIdentity | None":
-    """Return the session identity, or None when the cookie is missing/expired/forged."""
+def _optional_text_claim(claims: dict[str, object], name: str) -> str | None:
+    value = claims.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def verify_session_cookie_value(
+    signing_secret: str, cookie_value: str, workspace_domain: str
+) -> "RequesterIdentity | None":
+    """Return the session identity, or None when the cookie is missing, expired, forged, or pre-dates user ids."""
     if not cookie_value:
         return None
     try:
@@ -87,15 +91,22 @@ def verify_session_cookie_value(signing_secret: str, cookie_value: str, workspac
         )
     except jwt.PyJWTError:
         return None
-    email = claims.get("email")
-    if not isinstance(email, str) or not email:
+    user_id = _optional_text_claim(claims, "user_id")
+    email = _optional_text_claim(claims, "email")
+    if user_id is None or email is None:
         return None
-    return SessionIdentity(email=email, is_owner=bool(claims.get("owner", False)))
+    return RequesterIdentity(
+        user_id=user_id,
+        email=email,
+        is_owner=bool(claims.get("owner", False)),
+        display_name=_optional_text_claim(claims, "display_name"),
+        avatar_url=_optional_text_claim(claims, "avatar_url"),
+    )
 
 
 def verify_session_from_cookies(
     signing_secret: str, cookies: Mapping[str, str], workspace_domain: str
-) -> "SessionIdentity | None":
+) -> "RequesterIdentity | None":
     """The identity of the first session cookie copy that verifies, or None when neither does."""
     for cookie_name in _SESSION_COOKIE_NAMES:
         identity = verify_session_cookie_value(signing_secret, cookies.get(cookie_name, ""), workspace_domain)

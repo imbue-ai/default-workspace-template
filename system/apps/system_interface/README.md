@@ -50,14 +50,18 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   projects (`/api/projects/...`), layouts (`/api/layouts/<view>`), clients,
   tabs (`/api/tabs/<tab_id>/instance`), client activity, the inventory
   (`/api/inventory`), and the loopback-only op route (`/api/layout/broadcast`).
+- Presence (`/api/presence`, `/api/presence/heartbeat`,
+  `/api/presence/leave`): who is connected right now, with their identity
+  details (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `projects_updated`,
-  `layout_updated`, `active_view_changed`, `tab_rebound`, `layout_op`
-  (contracts section 8).
+  `presence_updated`, `layout_updated`, `active_view_changed`, `tab_rebound`,
+  `layout_op` (contracts section 8).
 
 Its state lives under `data/.state/system_interface/`: `projects.json`,
 `layouts/<view>/<client>.json` with a per-device seed beside each,
 `clients.json`, the migration marker, and the client-activity event log
 (`events/client_activity/events.jsonl`, what `layout.py context` reads).
+Presence lives beside it under `data/.state/presence/` (`--presence-dir`).
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory,
 relay, projects, layouts, clients, client activity, layout ops, the pure
@@ -89,6 +93,37 @@ offers them on its tab, every other app on the rail's per-app row menu
 through the contract module (`shell:open`, `shell:focused`, `shell:location`);
 a page that reports the path it is showing gets it stored on its own record
 and reopens there.
+
+### Who is here
+
+Every request that reaches the shell carries the requester's identity in the
+`X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
+`mngr forward` or the share gateway (the header contract is in
+`system/services/share_gateway/README.md`). The shell page mints a session id
+per page load and posts `/api/presence/heartbeat` with it every 30 seconds
+while the tab is visible (once immediately when it becomes visible), and
+beacons `/api/presence/leave` on `pagehide`. The page sends nothing about who
+it is; the heartbeat's answer is the requester's own identity record, which
+is what the account affordances render. A heartbeat whose identity carries no
+user id -- the owner of an unshared workspace, or a request that came through
+no current proxy -- answers 204 and records nothing: there is nobody to name.
+
+Each heartbeat upserts `data/.state/presence/users/<user_id>.json`: the
+user's latest identity snapshot (`user_id`, `email`, `display_name`,
+`avatar_url`, `owner`), the open tab sessions keyed by session id with each
+one's last heartbeat, and `first_seen` / `last_seen`. A session that misses
+three heartbeats (90 seconds) expires; a user whose last session expired or
+left is removed, and `data/.state/presence/events.jsonl` gets a `user_joined`
+or `user_left` line in the repo's event envelope (`timestamp`, `type`,
+`event_id`, `source: "presence"`, plus the record). Apps read the directory
+(a user is connected while `last_seen` is within 90 seconds) or tail the
+events. The shell sends the connected set on every WebSocket connect and
+pushes `presence_updated` -- one entry per user, however many tabs -- whenever
+someone joins or leaves, and draws one avatar per user in the corner of the
+window. Over a share that strip also links to the gateway's identity refresh,
+for a visitor who changed their name or avatar. A visitor granted a single
+app never loads the shell and so never appears: they are in one app, not in
+the workspace.
 
 ### Views, layouts, and the New Tab page
 
