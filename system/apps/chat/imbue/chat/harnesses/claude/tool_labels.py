@@ -15,7 +15,6 @@ from imbue.chat.harnesses.tool_labels import parse_input_preview
 from imbue.chat.harnesses.tool_labels import quoted
 from imbue.chat.harnesses.tool_labels import past_tense
 from imbue.chat.harnesses.tool_labels import shorten
-from imbue.chat.harnesses.tool_labels import shorten_path
 from imbue.chat.harnesses.tool_labels import stated_note
 from imbue.imbue_common.pure import pure
 
@@ -86,6 +85,11 @@ _SEARCH_TOOL_NAMES = ("Grep", "Glob", "WebSearch")
 def _action_target(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     """What the call acted on, for a chip: the literal thing, not a summary.
 
+    A file is named, not pathed: ``ToolChipGroup.ts``, not the directories above
+    it. The chip is a phrase a reader scans, and a path set in the middle of one
+    reads as machine output rather than as part of the sentence -- while the
+    whole path is one click away in the chip's own panel, which shows the input.
+
     This and the caption's ``_target`` diverge on exactly one tool, deliberately.
     For a shell call the caption prefers the agent's own description, because the
     live strip has room for one phrase and "why" beats "what". A chip shows that
@@ -101,11 +105,11 @@ def _action_target(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         searched = first_string_value(tool_input, *_TARGET_QUOTED_KEYS)
         if searched is not None:
             scope = first_string_value(tool_input, *_TARGET_PATH_KEYS)
-            return f"{quoted(searched)} in {shorten_path(scope)}" if scope is not None else quoted(searched)
+            return f"{quoted(searched)} in {basename(scope)}" if scope is not None else quoted(searched)
 
     path = first_string_value(tool_input, *_TARGET_PATH_KEYS)
     if path is not None:
-        return shorten_path(path)
+        return basename(path)
     text = first_string_value(tool_input, *_TARGET_TEXT_KEYS)
     if text is not None:
         return shorten(text)

@@ -5,9 +5,10 @@ Every tool call a parser emits carries:
 - ``header_label``  -- the tool's identity, for the transcript block header
 - ``caption_label`` -- verb + target, for the live activity strip
 - ``action_verb`` / ``action_target`` -- what the call DID, for the transcript's
-  inline tool chips. Past tense, and split in two because the halves are set in
-  different type: the verb is prose ("ran", "read"), the target is the machine's
-  own text (a path, a pattern, a command). Kept apart rather than joined because
+  inline tool chips: a past-tense verb and the thing it acted on, which for a
+  file is its NAME rather than its path (the chip is a phrase to read, and a
+  path in the middle of one is noise; the whole path is a click away in the
+  chip's panel). Kept as two fields rather than one joined string because
   splitting a joined label back would have to guess where a multi-word verb like
   "loaded skill" ends.
 - ``action_note`` -- the agent's OWN words for why it made the call, when the tool
@@ -47,10 +48,6 @@ GENERIC_CAPTION = "Running tool…"
 # The input key an agent states its reason in. Claude's Bash and Agent tools both
 # use ``description``; no other harness's tools record one at all.
 NOTE_INPUT_KEY = "description"
-
-# How many trailing path segments an action target keeps. Three tells two
-# same-named files apart in practice, without an absolute path swamping the chip.
-_ACTION_PATH_SEGMENTS = 3
 
 _MCP_PREFIX = "mcp__"
 _MCP_SEPARATOR = "__"
@@ -134,25 +131,6 @@ def past_tense(participle: str) -> str:
     if known is not None:
         return known
     return participle[:1].lower() + participle[1:]
-
-
-@pure
-def shorten_path(path: str, max_length: int = MAX_TARGET_LENGTH) -> str:
-    """A path trimmed to its informative tail: the last few segments.
-
-    ``shorten`` keeps the head, which is right for prose and wrong for a path --
-    clipping ``system/apps/chat/frontend/src/views/ToolChipGroup.ts`` from the
-    right would leave the reader the directory and no file. Trimming by segment
-    also means the result is a readable path fragment rather than a name cut in
-    half.
-    """
-    collapsed = re.sub(r"\s+", " ", path).strip()
-    segments = [segment for segment in collapsed.split("/") if segment]
-    if len(segments) > _ACTION_PATH_SEGMENTS:
-        collapsed = ".../" + "/".join(segments[-_ACTION_PATH_SEGMENTS:])
-    if len(collapsed) <= max_length:
-        return collapsed
-    return "…" + collapsed[-(max_length - 1) :]
 
 
 @pure
