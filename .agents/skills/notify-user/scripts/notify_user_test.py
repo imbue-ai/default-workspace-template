@@ -34,14 +34,14 @@ class _RecordingHttp(notify_user.HttpClient):
         return self._status, self._text
 
 
-def test_posts_the_message_to_this_chats_notifications_route_through_the_proxy() -> None:
+def test_posts_to_the_runtime_agents_route_when_the_chat_id_differs() -> None:
     http = _RecordingHttp(200, '{"ok": true}')
 
     is_accepted = notify_user.notify("The build is green.", None, http=http, environ=dict(_GATEWAY_ENV))
 
     assert is_accepted is True
     ((url, payload, headers),) = http.posts
-    assert url == "http://gateway.invalid:1234/minds-api-proxy/api/v1/agents/agent-chat/notifications"
+    assert url == "http://gateway.invalid:1234/minds-api-proxy/api/v1/agents/agent-self/notifications"
     assert payload == {"message": "The build is green."}
     assert headers["X-Latchkey-Gateway-Password"] == "pw"
     assert "X-Latchkey-Gateway-Permissions-Override" not in headers
@@ -58,7 +58,7 @@ def test_carries_the_optional_title_and_the_permissions_override_when_present() 
     assert headers["X-Latchkey-Gateway-Permissions-Override"] == "jwt"
 
 
-def test_falls_back_to_the_agents_own_id_when_it_is_its_own_chat() -> None:
+def test_posts_to_the_runtime_agents_route_without_a_separate_chat_id() -> None:
     http = _RecordingHttp(200)
     environ = {key: value for key, value in _GATEWAY_ENV.items() if key != "MINDS_CHAT_ID"}
 
@@ -99,15 +99,22 @@ def test_reports_a_missing_gateway_env_without_posting(capsys: pytest.CaptureFix
     assert "did not go out" in capsys.readouterr().err
 
 
-def test_reports_an_unnamed_chat_without_posting(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("chat_id", [None, "agent-chat"])
+def test_requires_a_runtime_agent_id_even_when_a_chat_id_is_set(
+    chat_id: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
     http = _RecordingHttp(200)
     environ = {"LATCHKEY_GATEWAY": "http://gateway.invalid", "LATCHKEY_GATEWAY_PASSWORD": "pw"}
+    if chat_id is not None:
+        environ["MINDS_CHAT_ID"] = chat_id
 
     is_accepted = notify_user.notify("Done.", None, http=http, environ=environ)
 
     assert is_accepted is False
     assert http.posts == []
-    assert "did not go out" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "MNGR_AGENT_ID is not set" in stderr
+    assert "did not go out" in stderr
 
 
 def test_main_exit_code_follows_acceptance(monkeypatch: pytest.MonkeyPatch) -> None:
