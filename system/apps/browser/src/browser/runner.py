@@ -57,8 +57,7 @@ from app_instances.blueprint import build_instances_blueprint
 from app_instances.errors import InvalidInstanceValueError
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
 from app_instances.primitives import AbsoluteHttpUrl
-from app_manifest.primitives import AppName
-from app_manifest.registry import read_origin_label, registry_path
+from app_manifest.registry import SHELL_APP_NAME, read_origin_label, registry_path
 from flask import Flask, Response, jsonify, redirect, request
 from flask_sock import Sock
 from loguru import logger
@@ -95,7 +94,6 @@ _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 # shell's origin label from to import the app contract module (desktop-interface contracts.md
 # section 7).
 NEW_PATH = "/new"
-SHELL_APP_NAME = AppName("system_interface")
 SHELL_LABEL_META_NAME = "workspace-shell-label"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).

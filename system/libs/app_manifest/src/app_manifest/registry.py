@@ -29,6 +29,10 @@ from app_manifest.primitives import PriorityName
 DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
 ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 
+# The workspace shell's registered name: the row whose origin label a plain app page reads
+# (``read_origin_label``) to import the app contract module from the shell's origin.
+SHELL_APP_NAME: Final[AppName] = AppName("system_interface")
+
 
 class RegistryAction(FrozenModel):
     """An action as copied onto a registry row: the id, the label, and the names of its params."""

@@ -19,7 +19,7 @@ from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.json_store import NEW_ACTION_ID
 from app_instances.primitives import InstanceTitle
 from app_manifest.primitives import AppName
-from app_manifest.registry import read_origin_label
+from app_manifest.registry import SHELL_APP_NAME, read_origin_label
 from flask import Blueprint, Response, jsonify, redirect, request
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -43,9 +43,8 @@ NEW_PATH: Final[str] = "/new"
 HEALTH_PATH: Final[str] = "/api/health"
 SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
 
-# The apps whose origins the page derives: the shell's, for the contract module it imports, and
-# the pty's, for the frame.
-SHELL_APP_NAME: Final[AppName] = AppName("system_interface")
+# The page derives two origins: the shell's (``SHELL_APP_NAME``), for the contract module it
+# imports, and the pty's, for the frame.
 PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 
 HTTP_FOUND: Final[int] = 302
