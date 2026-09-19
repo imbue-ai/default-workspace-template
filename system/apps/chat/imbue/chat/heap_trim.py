@@ -72,6 +72,9 @@ class HeapTrimmer:
             return
         if self._thread is not None:
             return
+        # Cleared here, not in ``stop``: a start after a stop must run, and the flag a
+        # previous stop set would otherwise end the new thread's first wait immediately.
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name="heap-trim")
         self._thread.start()
 
@@ -83,8 +86,7 @@ class HeapTrimmer:
             self._thread = None
 
     def trim_once(self) -> None:
-        """Run one trim now. Public so tests (and any caller that just released a lot)
-        can drive a pass without the thread."""
+        """Run one trim now, on the calling thread. A no-op without ``malloc_trim``."""
         if self._trim is None:
             return
         self._trim()

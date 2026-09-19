@@ -4,4 +4,6 @@ The scaffolder wrote `startretries=1000000` copied from the built-in services, a
 
 `scaffold_flask_lib_test.py` pins the property rather than the numbers: a scaffolded program must declare a finite retry count and a `startsecs` long enough that a fast death counts as a failed start.
 
-Surfacing a crash-looping app to the user (rather than only bounding it) is still open -- supervisord's FATAL state has no path into the workspace UI today.
+Surfacing a crash-looping app to the user (rather than only bounding it) is still open. The shell already reads every program's supervisord state name, but `fetch_supervisor_program_states` collapses FATAL into the same `False` as a program the user stopped on purpose, so telling them a broken app gave up means widening that bool into a state the inventory can render.
+
+Apps already scaffolded into existing workspaces keep `startretries=1000000` in their own drop-in; this changes what new ones get, and does not rewrite them.
