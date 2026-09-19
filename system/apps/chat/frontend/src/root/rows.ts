@@ -87,7 +87,7 @@ export function parentOf(row: ChatRow, rows: readonly ChatRow[]): ChatRow | null
     const leadAgent = current.labels.lead_agent;
     if (!isAgentStarted(current) || leadAgent === undefined) break;
     const next = rows.find((candidate) => candidate.chatId !== current.chatId && ownsAgent(candidate, leadAgent));
-    if (next === null || next === undefined) break;
+    if (next === undefined) break;
     parent = next;
     current = next;
   }
