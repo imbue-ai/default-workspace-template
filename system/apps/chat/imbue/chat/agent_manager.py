@@ -650,7 +650,7 @@ def chat_snapshot_for_active_agent(
     chat: _ResolvedChat,
     is_permission_pending: bool,
     shoulder_tap_available: bool,
-    last_messaged_at: float | None = None,
+    last_messaged_at: float | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
