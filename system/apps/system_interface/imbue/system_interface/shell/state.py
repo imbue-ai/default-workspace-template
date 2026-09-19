@@ -141,7 +141,7 @@ class ShellState(MutableModel):
             [project_wire_json(project) for project in self.projects.list_projects()]
         )
 
-    # ---------- the one write path for client layouts ----------
+    # The one write path for client layouts
 
     def _broadcast_layout_updated(self, rewritten: Sequence[StoredLayout]) -> None:
         """Every write the shell makes itself is announced with a save id it minted, so the owning windows refetch."""
@@ -254,7 +254,7 @@ class ShellState(MutableModel):
                 self.inventory.refetch_now(app_name)
         return deleted
 
-    # ---------- the desktop model (desktop-interface contracts.md sections 4 to 6) ----------
+    # The desktop model (desktop-interface contracts.md sections 4 to 6)
 
     def list_desktops(self) -> list[Desktop]:
         """Every desktop, the default one created on the first read after the inventory has read the registry once,

@@ -247,7 +247,7 @@ class AppInventory(MutableModel):
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_thread: threading.Thread | None = PrivateAttr(default=None)
 
-    # ---------- lifecycle ----------
+    # Lifecycle
 
     def start(self) -> None:
         """Read the registry and probe liveness now, then watch the registry and start the sweep."""
@@ -274,7 +274,7 @@ class AppInventory(MutableModel):
         for timer in timers:
             timer.cancel()
 
-    # ---------- reads ----------
+    # Reads
 
     def entries(self) -> list[AppInventoryEntry]:
         with self._lock:
@@ -309,7 +309,7 @@ class AppInventory(MutableModel):
         first_seen = entry.first_seen_at_by_key.get(instance.key)
         return first_seen is not None and self.clock() - first_seen < NEW_INSTANCE_GRACE_SECONDS
 
-    # ---------- the registry ----------
+    # The registry
 
     def reload_registry(self) -> None:
         """Re-read the registry, keeping each known app's liveness and list across the read.
@@ -378,7 +378,7 @@ class AppInventory(MutableModel):
             if entry.row.instances and not entry.is_listed:
                 self.refetch_now(str(entry.row.name))
 
-    # ---------- liveness ----------
+    # Liveness
 
     def refresh_liveness(self) -> None:
         """Re-derive every app's ``is_running``; a change rewrites its statuses and broadcasts."""
@@ -414,7 +414,7 @@ class AppInventory(MutableModel):
             to_update(entry.field_ref().instances, instances),
         )
 
-    # ---------- instance lists ----------
+    # Instance lists
 
     def nudge(self, app_name: str) -> bool:
         """An app said its list changed: refetch once the coalescing window closes. False for an unknown app."""
@@ -487,7 +487,7 @@ class AppInventory(MutableModel):
                     assert_never(unreachable)
             self._entry_by_name[app_name] = updated
 
-    # ---------- the sweep ----------
+    # The sweep
 
     def _run_sweep(self) -> None:
         sweep_count = 0
@@ -515,7 +515,7 @@ class AppInventory(MutableModel):
         except (OSError, ValueError) as e:
             logger.opt(exception=e).error("The app inventory sweep failed; the next pass will retry")
 
-    # ---------- the broadcast ----------
+    # The broadcast
 
     def _broadcast_if_changed(self) -> None:
         with self._broadcast_lock:

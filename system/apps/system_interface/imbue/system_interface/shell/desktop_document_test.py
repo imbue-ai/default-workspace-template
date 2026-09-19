@@ -89,7 +89,7 @@ def _assert_frames_close(actual: Frame, expected: Frame) -> None:
     assert actual.height == pytest.approx(expected.height)
 
 
-# ---------- the shared vectors ----------
+# The shared vectors
 
 
 @pytest.mark.parametrize("case", _VECTORS["cascade"], ids=lambda case: f"n={case['placed_count']}")
@@ -186,7 +186,7 @@ def test_nearest_free_cell_without_a_grid_searches_the_unbounded_plane() -> None
     assert nearest_free_cell(GridCell(column=3, row=3), occupied, None) == GridCell(column=3, row=3)
 
 
-# ---------- desktops: windows ----------
+# Desktops: windows
 
 
 def test_a_window_is_found_by_app_and_exact_path_and_a_marker_in_a_segment_or_query_value() -> None:
@@ -213,7 +213,7 @@ def test_a_location_report_replaces_the_path_and_title_and_ends_settling_only_wh
         with_window_location(desktop, _WIN_2, WindowPath("/"), WindowTitle(""))
 
 
-# ---------- desktops: shortcuts ----------
+# Desktops: shortcuts
 
 
 def _shortcut(
@@ -283,7 +283,7 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     assert [shortcut.cell for shortcut in seeded] == [GridCell(column=0, row=0), GridCell(column=0, row=1)]
 
 
-# ---------- layouts ----------
+# Layouts
 
 
 def _layout(*placements: Placement) -> DesktopLayout:

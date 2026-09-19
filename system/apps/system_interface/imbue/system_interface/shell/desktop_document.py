@@ -109,7 +109,7 @@ class PlacedShortcut(FrozenModel):
     cell: GridCell = Field(description="The cell it draws in on this grid")
 
 
-# ---------- geometry: frames ----------
+# Geometry: frames
 
 
 @pure
@@ -195,7 +195,7 @@ def unsnap_frame(
     )
 
 
-# ---------- geometry: the grid ----------
+# Geometry: the grid
 
 
 @pure
@@ -296,7 +296,7 @@ def place_shortcuts(shortcuts: Sequence[DesktopShortcut], dimensions: GridDimens
     return [PlacedShortcut(shortcut=shortcut, cell=placed_by_index[index]) for index, shortcut in enumerate(shortcuts)]
 
 
-# ---------- desktops: windows ----------
+# Desktops: windows
 
 
 @pure
@@ -358,7 +358,7 @@ def path_carries_marker(path: WindowPath, marker: str) -> bool:
     return any(value == marker for _name, value in parse_qsl(split.query, keep_blank_values=True))
 
 
-# ---------- desktops: shortcuts ----------
+# Desktops: shortcuts
 
 
 @pure
@@ -451,7 +451,7 @@ def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut
     return tuple(shortcuts)
 
 
-# ---------- layouts: placements ----------
+# Layouts: placements
 
 
 @pure
