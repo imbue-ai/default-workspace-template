@@ -1,6 +1,5 @@
 """The chat document over the chat app's real Flask app: the page, its probe route, and the instances API."""
 
-import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -216,14 +215,15 @@ def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch
 
 
 def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    chat_id = _agent_id()
-    client, _ = _client(tmp_path, chat_id)
-    registry = Path(os.environ["MINDS_APPS_FILE"])
-    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry = tmp_path / "registry" / "apps.toml"
+    registry.parent.mkdir()
     registry.write_text(
         '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n\n'
         '[[apps]]\nname = "terminal-pty"\nurl = "http://localhost:7683"\nlabel = "terminal-pty-a1b2c3d4"\ninternal = true\n'
     )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path / "static", chat_id)
 
     response = client.get(f"/{chat_id}")
 
