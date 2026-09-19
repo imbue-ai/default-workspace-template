@@ -110,6 +110,33 @@ before the next turn, at stop, or riding a tool result -- because harnesses diff
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
 
+### P8. A secret file is read only by `with_secrets.py`
+`agent_secrets_guard.sh` -> `agent_secrets_guard_check.py` -- **hard block.**
+
+A file under `data/.secrets/` holds a value the user typed into the chat's **secret card**
+(the `connect-external-service` skill's `request_secret.py`) so that it would never enter the
+transcript. A `cat`, a `source`, a `sed`, a `python3 -c`, a redirect, or a `Read`/`Edit` tool call
+on such a file puts the value into a tool call, which defeats the point. The one sanctioned
+reader is `system/scripts/with_secrets.py`, which puts the file's variables into a child
+process's environment and execs the command; `ls` and `rm` on the directory are allowed, and so
+is the request script, whose output names the path it will write. The directory's README is not
+a secret.
+
+Two halves: the shell half tokenises the command (a quoted rationale that mentions the
+directory stays inside one token) and unwraps `bash -c "..."`, so a supervisord program that
+runs the wrapper passes; the file-tool half refuses claude's `Read`/`Grep`/`Glob`/`Edit`/`Write`,
+pi's `read`/`edit`/`write`/`grep`/`find`, and a codex `apply_patch` whose file lines point under
+the directory. Unlike the other blockers, this one therefore polices every tool call, not only
+shell calls. The checker never prints the command or a path back, since either may carry a value.
+
+### P9. A secret request must be the only thing in its tool call
+`agent_latchkey_request_standalone.sh` -> `agent_latchkey_request_check.py` -- **hard block.**
+
+P3 for the secret card: `request_secret.py` prints the filed request as JSON, and the chat builds
+the card's password inputs from that echo in the same call's result. So the call stands alone,
+for exactly the reasons P3 gives, and the same files enforce it -- the checker counts a run of
+the request script as a filing alongside a POST to the permission-requests host.
+
 ## The rule that keeps this honest
 
 **The logic lives once.** A harness that can execute the scripts runs the scripts. A harness

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook: HARD-BLOCK a latchkey permission request that is batched with
+# PreToolUse hook: HARD-BLOCK a latchkey permission request, or a secret request
+# (the connect-external-service skill's request_secret.py), that is batched with
 # another request, chained with another command, has its output redirected, or is
 # filed by a backgrounded tool call.
 #
@@ -23,8 +24,10 @@
 # and the one an agent can check without knowing which commands pass stdout through.
 #
 # Scope: ONLY a POST to the reserved `latchkey-self.invalid/permission-requests`
-# host -- the call that FILES a request. Reading the queue or any other latchkey
-# curl is untouched, and may be piped or chained freely.
+# host and a run of `request_secret.py` -- the calls that FILE a request (policies
+# P3 and P9). Reading the queue or any other latchkey curl is untouched, and may be
+# piped or chained freely. The secret card is read the same way, by
+# `is_secret_request_call()` / `find_secret_request()` in tool_output.py.
 #
 # Blocks via exit 2 with a stderr message the agent sees. The command parsing lives
 # in the sibling agent_latchkey_request_check.py, which shell-tokenizes with
@@ -39,9 +42,9 @@ tool_name=$(echo "$input" | jq -r '.tool_name // empty')
 command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ -n "$command" ]] || exit 0
 
-# Cheap guard: every filing mentions the host path, so the overwhelming majority
-# of commands never pay for the tokenizer.
-[[ "$command" == *"permission-requests"* ]] || exit 0
+# Cheap guard: every filing mentions the host path or the request script, so the
+# overwhelming majority of commands never pay for the tokenizer.
+[[ "$command" == *"permission-requests"* || "$command" == *"request_secret.py"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 checker="$script_dir/agent_latchkey_request_check.py"

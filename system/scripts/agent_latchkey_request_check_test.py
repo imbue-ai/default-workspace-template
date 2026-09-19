@@ -40,10 +40,22 @@ _MULTILINE_REQUEST = (
 )
 
 
+# A secret request, exactly as the connect-external-service skill documents it: the
+# other kind of filing this gate governs (P9).
+_SECRET_REQUEST = (
+    "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+    "--file svc --var SVC_TOKEN --rationale 'I need your key to call the widget API'"
+)
+
 # Commands that must be ALLOWED (classify returns None).
 _ALLOWED = [
     _REQUEST,
     _MULTILINE_REQUEST,
+    _SECRET_REQUEST,
+    f"uv run {_SECRET_REQUEST.removeprefix('python3 ')}",
+    # A rationale that mentions operators, or the script's own name, stays one token.
+    f"{_SECRET_REQUEST.removesuffix("'")} && run request_secret.py again'",
+    "git commit -m 'document request_secret.py usage' && git push",
     _REQUEST.replace("-XPOST", "-X POST"),
     _REQUEST.replace("-XPOST", "--request POST"),
     f"  {_REQUEST}  ",  # surrounding whitespace
@@ -74,6 +86,13 @@ _ALLOWED = [
 # Commands that must be BLOCKED (classify returns a reason string).
 _BLOCKED = [
     f"{_REQUEST} && {_REQUEST}",  # two requests batched into one call
+    # A secret request is held to the same rule, alone or alongside a permission request.
+    f"{_SECRET_REQUEST} && {_SECRET_REQUEST}",
+    f"{_SECRET_REQUEST} && {_REQUEST}",
+    f"{_SECRET_REQUEST} > /tmp/filed.json",
+    f"{_SECRET_REQUEST} | jq .request_id",
+    f"cd /home/user/workspace && {_SECRET_REQUEST}",
+    f"{_SECRET_REQUEST} &",
     f"{_REQUEST}\n{_REQUEST}",  # ... via a newline
     # ... in every spelling of the method flag the transcript parser's
     # case-insensitive regex reads as a filing, so nothing it cards escapes here.
@@ -137,6 +156,8 @@ def test_routes_to_the_right_block_reason() -> None:
     """Each violation kind maps to its distinct reason (not just any block)."""
     assert checker.classify(f"{_REQUEST} && {_REQUEST}") == checker._MULTIPLE
     assert checker.classify(f"{_REQUEST} {_HOST}") == checker._MULTIPLE
+    assert checker.classify(f"{_SECRET_REQUEST} && {_REQUEST}") == checker._MULTIPLE
+    assert checker.classify(f"{_SECRET_REQUEST} | jq .") == checker._CHAIN
     assert checker.classify(f"{_REQUEST} > /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} -o /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} -so /tmp/out.json") == checker._REDIRECT

@@ -217,10 +217,36 @@ def _tk_result(
         pytest.param("tk start wor-1", id="standalone-tk-start"),
         pytest.param("cd /tmp && echo hi", id="chained-command-no-checker-cares-about"),
         pytest.param(f"latchkey curl {_HOST} | jq .", id="reading-the-queue"),
+        pytest.param(
+            "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- svc",
+            id="the-wrapper-reading-a-secret-file",
+        ),
+        pytest.param(
+            "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+            "--file svc --var SVC_TOKEN --rationale 'to call the API'",
+            id="lone-secret-request",
+        ),
     ],
 )
 def test_guards_allow_what_the_checkers_allow(tmp_path: Path, command: str) -> None:
     assert _guard_result(tmp_path, command) is None
+
+
+def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
+    """P8 covers a `read` of a secret file as much as a `cat`: the one checker pi runs on
+    every tool call, with the pi event mapped onto the claude-shaped payload it parses."""
+    payload = {"toolName": "read", "input": {"path": "data/.secrets/svc.env"}}
+    result = _event_result(
+        _run_event(tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT)
+    )
+    assert result is not None and result["block"] is True
+    assert "read only by with_secrets.py" in result["reason"]
+    assert "svc.env" not in result["reason"]
+    readme = {"toolName": "read", "input": {"path": "data/.secrets/README.md"}}
+    assert (
+        _event_result(_run_event(tmp_path, _POLICY_GUARDS, "tool_call", readme, work_dir=_REPO_ROOT))
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -228,8 +254,13 @@ def test_guards_allow_what_the_checkers_allow(tmp_path: Path, command: str) -> N
     [
         pytest.param(
             f"{_REQUEST} && {_REQUEST}",
-            "more than one permission request",
+            "more than one request",
             id="batched-requests",
+        ),
+        pytest.param(
+            "cat data/.secrets/svc.env",
+            "read only by with_secrets.py",
+            id="direct-read-of-a-secret-file",
         ),
         pytest.param(
             f"{_REQUEST} > /tmp/out.json",

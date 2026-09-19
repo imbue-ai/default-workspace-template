@@ -12,7 +12,7 @@
 # things the hooks were for: block (exit non-zero; stderr becomes the tool result), rewrite
 # (prepend, then exec), and inform.
 #
-# WHAT IT ENFORCES. The same four blockers claude runs, in claude's order, by feeding them the
+# WHAT IT ENFORCES. The same five blockers claude runs, in claude's order, by feeding them the
 # claude-shaped payload they already parse -- so the guard logic and its wording stay
 # single-sourced across claude, codex and agy. The policies themselves are stated in
 # system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md.
@@ -86,6 +86,7 @@ for guard in \
     agent_prevent_commit_rewrite.sh \
     agent_block_pipe_tail_head.sh \
     agent_latchkey_request_standalone.sh \
+    agent_secrets_guard.sh \
     agent_tk_standalone.sh
 do
     guard_path="$SCRIPTS_DIR/$guard"

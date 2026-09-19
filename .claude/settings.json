@@ -43,6 +43,10 @@
           },
           {
             "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_secrets_guard.sh"
+          },
+          {
+            "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_tk_standalone.sh"
           },
           {
@@ -105,5 +109,6 @@
     }
   },
   "effortLevel": "high",
+  "enableAllProjectMcpServers": true,
   "autoMemoryDirectory": "~/workspace/data/memories"
 }

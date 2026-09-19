@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Decide whether a Bash command files a latchkey permission request badly.
+"""Decide whether a Bash command files a latchkey permission request or a secret request badly.
 
 Takes the command as its positional argument, optionally preceded by
 ``--backgrounded`` when the tool call runs the command in the background (both
 passed by agent_latchkey_request_standalone.sh, which reads them out of the
 hook payload). Exits 0 to allow; exits 2 with a guiding stderr message to BLOCK.
 See the wrapper for the why.
+
+Two kinds of filing are held to the same rule (policies P3 and P9): a POST to the
+reserved permission-requests host, and a run of the connect-external-service
+skill's ``request_secret.py``. Both are rendered by the chat as a card built from
+the object the call echoes, so both must be the whole tool call.
 
 The command structure (which segments POST to the permission-requests host,
 whether one is chained or redirected) comes from the shared `tk_command_parsing`
@@ -39,6 +44,10 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 # match is a superset of that parser's `-X\s*POST|--request\s*POST`: token-wise, and
 # accepting the `=` form, so `--request=POST` -- which curl honors -- is gated too.
 _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
+# The connect-external-service skill's request script, matched by basename so the
+# path the skill documents and a `python3`/`uv run` prefix are both recognised. The
+# chat's reader (`is_secret_request_call` in tool_output.py) keys on the same name.
+_SECRET_REQUEST_SCRIPT = "request_secret.py"
 # Lowercased, because the flag is matched case-insensitively -- as the parser's
 # regex and the joined form below both are.
 _METHOD_FLAGS = ("-x", "--request")
@@ -53,7 +62,7 @@ _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 # modelling which short flags consume a value.
 _OUTPUT_FLAG_RE = re.compile(r"-[A-Za-z]*[oO]|-o.+|--output(?:=.+)?|--remote-name")
 
-_MULTIPLE = "the call files more than one permission request"
+_MULTIPLE = "the call files more than one request"
 _REDIRECT = (
     "its output is redirected, written to a file by curl itself, or its input "
     "replaced (`>`, `>>`, `2>`, `&>`, `-o`, `-O`, `<`, a heredoc)"
@@ -106,8 +115,20 @@ def _writes_body_to_file(words: tuple[str, ...]) -> bool:
     return any(_OUTPUT_FLAG_RE.fullmatch(word) is not None for word in words)
 
 
+def _files_secret_request(segment: CommandSegment) -> bool:
+    """True when the segment runs the request script (directly or under python3 / uv run).
+
+    Matched on the basename of a word that is itself an argument: a commit message
+    or doc line quoting the script name keeps it inside one prose token, exactly as
+    the host check below distinguishes a filing from a mention.
+    """
+    return any(
+        _is_argument(word) and word.rsplit("/", 1)[-1] == _SECRET_REQUEST_SCRIPT for word in segment.words
+    )
+
+
 def _request_count(segment: CommandSegment) -> int:
-    """How many permission requests this one command files.
+    """How many permission or secret requests this one command files.
 
     A command has to FILE a request to count, not merely quote one: the host
     must be passed as its own argument (the URL curl receives) and the method as
@@ -120,9 +141,10 @@ def _request_count(segment: CommandSegment) -> int:
     once for each URL it is given (and `--next` lets each carry its own body),
     so one invocation can file several.
     """
+    secret_filings = 1 if _files_secret_request(segment) else 0
     if not _sets_post_method(segment.words):
-        return 0
-    return sum(1 for word in segment.words if _is_request_url(word))
+        return secret_filings
+    return secret_filings + sum(1 for word in segment.words if _is_request_url(word))
 
 
 def classify(cmd: str, is_backgrounded: bool = False) -> str | None:
@@ -182,19 +204,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     sys.stderr.write(
-        "Blocked: file ONE latchkey permission request per tool call, as the only "
-        "command in it -- " + violation + ".\n\n"
+        "Blocked: file ONE request per tool call -- a latchkey permission request or a "
+        "secret request -- as the only command in it -- " + violation + ".\n\n"
         "The chat renders each request as a card the user acts on, and builds it from "
-        "that single tool call: what to show comes from the command, and the button "
-        "that opens the approval dialog comes from the request object the gateway "
-        "echoes on stdout. A second request in the same call is never shown (the user "
-        "cannot answer a request they cannot see), and anything that keeps the echo out "
-        "of this call's result -- redirecting or piping it away, or backgrounding the "
-        "call so the result is a shell id -- leaves the card with no button.\n\n"
+        "that single tool call: what to show comes from the command, and the card's "
+        "inputs or button come from the request object the call echoes on stdout. A "
+        "second request in the same call is never shown (the user cannot answer a "
+        "request they cannot see), and anything that keeps the echo out of this call's "
+        "result -- redirecting or piping it away, or backgrounding the call so the "
+        "result is a shell id -- leaves the card with nothing to act on.\n\n"
         "Re-run with just the one request, in the foreground, output untouched:\n"
         "  latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \\\n"
         "    -H 'Content-Type: application/json' \\\n"
-        '    -d \'{"agent_id": "\'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"\'", ...}\'\n\n'
+        '    -d \'{"agent_id": "\'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"\'", ...}\'\n'
+        "or\n"
+        "  python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+        "--file <name> --var NAME --rationale \"...\"\n\n"
         "Filing another request straight after this one is fine -- it just needs a "
         "tool call of its own.\n"
     )
