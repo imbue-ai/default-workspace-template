@@ -6,6 +6,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -66,7 +67,8 @@ def _list_kind(kind: WallpaperKind, directories: WallpaperDirectories) -> list[W
             continue
         try:
             name = WallpaperName(path.stem)
-        except InvalidShellValueError:
+        except InvalidShellValueError as e:
+            logger.debug("Skipped a wallpaper file with an unusable name at {}: {}", path, e)
             continue
         wallpaper = Wallpaper(kind=kind, name=name)
         listings.append(WallpaperListing(kind=kind, name=name, url=wallpaper_url(wallpaper)))
