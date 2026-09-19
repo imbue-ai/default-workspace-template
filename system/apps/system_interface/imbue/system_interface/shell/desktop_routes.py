@@ -13,7 +13,6 @@ from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from flask import Flask
-from flask import Response
 from flask import jsonify
 from flask import request
 from flask import send_file
@@ -73,8 +72,10 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
+from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
+from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import op_only_args
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.state import ShellState
@@ -272,15 +273,15 @@ def list_wallpapers_route() -> ResponseReturnValue:
     )
 
 
-def serve_wallpaper(kind: str, name: str) -> Response:
+def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
     try:
         wallpaper = Wallpaper(kind=WallpaperKind(kind), name=WallpaperName(name))
     except ValueError as e:
         logger.debug("Refused a wallpaper request for kind {!r} and name {!r}: {}", kind, name, e)
-        return Response(status=404)
+        return detail_response(f"No wallpaper of kind {kind!r} named {name!r}", HTTP_NOT_FOUND)
     path = resolve_wallpaper_file(wallpaper, _wallpaper_directories())
     if path is None:
-        return Response(status=404)
+        return detail_response(f"No {wallpaper.kind.value} wallpaper named {str(wallpaper.name)!r}", HTTP_NOT_FOUND)
     return send_file(path)
 
 
