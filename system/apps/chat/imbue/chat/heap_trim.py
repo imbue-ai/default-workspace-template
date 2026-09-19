@@ -36,7 +36,11 @@ def resolve_malloc_trim() -> Callable[[], int] | None:
     try:
         libc = ctypes.CDLL("libc.so.6")
         trim = libc.malloc_trim
-    except (OSError, AttributeError):
+    except (OSError, AttributeError) as e:
+        # Debug, not warning: a platform without the symbol is expected. Logged with the
+        # error because the other way here is a glibc workspace where the lookup failed
+        # for a reason of its own, and then the app stops trimming with nothing to say why.
+        logger.opt(exception=e).debug("No malloc_trim available from libc.so.6")
         return None
     trim.argtypes = [ctypes.c_size_t]
     trim.restype = ctypes.c_int
