@@ -170,7 +170,7 @@ def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
     return wallpaper
 
 
-# ---------- section 5.2: desktops ----------
+# Section 5.2: desktops
 
 
 def list_desktops() -> ResponseReturnValue:
@@ -231,7 +231,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     return jsonify(desktop_wire_json(desktop))
 
 
-# ---------- section 5.3: windows ----------
+# Section 5.3: windows
 
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
@@ -254,7 +254,7 @@ def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnVal
     return jsonify(window.model_dump(mode="json"))
 
 
-# ---------- section 5.4: placements ----------
+# Section 5.4: placements
 
 
 def get_placements(desktop_id: str) -> ResponseReturnValue:
@@ -269,7 +269,7 @@ def save_placements(desktop_id: str) -> ResponseReturnValue:
     return jsonify({"updated_at": desktop_layout_wire_json(saved)["updated_at"] if saved is not None else None})
 
 
-# ---------- section 5.5: wallpapers, and the inventory's desktop fields ----------
+# Section 5.5: wallpapers, and the inventory's desktop fields
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
@@ -388,7 +388,7 @@ def register_desktop_routes(application: Flask) -> None:
     )
 
 
-# ---------- section 8: the desktop verbs of the op route ----------
+# Section 8: the desktop verbs of the op route
 
 
 class _DesktopOpTarget(FrozenModel):

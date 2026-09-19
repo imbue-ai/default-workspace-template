@@ -82,7 +82,7 @@ def _panel_addresses(layout: dict[str, Any]) -> list[str]:
     return [panel["address"] for panel in layout["panels"]]
 
 
-# ---------- section 5 ----------
+# Section 5
 
 
 def test_an_app_nudge_is_accepted_from_loopback_only(client: FlaskClient, app: Flask) -> None:
@@ -193,7 +193,7 @@ def test_client_activity_is_appended_by_kind(client: FlaskClient, app: Flask) ->
     assert events[0]["key"] == "agent-1" and events[1]["from_view_id"] == "alpha"
 
 
-# ---------- section 6: the relay ----------
+# Section 6: the relay
 
 
 def test_instance_verbs_are_relayed_and_the_list_refetched(
@@ -298,7 +298,7 @@ def test_a_refused_delete_keeps_the_instance_in_its_tab_sets(
     assert shell.projects.get_project("alpha").tabs == (stub_1,)
 
 
-# ---------- section 6: stop and start ----------
+# Section 6: stop and start
 
 
 def test_stop_and_start_drive_the_supervised_program(
@@ -355,7 +355,7 @@ def test_an_unreachable_supervisord_is_a_502(
     assert client.post("/api/apps/files/stop").status_code == 502
 
 
-# ---------- section 6: projects ----------
+# Section 6: projects
 
 
 def test_projects_are_created_seeded_and_listed(client: FlaskClient, app: Flask) -> None:
@@ -444,7 +444,7 @@ def test_project_settings_tabs_shortcuts_and_deletion(client: FlaskClient, app: 
     assert client.post("/api/projects/alpha/delete").status_code == 404
 
 
-# ---------- section 6: layouts ----------
+# Section 6: layouts
 
 
 def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClient, app: Flask) -> None:
@@ -574,7 +574,7 @@ def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskCl
     assert seeded["device_kind"] == "mobile" and list(addresses_by_panel_id(seeded["dockview"]).values()) == [_FILES]
 
 
-# ---------- the broadcast endpoint ----------
+# The broadcast endpoint
 
 
 def _broadcast(
@@ -1031,7 +1031,7 @@ def test_reload_system_interface_reaches_every_view_and_null_args_are_refused(cl
     assert client.post("/api/layout/broadcast", json={"op": "refresh", "args": None}).status_code == 400
 
 
-# ---------- the desktop interface (desktop contracts.md sections 5 and 8) ----------
+# The desktop interface (desktop contracts.md sections 5 and 8)
 
 
 def _register_desktop_client(app: Flask, client_id: str, desktop_id: str) -> "queue.Queue[str | None]":

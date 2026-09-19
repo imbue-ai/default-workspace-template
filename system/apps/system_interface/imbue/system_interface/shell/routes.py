@@ -230,7 +230,7 @@ def _instance_key_or_raise(raw_key: str) -> InstanceKey:
     return InstanceKey(raw_key)
 
 
-# ---------- section 5: routes apps and scripts call ----------
+# Section 5: routes apps and scripts call
 
 
 def app_changed(name: str) -> ResponseReturnValue:
@@ -292,7 +292,7 @@ def client_activity_route() -> ResponseReturnValue:
     return "", HTTP_NO_CONTENT
 
 
-# ---------- section 6: the relay ----------
+# Section 6: the relay
 
 
 def relay_create_route(name: str) -> ResponseReturnValue:
@@ -342,7 +342,7 @@ def relay_start_route(name: str, key: str) -> ResponseReturnValue:
     return _relay_keyed(name, key, lambda entry: relay_start(_shell().http_client, entry, key))
 
 
-# ---------- section 6: stop and start of an app ----------
+# Section 6: stop and start of an app
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
@@ -396,7 +396,7 @@ def start_app(name: str) -> ResponseReturnValue:
     return _lifecycle(name, AppLifecycleAction.START)
 
 
-# ---------- section 6: projects ----------
+# Section 6: projects
 
 
 def list_projects() -> ResponseReturnValue:
@@ -468,7 +468,7 @@ def remove_project_shortcut(project_id: str) -> ResponseReturnValue:
     return jsonify(project_wire_json(project))
 
 
-# ---------- section 6: layouts ----------
+# Section 6: layouts
 
 
 def get_layout(view_id: str) -> ResponseReturnValue:
@@ -498,7 +498,7 @@ def save_layout(view_id: str) -> ResponseReturnValue:
     return jsonify({"updated_at": layout_wire_json(saved)["updated_at"] if saved is not None else None})
 
 
-# ---------- sections 6 and 9: clients and the inventory ----------
+# Sections 6 and 9: clients and the inventory
 
 
 def list_clients() -> ResponseReturnValue:
@@ -532,7 +532,7 @@ def inventory_document() -> ResponseReturnValue:
     return jsonify({**document, **desktop_inventory_fields(shell, document["clients"])})
 
 
-# ---------- the agent-facing op route (contracts.md section 12) ----------
+# The agent-facing op route (contracts.md section 12)
 
 
 def layout_broadcast() -> ResponseReturnValue:
@@ -715,7 +715,7 @@ def register_shell_routes(application: Flask) -> None:
     )
 
 
-# ---------- resolving the target: which view, which client ----------
+# Resolving the target: which view, which client
 
 
 def _find_view(shell: ShellState, requested: str) -> tuple[str | None, ResponseReturnValue | None]:
@@ -775,7 +775,7 @@ def _resolve_op_view(
     return active, None
 
 
-# ---------- the dispatch ----------
+# The dispatch
 
 
 def _dispatch_layout_op(

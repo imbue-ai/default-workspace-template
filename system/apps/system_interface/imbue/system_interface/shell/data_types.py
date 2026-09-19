@@ -411,7 +411,7 @@ class LayoutEditOutcome(FrozenModel):
     )
 
 
-# ---------- the desktop model (desktop-interface contracts.md sections 4 and 5) ----------
+# The desktop model (desktop-interface contracts.md sections 4 and 5)
 
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
