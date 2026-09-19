@@ -1,17 +1,22 @@
 """Test doubles for the terminal app: a fake ``tmux`` and a fake ``ttyd`` installed as executables on PATH."""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.primitives import InstanceTitle
+from flask import Flask
+from flask.testing import FlaskClient
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
 from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
+from terminal_app.pages import build_pages_blueprint
 from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
+from terminal_app.sessions import TmuxSessionSource
 from terminal_app.tmux import parse_tmux_sessions
 
 # Where the fake tmux keeps its canned answers and its call log.
@@ -25,6 +30,9 @@ FAKE_CREATED_EPOCH_BASE: Final[int] = 1_700_000_000
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
 # The command a test source gives a new session (the fake tmux records it, never runs it).
 TEST_SESSION_COMMAND: Final[tuple[str, ...]] = ("python3", "/opt/oom_tag_service.py", "terminal-session", "bash", "-l")
+# The origin labels a test registry gives the shell and the pty, the two rows the wrapper page reads.
+TEST_SHELL_LABEL: Final[str] = "system_interface-a1b2"
+TEST_PTY_LABEL: Final[str] = "terminal-pty-c3d4"
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 
@@ -298,3 +306,25 @@ def read_session_id_file(sessions_dir: Path, name: str) -> str | None:
     """The session id file's text for this terminal, or None when the app wrote none."""
     path = sessions_dir / name
     return path.read_text() if path.exists() else None
+
+
+def write_registry_labels(path: Path, label_by_app_name: Mapping[str, str]) -> Path:
+    """Write a registry of one row per app, carrying only what the wrapper page reads: the name and the origin label."""
+    path.write_text(
+        "".join(
+            f'[[apps]]\nname = "{name}"\nurl = "http://localhost:1"\nlabel = "{label}"\n\n'
+            for name, label in label_by_app_name.items()
+        )
+    )
+    return path
+
+
+def build_pages_test_client(
+    source: TmuxSessionSource, nudger: InstanceNudgerInterface, registry_path: Path
+) -> FlaskClient:
+    """A test client over the wrapper pages alone, reading origin labels from ``registry_path``."""
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(
+        build_pages_blueprint(source=source, nudger=nudger, registry_path=registry_path)
+    )
+    return app.test_client()
