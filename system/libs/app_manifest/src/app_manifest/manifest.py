@@ -54,7 +54,10 @@ class ActionParam(FrozenModel):
 
     name: NonEmptyStr = Field(description="The key in the create body's params, or the query parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
-    required: bool = Field(default=False, description="Whether the create refuses a body without it")
+    required: bool = Field(
+        default=False,
+        description="Whether the action refuses a create body without it, or the launch path refuses a request without it",
+    )
 
 
 class AppAction(FrozenModel):
