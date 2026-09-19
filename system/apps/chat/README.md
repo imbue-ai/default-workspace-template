@@ -16,9 +16,22 @@ The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 `mngr observe` for the workspace's agents, and serves:
 
+- `GET /`: the chat root, the built `root.html`: the chat list down the left
+  (`frontend/src/root/`, grouped by the chat that started each helper and
+  ordered by recency, with rename, stop and restart, and delete) beside an inner
+  frame of the selected chat's page. The selection is the `chat` query parameter,
+  so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
+  chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
+  params) serves the same document, and the root creates the chat and selects
+  it client-side. The root drives its inner frames through the page's
+  same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
+  `minds:`, `shell:focused`, and `shell:open` messages through
+  `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
-  hostname, and the terminal app's origin label in meta tags.
+  hostname, and the origin label of the terminal's pty (the terminal app's while
+  no pty is registered) in meta tags. Every chat page reports its path and the
+  chat's title to the shell.
 - `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
   manager (`instances.py`): every chat (a non-primary agent, today) is an
   explicit, renameable, stoppable instance keyed by its chat id (stop is `mngr
@@ -31,7 +44,7 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   lifecycle. The API answers `503` until the agent list has been read from mngr
   once.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence, destroy, start, stop; the subagent reads under
+  the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
@@ -39,8 +52,10 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
-  per chat, the agent-level facts under `active_agent`) and the provisional-chat
-  events (`provisional_chat_created`, `provisional_chat_completed`).
+  per chat, the agent-level facts under `active_agent` and the epoch seconds of
+  its last message as `last_messaged_at`, which the chat root's list orders on)
+  and the provisional-chat events (`provisional_chat_created`,
+  `provisional_chat_completed`).
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
   polls on the `--preflight` boot (after the restart it polls `/_instances`, the
   route that answers only once the agent manager has its first list).
