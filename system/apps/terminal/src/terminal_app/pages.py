@@ -24,6 +24,7 @@ from flask import Blueprint, Response, jsonify, redirect, request
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from loguru import logger
 from pydantic import Field
 
 from terminal_app.errors import InvalidTerminalValueError, UnknownSessionPageError
@@ -213,15 +214,15 @@ def _session_name(raw: str) -> TmuxSessionName:
         raise UnknownSessionPageError(f"no terminal has the name {raw!r}") from e
 
 
-@pure
 def _tab_id(raw: str) -> TerminalTabId | None:
     if raw == "":
         return None
     try:
         return TerminalTabId(raw)
-    except InvalidTerminalValueError:
+    except InvalidTerminalValueError as e:
         # A tab id the pty cannot record under is dropped rather than refused: the page still
         # attaches, it just cannot be re-pointed on a tmux session switch.
+        logger.debug("Ignored the tab id in the wrapper URL: {}", e)
         return None
 
 
