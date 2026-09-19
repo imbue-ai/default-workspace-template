@@ -27,14 +27,18 @@ def _registry(tmp_path: Path, *rows: tuple[str, str]) -> Path:
     return path
 
 
+def _client(source: TmuxSessionSource, nudger: RecordingNudger, registry_path: Path) -> FlaskClient:
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(build_pages_blueprint(source=source, nudger=nudger, registry_path=registry_path))
+    return app.test_client()
+
+
 @pytest.fixture
 def pages_client(
     session_source: TmuxSessionSource, recording_nudger: RecordingNudger, tmp_path: Path
 ) -> FlaskClient:
     registry_path = _registry(tmp_path, ("system_interface", "system_interface-a1b2"), ("terminal-pty", "terminal-pty-c3d4"))
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(build_pages_blueprint(source=session_source, nudger=recording_nudger, registry_path=registry_path))
-    return app.test_client()
+    return _client(session_source, recording_nudger, registry_path)
 
 
 def _config_of(page_html: str) -> dict[str, object]:
@@ -76,6 +80,29 @@ def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
     assert config["tab"] is None
     assert config["page"] is None
     assert "<title>Terminal</title>" in response.text
+
+
+def test_an_unusable_tab_id_is_dropped_and_an_unregistered_pty_leaves_the_label_empty(
+    session_source: TmuxSessionSource, recording_nudger: RecordingNudger, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    client = _client(session_source, recording_nudger, _registry(tmp_path, ("system_interface", "system_interface-a1b2")))
+    fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
+
+    page = client.get("/?session=terminal-3&tab=not%20a%20tab")
+    session = client.get("/api/sessions/terminal-3?tab=not%20a%20tab")
+
+    assert page.status_code == 200
+    config = _config_of(page.text)
+    assert config["tab"] is None
+    assert config["shell_label"] == "system_interface-a1b2"
+    # The tab slot stays, empty, so a workdir would still be the argument session.sh reads.
+    assert config["page"] == {
+        "name": "terminal-3",
+        "title": "Terminal 3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
+        "pty_label": "",
+    }
+    assert session.json == config["page"]
 
 
 def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient) -> None:
