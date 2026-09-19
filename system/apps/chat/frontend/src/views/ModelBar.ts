@@ -17,6 +17,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
+import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { ensureFastModeState, fastModeLabel, getFastModeState } from "../models/FastMode";
@@ -40,6 +41,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import { FastModeModal } from "./FastModeModal";
+import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -60,8 +62,21 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   return (shown[0] ?? option.efforts[0]).level;
 }
 
-function capitalizeEffort(level: string): string {
-  return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
+/** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat is
+ *  not converging, the switch failed, or it picked no model, all of which leave the chip on the live
+ *  choice. A failed switch still carries its pick, for the retry to rerun the model step from, but
+ *  never applied it.
+ *
+ *  Named from the target harness's catalog, and by its raw id for a harness whose option set is per
+ *  agent (codex), which no catalog holds -- an id the user has not seen spelled that way, but the
+ *  model they picked, which is the point. */
+function convergingPickLabel(chat: ChatSnapshot): string | null {
+  const converging = chat.handoff;
+  const pick = converging?.model_pick ?? null;
+  if (converging === null || converging.phase === "failed" || pick === null) return null;
+  const options = getHarnessCatalog(converging.target_harness)?.options ?? [];
+  const option = options.find((each) => each.id === pick.model_id);
+  return modelPickLabel(option?.label ?? pick.model_id, pick.effort, pick.fast);
 }
 
 // A search picker (pi) can carry thousands of models; never lay out more than
@@ -624,10 +639,18 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
 
-      // The account the next send switches the chat to, and the model picked for it: while a
+      // The account the next send switches the chat to, and the model it runs on there: while a
       // switch is armed the bar reads as the target, since that is what the next message runs on.
+      // With nothing picked, a rebind keeps the agent's model and a handoff's successor starts on
+      // its harness's default, which the bar has no name for.
       const pending = pendingSwitchTarget(chatId);
       const pendingPick = getPendingPick(chatId);
+      const isPendingRebind = pending !== null && switchKind(chat, pending) === "rebind";
+      const pendingModelLabel = pendingPick?.label ?? (isPendingRebind ? (matched?.label ?? null) : null);
+      // A page with no armed switch of its own can still be watching one: reloaded mid-switch, it
+      // has only what the chat carries. Read the same way, so the chip does not fall back to a live
+      // choice that cannot name the picked model until the harness has taken it.
+      const convergingLabel = pending !== null ? null : convergingPickLabel(chat);
 
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
@@ -657,9 +680,9 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             }
           },
         },
-        pending !== null
+        pending !== null || convergingLabel !== null
           ? [
-              m("span", pendingPick?.label ?? pending.harness_label),
+              m("span", convergingLabel ?? pendingModelLabel ?? pending?.harness_label ?? ""),
               m(
                 "span",
                 {
@@ -710,8 +733,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       // While a switch is armed the card describes the target: the account the next send moves
-      // the chat to and, for a handoff, the model picked for it, which opens the dialog again to
-      // change. A rebind keeps the agent's model, so it has no row to offer.
+      // the chat to and the model it runs on there, whose row opens the dialog again to change it.
       const armedRows: m.Children[] = [
         menuRow({
           label: "Provider",
@@ -721,12 +743,12 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           openable: true,
           tooltip: null,
         }),
-        ...(pending !== null && switchKind(chat, pending) === "handoff"
+        ...(pending !== null
           ? [
               m("div", { class: css.DIVIDER }),
               menuRow({
                 label: "Model",
-                value: pendingPick?.label ?? "Default model",
+                value: pendingModelLabel ?? (isPendingRebind ? "Current model" : "Default model"),
                 which: "model",
                 openable: true,
                 tooltip: "Change the model this chat switches to",

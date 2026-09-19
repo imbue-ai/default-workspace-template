@@ -211,6 +211,10 @@ class ModelApplyError(RuntimeError):
     the harness refused the switch. The message is what the user sees."""
 
 
+class ModelPickRejectedError(ModelApplyError):
+    """A model pick that is not one of the agent's options: trying it again cannot help."""
+
+
 class AgentStopError(RuntimeError):
     """Raised when ``mngr stop`` refuses or fails for a chat agent."""
 
@@ -304,14 +308,15 @@ class HandoffFailedStep(LowerCaseStrEnum):
 
     # The successor's ``mngr create`` (a handoff) or the agent's restart (a rebind).
     START = auto()
-    # The successor was created, but the model the user picked for it could not be applied.
+    # The agent the chat continues on is up (a handoff's successor, a rebind's restarted agent), but the model the
+    # user picked for it could not be applied.
     MODEL = auto()
 
 
 class ModelPick(FrozenModel):
     """A model, effort, and fast-mode selection made for an agent that does not run yet: the successor a
-    switch creates, or a new chat. Validated against the agent's option set once it exists, exactly as
-    the model bar's own pick is (``validate_model_pick``)."""
+    handoff creates, the agent a rebind restarts, or a new chat. Validated against the agent's option set once
+    it runs, exactly as the model bar's own pick is (``validate_model_pick``)."""
 
     model_id: str = Field(description="Model id to run on; must be one of the harness's option ids")
     effort: str | None = Field(default=None, description="Reasoning effort; None for a model with no effort axis")
@@ -404,6 +409,14 @@ class HandoffState(FrozenModel):
             "too) keeps showing them until they land in the transcript"
         ),
     )
+    model_pick: ModelPick | None = Field(
+        default=None,
+        description=(
+            "The model the chat runs on once the switch lands, applied on the far side of the restart or the "
+            "create; None when none was picked. Read by a page with no armed switch of its own to name it (one "
+            "reloaded mid-switch), since the pushed live choice cannot carry it until the harness has taken it"
+        ),
+    )
     error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
@@ -413,14 +426,14 @@ class HandoffState(FrozenModel):
 class SwitchChatRequest(SendMessageRequest):
     """Request body for POST /api/chats/{id}/handoff: a send (the first message the chat sends after the
     switch, with the sender's client fields; empty for a switch made with nothing to say yet) plus the
-    account the chat moves to, and for a handoff the model the successor should run on."""
+    account the chat moves to and the model it should run on there."""
 
     account_id: str = Field(description="The signed-in account the chat moves to")
     model: ModelPick | None = Field(
         default=None,
         description=(
-            "The model the successor runs on, applied before its first message; None for the harness's default. "
-            "Refused for a rebind, which keeps the agent's own settings"
+            "The model the chat runs on after the switch, applied before its first message; None for the harness's "
+            "default on a handoff, and for the agent's own model on a rebind"
         ),
     )
 

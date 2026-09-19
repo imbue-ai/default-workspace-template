@@ -42,9 +42,6 @@ import pexpect
 from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
-from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
@@ -70,6 +67,7 @@ from imbue.chat.harnesses.pty_auth import extract_wrapped_value
 from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -248,7 +246,7 @@ class AuthFlowService:
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         return service
 
-    # -- lifecycle ------------------------------------------------------------------------
+    # lifecycle
 
     def start(self, lane_id: str, method_id: str, account_id: str | None = None) -> FlowStart:
         """Begin a sign-in. Any flow already running is abandoned.
@@ -278,7 +276,8 @@ class AuthFlowService:
                     raise FlowError(f"that account signs in through {existing.lane}, not {lane.id}")
                 account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
-            seed_account(lane.harness, account_path, self._work_dir)
+            binding = build_account_binding(lane.harness)
+            binding.seed_account(account_path, self._work_dir)
 
             session = _new_session(lane, method, account_id, minted)
             self._session = session
@@ -289,7 +288,7 @@ class AuthFlowService:
             # already there and reported as a success. Nothing changed, and the UI says
             # "signed in again".
             if not minted:
-                session.cleared_credentials = _read_credentials(_harness_credential_paths(lane.harness, account_path))
+                session.cleared_credentials = _read_credentials(binding.credential_paths(account_path))
                 # Parked on DISK before anything is unlinked, so the only copy is never
                 # process memory alone. A stop, a snapshot or an OOM kill in this window used
                 # to destroy a working credential with no trace: the row still pointed at a
@@ -350,7 +349,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **account_env(session.lane.harness, account_path)}
+        env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
         binary = _binary_for(session.lane)
         session.process = self._spawner(
             binary, list(method.argv), method.scrape_timeout_s, env=env, columns=method.pty_columns
@@ -426,7 +425,7 @@ class AuthFlowService:
             raise FlowError(session.detail or "extraction failed")
         return (None, value) if method.static_url else (value, None)
 
-    # -- advancing ------------------------------------------------------------------------
+    # advancing
 
     def submit_code(self, flow_id: str, code: str) -> FlowStatus:
         with self._lock:
@@ -513,7 +512,7 @@ class AuthFlowService:
                 write_claude_env(path, managed_env)
                 return existing
             account_id, path = accounts.mint_account_dir(self._home)
-            seed_account(lane.harness, path, self._work_dir)
+            build_account_binding(lane.harness).seed_account(path, self._work_dir)
             write_claude_env(path, managed_env)
             return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
 
@@ -532,7 +531,7 @@ class AuthFlowService:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
 
-    # -- internals ------------------------------------------------------------------------
+    # internals
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""
@@ -875,23 +874,6 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
             return (account_path / "settings.json",)
         case _ as unreachable:
             assert_never(unreachable)
-
-
-def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple[Path, ...]:
-    """Every file that says this account is signed in, whoever wrote it.
-
-    Wider than `_credential_paths`, which only knows what OUR paste sinks write: a browser
-    sign-in leaves the CLI's own store there too. Used to take an account's credential AWAY
-    before re-driving its sign-in -- see `_clear_for_reauth`.
-    """
-    paths = [account_path / "settings.json"] if harness is HarnessType.CLAUDE else []
-    linked = account_credential_path(harness, account_path)
-    if linked is not None:
-        paths.append(linked)
-    if harness is HarnessType.CLAUDE:
-        # What `claude auth login` / `setup-token` write themselves.
-        paths.append(account_path / ".credentials.json")
-    return tuple(paths)
 
 
 def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:

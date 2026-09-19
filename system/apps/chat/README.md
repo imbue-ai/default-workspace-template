@@ -102,17 +102,19 @@ A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
 and lane: the same route, dispatched on the target account's harness and lane
 (the answer's `kind` says which it was). The chat app drains the agent's queue
 as a handoff does, then stops the agent, repoints its binding in its own state
-dir (the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the
-chat's session files into the new account's folder so `claude --resume` and the
+dir (the harness's account binding, `harnesses/<harness>/account_binding.py`:
+the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the chat's
+session files into the new account's folder so `claude --resume` and the
 watcher still find them; the credential symlink for codex, pi, and antigravity),
 rewrites its `account` label, starts it again with `mngr start --no-resume`,
-and delivers the held messages once it is up. The agent, its transcript, its tk
-steps, and its model settings stay; the record's `rebind` entry carries the
-state through a restart of the app, and a rebind on a one-agent chat drops the
-record again when it completes. There is no cancel (the agent restarts as soon
-as the armed switch's next message carries it out); a failed start leaves the
-chat in the `failed` phase, and the retry offers the accounts of the same
-harness and lane.
+applies the model picked for it if one was, and delivers the held messages once
+it is up. The agent, its transcript, its tk steps, and, unless another model was
+picked, its model settings stay; the record's `rebind` entry carries the state
+through a restart of the app, and a rebind on a one-agent chat drops the record
+again when it completes. There is no cancel (the agent restarts as soon as the
+armed switch's next message carries it out); a failed start or a model pick the
+agent cannot take leaves the chat in the `failed` phase, and the retry offers
+the accounts of the same harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
 may be rebound on; a same-lane target on any other harness is a handoff.
 
@@ -124,9 +126,11 @@ target, and the send button reads "Switch and send" and carries the switch out
 with the typed message as the first the chat sends after it, with no second
 confirmation. "Start a new chat" opens a chat on that account and model
 instead, with the draft moved over. Pressing an account on the chat's own
-harness and lane (a rebind) asks nothing: the agent keeps its conversation and
-its model, so the press arms the switch at once and the next message carries
-it out, with the strip offering Cancel but no Change. A chat that has had no
+harness and lane (a rebind) asks nothing: the agent keeps its conversation and,
+by default, its model, so the press arms the switch at once and the next
+message carries it out. The strip's Change (and the model bar's Model row)
+opens the dialog's rebind variant, whose picker starts from "Keep the current
+model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
 write a summary asks.
@@ -147,11 +151,15 @@ written for the user, which the page and the shell's tab menu show as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A new chat created
-with a pick (`POST /api/chats/create` takes `model` too) is set up the same
-way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
-successor's models from: the catalog for a static harness, the options the
-account's last agent was offered for codex.
+goes to it through the send path, then the held messages. A rebind's pick is
+applied the same way once the agent is back on the new account, retried for a
+while since `mngr start` does not wait for the harness to come up. A new chat
+created with a pick (`POST /api/chats/create` takes `model` too) is set up the
+same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
+gets the target account's models, for a handoff's successor and a rebound agent
+alike: the catalog for a static harness, for codex the options an agent of the
+account was last offered, and nothing for antigravity, whose model is changed
+from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's

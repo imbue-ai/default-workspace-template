@@ -124,6 +124,16 @@ describe("the failed-switch notice", () => {
     expect(state.retries).toEqual([]);
   });
 
+  it("names the model pick for a rebind whose agent came back but could not take it", () => {
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic-2" },
+      handoff: rebindStateFixture({ phase: "failed", error: "Unknown model 'gpt-6-astra'", failed_step: "model" }),
+    });
+    render();
+    expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not set the model on Claude Code");
+    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toContain("Unknown model 'gpt-6-astra'");
+  });
+
   it("names the restart and offers only the agent's own harness and lane for a failed rebind", () => {
     state.chat = chatSnapshotFixture("agent-1", {
       active_agent: { harness: "claude", account_id: "acct-anthropic-2" },

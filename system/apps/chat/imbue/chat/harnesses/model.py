@@ -363,13 +363,16 @@ class HarnessModelResolver(ABC):
         """
         return None
 
-    def list_persisted_options(self) -> tuple["ModelOption", ...] | None:
-        """The options this agent was last offered, read from disk without reaching its daemon, or None
-        for a static catalog.
+    @classmethod
+    def list_account_options(cls, account_dir: Path) -> tuple["ModelOption", ...] | None:
+        """The models an ACCOUNT offers, for a switch onto an account the chat is not running on yet.
 
-        What an account-level picker shows for an agent that does not exist yet: the switch
-        dialog offering a handoff's successor its models reads them off an existing agent of
-        the same account. The default, for a static harness, is None (the catalog is the offer).
+        Account-scoped rather than agent-scoped, so it has an answer before any agent of that
+        account exists -- a classmethod for the same reason: there is no agent to build from. The
+        default is None, the honest answer for a harness whose catalog is static and the same on
+        every account of it (claude, pi): the catalog is the offer, and the account changes nothing
+        about it. A harness whose set is account-derived (codex) overrides this and asks the
+        account.
         """
         return None
 

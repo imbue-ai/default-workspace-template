@@ -48,6 +48,7 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
@@ -2568,7 +2569,7 @@ def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
     assert services_agent.id in agent_manager._agents
 
 
-# -- Agent file serving (markdown images + download links) --------------------
+# Agent file serving (markdown images + download links)
 #
 # An agent writes a file and references its absolute on-disk path in markdown;
 # the catch-all serves that file -- images inline so they render, any other file
@@ -2849,7 +2850,7 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert second["type"] == "chats_updated"
 
 
-# --- A chat that has run on two agents: one transcript, read across both segments ---
+# A chat that has run on two agents: one transcript, read across both segments
 
 
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
@@ -2974,7 +2975,9 @@ def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
     return create_application(state), log_path
 
 
-def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> tuple[str, str]:
+def _converging_claude_chat(
+    app: Flask, tmp_path: Path, phase: HandoffPhase, model_pick: ModelPick | None = None
+) -> tuple[str, str]:
     """A running claude chat of one agent whose record carries a handoff in ``phase``; returns the two agent ids."""
     first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
     state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
@@ -2987,11 +2990,30 @@ def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> 
         ChatRecord(
             chat_id=ChatId(first),
             agents=(make_chat_agent_entry(1, first, is_archived=False),),
-            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=phase),
+            handoff=make_chat_handoff_record(
+                retiring_seq=1, next_agent_id=successor, phase=phase, model_pick=model_pick
+            ),
         )
     )
     manager.refresh_chat_records()
     return first, successor
+
+
+def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) -> None:
+    # The model bar reads the pick off the chat while the switch runs: the pushed live choice is the
+    # agent the chat is leaving until the harness on the far side has taken the pick, so a page with
+    # no armed switch of its own to name it -- one reloaded mid-switch -- has only this.
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    pick = ModelPick(model_id="gpt-6-astra", effort="high", fast=False)
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING, model_pick=pick)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["model_pick"] == {"model_id": "gpt-6-astra", "effort": "high", "fast": False}
+
+    # A switch that picked no model leaves the bar on the live choice.
+    other, _ = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
@@ -3060,15 +3082,6 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
-    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
-    second, _ = mint_account_dir()
-    commit_account(second, "anthropic", "Anthropic")
-    with_pick = client.post(
-        f"/api/chats/{first}/handoff",
-        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
-    )
-    assert with_pick.status_code == 400
-    assert "keeps its model settings" in with_pick.get_json()["detail"]
 
 
 def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:
@@ -3157,6 +3170,8 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
 
 
 def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path: Path, signed_in_account: str) -> None:
+    """The rebind through the route, with a model picked for it: the pick reaches the agent once it is back on the
+    new account, ahead of the message the user switched with."""
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
@@ -3171,7 +3186,13 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     commit_account(second, "anthropic", "Anthropic")
 
     switched = client.post(
-        f"/api/chats/{first}/handoff", json={"account_id": second, "message": "Carry on here", "message_id": "m-1"}
+        f"/api/chats/{first}/handoff",
+        json={
+            "account_id": second,
+            "message": "Carry on here",
+            "message_id": "m-1",
+            "model": {"model_id": "sonnet[1m]", "effort": "medium", "fast": False},
+        },
     )
     assert switched.status_code == 202
     assert switched.get_json() == {
@@ -3194,6 +3215,12 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     messenger = manager._messenger
     assert isinstance(messenger, RecordingMngrMessenger)
     wait_for(lambda: (first, "Carry on here") in messenger.sent, timeout=5.0)
+    assert messenger.sent == [
+        (first, "/model sonnet[1m]"),
+        (first, "/effort medium"),
+        (first, "/fast off"),
+        (first, "Carry on here"),
+    ]
     # The chat still reads its transcript, now from the new account's folder.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 
