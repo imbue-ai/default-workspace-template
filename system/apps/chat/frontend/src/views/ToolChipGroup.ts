@@ -102,11 +102,12 @@ function chipKey(call: ToolCall): string {
   return `chip:${call.tool_call_id}`;
 }
 
-/** `-ml-2` cancels the first chip's own left padding, so the row's ink starts
+/** `-ml-1.5` cancels the first chip's own left padding, so the row's ink starts
  *  where the prose above it does. A ghost button needs that padding for its
  *  hover fill to have a shape, but the padding is chrome -- without this the
- *  whole row sat indented from the text it belongs to. */
-const ROW_CLASS = "tool-chip-row -ml-2 flex flex-wrap items-center gap-1";
+ *  whole row sat indented from the text it belongs to. It tracks the chip's
+ *  `px-1.5`, as does the panel's own margin below. */
+const ROW_CLASS = "tool-chip-row -ml-1.5 flex flex-wrap items-center gap-1";
 
 /** A ghost button: no fill at rest, a wash on hover, a stronger fill and full-
  *  strength text once it is the open one.
@@ -115,8 +116,8 @@ const ROW_CLASS = "tool-chip-row -ml-2 flex flex-wrap items-center gap-1";
  *  one must not take a whole line of the row to itself. Past that width the
  *  target truncates and the hover title carries the rest. */
 const CHIP_BASE =
-  "tool-chip inline-flex max-w-[20rem] cursor-pointer appearance-none items-center gap-1.5 rounded-md border-0 " +
-  "px-2 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
+  "tool-chip inline-flex max-w-[20rem] cursor-pointer appearance-none items-center gap-0.5 rounded-md border-0 " +
+  "px-1.5 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
   "hover:bg-fill-hover";
 
 /**
@@ -138,10 +139,10 @@ const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
  *  annotation on the row rather than as another block in the transcript.
  *
  *  It is a flex item of the chip row. `basis-full` is what forces the wrap
- *  break, since an item that wants the whole width cannot share a line. `ml-2`
+ *  break, since an item that wants the whole width cannot share a line. `ml-1.5`
  *  and the matching narrower basis put it back in line with the prose, undoing
- *  the row's own `-ml-2` for this one child. */
-const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-2 basis-[calc(100%-0.5rem)] rounded-md border px-3 py-1.5";
+ *  the row's own `-ml-1.5` for this one child. */
+const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-1.5 basis-[calc(100%-0.375rem)] rounded-md border px-3 py-1.5";
 
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
