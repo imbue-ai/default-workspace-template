@@ -45,6 +45,7 @@ uv run apt-mirror verify
 `warm` and `verify` default to the timestamp in `current-timestamp` and to every list in `package_lists/`; override with `--timestamp` and repeated `--list` flags.
 
 - `current-timestamp` is the committed source of truth for the latest cut `T`. The dwt repo's `.mngr/apt-snapshot-timestamp` must hold the same value when a `T` bump lands there (the release runbook enforces this ordering; see `apps/minds/docs/deploy/ops/app-release.md`, step 0).
+- The dwt `system/Dockerfile` pins its `python:3.12-slim-trixie` base by index digest, and that base's packages must all exist in the frozen index at `T`: apt never downgrades, so a base from a newer Debian point release than the snapshot cannot install the template's toolchain (imbue-ai/mngr-internal#1138). A `T` bump therefore bumps the digest in the same commit; `template_base_image.py` reads both pins from a template ref and the release test below proves they agree.
 - `package_lists/*.txt` are committed lists of package specs (one per line, `#` comments) that warming covers -- what dwt workspaces actually install, not the whole Debian universe. An entry is a bare `name` (resolves to the newest version in the frozen index, which is what `apt-get install name` picks against it) or an apt-style `name=version` pin (`docker.txt` pins the engine to the version `libs/mngr_vps/.../host_setup.py` installs). Names are top-level only; dependencies are not resolved, and for the Debian archives read-through covers anything a list misses (slower first fetch, never a missing package). For the docker archive there is no read-through, so `docker.txt` must list every package the guest image installs. After changing what dwt or the guest image installs, create a fresh workspace, note any slow first-installs, and extend the list.
 
 ## Artifacts
@@ -115,7 +116,7 @@ All steps in the production Cloudflare account:
 5. Deploy the Worker (`just deploy-apt-mirror`). The custom domain `apt.imbuepackages.com` is attached from `wrangler.jsonc`; Cloudflare creates the DNS record automatically.
 6. Cut the committed timestamp: `uv run apt-mirror cut --timestamp $(cat apps/apt_mirror/current-timestamp)`.
 7. Warm and verify: `uv run apt-mirror warm && uv run apt-mirror verify`.
-8. Smoke-test from a scratch container: run `apt-get update && apt-get install -y jq` in `python:3.12-slim-trixie` with sources pointed at the mirror (the release test in `test_apt_mirror_release.py` does exactly this).
+8. Smoke-test from a scratch container: run `apt-get update && apt-get install -y jq` in the dwt Dockerfile's digest-pinned `python:3.12-slim-trixie` base with sources pointed at the mirror (the release test in `test_apt_mirror_release.py` does exactly this).
 
 Only after this succeeds should the dwt change that defaults `APT_MIRROR_BASE_URL` to `https://apt.imbuepackages.com` land -- until then, dwt builds fall back to throttled `snapshot.debian.org` (slow but correct).
 
@@ -123,4 +124,4 @@ Only after this succeeds should the dwt change that defaults `APT_MIRROR_BASE_UR
 
 - Python (CLI + cut/warm/verify logic): `just test-quick apps/apt_mirror`.
 - Worker: `cd apps/apt_mirror/worker && pnpm install && pnpm test` (vitest running inside workerd via `@cloudflare/vitest-pool-workers`, with upstream fetches mocked). CI runs these tests when `worker/` changes.
-- The live end-to-end release tests (marked `release`) drive a real trixie container against `apt.imbuepackages.com` at the committed timestamp: `test_apt_mirror_release.py` here installs from the Debian archives, and `apps/minds_admin/.../slices/test_docker_mirror_release.py` downloads the pinned docker-ce-cli from the frozen docker archive with the committed signing key.
+- The live end-to-end release tests (marked `release`) drive the dwt Dockerfile's digest-pinned base image against `apt.imbuepackages.com`: `test_apt_mirror_release.py` here installs from the Debian archives at the template's committed timestamp and checks that no package the base ships (amd64 and arm64) is newer than, or absent from, that snapshot's index, and `apps/minds_admin/.../slices/test_docker_mirror_release.py` downloads the pinned docker-ce-cli from the docker archive frozen at this repo's `current-timestamp` with the committed signing key. Both read the base-image pin (and the first test its timestamp) from dwt `main`; set `DEFAULT_WORKSPACE_TEMPLATE_REF=<branch>` to check a release branch before it lands.

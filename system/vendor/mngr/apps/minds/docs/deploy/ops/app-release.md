@@ -187,6 +187,31 @@ guest images install), and `warm` is what pins its package files, so never
 skip the warm; the gen-2 prep reads the committed `current-timestamp` to
 pick the docker archive it installs from, and re-stages every gen-2 box's
 guest image on its next prep after a bump.
+
+**Bump the Dockerfile's base-image digest in the same commit.** The
+DEFAULT_WORKSPACE_TEMPLATE `system/Dockerfile` pins `python:3.12-slim-trixie`
+by index digest, and apt never downgrades, so every package that base ships
+must exist in the snapshot's frozen index -- a base from a newer Debian point
+release than the snapshot makes `apt-get install libc6-dev` unsatisfiable and
+every fresh image build fails (imbue-ai/mngr-internal#1138 is what a floating
+tag did). Pick a digest whose point release the new timestamp covers (the tag's
+current index digest from `docker buildx imagetools inspect
+python:3.12-slim-trixie` when the cut is recent), and prove the pair before it
+lands, against the DEFAULT_WORKSPACE_TEMPLATE release branch:
+
+```bash
+DEFAULT_WORKSPACE_TEMPLATE_REF=<default-workspace-template-release-branch> \
+  just test apps/apt_mirror/imbue/apt_mirror/test_apt_mirror_release.py::test_template_base_image_packages_are_installable_from_its_pinned_snapshot
+```
+
+It reads the branch's Dockerfile and timestamp, pulls the digest for amd64 and
+arm64, and fails naming every shipped package that is newer than (or absent
+from) the snapshot's index. The same test runs against `main` in the Release
+Tests workflow (`.github/workflows/release-tests.yml`: dispatch it by hand
+before tagging, and it also runs on every `v*` tag), so a digest that stops
+being pullable is caught at the next release rehearsal; no scheduled run
+covers it. Never bump one pin without the other.
+
 Setting `APT_MIRROR_BASE_URL` empty in a workspace build falls back to
 snapshot.debian.org at the same timestamp (correct but throttled), so a
 not-yet-warmed mirror degrades to slow, never to wrong; warming only

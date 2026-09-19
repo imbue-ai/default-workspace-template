@@ -1,17 +1,23 @@
-"""Live end-to-end proof of the mirror's frozen docker archive: a real trixie
-container installs the pinned docker-ce from https://apt.imbuepackages.com at
-the committed cut timestamp, verifying it with the committed signing key.
+"""Live end-to-end proof of the mirror's frozen docker archive: the workspace
+template's pinned base image installs the pinned docker-ce from
+https://apt.imbuepackages.com at the committed cut timestamp, verifying it
+with the committed signing key.
 
 Release-only: it depends on the deployed Worker, a cut + warm of the committed
-timestamp that covered the ``docker`` archive, and Docker locally.
+timestamp that covered the ``docker`` archive, Docker Hub, and Docker locally.
+The container is the template's own digest-pinned base (read from the template
+ref named by ``DEFAULT_WORKSPACE_TEMPLATE_REF``, default ``main``), not the
+floating tag, so the test runs the trixie the fleet actually builds on.
 """
 
+import os
 import subprocess
 
 import pytest
 
 from imbue.apt_mirror.cli import CURRENT_TIMESTAMP_PATH
 from imbue.apt_mirror.cli import read_current_timestamp
+from imbue.apt_mirror.template_base_image import read_default_workspace_template_pin
 from imbue.minds_admin.slices.bare_metal_prep import render_docker_apt_source_section
 from imbue.mngr_vps.host_setup import PINNED_DOCKER_APT_VERSION_CORE
 
@@ -40,8 +46,9 @@ def _docker_install_script(timestamp: str) -> str:
 @pytest.mark.timeout(600)
 def test_live_mirror_serves_the_pinned_docker_engine_to_a_trixie_container() -> None:
     timestamp = read_current_timestamp(CURRENT_TIMESTAMP_PATH)
+    base_image_ref = read_default_workspace_template_pin(os.environ).base_image_ref
     result = subprocess.run(
-        ["docker", "run", "--rm", "python:3.12-slim-trixie", "bash", "-c", _docker_install_script(timestamp)],
+        ["docker", "run", "--rm", base_image_ref, "bash", "-c", _docker_install_script(timestamp)],
         capture_output=True,
         text=True,
         timeout=540,
