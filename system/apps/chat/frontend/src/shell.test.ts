@@ -11,14 +11,15 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChat = vi.fn();
 const getChatById = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener: vi.fn() }));
+const addChatsUpdatedListener = vi.fn();
+vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
 
-import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
+import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
 
@@ -75,6 +76,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   connection?.disconnect();
   connection = null;
+  delete window.chatPageEmbed;
   Object.defineProperty(window, "parent", { value: window, configurable: true });
 });
 
@@ -115,6 +117,61 @@ describe("connectChatToShell", () => {
     window.dispatchEvent(new Event("focus"));
 
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:focused" }, "*");
+  });
+});
+
+/** The location reports the page posted, as ``[path, title]`` pairs. */
+function locationReports(parent: { postMessage: ReturnType<typeof vi.fn> }): [string, string][] {
+  return parent.postMessage.mock.calls
+    .filter(([message]) => (message as { type: string }).type === SHELL_LOCATION)
+    .map(([message]) => {
+      const { path, title } = message as { path: string; title: string };
+      return [path, title];
+    });
+}
+
+describe("the chat page's location report", () => {
+  it("reports its path on connect, and the chat's title once the list names it, once per change", async () => {
+    const parent = framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    expect(locationReports(parent)).toEqual([["/agent-1", ""]]);
+    const onChatsUpdated = addChatsUpdatedListener.mock.calls[0][0] as () => void;
+
+    getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { title: "Plan" }));
+    onChatsUpdated();
+    onChatsUpdated();
+
+    expect(locationReports(parent)).toEqual([
+      ["/agent-1", ""],
+      ["/agent-1", "Plan"],
+    ]);
+    expect(document.title).toBe("Plan");
+  });
+});
+
+describe("the embed API", () => {
+  it("drives a framed page's presence the way the shell's messages do", async () => {
+    framed();
+    const { connectChatToShell, presence } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    const embed = window.chatPageEmbed;
+    expect(embed).toBeDefined();
+    if (embed === undefined) throw new Error("no embed API on a framed page");
+
+    embed.handshake({ clientId: "client-2", deviceKind: "", viewId: "", address: "", tabId: "" });
+    embed.shown();
+    embed.hidden();
+
+    expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-2", "hidden"]]);
+    expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"]]);
+  });
+
+  it("is absent on a top-level visit, which no root drives", async () => {
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+
+    expect(window.chatPageEmbed).toBeUndefined();
   });
 });
 
