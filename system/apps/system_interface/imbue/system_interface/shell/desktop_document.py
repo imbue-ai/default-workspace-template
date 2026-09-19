@@ -156,15 +156,13 @@ def fit_frame_to_backdrop(frame: Frame, backdrop: BackdropSize, metrics: FitMetr
     """The fit rule (render only): fractions to pixels, the minimum size enforced, the title bar nudged into view."""
     width = max(frame.width * backdrop.width, metrics.window_min_width)
     height = max(frame.height * backdrop.height, metrics.window_min_height)
-    x = frame.x * backdrop.width
-    y = frame.y * backdrop.height
+    scaled_x = frame.x * backdrop.width
+    scaled_y = frame.y * backdrop.height
     # Horizontally at least the minimum visible title width stays inside, on either side.
     visible = min(metrics.title_min_visible, width)
-    x = max(x, visible - width)
-    x = min(x, backdrop.width - visible)
+    x = min(max(scaled_x, visible - width), backdrop.width - visible)
     # Vertically the whole title bar stays inside, and the top edge is never above the backdrop's.
-    y = min(y, backdrop.height - metrics.title_bar_height)
-    y = max(y, 0.0)
+    y = max(min(scaled_y, backdrop.height - metrics.title_bar_height), 0.0)
     return PixelRect(x=x, y=y, width=width, height=height)
 
 
