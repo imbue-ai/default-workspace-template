@@ -174,6 +174,15 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. Not in
+ *  the `beforeEach`: most of the file runs on a model with no fast mode, and the row's absence
+ *  there is itself asserted. */
+function withFastModel(): void {
+  const model = { ...OPUS, supports_fast: true };
+  catalogState.catalog = catalogOf({ options: [model] });
+  settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -632,9 +641,7 @@ describe("the combo card", () => {
     // auto is neither on nor off; the submenu is where the modes are picked and auto's turn
     // limit lives, and it STAYS UP on a pick, because picking auto is usually followed by
     // setting the limit it runs to.
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    withFastModel();
     chatSettingsState.settings = {
       fast_mode_default: "auto",
       fast_mode_turn_limit: 3,
@@ -671,9 +678,7 @@ describe("the combo card", () => {
   });
 
   it("offers auto's turn limit only under auto, and writes a changed one to the settings", () => {
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    withFastModel();
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="fast"]');
@@ -705,9 +710,7 @@ describe("the combo card", () => {
   });
 
   it("makes the chat's mode the one new chats start in, and says when it already is", () => {
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    withFastModel();
     fastModeState.state = { mode: "on", is_switched: false };
     render();
     click(".model-selector-trigger");
@@ -739,9 +742,7 @@ describe("the combo card", () => {
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    withFastModel();
     fastModeState.state = null;
     render();
     click(".model-selector-trigger");
