@@ -54,7 +54,7 @@ def _shell(app: Flask) -> ShellState:
 def _register_client(app: Flask, client_id: str, view_id: str) -> "queue.Queue[str | None]":
     """A connected window of ``client_id`` on ``view_id``, recorded the way its ``client_state`` report would record it."""
     client_queue = _shell(app).broadcaster.register()
-    _shell(app).broadcaster.set_client_info(client_queue, client_id, view_id, "desktop")
+    _shell(app).broadcaster.set_client_info(client_queue, client_id, view_id, "desktop", active_desktop="")
     _shell(app).clients.record_report(
         ClientStateReport(
             client_id=ClientId(client_id),
