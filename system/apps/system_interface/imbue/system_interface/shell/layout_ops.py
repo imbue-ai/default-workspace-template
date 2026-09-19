@@ -13,12 +13,15 @@ from typing import Any
 from typing import Final
 
 from app_instances.primitives import InstanceKey
+from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
+from app_manifest.primitives import LaunchPathId
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import DEFAULT_SPLIT_RATIO
 from imbue.system_interface.shell.dockview_document import Direction
@@ -155,16 +158,19 @@ class DesktopOpArguments(FrozenModel):
     window: str = Field(default="", description="A window id, ``self``, or an app name")
     app: str = Field(default="", description="The app an ``open`` or a whole-app ``refresh`` names")
     path: str = Field(default="", description="The path an ``open`` or a ``navigate`` names")
-    launch: str = Field(default="", description="The launch path an ``open`` runs; empty for the app's default")
+    launch: LaunchPathId | None = Field(
+        default=None,
+        description="The launch path an ``open`` runs (None for the app's default) or a shortcut op names",
+    )
     params: dict[str, str] = Field(default_factory=dict, description="The launch path's query parameters")
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
     )
     zone: str = Field(default="", description="``left``, ``right``, or ``maximized`` for ``place``")
     frame: str = Field(default="", description="``x,y,width,height`` in fractions for ``place``")
-    mode: str = Field(default="focus", description="A shortcut's mode for ``shortcut_set``")
+    mode: ShortcutMode = Field(default=ShortcutMode.FOCUS, description="A shortcut's mode for ``shortcut_set``")
     cell: str = Field(default="", description="``column,row`` for ``shortcut_set`` and ``shortcut_move``")
-    wallpaper: dict[str, Any] | None = Field(default=None, description="The wallpaper reference for ``wallpaper``")
+    wallpaper: Wallpaper | None = Field(default=None, description="The wallpaper reference for ``wallpaper``")
 
 
 class DocumentOpArguments(FrozenModel):

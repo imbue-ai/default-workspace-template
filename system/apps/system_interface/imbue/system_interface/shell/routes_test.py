@@ -1426,3 +1426,24 @@ def test_a_desktop_op_with_no_client_to_target_is_a_412(client: FlaskClient) -> 
     refused = _desktop_op(client, "open", {"app": "terminal"}, None)
     assert refused.status_code == 412 and "--client" in refused.get_json()["detail"]
     assert _desktop_op(client, "open", {"app": "terminal", "client": "ghost"}, None).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("op", "args", "fragment"),
+    [
+        ("shortcut_set", {"app": "files", "launch": "open", "mode": "bogus"}, "mode"),
+        ("shortcut_set", {"app": "files", "launch": "", "mode": "new"}, "launch"),
+        ("shortcut_set", {"app": "files", "mode": "new"}, "launch"),
+        ("shortcut_remove", {"app": "files", "launch": "Not Valid"}, "launch"),
+        ("open", {"app": "terminal", "launch": "Not Valid"}, "launch"),
+        ("wallpaper", {"wallpaper": {"kind": "nope", "name": "x"}}, "wallpaper"),
+        ("wallpaper", {"wallpaper": {"kind": "bundled"}}, "wallpaper"),
+    ],
+)
+def test_a_malformed_desktop_op_argument_is_a_400_naming_the_argument(
+    client: FlaskClient, app: Flask, op: str, args: dict[str, Any], fragment: str
+) -> None:
+    _register_desktop_client(app, "c1", "home")
+    refused = _desktop_op(client, op, args, {"app": "terminal", "marker": "terminal-7"})
+    assert refused.status_code == 400
+    assert fragment in refused.get_json()["detail"]
