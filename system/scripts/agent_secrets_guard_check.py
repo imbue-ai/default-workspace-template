@@ -33,8 +33,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(
@@ -56,7 +55,9 @@ _ALLOWED_SCRIPTS = frozenset({WRAPPER_SCRIPT, REQUEST_SCRIPT})
 _ALLOWED_PROGRAMS = frozenset({"ls", "rm"})
 _PYTHON_PROGRAMS = frozenset({"python", "python3"})
 # Python's own flags that keep the next argument a script rather than code.
-_PYTHON_PASSTHROUGH_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-I", "-O", "-OO", "-q"})
+_PYTHON_PASSTHROUGH_FLAGS = frozenset(
+    {"-u", "-B", "-E", "-s", "-S", "-I", "-O", "-OO", "-q"}
+)
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
@@ -86,10 +87,16 @@ _PATCH_TOOL_NAME = "apply_patch"
 # tools (claude's Glob, pi's find); Grep's ``pattern`` is a regex and is left alone.
 _PATH_FIELDS = ("file_path", "path", "notebook_path")
 _GLOB_TOOL_NAMES = frozenset({"Glob", "find"})
-_PATCH_FILE_LINE_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE)
+_PATCH_FILE_LINE_RE = re.compile(
+    r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE
+)
 
-_SHELL_REASON = "it reads, writes, or otherwise touches a file under data/.secrets/ directly"
-_UNPARSEABLE_REASON = "it mentions data/.secrets/ and could not be parsed as a shell command"
+_SHELL_REASON = (
+    "it reads, writes, or otherwise touches a file under data/.secrets/ directly"
+)
+_UNPARSEABLE_REASON = (
+    "it mentions data/.secrets/ and could not be parsed as a shell command"
+)
 _FILE_TOOL_REASON = "it opens a file under data/.secrets/"
 
 
@@ -107,7 +114,9 @@ def _basename(word: str) -> str:
 def _strip_leading_assignments(words: Sequence[str]) -> tuple[str, ...]:
     """The words after any ``VAR=value`` prefixes (and an ``env`` in front of them)."""
     remaining = list(words)
-    while remaining and (_ENV_ASSIGNMENT_RE.match(remaining[0]) or remaining[0] == "env"):
+    while remaining and (
+        _ENV_ASSIGNMENT_RE.match(remaining[0]) or remaining[0] == "env"
+    ):
         remaining.pop(0)
     return tuple(remaining)
 
@@ -139,7 +148,9 @@ def _segment_violation(words: Sequence[str]) -> str | None:
     while index < len(words):
         word = words[index]
         is_shell_string = (
-            _basename(word) in _SHELL_PROGRAMS and index + 2 < len(words) and words[index + 1] == "-c"
+            _basename(word) in _SHELL_PROGRAMS
+            and index + 2 < len(words)
+            and words[index + 1] == "-c"
         )
         if is_shell_string:
             inner_violation = classify_command(words[index + 2])
@@ -182,17 +193,29 @@ def _file_tool_targets(tool_name: str, tool_input: Mapping[str, object]) -> list
     fields = list(_PATH_FIELDS)
     if tool_name in _GLOB_TOOL_NAMES:
         fields.append("pattern")
-    return [str(tool_input[field]) for field in fields if isinstance(tool_input.get(field), str)]
+    return [
+        str(tool_input[field])
+        for field in fields
+        if isinstance(tool_input.get(field), str)
+    ]
 
 
 def classify_file_tool(tool_name: str, tool_input: Mapping[str, object]) -> str | None:
     targets = _file_tool_targets(tool_name, tool_input)
-    return _FILE_TOOL_REASON if any(_is_secret_path_mention(target) for target in targets) else None
+    return (
+        _FILE_TOOL_REASON
+        if any(_is_secret_path_mention(target) for target in targets)
+        else None
+    )
 
 
 def classify_patch(patch_body: str) -> str | None:
     file_lines = _PATCH_FILE_LINE_RE.findall(patch_body)
-    return _FILE_TOOL_REASON if any(_is_secret_path_mention(line.strip()) for line in file_lines) else None
+    return (
+        _FILE_TOOL_REASON
+        if any(_is_secret_path_mention(line.strip()) for line in file_lines)
+        else None
+    )
 
 
 def classify_payload(payload: Mapping[str, object]) -> str | None:

@@ -15,7 +15,7 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 Order of decision (:func:`classify_user_message`):
 
 1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
-   model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
+   model-bar traffic, a latchkey resolution, a secret-card resolution) -> that decision. Explicit detectors WIN over
    ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
@@ -29,6 +29,7 @@ from typing import Any
 from pydantic import Field
 
 from imbue.chat.harnesses.events import DisplayKind
+from imbue.imbue_common.errors import SwitchError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
@@ -125,6 +126,38 @@ _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be complet
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 
+# The chat app's own notice when a secret card is answered (``secret_requests_endpoints``
+# builds it with ``format_secret_resolution_notice`` below), tagged the way the latchkey
+# notice is: "(secret: stored, request_id: <id>)". The tag is the classification contract.
+SECRET_RESOLUTION_VERDICTS = ("stored", "declined", "superseded")
+_SECRET_RESOLUTION_TAG_RE = re.compile(
+    r"\(secret:\s*(" + "|".join(SECRET_RESOLUTION_VERDICTS) + r"),\s*request_id:\s*([^)\s]+)\)"
+)
+_RESOLUTION_VALUES = ("granted", "denied", "error", *SECRET_RESOLUTION_VERDICTS)
+
+
+@pure
+def format_secret_resolution_notice(
+    verdict: str, request_id: str, env_path: str, variable_names: tuple[str, ...], note: str | None
+) -> str:
+    """The user message the chat app sends the agent when a secret card is answered.
+
+    Names the file and the variables, never a value. The tag at the end is what
+    :func:`_match_secret_resolution` reads, so the two cannot drift apart.
+    """
+    variables = ", ".join(variable_names)
+    tag = f"(secret: {verdict}, request_id: {request_id})"
+    if verdict == "stored":
+        body = f"Secret stored: {env_path} ({variables}) {tag}"
+    elif verdict == "declined":
+        body = f"Secret declined: {env_path} ({variables}) {tag}"
+    elif verdict == "superseded":
+        body = f"Secret request superseded by a newer request for {env_path} {tag}"
+    else:
+        raise SwitchError(f"Unknown secret resolution verdict: {verdict!r}")
+    return f"{body} {note}" if note else body
+
+
 class MessageDisplay(FrozenModel):
     """One user message's render decision, as it goes on the wire."""
 
@@ -134,11 +167,12 @@ class MessageDisplay(FrozenModel):
     # The body to display when a wrapper sentinel was stripped (a fleet nudge); omitted
     # when the raw content is already the display body.
     display_body: str | None = None
-    # PERMISSION_RESOLUTION only: granted / denied / error.
-    resolution: str | None = Field(default=None, pattern="^(granted|denied|error)$")
-    # PERMISSION_RESOLUTION only: the resolved request's own id, when the notice carries
-    # one (see _RESOLUTION_REQUEST_ID_RE). None for a notice recorded before request-id
-    # embedding shipped.
+    # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
+    # declined / superseded.
+    resolution: str | None = Field(default=None, pattern="^(" + "|".join(_RESOLUTION_VALUES) + ")$")
+    # PERMISSION_RESOLUTION and SECRET_RESOLUTION only: the resolved request's own id, when
+    # the notice carries one (see _RESOLUTION_REQUEST_ID_RE). None for a permission notice
+    # recorded before request-id embedding shipped; a secret notice always carries one.
     request_id: str | None = None
 
     def apply_to(self, event: dict[str, Any]) -> None:
@@ -262,6 +296,14 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
+def _match_secret_resolution(content: str) -> MessageDisplay | None:
+    """The chat app's notice that a secret card was answered, sent as a plain user message."""
+    tag = _SECRET_RESOLUTION_TAG_RE.search(content)
+    if tag is None:
+        return None
+    return MessageDisplay(display=DisplayKind.SECRET_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2))
+
+
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
     _match_welcome,
@@ -275,6 +317,7 @@ _DETECTORS = (
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,
+    _match_secret_resolution,
 )
 
 

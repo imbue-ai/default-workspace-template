@@ -37,9 +37,9 @@ from imbue.chat.harnesses.pi_coding.tool_labels import shell_command
 from imbue.chat.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
-from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 
 # "common" here means the normalized/common event *form*, not the on-disk common-transcript
@@ -199,7 +199,6 @@ def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -
     raw_output = _text_from_content(message.get("content"))
     # The structured facts lifted from the full output, which itself stays off the event
     # (the payload-free wire contract -- see ``harnesses/tool_output``).
-    permission_request = find_permission_request(raw_output)
     is_error = message.get("isError") is True
     event: dict[str, Any] = {
         "timestamp": timestamp,
@@ -212,8 +211,7 @@ def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -
         "is_error": is_error,
         "message_uuid": event_id,
     }
-    if permission_request is not None:
-        event["permission_request"] = permission_request.details
+    stamp_echoed_requests(event, raw_output)
     snippet = error_snippet(raw_output) if is_error else ""
     if snippet:
         event["error_snippet"] = snippet

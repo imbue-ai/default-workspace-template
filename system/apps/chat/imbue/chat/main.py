@@ -36,6 +36,9 @@ from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.secret_requests import DEFAULT_REQUESTS_DIRECTORY
+from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
@@ -140,6 +143,9 @@ def build_production_state(
         # separate one for the latchkey catalog proxy.
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
+        secret_requests=SecretRequestStore(
+            requests_directory=DEFAULT_REQUESTS_DIRECTORY, secrets_directory=DEFAULT_SECRETS_DIRECTORY
+        ),
     )
     # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
     # transition into a dead state, the state drops that agent's watcher -- the

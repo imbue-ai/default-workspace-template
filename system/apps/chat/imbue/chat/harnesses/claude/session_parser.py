@@ -24,9 +24,9 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
-from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -519,12 +519,11 @@ def _parse_user_message(
             tool_name = tool_name_by_call_id.get(tool_call_id, "unknown")
 
             # The structured facts lifted from the full output (which itself stays off
-            # the event): the subagent linkage trailer and the permission-request object
-            # the card renders from.
+            # the event): the subagent linkage trailer and the request objects the
+            # permission and secret cards render from.
             extracted_subagent_id: str | None = None
             if tool_name == "Agent":
                 extracted_subagent_id = _extract_subagent_id(structured_agent_id, result_content)
-            permission_request = find_permission_request(result_content)
 
             is_error = bool(block.get("is_error", False))
             event = {
@@ -551,8 +550,7 @@ def _parse_user_message(
 
             if extracted_subagent_id:
                 event["subagent_id"] = extracted_subagent_id
-            if permission_request is not None:
-                event["permission_request"] = permission_request.details
+            stamp_echoed_requests(event, result_content)
 
             existing_event_ids.add(event_id)
             new_events.append((timestamp, event))

@@ -43,7 +43,16 @@ def _child_environment(env_file: Path, *names: str) -> dict[str, str | None]:
     """Run the wrapper for real, with a child that reports the named variables as JSON."""
     reporter = "import json, os, sys; print(json.dumps({n: os.environ.get(n) for n in sys.argv[1:]}))"
     completed = subprocess.run(
-        [sys.executable, str(_SCRIPT), str(env_file), "--", sys.executable, "-c", reporter, *names],
+        [
+            sys.executable,
+            str(_SCRIPT),
+            str(env_file),
+            "--",
+            sys.executable,
+            "-c",
+            reporter,
+            *names,
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -53,17 +62,38 @@ def _child_environment(env_file: Path, *names: str) -> dict[str, str | None]:
     return json.loads(completed.stdout)
 
 
-def test_a_value_with_every_shell_significant_character_round_trips_into_the_child(tmp_path: Path) -> None:
-    env_file = _write_env(_secrets_dir(tmp_path), f"API_KEY={_quote(_AWKWARD_VALUE)}\nOTHER='plain'\n")
-    assert _child_environment(env_file, "API_KEY", "OTHER") == {"API_KEY": _AWKWARD_VALUE, "OTHER": "plain"}
+def test_a_value_with_every_shell_significant_character_round_trips_into_the_child(
+    tmp_path: Path,
+) -> None:
+    env_file = _write_env(
+        _secrets_dir(tmp_path), f"API_KEY={_quote(_AWKWARD_VALUE)}\nOTHER='plain'\n"
+    )
+    assert _child_environment(env_file, "API_KEY", "OTHER") == {
+        "API_KEY": _AWKWARD_VALUE,
+        "OTHER": "plain",
+    }
 
 
-def test_the_child_keeps_the_parent_environment_and_the_file_wins_on_a_clash(tmp_path: Path) -> None:
+def test_the_child_keeps_the_parent_environment_and_the_file_wins_on_a_clash(
+    tmp_path: Path,
+) -> None:
     env_file = _write_env(_secrets_dir(tmp_path), "WITH_SECRETS_CLASH='from-file'\n")
-    environment = {**os.environ, "WITH_SECRETS_CLASH": "from-parent", "WITH_SECRETS_KEEP": "kept"}
+    environment = {
+        **os.environ,
+        "WITH_SECRETS_CLASH": "from-parent",
+        "WITH_SECRETS_KEEP": "kept",
+    }
     reporter = "import json, os; print(json.dumps([os.environ['WITH_SECRETS_CLASH'], os.environ['WITH_SECRETS_KEEP']]))"
     completed = subprocess.run(
-        [sys.executable, str(_SCRIPT), str(env_file), "--", sys.executable, "-c", reporter],
+        [
+            sys.executable,
+            str(_SCRIPT),
+            str(env_file),
+            "--",
+            sys.executable,
+            "-c",
+            reporter,
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -77,7 +107,15 @@ def test_the_child_keeps_the_parent_environment_and_the_file_wins_on_a_clash(tmp
 def test_the_command_exit_status_is_the_wrappers(tmp_path: Path) -> None:
     env_file = _write_env(_secrets_dir(tmp_path), "X='1'\n")
     completed = subprocess.run(
-        [sys.executable, str(_SCRIPT), str(env_file), "--", sys.executable, "-c", "raise SystemExit(37)"],
+        [
+            sys.executable,
+            str(_SCRIPT),
+            str(env_file),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(37)",
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -97,17 +135,29 @@ def test_the_command_exit_status_is_the_wrappers(tmp_path: Path) -> None:
         ("", None),
     ],
 )
-def test_hand_written_and_generated_lines_parse(line: str, expected: tuple[str, str] | None) -> None:
+def test_hand_written_and_generated_lines_parse(
+    line: str, expected: tuple[str, str] | None
+) -> None:
     expected_variables = {} if expected is None else {expected[0]: expected[1]}
     assert with_secrets.parse_env_file(line + "\n") == expected_variables
 
 
 def test_a_single_quoted_value_may_span_lines_and_the_next_line_still_parses() -> None:
-    assert with_secrets.parse_env_file("A='one\ntwo'\nB='3'\n") == {"A": "one\ntwo", "B": "3"}
+    assert with_secrets.parse_env_file("A='one\ntwo'\nB='3'\n") == {
+        "A": "one\ntwo",
+        "B": "3",
+    }
 
 
 @pytest.mark.parametrize(
-    "line", ["not an assignment", "1BAD='x'", "NAME='unterminated", "A-B='x'", "NAME='a' trailing"]
+    "line",
+    [
+        "not an assignment",
+        "1BAD='x'",
+        "NAME='unterminated",
+        "A-B='x'",
+        "NAME='a' trailing",
+    ],
 )
 def test_a_malformed_line_is_refused_rather_than_skipped(line: str) -> None:
     with pytest.raises(with_secrets.WithSecretsError, match="line 1"):
@@ -120,7 +170,9 @@ def test_a_later_line_wins_over_an_earlier_one() -> None:
 
 def test_a_group_readable_file_is_refused(tmp_path: Path) -> None:
     env_file = _write_env(_secrets_dir(tmp_path), "X='1'\n", mode=0o640)
-    with pytest.raises(with_secrets.WithSecretsError, match="readable by more than its owner"):
+    with pytest.raises(
+        with_secrets.WithSecretsError, match="readable by more than its owner"
+    ):
         with_secrets.load_env_file(env_file)
 
 
@@ -142,7 +194,15 @@ def test_a_refusal_exits_two_and_runs_nothing(tmp_path: Path) -> None:
     env_file = _write_env(_secrets_dir(tmp_path), "X='1'\n", mode=0o644)
     marker = tmp_path / "ran"
     completed = subprocess.run(
-        [sys.executable, str(_SCRIPT), str(env_file), "--", sys.executable, "-c", f"open({str(marker)!r}, 'w')"],
+        [
+            sys.executable,
+            str(_SCRIPT),
+            str(env_file),
+            "--",
+            sys.executable,
+            "-c",
+            f"open({str(marker)!r}, 'w')",
+        ],
         capture_output=True,
         text=True,
         timeout=30,

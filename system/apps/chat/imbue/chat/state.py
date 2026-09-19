@@ -22,6 +22,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -64,6 +65,8 @@ class ChatAppState(MutableModel):
     auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
+    # The secret requests agents file and the env files their answers are written to.
+    secret_requests: SecretRequestStore
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not

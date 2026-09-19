@@ -37,6 +37,7 @@ from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
+from imbue.chat import secret_requests_endpoints
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import discover_agents
@@ -466,6 +467,40 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     if outcome is SendOutcome.OK:
         agent_manager.note_agent_alive(agent_info.id)
     return outcome
+
+
+def _lookup_chat_for_secret_request(chat_id: str) -> secret_requests_endpoints.ChatLookup:
+    """Whether a chat id names a chat, in the same terms the message route answers: not ready until the agent list is known."""
+    if not get_state().agent_manager.is_agent_list_known():
+        return secret_requests_endpoints.ChatLookup.NOT_READY
+    if _find_active_agent(chat_id) is None:
+        return secret_requests_endpoints.ChatLookup.UNKNOWN
+    return secret_requests_endpoints.ChatLookup.KNOWN
+
+
+def _deliver_secret_notice(chat_id: str, text: str) -> None:
+    """Put a secret card's resolution notice into the chat exactly as the message route would: held while the chat converges, else delivered.
+
+    Raises NoticeDeliveryError when the chat's agent could not take it.
+    """
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
+    message_id = uuid4().hex
+    if agent_manager.hold_send(ChatId(chat_id), message_id, text, HeldSendOrigin.SCRIPT) is not None:
+        agent_manager.record_message_sent(ChatId(chat_id))
+        return
+    agent_info = _find_active_agent(chat_id)
+    if agent_info is None:
+        raise secret_requests_endpoints.NoticeDeliveryError(f"Chat '{chat_id}' not found")
+    try:
+        outcome = _deliver_message(state, agent_info, text, message_id)
+    except SendFailedError as send_failure:
+        raise secret_requests_endpoints.NoticeDeliveryError(send_failure.detail) from send_failure
+    if outcome is not SendOutcome.OK:
+        raise secret_requests_endpoints.NoticeDeliveryError(
+            f"Agent '{agent_info.name}' did not take the message ({outcome.name})"
+        )
+    agent_manager.record_message_sent(ChatId(chat_id))
 
 
 def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
@@ -1675,6 +1710,7 @@ def create_application(state: ChatAppState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    secret_requests_endpoints.register_routes(application, _lookup_chat_for_secret_request, _deliver_secret_notice)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

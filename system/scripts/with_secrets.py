@@ -30,8 +30,7 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 SECRETS_DIRECTORY_PARTS = ("data", ".secrets")
@@ -99,8 +98,12 @@ class _EnvFileScanner:
         while not self.is_done():
             line_end = self.text.find("\n", self.position)
             line_end = len(self.text) if line_end < 0 else line_end
-            if self.text[self.position : line_end].strip() and not self.text[self.position : line_end].lstrip().startswith("#"):
-                self.position += len(self.text[self.position:line_end]) - len(self.text[self.position:line_end].lstrip())
+            if self.text[self.position : line_end].strip() and not self.text[
+                self.position : line_end
+            ].lstrip().startswith("#"):
+                self.position += len(self.text[self.position : line_end]) - len(
+                    self.text[self.position : line_end].lstrip()
+                )
                 return
             self.position = line_end + 1
 
@@ -123,7 +126,9 @@ class _EnvFileScanner:
         while self.peek() == "'":
             end = self.text.find("'", self.position + 1)
             if end < 0:
-                raise WithSecretsError("a single-quoted value is missing its closing quote")
+                raise WithSecretsError(
+                    "a single-quoted value is missing its closing quote"
+                )
             pieces.append(self.text[self.position + 1 : end])
             self.position = end + 1
             if self.text.startswith("\\'", self.position):
@@ -138,9 +143,13 @@ class _EnvFileScanner:
         self.position += 1
         while True:
             if self.is_done():
-                raise WithSecretsError("a double-quoted value is missing its closing quote")
+                raise WithSecretsError(
+                    "a double-quoted value is missing its closing quote"
+                )
             character = self.peek()
-            if character == "\\" and self.text[self.position + 1 : self.position + 2] in ('"', "\\"):
+            if character == "\\" and self.text[
+                self.position + 1 : self.position + 2
+            ] in ('"', "\\"):
                 pieces.append(self.text[self.position + 1])
                 self.position += 2
                 continue

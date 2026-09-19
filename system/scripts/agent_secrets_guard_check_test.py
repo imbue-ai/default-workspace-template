@@ -14,12 +14,16 @@ import pytest
 
 from conftest import _load_script_module
 
-checker = _load_script_module("agent_secrets_guard_check_for_tests", "agent_secrets_guard_check.py")
+checker = _load_script_module(
+    "agent_secrets_guard_check_for_tests", "agent_secrets_guard_check.py"
+)
 
 _SCRIPTS = Path(__file__).resolve().parent
 _GUARD = _SCRIPTS / "agent_secrets_guard.sh"
 
-_WRAPPER = "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- svc --port 8090"
+_WRAPPER = (
+    "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- svc --port 8090"
+)
 _REQUEST = (
     "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
     "--file svc --var SVC_TOKEN --rationale 'I need the key from data/.secrets/svc.env to call the API'"
@@ -92,15 +96,21 @@ def _bash(command: str) -> dict[str, object]:
 
 def test_allowed_commands_pass() -> None:
     for command in _ALLOWED_COMMANDS:
-        assert checker.classify_command(command) is None, f"should be allowed: {command!r}"
+        assert checker.classify_command(command) is None, (
+            f"should be allowed: {command!r}"
+        )
 
 
 def test_blocked_commands_are_refused() -> None:
     for command in _BLOCKED_COMMANDS:
-        assert checker.classify_command(command) is not None, f"should be blocked: {command!r}"
+        assert checker.classify_command(command) is not None, (
+            f"should be blocked: {command!r}"
+        )
 
 
-def test_the_wrapper_blocks_through_the_hook_with_the_reason_and_without_the_command() -> None:
+def test_the_wrapper_blocks_through_the_hook_with_the_reason_and_without_the_command() -> (
+    None
+):
     completed = _run_guard(_bash("cat data/.secrets/svc.env"))
     assert completed.returncode == 2
     assert "with_secrets.py" in completed.stderr
@@ -113,28 +123,65 @@ def test_the_wrapper_allows_the_supervisord_shape_through_the_hook() -> None:
 
 
 @pytest.mark.parametrize("tool_name", ["", "bash"])
-def test_a_shell_call_under_another_harnesss_tool_name_is_judged_by_its_command(tool_name: str) -> None:
-    assert _run_guard({"tool_name": tool_name, "tool_input": {"command": "cat data/.secrets/svc.env"}}).returncode == 2
+def test_a_shell_call_under_another_harnesss_tool_name_is_judged_by_its_command(
+    tool_name: str,
+) -> None:
+    assert (
+        _run_guard(
+            {
+                "tool_name": tool_name,
+                "tool_input": {"command": "cat data/.secrets/svc.env"},
+            }
+        ).returncode
+        == 2
+    )
 
 
 @pytest.mark.parametrize(
     "payload",
     [
         {"tool_name": "Read", "tool_input": {"file_path": "data/.secrets/svc.env"}},
-        {"tool_name": "Read", "tool_input": {"file_path": "/home/user/workspace/data/.secrets/svc.env"}},
-        {"tool_name": "Edit", "tool_input": {"file_path": "data/.secrets/svc.env", "old_string": "a", "new_string": "b"}},
-        {"tool_name": "Write", "tool_input": {"file_path": "data/.secrets/new.env", "content": "X='1'"}},
-        {"tool_name": "Grep", "tool_input": {"pattern": "TOKEN", "path": "data/.secrets"}},
+        {
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/home/user/workspace/data/.secrets/svc.env"},
+        },
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "data/.secrets/svc.env",
+                "old_string": "a",
+                "new_string": "b",
+            },
+        },
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": "data/.secrets/new.env", "content": "X='1'"},
+        },
+        {
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "TOKEN", "path": "data/.secrets"},
+        },
         {"tool_name": "Glob", "tool_input": {"pattern": "data/.secrets/*.env"}},
-        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "data/.secrets/x.ipynb"}},
+        {
+            "tool_name": "NotebookEdit",
+            "tool_input": {"notebook_path": "data/.secrets/x.ipynb"},
+        },
         # pi's spellings.
         {"tool_name": "read", "tool_input": {"path": "data/.secrets/svc.env"}},
-        {"tool_name": "write", "tool_input": {"path": "data/.secrets/svc.env", "content": "X"}},
-        {"tool_name": "find", "tool_input": {"pattern": "*.env", "path": "data/.secrets"}},
+        {
+            "tool_name": "write",
+            "tool_input": {"path": "data/.secrets/svc.env", "content": "X"},
+        },
+        {
+            "tool_name": "find",
+            "tool_input": {"pattern": "*.env", "path": "data/.secrets"},
+        },
         # codex edits through a patch whose file lines name the target.
         {
             "tool_name": "apply_patch",
-            "tool_input": {"command": "*** Begin Patch\n*** Update File: data/.secrets/svc.env\n+X='1'\n*** End Patch"},
+            "tool_input": {
+                "command": "*** Begin Patch\n*** Update File: data/.secrets/svc.env\n+X='1'\n*** End Patch"
+            },
         },
     ],
 )
@@ -150,8 +197,16 @@ def test_file_tools_on_a_secret_file_are_refused(payload: dict[str, object]) -> 
         {"tool_name": "Read", "tool_input": {"file_path": "data/.secrets/README.md"}},
         {"tool_name": "Read", "tool_input": {"file_path": "data/.state/apps.toml"}},
         # Grep's pattern is a regex, not a path: searching the code for the directory name is fine.
-        {"tool_name": "Grep", "tool_input": {"pattern": "data/.secrets", "path": "system/"}},
-        {"tool_name": "apply_patch", "tool_input": {"command": "*** Begin Patch\n*** Update File: README.md\n+see data/.secrets/\n*** End Patch"}},
+        {
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "data/.secrets", "path": "system/"},
+        },
+        {
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": "*** Begin Patch\n*** Update File: README.md\n+see data/.secrets/\n*** End Patch"
+            },
+        },
         # pi's `ls` is the shell's `ls`.
         {"tool_name": "ls", "tool_input": {"path": "data/.secrets"}},
     ],

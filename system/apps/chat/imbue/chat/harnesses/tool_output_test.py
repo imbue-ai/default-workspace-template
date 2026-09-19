@@ -6,9 +6,15 @@ between them. The resident error snippet is shared the same way, so its rule (an
 hook-block exception to it) is tested here too.
 """
 
+from imbue.chat.harnesses.events import DisplayKind
+from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
+from imbue.chat.harnesses.tool_output import find_permission_request
+from imbue.chat.harnesses.tool_output import find_secret_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
+from imbue.chat.harnesses.tool_output import is_secret_request_call
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 
 # --- the two tk rules, and the asymmetry between them -------------------------------------
 # Both used to be reimplemented per harness (four copies of the verb set, the parser import
@@ -66,3 +72,42 @@ def test_error_snippet_is_empty_for_a_call_a_hook_refused() -> None:
 
 def test_error_snippet_keeps_an_ordinary_error_that_merely_mentions_a_hook() -> None:
     assert error_snippet("bash: hook error: not a real hook block") == "bash: hook error: not a real hook block"
+
+
+# --- the secret request: recognised from the input, lifted from the result ----------------
+
+_SECRET_REQUEST_CALL = (
+    "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+    "--file svc --var SVC_TOKEN --rationale 'to call the widget API'"
+)
+_SECRET_ECHO = (
+    '{"request_id": "secret-0123456789abcdef0123456789abcdef", "chat_id": "agent-1", "file": "svc", '
+    '"variables": ["SVC_TOKEN"], "rationale": "to call the widget API", "status": "pending", '
+    '"existing_variables": [], "overwrites": []}'
+)
+_PERMISSION_ECHO = '{"request_id": "req-1", "payload": {"scope": "slack-api"}, "rationale": "read it"}'
+
+
+def test_a_secret_request_call_is_recognised_from_its_input_and_renders_as_the_card() -> None:
+    assert is_secret_request_call(_SECRET_REQUEST_CALL)
+    assert is_secret_request_call("uv run " + _SECRET_REQUEST_CALL.removeprefix("python3 "))
+    assert classify_tool_call_display(is_pure_tk=False, raw_input=_SECRET_REQUEST_CALL) is DisplayKind.SECRET_REQUEST
+    # A mention that is not the script (another file with a longer name) is not a request.
+    assert not is_secret_request_call("cat request_secret.pyc")
+    assert classify_tool_call_display(is_pure_tk=False, raw_input="ls data/.secrets") is None
+
+
+def test_the_two_echoed_shapes_are_told_apart_and_stamped_side_by_side() -> None:
+    filler = "x" * 3000
+    assert find_secret_request(filler + "\n" + _SECRET_ECHO) is not None
+    assert find_secret_request(_PERMISSION_ECHO) is None
+    assert find_permission_request(_SECRET_ECHO) is None
+    event: dict[str, object] = {}
+    stamp_echoed_requests(event, _SECRET_ECHO)
+    assert event == {"secret_request": {**__import__("json").loads(_SECRET_ECHO)}}
+    other: dict[str, object] = {}
+    stamp_echoed_requests(other, _PERMISSION_ECHO)
+    assert set(other) == {"permission_request"}
+    untouched: dict[str, object] = {}
+    stamp_echoed_requests(untouched, "plain output with a {brace} and no request")
+    assert untouched == {}

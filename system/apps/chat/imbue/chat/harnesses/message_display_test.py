@@ -12,6 +12,7 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import classify_user_message
+from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 
 
@@ -275,3 +276,26 @@ def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() ->
     decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
+
+
+def test_secret_resolution_notices_classify_by_their_own_tag_and_carry_the_verdict_and_id() -> None:
+    request_id = "secret-0123456789abcdef0123456789abcdef"
+    stored = format_secret_resolution_notice("stored", request_id, "data/.secrets/svc.env", ("A", "B"), None)
+    declined = format_secret_resolution_notice("declined", request_id, "data/.secrets/svc.env", ("A",), "not now")
+    superseded = format_secret_resolution_notice("superseded", request_id, "data/.secrets/svc.env", ("A",), None)
+    for notice, verdict in ((stored, "stored"), (declined, "declined"), (superseded, "superseded")):
+        decision = classify_user_message(notice)
+        assert decision is not None, notice
+        assert decision.display is DisplayKind.SECRET_RESOLUTION
+        assert decision.resolution == verdict
+        assert decision.request_id == request_id
+    # The notice names the file and the variables and ends with the note; the latchkey
+    # detector does not claim it.
+    assert stored.startswith("Secret stored: data/.secrets/svc.env (A, B)")
+    assert declined.endswith("not now")
+    latchkey = classify_user_message("Your request was granted (resolution: granted, request_id: r1)")
+    assert latchkey is not None and latchkey.display is DisplayKind.PERMISSION_RESOLUTION
+
+
+def test_a_human_message_mentioning_a_secret_file_is_not_a_resolution() -> None:
+    assert classify_user_message("please put it in data/.secrets/svc.env (secret: stored)") is None

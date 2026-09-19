@@ -43,8 +43,8 @@ SPECIAL_EVENT_TYPE: Final[str] = "special"
 # a payload is stamped at parse time instead: the labels (derived from the FULL input),
 # ``input_chars`` / ``output_chars`` (so the frontend knows whether there is anything to
 # fetch), ``error_snippet`` (a failed call stays glanceable without a fetch), ``tk_stamp``
-# and ``tk_command`` (the step progress view's facts), ``permission_request`` (the card's
-# structured object), and ``has_thinking``.
+# and ``tk_command`` (the step progress view's facts), ``permission_request`` and
+# ``secret_request`` (the two cards' structured objects), and ``has_thinking``.
 MAX_ERROR_SNIPPET_LENGTH: Final[int] = 200
 # Ceiling on the resident tk stamp. tk decoration is a handful of short lines per call;
 # the cap only guards against pathological output that happens to be full of step-id
@@ -75,8 +75,8 @@ class DisplayKind(StrEnum):
     ``message-kinds.ts``) with zero sniffing of harness data.
 
     Carried in the optional ``display`` field of ``user_message`` (with ``display_label`` /
-    ``display_body`` for the chip title / unwrapped body) and ``tool_call`` (``HIDDEN`` and
-    ``PERMISSION_REQUEST`` only). Absent = render normally. A sibling of
+    ``display_body`` for the chip title / unwrapped body) and ``tool_call`` (``HIDDEN``,
+    ``PERMISSION_REQUEST`` and ``SECRET_REQUEST`` only). Absent = render normally. A sibling of
     :class:`SpecialEventKind`, deliberately not the same enum: ``special`` says an event is
     not a message at all (and renderers ignore it), while ``display`` says how a message
     renders -- a hidden message is still a message and still occupies its ``/events`` slot.
@@ -93,6 +93,11 @@ class DisplayKind(StrEnum):
     # user_message only: a latchkey verdict -- no row; the ``resolution`` field is written
     # onto the earlier permission card.
     PERMISSION_RESOLUTION = "permission_resolution"
+    # tool_call only: render the secret card (password inputs) instead of a tool row.
+    SECRET_REQUEST = "secret_request"
+    # user_message only: the chat app's stored / declined / superseded notice -- no row; the
+    # ``resolution`` field is written onto the earlier secret card.
+    SECRET_RESOLUTION = "secret_resolution"
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
 

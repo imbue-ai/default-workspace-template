@@ -69,9 +69,9 @@ from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
-from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 
 logger = _loguru_logger
@@ -605,9 +605,8 @@ def parse_lines(
         event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
         raw_output = _output_text(payload.get("output"))
         # The structured facts lifted from the full output, which itself stays off the
-        # event (the payload-free wire contract): the permission-request object the card
-        # renders from, the tk stamp the step view reads, and the error snippet.
-        permission_request = find_permission_request(raw_output)
+        # event (the payload-free wire contract): the request objects the permission and
+        # secret cards render from, the tk stamp the step view reads, and the error snippet.
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
@@ -621,8 +620,7 @@ def parse_lines(
             "is_error": is_error,
             "message_uuid": event_id,
         }
-        if permission_request is not None:
-            event["permission_request"] = permission_request.details
+        stamp_echoed_requests(event, raw_output)
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
