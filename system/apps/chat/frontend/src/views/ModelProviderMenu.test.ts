@@ -144,6 +144,16 @@ function click(selector: string): void {
   render();
 }
 
+/** Take the pointer off the open submenu and wait out the menu's leave grace. Fake timers only:
+ *  the grace is the shared menu's own constant, so this overshoots it rather than restating it. */
+function leaveSubmenu(): void {
+  const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+  if (submenu === null) throw new Error("no submenu to leave");
+  submenu.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+  vi.advanceTimersByTime(1000);
+  render();
+}
+
 const OPUS = {
   id: "opus",
   label: "Opus",
@@ -707,6 +717,31 @@ describe("the combo card", () => {
     fastModeState.state = { mode: "on", is_switched: false };
     render();
     expect(document.querySelector(".fast-limit-input")).toBeNull();
+  });
+
+  it("holds the fast submenu open while a limit is half typed, and lets it go once it is filed", () => {
+    // What hover opened hover dismisses -- except over a number the user is part way through,
+    // which a pointer drifting off the menu must not take down with it.
+    vi.useFakeTimers();
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const limit = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    limit.value = "12";
+    limit.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+
+    // Well past the menu's leave grace, which is the shared menu's own constant.
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+
+    // Filed, so there is nothing left to lose and the drift closes it again.
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    render();
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("makes the chat's mode the one new chats start in, and says when it already is", () => {
