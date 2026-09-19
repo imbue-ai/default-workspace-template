@@ -50,9 +50,9 @@ class ShortcutMode(LowerCaseStrEnum):
 
 
 class ActionParam(FrozenModel):
-    """One documented key of an action's create body."""
+    """One documented parameter: a key of an action's create body, or a query parameter of a launch path."""
 
-    name: NonEmptyStr = Field(description="The key in the create body's params")
+    name: NonEmptyStr = Field(description="The key in the create body's params, or the query parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
     required: bool = Field(default=False, description="Whether the create refuses a body without it")
 
