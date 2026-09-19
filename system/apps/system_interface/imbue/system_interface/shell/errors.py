@@ -117,3 +117,7 @@ class StalePlacementsSaveError(ShellError, ValueError):
 
 class WallpaperNotFoundError(ShellError, LookupError):
     """No bundled or file wallpaper has the given kind and name."""
+
+
+class GridSearchExhaustedError(ShellError, AssertionError):
+    """The unbounded nearest-free-cell search ran out of rings without finding a free cell, which cannot happen."""
