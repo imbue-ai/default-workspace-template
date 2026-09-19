@@ -2,16 +2,22 @@ import lzma
 
 import pytest
 
+from imbue.apt_mirror.data_types import InstalledPackage
 from imbue.apt_mirror.data_types import PackagesIndexEntry
 from imbue.apt_mirror.data_types import ReleaseFileEntry
+from imbue.apt_mirror.data_types import SnapshotPackageMismatch
 from imbue.apt_mirror.errors import AptMirrorInvalidTimestampError
+from imbue.apt_mirror.errors import AptMirrorTemplateBaseImageError
 from imbue.apt_mirror.errors import AptMirrorUnsafePathError
 from imbue.apt_mirror.parsing import artifact_object_key
 from imbue.apt_mirror.parsing import artifact_url
 from imbue.apt_mirror.parsing import by_hash_path_for_entry
 from imbue.apt_mirror.parsing import filter_index_entries_for_architectures
 from imbue.apt_mirror.parsing import filter_index_entries_for_components
+from imbue.apt_mirror.parsing import find_packages_newer_than_or_absent_from_index
 from imbue.apt_mirror.parsing import package_file_object_key
+from imbue.apt_mirror.parsing import parse_dockerfile_base_image
+from imbue.apt_mirror.parsing import parse_dpkg_status_installed_packages
 from imbue.apt_mirror.parsing import parse_packages_index_entries
 from imbue.apt_mirror.parsing import parse_release_sha256_entries
 from imbue.apt_mirror.parsing import select_newest_entry
@@ -144,3 +150,116 @@ def test_validate_snapshot_timestamp_enforces_format() -> None:
     for bad_timestamp in ("20260725", "latest", "20260725T000000", "2026-07-25T00:00:00Z"):
         with pytest.raises(AptMirrorInvalidTimestampError):
             validate_snapshot_timestamp(bad_timestamp)
+
+
+def test_parse_dpkg_status_keeps_only_packages_whose_version_dpkg_holds() -> None:
+    status_text = (
+        "Package: libc6\n"
+        "Status: install ok installed\n"
+        "Version: 2.41-12+deb13u3\n"
+        "Architecture: amd64\n"
+        "\n"
+        "Package: old-config\n"
+        "Status: deinstall ok config-files\n"
+        "Version: 1.0\n"
+        "\n"
+        "Package: half-done\n"
+        "Status: install ok half-installed\n"
+        "Version: 2.0\n"
+        "\n"
+        "Package: only-unpacked\n"
+        "Status: install ok unpacked\n"
+        "Version: 2.5\n"
+        "\n"
+        "Package: perl-base\n"
+        "Status: install ok installed\n"
+        "Version: 5.40.1-6\n"
+        "\n"
+        "Package: held-lib\n"
+        "Status: hold ok installed\n"
+        "Version: 3.0\n"
+        "\n"
+        "Package: man-db\n"
+        "Status: install ok triggers-pending\n"
+        "Version: 2.13.0-1\n"
+        "\n"
+        "Package: libc-bin\n"
+        "Status: install ok triggers-awaited\n"
+        "Version: 2.41-12+deb13u3\n"
+    )
+
+    installed = parse_dpkg_status_installed_packages(status_text)
+
+    assert installed == [
+        InstalledPackage(name="libc6", version="2.41-12+deb13u3"),
+        InstalledPackage(name="perl-base", version="5.40.1-6"),
+        InstalledPackage(name="held-lib", version="3.0"),
+        InstalledPackage(name="man-db", version="2.13.0-1"),
+        InstalledPackage(name="libc-bin", version="2.41-12+deb13u3"),
+    ]
+
+
+def test_parse_dpkg_status_of_an_empty_file_is_empty() -> None:
+    assert parse_dpkg_status_installed_packages("") == []
+
+
+def test_find_packages_newer_than_or_absent_from_index_flags_only_newer_or_unlisted_installs() -> None:
+    # libc6 is listed by both trixie and trixie-security: the newest listing wins under dpkg ordering.
+    index_entries = [
+        PackagesIndexEntry(package_name="libc6", version="2.41-12", filename="a"),
+        PackagesIndexEntry(package_name="libc6", version="2.41-12+deb13u3", filename="b"),
+        PackagesIndexEntry(package_name="perl-base", version="5.40.1-6", filename="c"),
+        PackagesIndexEntry(package_name="tzdata", version="2025b-1", filename="d"),
+        PackagesIndexEntry(package_name="tzdata", version="2025b-1~deb13u1", filename="e"),
+    ]
+    installed = [
+        InstalledPackage(name="libc6", version="2.41-13"),
+        InstalledPackage(name="perl-base", version="5.40.1-5"),
+        InstalledPackage(name="tzdata", version="2025b-1"),
+        InstalledPackage(name="removed-pkg", version="1.0"),
+    ]
+
+    mismatches = find_packages_newer_than_or_absent_from_index(installed, index_entries)
+
+    assert mismatches == [
+        SnapshotPackageMismatch(name="libc6", installed_version="2.41-13", newest_index_version="2.41-12+deb13u3"),
+        SnapshotPackageMismatch(name="removed-pkg", installed_version="1.0", newest_index_version=None),
+    ]
+    assert [mismatch.text for mismatch in mismatches] == [
+        "libc6=2.41-13 (index lists 2.41-12+deb13u3)",
+        "removed-pkg=1.0 (index lists nothing)",
+    ]
+
+
+_PINNED_BASE_IMAGE_REF = (
+    "python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
+)
+
+
+@pytest.mark.parametrize(
+    "from_line",
+    [
+        f"from {_PINNED_BASE_IMAGE_REF} AS base",
+        f"FROM --platform=$BUILDPLATFORM {_PINNED_BASE_IMAGE_REF}",
+        f"FROM\t{_PINNED_BASE_IMAGE_REF}",
+    ],
+)
+def test_parse_dockerfile_base_image_returns_the_first_from_reference(from_line: str) -> None:
+    dockerfile_text = f"# FROM in a comment is ignored\nARG X=1\n{from_line}\nFROM alpine:3.20\n"
+
+    assert parse_dockerfile_base_image(dockerfile_text) == _PINNED_BASE_IMAGE_REF
+
+
+@pytest.mark.parametrize(
+    ("dockerfile_text", "message"),
+    [
+        ("FROM python:3.12-slim-trixie\n", "not digest-pinned"),
+        ("FROM --platform=linux/amd64 python:3.12-slim-trixie\n", "not digest-pinned"),
+        ("FROM python:3.12-slim-trixie@sha256:57cd7c3a\n", "not digest-pinned"),
+        ("FROM python:3.12-slim-trixie@sha256:${BASE_DIGEST}\n", "not digest-pinned"),
+        ("RUN true\n", "no FROM line"),
+    ],
+)
+def test_parse_dockerfile_base_image_rejects_floating_or_missing_bases(dockerfile_text: str, message: str) -> None:
+    with pytest.raises(AptMirrorTemplateBaseImageError, match=message):
+        parse_dockerfile_base_image(dockerfile_text)
