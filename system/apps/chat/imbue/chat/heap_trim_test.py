@@ -1,33 +1,31 @@
 import threading
-import time
 
 from imbue.chat.heap_trim import HeapTrimmer
 from imbue.chat.heap_trim import resolve_malloc_trim
+from imbue.mngr.utils.polling import poll_until
+
+
+def _heap_trim_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name == "heap-trim"]
 
 
 def test_the_trimmer_keeps_trimming_on_its_own_thread() -> None:
     """The point of the trimmer is the repeat: one trim at startup would return the
     heap once and never again."""
-    calls: list[float] = []
-    trimmer = HeapTrimmer.build(trim=lambda: calls.append(time.monotonic()) or 0, interval_seconds=0.01)
+    calls: list[int] = []
+    trimmer = HeapTrimmer.build(trim=lambda: calls.append(1) or 0, interval_seconds=0.01)
 
-    threads_before = set(threading.enumerate())
     trimmer.start()
     try:
-        deadline = time.monotonic() + 5.0
-        while len(calls) < 3 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        new_threads = set(threading.enumerate()) - threads_before
-        assert len(new_threads) == 1
-        assert next(iter(new_threads)).name == "heap-trim"
+        assert poll_until(lambda: len(calls) >= 3, timeout=5.0, poll_interval=0.01), (
+            f"expected repeated trims, got {len(calls)}"
+        )
+        assert len(_heap_trim_threads()) == 1
     finally:
         trimmer.stop()
 
-    assert len(calls) >= 3
-    # Stopped means stopped: no further calls after stop() returns.
-    settled = len(calls)
-    time.sleep(0.1)
-    assert len(calls) == settled
+    # ``stop`` joins, so the thread that could call again is gone by the time it returns.
+    assert _heap_trim_threads() == []
 
 
 def test_a_platform_without_malloc_trim_starts_no_thread() -> None:
@@ -35,10 +33,9 @@ def test_a_platform_without_malloc_trim_starts_no_thread() -> None:
     fail at startup."""
     trimmer = HeapTrimmer.build(interval_seconds=0.01, resolve_trim=lambda: None)
 
-    threads_before = set(threading.enumerate())
     trimmer.start()
     try:
-        assert set(threading.enumerate()) == threads_before
+        assert _heap_trim_threads() == []
         trimmer.trim_once()
     finally:
         trimmer.stop()
