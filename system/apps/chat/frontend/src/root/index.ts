@@ -152,6 +152,11 @@ const ChatRoot: m.Component = {
                   pool.setRootShown(isRootShown);
                   pool.show(selectedChatId);
                 },
+                // The frames go with the container (the list alone on a phone); a new pool
+                // is made when it comes back.
+                onremove: () => {
+                  pool = null;
+                },
                 onbeforeupdate: () => false,
               }),
               selectedChatId === null
