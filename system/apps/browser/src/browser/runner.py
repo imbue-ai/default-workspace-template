@@ -53,7 +53,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from app_instances.blueprint import build_instances_blueprint
+from app_instances.blueprint import HTTP_FOUND, build_instances_blueprint
 from app_instances.errors import InvalidInstanceValueError
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
 from app_instances.primitives import AbsoluteHttpUrl
@@ -288,7 +288,7 @@ def new_browser() -> Response:
     started = _start_browser(None, request.args.get(START_URL_PARAM))
     if isinstance(started, Response):
         return started
-    return redirect(str(instance_url_for_browser(BrowserName(started.browser_id))), code=302)
+    return redirect(str(instance_url_for_browser(BrowserName(started.browser_id))), code=HTTP_FOUND)
 
 
 def health() -> Response:

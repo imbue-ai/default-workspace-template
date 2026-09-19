@@ -37,6 +37,7 @@ BLUEPRINT_NAME: Final[str] = "app_instances"
 HTTP_OK: Final[int] = 200
 HTTP_CREATED: Final[int] = 201
 HTTP_NO_CONTENT: Final[int] = 204
+HTTP_FOUND: Final[int] = 302
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_CONFLICT: Final[int] = 409
