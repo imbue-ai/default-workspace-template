@@ -24,7 +24,7 @@
 #   - Overlay via `rsync -a "$STAGE/" "$REPO/"` (root-to-root), NEVER
 #     `cp -a "$STAGE/apps" "$REPO/apps"` (nests into apps/apps).
 #   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate
-#     -- the authoritative blocker. It runs the sibling scan_secrets.sh, which
+# the authoritative blocker. It runs the sibling scan_secrets.sh, which
 #     requires BOTH scanners (betterleaks with the sibling betterleaks.toml
 #     config, kingfisher with --no-validate) and fails on any finding, any
 #     scanner error, or any missing scanner binary. There is NO fallback
@@ -67,7 +67,7 @@ TEMPLATE_VERSION="v1"
 # is invoked by a path that may be relative to the caller's cwd.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# --- argument parsing --------------------------------------------------------
+# argument parsing
 
 BASE_REF=""
 SLUG=""
@@ -140,7 +140,7 @@ fi
 REPO="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 cd "$REPO"
 
-# --- refuse to run anywhere but a throwaway linked worktree ------------------
+# refuse to run anywhere but a throwaway linked worktree
 #
 # Step 2 resets the tree to BASE_REF and runs `git clean -fdxq`, which deletes
 # untracked AND gitignored files. In a live mind that is data/, .mngr/, the
@@ -191,7 +191,7 @@ THUMBNAIL="template.svg"
 # placeholder thumbnail.
 REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
 
-# --- 0. validate that BASE_REF is a real, bootable default workspace template tree ---------
+# 0. validate that BASE_REF is a real, bootable default workspace template tree
 
 # Guard against a wrong --base-ref: minds assembled via subtree merges can have
 # several parallel root commits, and a naive fallback can land on a near-empty
@@ -235,9 +235,9 @@ while IFS=' ' read -r marker_sha marker_subject; do
     break
 done < <(git log --first-parent --format='%H %s' HEAD)
 
-# --- 1. stage the selected paths BEFORE the reset ----------------------------
+# 1. stage the selected paths BEFORE the reset
 #
-# --include out of this checkout, --data-include out of the live workspace (see
+# include out of this checkout, --data-include out of the live workspace (see
 # the data_source comment below).
 
 # rsync -R preserves each relative path so it lands at the same location under
@@ -334,7 +334,7 @@ done
 # everything else. The predecessor's address survives as a [[lineage]] entry
 # (staged above), which is what makes the override non-destructive.
 
-# --- 2. clean base = the DEFAULT_WORKSPACE_TEMPLATE version the mind was based on --------------------
+# 2. clean base = the DEFAULT_WORKSPACE_TEMPLATE version the mind was based on
 
 # read-tree -u --reset makes the index+worktree match BASE_REF, dropping
 # tracked-but-not-in-base files. clean -fdxq then drops untracked AND gitignored
@@ -344,7 +344,7 @@ done
 git read-tree -u --reset "$BASE_REF"
 git clean -fdxq
 
-# --- 3. overlay the staged paths onto the clean base -------------------------
+# 3. overlay the staged paths onto the clean base
 
 # Root-to-root contents merge. The trailing slash on the source is load-bearing:
 # it merges the stage's CONTENTS into $REPO, so a path like apps/foo lands at
@@ -358,9 +358,9 @@ if [ -f "$REPO/.mcp.json" ]; then
     mv "$REPO/.mcp.json" "$REPO/.mcp.template.json"
 fi
 
-# --- 4. (carry-forward already handled in step 1's staging) ------------------
+# 4. (carry-forward already handled in step 1's staging)
 
-# --- 5. secret scan (authoritative, hard-failing blocker) --------------------
+# 5. secret scan (authoritative, hard-failing blocker)
 
 # The scan is the snapshotted scan_secrets.sh (with its sibling
 # betterleaks.toml) over the STAGING dir. It runs TWO scanners --
@@ -375,7 +375,7 @@ fi
 #
 # Scanning the STAGE (not the assembled tree) means the scan covers exactly
 # the content overlaid out of the live mind: the selected --include /
-# --data-include paths. The manifest files are generated after the scan. The
+# data-include paths. The manifest files are generated after the scan. The
 # clean base is the trusted, public default workspace template -- it cannot
 # contain the user's secrets, and its own test fixtures legitimately hold
 # placeholder token strings (e.g. "sk-ant-test"), so scanning it would only
@@ -391,7 +391,7 @@ if ! bash "$SCAN_TOOLS_DIR/scan_secrets.sh" "$STAGE"; then
     exit 1
 fi
 
-# --- no-diff guard: nothing to publish beyond the base -----------------------
+# no-diff guard: nothing to publish beyond the base
 
 stage_snapshot() {
     # Everything on disk, plus each opted-in data path by force. `git add -A`
@@ -419,7 +419,7 @@ if [ "$ASSEMBLED_TREE" = "$BASE_TREE" ]; then
     exit 3
 fi
 
-# --- 6. generate the manifest ------------------------------------------------
+# 6. generate the manifest
 
 # The manifest is the single document the NEXT agent (in a mind created from
 # this template) reads to understand, present, and adapt the template.
@@ -681,7 +681,7 @@ Each mind that adapts this template appends one dated entry below. Earlier
 entries are never rewritten.
 MANIFEST_EOF
 
-# --- 7. generate a placeholder thumbnail (mock data only) --------------------
+# 7. generate a placeholder thumbnail (mock data only)
 
 # A neutral placeholder SVG using MOCK data only -- never real user data. The
 # marker comment makes "placeholder still in place" a deterministic grep: the
@@ -699,7 +699,7 @@ cat > "$THUMBNAIL" <<THUMB_EOF
 </svg>
 THUMB_EOF
 
-# --- 8. write the template-specific /welcome into the SNAPSHOT ------------
+# 8. write the template-specific /welcome into the SNAPSHOT
 
 # The published repo ships its OWN welcome skill, generated here by overwriting
 # .agents/skills/welcome/SKILL.md in the assembled tree. The TEMPLATE's welcome
@@ -754,7 +754,7 @@ them at the exact state that was used. They are provenance, not something to
 adapt here.
 WELCOME_EOF
 
-# --- 8.5 overwrite README.md to describe the template ---------------------
+# 8.5 overwrite README.md to describe the template
 
 # The clean base's README describes the generic default-workspace-template.
 # That is wrong for a published template: the repo's landing page -- the
@@ -822,7 +822,7 @@ machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
-# --- 8.6 remove the version history so it never ships in a template ------
+# 8.6 remove the version history so it never ships in a template
 
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo
@@ -836,7 +836,7 @@ README_EOF
 # an empty include set look like it had something to publish.
 rm -f docs/VERSION_HISTORY.md
 
-# --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
+# 9. boot smoke-check WITHOUT side effects, then single commit
 
 # Validate system/supervisord.conf via the supervisor python lib -- realize() +
 # process_config() parse and check the config WITHOUT starting the daemon.
@@ -901,13 +901,13 @@ if [ "$smoke_ok" -ne 1 ]; then
     exit 4
 fi
 
-# --- 9.5 validate the generated manifest -------------------------------------
+# 9.5 validate the generated manifest
 
 # Schema + cross-file agreement, from the snapshotted validator and its schema
 # module. The apt-resolution half is skipped HERE and only here: this run sees
 # the freshly-generated skeleton, whose [environment] is still empty, so there
 # is nothing to resolve yet. The worker re-runs this command WITHOUT
-# --skip-apt-check once it has filled the declarations in (that is the run that
+# skip-apt-check once it has filled the declarations in (that is the run that
 # rejects an unmirrorable package), and the lead runs it again before the push.
 #
 # `uv run --no-project` resolves no workspace project at all -- the same reason
@@ -921,7 +921,7 @@ if ! uv run --no-project --with 'pydantic>=2' python \
     exit 6
 fi
 
-# --- 10. single commit, parented on BASE_REF (never on the mind's HEAD) ------
+# 10. single commit, parented on BASE_REF (never on the mind's HEAD)
 
 # The snapshot commit's parent is BASE_REF, NOT the branch's previous HEAD.
 # This is a privacy invariant: the published repo's history must be the public
@@ -938,7 +938,7 @@ SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "$BASE_REF" -m "templa
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base ${BASE_REF} (provenance link only; no upstream fetch).")"
 git reset --soft "$SNAPSHOT_COMMIT"
 
-# --- 11. summary for the worker's done report --------------------------------
+# 11. summary for the worker's done report
 
 echo "build_template.sh: assembled template '${SLUG}' on clean base ${BASE_REF}"
 echo "  included paths:"

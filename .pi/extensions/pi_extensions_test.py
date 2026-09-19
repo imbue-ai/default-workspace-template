@@ -207,7 +207,7 @@ def _tk_result(
     )
 
 
-# --- policy_guards.ts --------------------------------------------------------
+# policy_guards.ts
 
 
 @pytest.mark.parametrize(
@@ -244,7 +244,11 @@ def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
     assert "svc.env" not in result["reason"]
     readme = {"toolName": "read", "input": {"path": "data/.secrets/README.md"}}
     assert (
-        _event_result(_run_event(tmp_path, _POLICY_GUARDS, "tool_call", readme, work_dir=_REPO_ROOT))
+        _event_result(
+            _run_event(
+                tmp_path, _POLICY_GUARDS, "tool_call", readme, work_dir=_REPO_ROOT
+            )
+        )
         is None
     )
 
@@ -306,7 +310,7 @@ def test_guards_check_the_command_the_agent_wrote_not_the_rewritten_one(
     assert _guard_result(tmp_path, rewritten, mngrOriginalCommand=_REQUEST) is None
 
 
-# --- tk_workflow.ts ----------------------------------------------------------
+# tk_workflow.ts
 
 
 def test_require_steps_reminder_rides_the_tool_result_when_no_step_is_in_progress(

@@ -606,7 +606,7 @@ def close_ws(ws: simple_websocket.Client) -> None:
         pass
 
 
-# ---------- the two-process fixture: the shell framing this chat app ----------
+# the two-process fixture: the shell framing this chat app
 
 # The fixture chat's agent id and name, and the project every workspace starts with unless a
 # test asks for none (what a migrated workspace has, and where a fresh browser lands).

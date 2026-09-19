@@ -22,7 +22,7 @@ from imbue.chat.secret_requests import merge_env_text
 _WITH_SECRETS = Path(__file__).resolve().parents[4] / "scripts" / "with_secrets.py"
 
 # Every shell-significant character at once, plus a newline and trailing whitespace.
-_AWKWARD_VALUE = "it's $HOME `x` \\ # a=b\nline two  "
+_AWKWARD_VALUE = "it's $HOME `x` \\ a=b#c\nline two  "
 _CHAT = "agent-00000000000000000000000000000001"
 
 

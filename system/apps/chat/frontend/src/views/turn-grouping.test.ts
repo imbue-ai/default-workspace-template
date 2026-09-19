@@ -11,7 +11,7 @@ import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
 import type { RequestResolution } from "./message-classification";
 
-// --- Event builders ---
+// Event builders
 
 function userMsg(
   ts: string,
@@ -197,7 +197,7 @@ function result(ts: string, callId: string, output: string): ToolResultEvent {
   };
 }
 
-// --- tk stdout decoration helpers (the lines tk prints; see system/vendor/tk/ticket) ---
+// tk stdout decoration helpers (the lines tk prints; see system/vendor/tk/ticket)
 
 /** `tk start` output: the transition line plus, for a step, its title line. */
 function startOut(id: string, title?: string): string {
@@ -1503,7 +1503,7 @@ describe("permission resolutions", () => {
   });
 });
 
-// --- Agent switches -------------------------------------------------------------------
+// Agent switches
 
 function agentSwitch(
   ts: string,

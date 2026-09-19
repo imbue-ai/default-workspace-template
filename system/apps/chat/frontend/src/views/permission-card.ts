@@ -129,7 +129,7 @@ export function openPermissionRequest(requestId: string): void {
   sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
 }
 
-// -- Shell-reported verdicts --------------------------------------------------
+// Shell-reported verdicts
 //
 // Verdicts learned over `minds:permission-resolutions`, which arrives two ways
 // with one meaning: unsolicited with a single entry the moment the user

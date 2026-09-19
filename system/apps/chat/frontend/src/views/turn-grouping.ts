@@ -391,7 +391,7 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
 
   // Only a recognised, pure tk lifecycle call is hidden from the rendered
   // output. Anything else -- including a command that merely mentions a tk verb
-  // -- renders as normal work, so real work is never silently dropped.
+  // renders as normal work, so real work is never silently dropped.
   const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
   if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
@@ -414,7 +414,7 @@ function isProse(e: AssistantMessageEvent): boolean {
   return !!e.text && e.tool_calls.length === 0;
 }
 
-// --- Section assembly ---
+// Section assembly
 
 /** An ordered skeleton entry recorded as the transcript is walked. A `step`
  *  entry marks where a step node first appears -- its first transition (an

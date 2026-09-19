@@ -116,7 +116,6 @@ describe("renderSecretCard", () => {
     expect(root.querySelector(".secret-request-reason")?.textContent).toBe(FILED.rationale);
     expect(root.querySelector(".secret-request-title")?.textContent).toBe("Store data/.secrets/svc.env");
     expect(root.querySelector(".secret-request-overwrites")?.textContent).toBe("Replaces the existing SVC_URL.");
-    // Submit stays disabled until every variable has a value.
     const [submit, decline] = [...root.querySelectorAll<HTMLButtonElement>(".secret-request-actions button")];
     expect(submit.textContent).toBe("Submit");
     expect(submit.disabled).toBe(true);

@@ -16,6 +16,8 @@ supersedes the first: only the newest card accepts input.
 import os
 import re
 import threading
+from abc import ABC
+from abc import abstractmethod
 from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
@@ -94,6 +96,31 @@ class SecretFileWriteError(SecretRequestError, OSError):
     def __init__(self, path: Path, reason: str) -> None:
         self.path = path
         super().__init__(f"Could not write {path}: {reason}")
+
+
+class NoticeDeliveryError(SecretRequestError):
+    """Raised by the chat bridge when the chat's agent could not take a resolution notice."""
+
+
+class ChatLookup(LowerCaseStrEnum):
+    """What the router knows about a chat id when a request names it."""
+
+    KNOWN = auto()
+    UNKNOWN = auto()
+    # The agent list has not been read yet, so nothing can be said either way.
+    NOT_READY = auto()
+
+
+class SecretRequestChatBridge(MutableModel, ABC):
+    """What the secret-request routes borrow from the router: chat lookup and notice delivery."""
+
+    @abstractmethod
+    def lookup_chat(self, chat_id: str) -> ChatLookup:
+        """Whether ``chat_id`` names a chat, or whether that cannot be known yet."""
+
+    @abstractmethod
+    def deliver_notice(self, chat_id: str, text: str) -> None:
+        """Put a resolution notice into the chat's transcript; raises NoticeDeliveryError when its agent cannot take it."""
 
 
 class SecretFileName(str):

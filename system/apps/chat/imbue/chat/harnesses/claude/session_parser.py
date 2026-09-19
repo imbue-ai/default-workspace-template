@@ -475,7 +475,7 @@ def _parse_user_message(
                     }
                     # Claude Code's own markers (``isMeta`` for framework-injected,
                     # model-only messages) are read HERE and become the shared render decision
-                    # -- the raw flags never cross the wire. Explicit detectors win over
+                    # the raw flags never cross the wire. Explicit detectors win over
                     # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
                     # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
                     stamp_user_message_display(
@@ -610,7 +610,7 @@ def _parse_queued_command_attachment(
     new_events.append((timestamp, event))
 
 
-# --- On-demand payload reconstruction (the detail endpoint's parse half) ---
+# On-demand payload reconstruction (the detail endpoint's parse half)
 
 
 def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:

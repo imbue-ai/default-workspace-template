@@ -100,4 +100,3 @@ class DisplayKind(StrEnum):
     SECRET_RESOLUTION = "secret_resolution"
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
-

@@ -9,13 +9,11 @@ receives.
 
 Kept out of server.py like the other endpoint modules; the two things it needs from the
 router -- whether a chat id names a chat, and how to put a notice into that chat's
-transcript -- are handed in at registration, so the module never imports the router.
+transcript -- come through the ``SecretRequestChatBridge`` the router puts on the app
+state, so the module never imports the router.
 """
 
 from __future__ import annotations
-
-from collections.abc import Callable
-from enum import auto
 
 from flask import Flask
 from flask import Response
@@ -25,34 +23,31 @@ from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.models import ErrorResponse
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_json_object_body
+from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import FiledSecretRequest
 from imbue.chat.secret_requests import InvalidSecretRequestError
+from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretFileWriteError
 from imbue.chat.secret_requests import SecretRequest
+from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.secret_requests import SecretRequestError
 from imbue.chat.secret_requests import SecretRequestNotPendingError
 from imbue.chat.secret_requests import SecretValuesMismatchError
 from imbue.chat.secret_requests import UnknownSecretRequestError
 from imbue.chat.state import get_state
-from imbue.imbue_common.enums import UpperCaseStrEnum
 
 logger = _loguru_logger
 
 
-class ChatLookup(UpperCaseStrEnum):
-    """What the router knows about a chat id when a request names it."""
-
-    KNOWN = auto()
-    UNKNOWN = auto()
-    # The agent list has not been read yet, so nothing can be said either way.
-    NOT_READY = auto()
+class SecretRequestBridgeMissingError(SecretRequestError, RuntimeError):
+    """Raised when a route runs on an app whose router never attached its bridge."""
 
 
-class NoticeDeliveryError(Exception):
-    """Raised by the router's notice delivery when the chat's agent could not take the message."""
-
-
-LookupChat = Callable[[str], ChatLookup]
-DeliverNotice = Callable[[str, str], None]
+def _bridge() -> SecretRequestChatBridge:
+    bridge = get_state().secret_request_bridge
+    if bridge is None:
+        raise SecretRequestBridgeMissingError("The secret-request routes have no chat bridge attached")
+    return bridge
 
 
 def _error_response(detail: str, status_code: int = 400) -> Response:
@@ -67,13 +62,13 @@ def _request_response(request: SecretRequest, is_notice_delivered: bool | None) 
     return json_response(body)
 
 
-def _deliver(deliver_notice: DeliverNotice, request: SecretRequest, verdict: str) -> bool:
+def _deliver(request: SecretRequest, verdict: str) -> bool:
     """Put the resolution notice into the request's chat; False (and a warning) when the chat could not take it."""
     notice = format_secret_resolution_notice(
         verdict, request.request_id, request.env_path, request.variables, request.note
     )
     try:
-        deliver_notice(request.chat_id, notice)
+        _bridge().deliver_notice(request.chat_id, notice)
     except NoticeDeliveryError as e:
         logger.warning(
             "The {} notice for secret request {} did not reach chat {}: {}",
@@ -86,45 +81,40 @@ def _deliver(deliver_notice: DeliverNotice, request: SecretRequest, verdict: str
     return True
 
 
-def _notify_superseded_in_other_chats(deliver_notice: DeliverNotice, filed: FiledSecretRequest) -> None:
+def _notify_superseded_in_other_chats(filed: FiledSecretRequest) -> None:
     """A superseded request in ANOTHER chat learns of it only through a notice; the same chat's transcript walk sees the newer request itself."""
     for superseded in filed.superseded:
         if superseded.chat_id != filed.request.chat_id:
-            _deliver(deliver_notice, superseded, "superseded")
+            _deliver(superseded, "superseded")
 
 
-def _file_request(lookup_chat: LookupChat, deliver_notice: DeliverNotice) -> Callable[[], Response]:
-    def file_request() -> Response:
-        payload = parse_json_object_body()
-        if isinstance(payload, Response):
-            return payload
-        chat_id = payload.get("chat_id")
-        file = payload.get("file")
-        variables = payload.get("variables")
-        rationale = payload.get("rationale")
-        if not isinstance(chat_id, str) or not chat_id:
-            return _error_response("chat_id must be a non-empty string")
-        if not isinstance(file, str) or not isinstance(rationale, str):
-            return _error_response("file and rationale must be strings")
-        if not isinstance(variables, list) or not all(isinstance(name, str) for name in variables):
-            return _error_response("variables must be a list of strings")
-        match lookup_chat(chat_id):
-            case ChatLookup.NOT_READY:
-                return _error_response(
-                    "The chat app has not read its agent list from mngr yet; try again shortly.", 503
-                )
-            case ChatLookup.UNKNOWN:
-                return _error_response(f"Chat '{chat_id}' not found", 404)
-            case ChatLookup.KNOWN:
-                pass
-        try:
-            filed = get_state().secret_requests.file_request(chat_id, file, variables, rationale)
-        except InvalidSecretRequestError as e:
-            return _error_response(str(e))
-        _notify_superseded_in_other_chats(deliver_notice, filed)
-        return json_response(filed.as_wire(), status_code=201)
-
-    return file_request
+def file_request() -> Response:
+    payload = parse_json_object_body()
+    if isinstance(payload, Response):
+        return payload
+    chat_id = payload.get("chat_id")
+    file = payload.get("file")
+    variables = payload.get("variables")
+    rationale = payload.get("rationale")
+    if not isinstance(chat_id, str) or not chat_id:
+        return _error_response("chat_id must be a non-empty string")
+    if not isinstance(file, str) or not isinstance(rationale, str):
+        return _error_response("file and rationale must be strings")
+    if not isinstance(variables, list) or not all(isinstance(name, str) for name in variables):
+        return _error_response("variables must be a list of strings")
+    match _bridge().lookup_chat(chat_id):
+        case ChatLookup.NOT_READY:
+            return _error_response("The chat app has not read its agent list from mngr yet; try again shortly.", 503)
+        case ChatLookup.UNKNOWN:
+            return _error_response(f"Chat '{chat_id}' not found", 404)
+        case ChatLookup.KNOWN:
+            pass
+    try:
+        filed = get_state().secret_requests.file_request(chat_id, file, variables, rationale)
+    except InvalidSecretRequestError as e:
+        return _error_response(str(e))
+    _notify_superseded_in_other_chats(filed)
+    return json_response(filed.as_wire(), status_code=201)
 
 
 def get_request(request_id: str) -> Response:
@@ -134,67 +124,55 @@ def get_request(request_id: str) -> Response:
     return _request_response(request, None)
 
 
-def _submit(deliver_notice: DeliverNotice) -> Callable[[str], Response]:
-    def submit(request_id: str) -> Response:
-        payload = parse_json_object_body()
-        if isinstance(payload, Response):
-            return payload
-        values = payload.get("values")
-        if not isinstance(values, dict) or not all(
-            isinstance(name, str) and isinstance(value, str) for name, value in values.items()
-        ):
-            return _error_response("values must be an object of variable name to string")
-        try:
-            stored = get_state().secret_requests.submit(request_id, values)
-        except UnknownSecretRequestError as e:
-            return _error_response(str(e), 404)
-        except SecretRequestNotPendingError as e:
-            return _error_response(str(e), 409)
-        except SecretValuesMismatchError as e:
-            return _error_response(str(e))
-        except SecretFileWriteError as e:
-            return _error_response(str(e), 500)
-        return _request_response(stored, _deliver(deliver_notice, stored, "stored"))
-
-    return submit
+def submit(request_id: str) -> Response:
+    payload = parse_json_object_body()
+    if isinstance(payload, Response):
+        return payload
+    values = payload.get("values")
+    if not isinstance(values, dict) or not all(
+        isinstance(name, str) and isinstance(value, str) for name, value in values.items()
+    ):
+        return _error_response("values must be an object of variable name to string")
+    try:
+        stored = get_state().secret_requests.submit(request_id, values)
+    except UnknownSecretRequestError as e:
+        return _error_response(str(e), 404)
+    except SecretRequestNotPendingError as e:
+        return _error_response(str(e), 409)
+    except SecretValuesMismatchError as e:
+        return _error_response(str(e))
+    except SecretFileWriteError as e:
+        return _error_response(str(e), 500)
+    return _request_response(stored, _deliver(stored, "stored"))
 
 
-def _decline(deliver_notice: DeliverNotice) -> Callable[[str], Response]:
-    def decline(request_id: str) -> Response:
-        payload = parse_json_object_body()
-        if isinstance(payload, Response):
-            return payload
-        note = payload.get("note")
-        if note is not None and not isinstance(note, str):
-            return _error_response("note must be a string")
-        try:
-            declined = get_state().secret_requests.decline(request_id, note)
-        except UnknownSecretRequestError as e:
-            return _error_response(str(e), 404)
-        except SecretRequestNotPendingError as e:
-            return _error_response(str(e), 409)
-        except InvalidSecretRequestError as e:
-            return _error_response(str(e))
-        return _request_response(declined, _deliver(deliver_notice, declined, "declined"))
-
-    return decline
+def decline(request_id: str) -> Response:
+    payload = parse_json_object_body()
+    if isinstance(payload, Response):
+        return payload
+    note = payload.get("note")
+    if note is not None and not isinstance(note, str):
+        return _error_response("note must be a string")
+    try:
+        declined = get_state().secret_requests.decline(request_id, note)
+    except UnknownSecretRequestError as e:
+        return _error_response(str(e), 404)
+    except SecretRequestNotPendingError as e:
+        return _error_response(str(e), 409)
+    except InvalidSecretRequestError as e:
+        return _error_response(str(e))
+    return _request_response(declined, _deliver(declined, "declined"))
 
 
-def register_routes(application: Flask, lookup_chat: LookupChat, deliver_notice: DeliverNotice) -> None:
+def register_routes(application: Flask) -> None:
     """Wire `/api/secret-requests` onto the Flask application.
 
-    ``lookup_chat`` says whether a chat id names a chat; ``deliver_notice`` puts a
-    resolution notice into that chat's transcript, raising NoticeDeliveryError when the
-    chat's agent cannot take it. The file is written either way: a value the user
-    submitted is never dropped because the agent happened to be unreachable.
+    The router attaches its :class:`SecretRequestChatBridge` to the app state before any
+    of these serve a request. The file is written whether or not the notice lands: a
+    value the user submitted is never dropped because the agent happened to be
+    unreachable.
     """
-    application.add_url_rule(
-        "/api/secret-requests", view_func=_file_request(lookup_chat, deliver_notice), methods=["POST"]
-    )
+    application.add_url_rule("/api/secret-requests", view_func=file_request, methods=["POST"])
     application.add_url_rule("/api/secret-requests/<request_id>", view_func=get_request, methods=["GET"])
-    application.add_url_rule(
-        "/api/secret-requests/<request_id>/submit", view_func=_submit(deliver_notice), methods=["POST"]
-    )
-    application.add_url_rule(
-        "/api/secret-requests/<request_id>/decline", view_func=_decline(deliver_notice), methods=["POST"]
-    )
+    application.add_url_rule("/api/secret-requests/<request_id>/submit", view_func=submit, methods=["POST"])
+    application.add_url_rule("/api/secret-requests/<request_id>/decline", view_func=decline, methods=["POST"])

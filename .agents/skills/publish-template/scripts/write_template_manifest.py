@@ -148,7 +148,7 @@ def read_inherited_lineage(previous_manifest_path: Path) -> list[dict[str, str]]
     return inherited
 
 
-# --- secret declarations -----------------------------------------------------
+# secret declarations
 
 
 def _validated_declaration(raw: object, source: str) -> tuple[str, list[str], str]:

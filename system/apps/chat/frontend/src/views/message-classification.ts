@@ -64,7 +64,7 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
   }
 }
 
-// --- Thin semantic helpers over classifyUserMessage -------------------------
+// Thin semantic helpers over classifyUserMessage
 // Kept as named predicates because callers ask a specific structural question;
 // all derive from the single classification above.
 
@@ -113,7 +113,7 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
-// --- Permission REQUEST (a tool call) ---------------------------------------
+// Permission REQUEST (a tool call)
 
 /** True when a tool call is an agent permission request (a POST to the reserved
  *  latchkey host). The backend recognises it from the UNTRUNCATED input the
@@ -123,7 +123,7 @@ export function isPermissionRequestCall(tc: ToolCall): boolean {
   return tc.display === "permission_request";
 }
 
-// --- Permission RESOLUTION (a user_message verdict) -------------------------
+// Permission RESOLUTION (a user_message verdict)
 
 /** The outcome of a permission request, once it has been resolved:
  *   - "granted"/"denied": the user made a decision.
@@ -154,7 +154,7 @@ export function resolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | 
   return event.request_id ?? null;
 }
 
-// --- Secret REQUEST (a tool call) ------------------------------------------
+// Secret REQUEST (a tool call)
 
 /** True when a tool call is a secret request (the connect-external-service skill's
  *  `request_secret.py`). Recognised by the backend from the untruncated input, so
@@ -163,7 +163,7 @@ export function isSecretRequestCall(tc: ToolCall): boolean {
   return tc.display === "secret_request";
 }
 
-// --- Secret RESOLUTION (a user_message notice) -----------------------------
+// Secret RESOLUTION (a user_message notice)
 
 /** The outcome of a secret request: the user stored the values, declined (with an
  *  optional note), or a newer request for the same file replaced it. */

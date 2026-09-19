@@ -16,7 +16,7 @@ from imbue.chat.harnesses.tool_output import is_secret_request_call
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
 from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 
-# --- the two tk rules, and the asymmetry between them -------------------------------------
+# the two tk rules, and the asymmetry between them
 # Both used to be reimplemented per harness (four copies of the verb set, the parser import
 # and the segment walk). These pin the property those copies were free to drift on.
 
@@ -51,7 +51,7 @@ def test_a_tk_verb_quoted_inside_another_command_is_neither() -> None:
     assert is_tk_lifecycle_anywhere(command) is False
 
 
-# --- the resident error snippet ----------------------------------------------------------
+# the resident error snippet
 
 
 def test_error_snippet_keeps_the_first_non_empty_line_of_a_failure() -> None:
@@ -74,7 +74,7 @@ def test_error_snippet_keeps_an_ordinary_error_that_merely_mentions_a_hook() -> 
     assert error_snippet("bash: hook error: not a real hook block") == "bash: hook error: not a real hook block"
 
 
-# --- the secret request: recognised from the input, lifted from the result ----------------
+# the secret request: recognised from the input, lifted from the result
 
 _SECRET_REQUEST_CALL = (
     "python3 .agents/skills/connect-external-service/scripts/request_secret.py "

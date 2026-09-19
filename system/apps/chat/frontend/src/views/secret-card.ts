@@ -78,7 +78,7 @@ export function isFiledSecretRequest(toolCall: ToolCall, toolResult: ToolResultE
   return parseSecretRequest(toolCall, toolResult) !== null;
 }
 
-// -- Status hydration -----------------------------------------------------------
+// Status hydration
 //
 // The transcript's resolution notice is the primary signal, and a submit from this
 // page flips the card at once. A page rebuilt after either has neither, so the
@@ -131,7 +131,7 @@ export function resetSecretStatusCacheForTesting(): void {
   statusCache.clear();
 }
 
-// -- Submit and decline ----------------------------------------------------------
+// Submit and decline
 
 async function postJson(path: string, body: unknown): Promise<{ ok: boolean; detail: string }> {
   try {
@@ -165,7 +165,7 @@ export function declineSecret(requestId: string, note: string): Promise<{ ok: bo
   return postJson(`/api/secret-requests/${encodeURIComponent(requestId)}/decline`, note ? { note } : {});
 }
 
-// -- Rendering -------------------------------------------------------------------
+// Rendering
 
 /** The card's own state beyond the request: what the inputs hold and what the
  *  last submit or decline said. Owned by the live component. */

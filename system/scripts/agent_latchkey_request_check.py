@@ -123,7 +123,8 @@ def _files_secret_request(segment: CommandSegment) -> bool:
     the host check below distinguishes a filing from a mention.
     """
     return any(
-        _is_argument(word) and word.rsplit("/", 1)[-1] == _SECRET_REQUEST_SCRIPT for word in segment.words
+        _is_argument(word) and word.rsplit("/", 1)[-1] == _SECRET_REQUEST_SCRIPT
+        for word in segment.words
     )
 
 
@@ -219,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         '    -d \'{"agent_id": "\'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"\'", ...}\'\n'
         "or\n"
         "  python3 .agents/skills/connect-external-service/scripts/request_secret.py "
-        "--file <name> --var NAME --rationale \"...\"\n\n"
+        '--file <name> --var NAME --rationale "..."\n\n'
         "Filing another request straight after this one is fine -- it just needs a "
         "tool call of its own.\n"
     )
