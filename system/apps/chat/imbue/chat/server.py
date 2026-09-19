@@ -1349,7 +1349,7 @@ def _list_chats_endpoint() -> Response:
 
 
 def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: str) -> Response | None:
-    """A 400 refusing to destroy or stop the ``is_primary=true`` services agent, or None.
+    """A 400 refusing to destroy, stop, or rename the ``is_primary=true`` services agent, or None.
 
     That agent runs the workspace's supervised services; the frontend never offers it, so this
     is defense in depth for direct callers.
