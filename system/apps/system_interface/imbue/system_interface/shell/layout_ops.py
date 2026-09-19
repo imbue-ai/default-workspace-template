@@ -127,6 +127,7 @@ class OpRequester(FrozenModel):
     marker: str = Field(description="The requester's marker; empty for a bare app")
 
 
+@pure
 def parse_op_requester(raw: Any) -> OpRequester | None:
     """The requester an op body carries: an address string, a ``{app, marker}`` object, or nothing (None or "").
     Raises LayoutOpError (a 400) for anything else: dropping a malformed requester would silently cost the op its
