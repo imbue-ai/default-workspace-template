@@ -1487,6 +1487,14 @@ def _terminal_origin_label() -> str:
     return read_origin_label(registry_path(), _TERMINAL_APP_NAME)
 
 
+def _inject_workspace_meta_tags(html_content: str, root_path: str) -> str:
+    """The meta tags every document of this origin carries: the base path, the hostname, the primary agent's id, and the terminal's origin label."""
+    with_base_path = inject_base_path_meta_tag(html_content, root_path)
+    with_hostname = inject_hostname_meta_tag(with_base_path)
+    with_primary_agent = inject_primary_agent_id_meta_tag(with_hostname)
+    return inject_terminal_label_meta_tag(with_primary_agent, _terminal_origin_label())
+
+
 def _root_document() -> Response:
     """Serve the chat root: the chat list beside an inner frame of the selected chat (``/?chat=<id>``), and ``/new``.
 
@@ -1498,11 +1506,7 @@ def _root_document() -> Response:
         _loguru_logger.warning("Served the chat not-built placeholder: no chat root bundle at {}", document_path)
         return document_response(_CHAT_NOT_BUILT_HTML, is_frontend_built=False)
     root_path = (request.script_root or "").rstrip("/")
-    html_content = document_path.read_text()
-    html_content = inject_base_path_meta_tag(html_content, root_path)
-    html_content = inject_hostname_meta_tag(html_content)
-    html_content = inject_primary_agent_id_meta_tag(html_content)
-    html_content = inject_terminal_label_meta_tag(html_content, _terminal_origin_label())
+    html_content = _inject_workspace_meta_tags(document_path.read_text(), root_path)
     return document_response(html_content, is_frontend_built=True)
 
 
@@ -1521,12 +1525,8 @@ def _chat_document(key: str) -> Response:
         return document_response(_CHAT_NOT_BUILT_HTML, is_frontend_built=False)
     config: Config = get_state().config
     root_path = (request.script_root or "").rstrip("/")
-    html_content = document_path.read_text()
-    html_content = inject_base_path_meta_tag(html_content, root_path)
-    html_content = inject_hostname_meta_tag(html_content)
-    html_content = inject_primary_agent_id_meta_tag(html_content)
-    html_content = inject_chat_identity_meta_tags(html_content, chat_id, agent_id, session_id)
-    html_content = inject_terminal_label_meta_tag(html_content, _terminal_origin_label())
+    with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
+    html_content = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
     return document_response(html_content, is_frontend_built=True)
