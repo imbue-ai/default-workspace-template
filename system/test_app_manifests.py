@@ -244,6 +244,13 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.action == "new"
         assert [action.id for action in by_name[name].actions] == ["new"]
+    # The desktop interface's launch paths (desktop-interface contracts.md section 2).
+    assert by_name["system_interface"].launch_paths == ()
+    for name, launch_path in (("chat", "/new"), ("terminal", "/new"), ("files", "/"), ("browser", "/new")):
+        assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [("new", launch_path)], name
+        assert by_name[name].default_shortcut is not None
+        assert by_name[name].default_shortcut.launch == "new", name
+    assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["account_id", "message"]
     assert by_name["terminal"].instances_url == "http://127.0.0.1:7682"
     assert by_name["files"].instances_url == "http://127.0.0.1:8301"
     assert by_name["browser"].instances_url is None

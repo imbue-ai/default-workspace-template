@@ -5,9 +5,12 @@ The models behind a workspace app's two descriptions:
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, icon, whether it serves instances, its
   memory-shedding priority, whether it is critical, its supervisord program, the
-  actions it declares, the rail shortcut a new project is seeded with, and what
-  it owns outside its own directory). The schema is `contracts.md` section 2 of
-  the workspace app model (`docs/system/blueprint/workspace-app-model/`).
+  actions it declares, the launch paths the desktop interface opens windows at,
+  the shortcut a new project or desktop is seeded with, and what it owns outside
+  its own directory). The schema is `contracts.md` section 2 of the workspace
+  app model (`docs/system/blueprint/workspace-app-model/`), with the launch
+  paths added by `contracts.md` section 2 of the desktop interface
+  (`docs/system/blueprint/desktop-interface/`).
 - **The registry**, `data/.state/apps.toml`: the runtime record of registered
   apps, written only by `system/scripts/forward_port.py` (which copies the
   manifest's fields onto the row at registration and adds the URL and the
@@ -16,8 +19,10 @@ The models behind a workspace app's two descriptions:
 ## API
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
-  cross-field rule of the contract is a validator), `AppAction`,
-  `DefaultShortcut`, `ShortcutMode`, `AppReference` (`path`, optional `note`),
+  cross-field rule of the contract is a validator), `AppAction`, `LaunchPath`
+  (`id`, `label`, `path`, `params`; `open` is reserved for the root launch path
+  the shell synthesizes for an app that declares none), `DefaultShortcut`
+  (`action`, optional `launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `load_manifest(path, repo_root=None)` (reads,
   validates, checks the icon file exists beside the manifest, and -- against the
   repo root, given or derived from a `system/apps/<package>/app.toml` layout --
@@ -47,7 +52,9 @@ The models behind a workspace app's two descriptions:
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `ActionId`, `InstancesUrl`, `PriorityName`, `ProgramName`,
+  `DisplayName`, `ActionId`, `LaunchPathId`, `LaunchPathValue` (rooted with one
+  slash, no query string or fragment, nothing a URL would escape),
+  `InstancesUrl`, `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in

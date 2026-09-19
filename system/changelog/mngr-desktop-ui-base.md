@@ -1,2 +1,5 @@
 Added the blueprint for the desktop-style system interface under `docs/system/blueprint/desktop-interface/`: `concepts.md` (the agreed vocabulary and decisions: desktops, windows, placements, backdrop, shortcuts, taskbar, launcher, system tray, theme, compact and touch modes), `plan-desktop-interface.md` (the V1 spec: model, behaviour, shell backend, frontend architecture, app contract v2, manifest changes, the built-in apps, testing, phases, deferred work), and `contracts.md` (identifiers, manifest, registry, state files, routes, WebSocket, contract messages, agent ops, geometry rules, theme tokens, test selectors).
-No code changes.
+
+Phase 1 of that plan: the browser-side app contract (`system/libs/workspace_ui/src/app_contract.ts`) gains the desktop interface's additions, all additive: a `title` on `shell:location`, a `shell:capabilities` announcement on connect, a `shell:navigate` message with an `onNavigate` handler for pages that can move in place, and `openPath(path, ifPresent)` beside `open(address)`. The tabbed shell ignores what it does not know.
+
+Phase 2: `system/scripts/forward_port.py` copies a manifest's `launch_paths` and `default_shortcut.launch` onto the registry row.
