@@ -23,6 +23,8 @@ command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run 
 directory=/home/user/workspace
 autostart=true
 autorestart=true
+# A built-in service retries forever. A user app bounds its crash loop instead;
+# see the startsecs/startretries field below.
 startretries=1000000
 stopasgroup=true
 killasgroup=true
@@ -69,6 +71,17 @@ Key fields:
   use `true`.) For a **one-shot** task that should run once and then stay
   stopped, use `autorestart=false` plus `startsecs=0` and `exitcodes=0` (see the
   `deferred-install` program for an example).
+- `startsecs` / `startretries` -- how a crash loop ends. A program that dies
+  before it has been up `startsecs` counts as a *failed start*, so supervisord
+  backs off and gives up in FATAL after `startretries` attempts. A **user app**
+  carries `startsecs=30` and `startretries=5` (what the `build-app` scaffolder
+  writes), so a broken app stops rather than restarting several times a second
+  for the life of the workspace -- each restart also re-registers the app. The
+  **built-in services** keep `startretries=1000000`, deliberately: the workspace
+  is unusable without them, so retrying forever beats giving up. Note that a
+  program with `startsecs=30` sits in `STARTING` for its first 30 seconds, and
+  `supervisorctl start`/`restart` block for that long; only `BACKOFF` or `FATAL`
+  means it failed.
 - `stopasgroup=true` / `killasgroup=true` -- signal the whole `bash -c` process
   group on stop, so a wrapped command shuts down cleanly.
 - `stdout_logfile` / `stderr_logfile` (+ `*_maxbytes` / `*_backups`) --
