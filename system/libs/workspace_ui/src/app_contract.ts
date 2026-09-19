@@ -1,6 +1,8 @@
 /**
- * The browser-side app contract (workspace app model, contracts.md section 10): the one
- * postMessage module an app page imports to speak to the workspace shell that frames it.
+ * The browser-side app contract (workspace app model, contracts.md section 10, extended for
+ * the desktop interface by docs/system/blueprint/desktop-interface/contracts.md section 7):
+ * the one postMessage module an app page imports to speak to the workspace shell that frames
+ * it.
  *
  * Built as its own library entry (`vite.contract.config.ts`) and served by the shell at
  * `/_static/app_contract.js` with a permissive CORS header, so a page on any app origin can
@@ -23,11 +25,15 @@ export const SHELL_SHOWN = "shell:shown";
 export const SHELL_HIDDEN = "shell:hidden";
 /** Shell to app: the close chord fired while this tab was active. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
+/** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
+export const SHELL_NAVIGATE = "shell:navigate";
+/** App to shell: what this page can do, sent once on connect. */
+export const SHELL_CAPABILITIES = "shell:capabilities";
 /** App to shell: the page received focus; the shell activates its tab. */
 export const SHELL_FOCUSED = "shell:focused";
-/** App to shell: the page reports where it is; the shell relays it to the owning app. */
+/** App to shell: the page reports where it is and what it is called. */
 export const SHELL_LOCATION = "shell:location";
-/** App to shell: dock an instance of this app beside this tab. */
+/** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
 
 export interface ShellHandshake {
@@ -38,11 +44,25 @@ export interface ShellHandshake {
   tabId: string;
 }
 
+/**
+ * What a page can do beyond the base contract. A page that handles `shell:navigate` in place
+ * declares `navigation: true` and gives `onNavigate`; a shell then asks it to move rather than
+ * reloading its frame.
+ */
+export interface ShellCapabilities {
+  navigation: boolean;
+}
+
+/** What an open does when a page of this app at the same path is already showing. */
+export type OpenIfPresent = "focus" | "new";
+
 export interface ShellConnectionHandlers {
   onHandshake?: (handshake: ShellHandshake) => void;
   onShown?: () => void;
   onHidden?: () => void;
   onCloseRequest?: () => void;
+  onNavigate?: (path: string) => void;
+  capabilities?: ShellCapabilities;
 }
 
 export interface ShellConnection {
@@ -50,13 +70,20 @@ export interface ShellConnection {
   readonly isFramed: boolean;
   /** Tell the shell this page received focus. */
   focused(): void;
-  /** Report where this page is now (a path under the app's origin). */
-  location(path: string): void;
-  /** Ask the shell to dock an instance of this app beside this tab. */
+  /** Report where this page is now (a path under the app's origin) and what it is called. */
+  location(path: string, title: string): void;
+  /** Ask the shell to dock an instance of this app beside this tab, by address. */
   open(address: string): void;
+  /** Ask the shell to open a page of this app at a path beside this one. */
+  openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
+
+/** Raised when a page's handlers and its declared capabilities disagree. */
+export class ShellContractError extends Error {}
+
+const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false };
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
   const { clientId, deviceKind, viewId, address, tabId } = data;
@@ -65,11 +92,23 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
   return { clientId, deviceKind, viewId, address, tabId };
 }
 
+function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabilities {
+  const capabilities = handlers.capabilities ?? DEFAULT_CAPABILITIES;
+  const hasNavigateHandler = handlers.onNavigate !== undefined;
+  if (hasNavigateHandler !== capabilities.navigation) {
+    throw new ShellContractError(
+      "a page that handles shell:navigate declares capabilities.navigation: true, and one that declares it gives onNavigate",
+    );
+  }
+  return capabilities;
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
  * arrives, and every send is a no-op, so an app behaves the same visited directly.
  */
 export function connectToShell(handlers: ShellConnectionHandlers): ShellConnection {
+  const capabilities = checkedCapabilities(handlers);
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
 
@@ -93,6 +132,11 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       case SHELL_CLOSE_REQUEST:
         handlers.onCloseRequest?.();
         return;
+      case SHELL_NAVIGATE: {
+        const path = message.path;
+        if (typeof path === "string") handlers.onNavigate?.(path);
+        return;
+      }
       default:
         return;
     }
@@ -104,11 +148,13 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   }
 
   boundWindow.addEventListener("message", onMessage);
+  send(SHELL_CAPABILITIES, { navigation: capabilities.navigation });
   return {
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),
-    location: (path: string) => send(SHELL_LOCATION, { path }),
+    location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     open: (address: string) => send(SHELL_OPEN, { address }),
+    openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }
