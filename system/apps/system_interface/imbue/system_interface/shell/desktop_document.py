@@ -1,6 +1,6 @@
 """The pure editor over the desktop model (desktop-interface plan section 5.3, contracts.md section 10).
 
-Pure functions over the frozen ``Desktop``, ``Window``, ``DesktopLayout``, and ``Placement`` records that
+Pure functions over the frozen ``Desktop``, ``Window``, ``DesktopLayout``, and ``WindowPlacement`` records that
 both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, and
 the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the nearest free
 cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also applies is
@@ -29,9 +29,9 @@ from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
-from imbue.system_interface.shell.data_types import Placement
 from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import Window
+from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import WindowId
@@ -475,17 +475,17 @@ def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut
 
 
 @pure
-def default_placement(window_id: WindowId, stored_count: int) -> Placement:
+def default_placement(window_id: WindowId, stored_count: int) -> WindowPlacement:
     """What a window with no placement reads as: the cascade frame at the bottom of the stack, minimized."""
-    return Placement(
+    return WindowPlacement(
         window_id=window_id, frame=cascade_frame(stored_count), state=WindowState.NORMAL, is_minimized=True
     )
 
 
 @pure
-def opened_placement(window_id: WindowId, stored_count: int) -> Placement:
+def opened_placement(window_id: WindowId, stored_count: int) -> WindowPlacement:
     """The placement an open writes for the requesting client: the cascade frame, normal, shown."""
-    return Placement(
+    return WindowPlacement(
         window_id=window_id, frame=cascade_frame(stored_count), state=WindowState.NORMAL, is_minimized=False
     )
 
@@ -500,7 +500,7 @@ def drop_stale_placements(layout: DesktopLayout, live_window_ids: AbstractSet[Wi
 
 
 @pure
-def effective_placements(layout: DesktopLayout, desktop: Desktop) -> tuple[Placement, ...]:
+def effective_placements(layout: DesktopLayout, desktop: Desktop) -> tuple[WindowPlacement, ...]:
     """Every window of the desktop placed: the stored placements in their order (stale ones dropped), with the
     windows the layout lacks read as the default placement at the start of the list, in opening order."""
     live_ids = {window.id for window in desktop.windows}
@@ -513,7 +513,7 @@ def effective_placements(layout: DesktopLayout, desktop: Desktop) -> tuple[Place
 
 
 @pure
-def focused_window_id(placements: Sequence[Placement]) -> WindowId | None:
+def focused_window_id(placements: Sequence[WindowPlacement]) -> WindowId | None:
     """The last placement that is not minimized; None when the backdrop has focus."""
     return next((placement.window_id for placement in reversed(placements) if not placement.is_minimized), None)
 
@@ -530,20 +530,20 @@ def most_recently_focused_window_of_app(layout: DesktopLayout, desktop: Desktop,
 
 
 @pure
-def placement_of(layout: DesktopLayout, window_id: WindowId) -> Placement:
+def placement_of(layout: DesktopLayout, window_id: WindowId) -> WindowPlacement:
     """The window's stored placement, else its default."""
     stored = next((placement for placement in layout.placements if placement.window_id == window_id), None)
     return stored if stored is not None else default_placement(window_id, len(layout.placements))
 
 
 @pure
-def _with_placement_on_top(layout: DesktopLayout, placement: Placement) -> DesktopLayout:
+def _with_placement_on_top(layout: DesktopLayout, placement: WindowPlacement) -> DesktopLayout:
     others = tuple(candidate for candidate in layout.placements if candidate.window_id != placement.window_id)
     return layout.model_copy_update(to_update(layout.field_ref().placements, (*others, placement)))
 
 
 @pure
-def _with_placement_in_place(layout: DesktopLayout, placement: Placement) -> DesktopLayout:
+def _with_placement_in_place(layout: DesktopLayout, placement: WindowPlacement) -> DesktopLayout:
     """The layout with the placement replacing its window's entry where it stands, or appended when there is none."""
     if not any(candidate.window_id == placement.window_id for candidate in layout.placements):
         return layout.model_copy_update(to_update(layout.field_ref().placements, (*layout.placements, placement)))

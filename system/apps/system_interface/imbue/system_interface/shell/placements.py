@@ -23,8 +23,8 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import Placement
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
+from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import PLACEMENTS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import drop_stale_placements
 from imbue.system_interface.shell.desktop_document import is_same_layout
@@ -126,7 +126,7 @@ class PlacementStore(MutableModel):
         self,
         desktop_id: str,
         client_id: str,
-        placements: Sequence[Placement],
+        placements: Sequence[WindowPlacement],
         base_updated_at: datetime | None,
         live_window_ids: AbstractSet[WindowId],
         now: datetime,

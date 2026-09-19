@@ -527,7 +527,7 @@ class DesktopsDocument(FrozenModel):
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
 
 
-class Placement(FrozenModel):
+class WindowPlacement(FrozenModel):
     """Where one client keeps one window: its frame, state, and whether it is minimized."""
 
     window_id: WindowId = Field(description="The window placed")
@@ -541,7 +541,7 @@ class DesktopLayout(FrozenModel):
 
     version: int = Field(description="The file format version")
     updated_at: AwareDatetime | None = Field(description="When last saved, None for a layout never written")
-    placements: tuple[Placement, ...] = Field(description="Back to front")
+    placements: tuple[WindowPlacement, ...] = Field(description="Back to front")
 
 
 class PlacementsSaveRequest(FrozenModel):
@@ -553,7 +553,7 @@ class PlacementsSaveRequest(FrozenModel):
         default=None,
         description="The updated_at of the layout the window last fetched or saved; None for one only seen empty",
     )
-    placements: tuple[Placement, ...] = Field(description="The whole layout, back to front")
+    placements: tuple[WindowPlacement, ...] = Field(description="The whole layout, back to front")
 
 
 class WindowOpenRequest(FrozenModel):
