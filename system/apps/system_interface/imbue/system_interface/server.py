@@ -520,6 +520,15 @@ def _handle_client_state_message(
             id(client_queue),
         )
         return True
+    _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _log_client_switches(
+    report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
+) -> None:
+    """Log, and append to the activity log, the view switch and the desktop switch a re-report names (a report
+    whose previous view or desktop is empty or unchanged names none)."""
     is_view_switch = (
         report.active_view is not None and bool(report.previous_view) and report.previous_view != report.active_view
     )
@@ -528,6 +537,7 @@ def _handle_client_state_message(
         and bool(report.previous_desktop)
         and report.previous_desktop != report.active_desktop
     )
+    # A switch the log cannot take is a warning: the record already moved the client.
     if is_view_switch:
         _loguru_logger.info(
             "WS client {} switched view {} -> {} (conn {})",
@@ -536,6 +546,12 @@ def _handle_client_state_message(
             report.active_view,
             id(client_queue),
         )
+        try:
+            shell.activity.append_view_switch(
+                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
+            )
+        except OSError as e:
+            _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
     if is_desktop_switch:
         _loguru_logger.info(
             "WS client {} switched desktop {} -> {} (conn {})",
@@ -544,19 +560,12 @@ def _handle_client_state_message(
             report.active_desktop,
             id(client_queue),
         )
-    # A switch the log cannot take is a warning: the record above already moved the client.
-    try:
-        if is_view_switch:
-            shell.activity.append_view_switch(
-                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
-            )
-        if is_desktop_switch:
+        try:
             shell.activity.append_desktop_switch(
                 str(report.client_id), report.previous_desktop, str(report.active_desktop)
             )
-    except OSError as e:
-        _loguru_logger.opt(exception=e).warning("Could not log the switch for {}", report.client_id)
-    return True
+        except OSError as e:
+            _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
 def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
