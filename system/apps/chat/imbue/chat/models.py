@@ -616,6 +616,8 @@ class RenameChatRequest(FrozenModel):
 
 
 class RenameChatResponse(FrozenModel):
+    """Response from ``POST /api/chats/<chat_id>/rename``."""
+
     status: str = Field(description="Always 'ok'")
 
 
