@@ -1,1 +1,1 @@
-`read_origin_label(path, name)` answers one app's origin label from the registry (or "" when it is not registered or the registry cannot be read), for pages that derive another app's origin.
+`read_origin_label(path, name)` answers one app's origin label from the registry (or "" when it is not registered or the registry cannot be read), for pages that derive another app's origin; `SHELL_APP_NAME` is the shell's registered name, the row such pages read to import the app contract module from the shell's origin.
