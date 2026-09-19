@@ -91,15 +91,19 @@ export async function updateFastModeState(chatId: string, next: ChatFastModeStat
 }
 
 /** What each mode is called, everywhere one is named. Keyed by the mode rather than searched
- *  for in a list, so every mode has a name by construction and no caller needs a fallback. */
+ *  for in a list, so every mode has a name by construction and no caller needs a fallback.
+ *  Written in the order the chooser offers the modes in, which `FAST_MODES` reads off it. */
 export const FAST_MODE_LABELS: Readonly<Record<FastModeMode, string>> = {
   off: "Off",
   auto: "Auto",
   on: "On",
 };
 
-/** The three modes, in the order the chooser offers them. */
-export const FAST_MODES: readonly FastModeMode[] = ["off", "auto", "on"];
+/** The modes, in the order the chooser offers them. Taken from the table above rather than
+ *  written out again: that table is keyed by the mode, so every mode is in it by construction,
+ *  where a second list of names is the one spelling of the set nothing checks -- a mode added to
+ *  `FastModeMode` would compile while the chooser quietly stopped offering it. */
+export const FAST_MODES: readonly FastModeMode[] = Object.keys(FAST_MODE_LABELS) as FastModeMode[];
 
 /** What the model picker's fast row says for a state: the mode's name, and for auto whether it
  *  has already run its fast turns. */
