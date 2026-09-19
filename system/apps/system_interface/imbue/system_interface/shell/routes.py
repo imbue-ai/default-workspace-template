@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from typing import Any
-from typing import Final
 from typing import assert_never
 
 from app_instances.blueprint import answer_typed_error
@@ -25,8 +24,8 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.client_activity import find_client_id_for_instance
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
@@ -37,6 +36,9 @@ from imbue.system_interface.shell.data_types import Shortcut
 from imbue.system_interface.shell.data_types import TabInstanceReport
 from imbue.system_interface.shell.data_types import effective_actions
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
+from imbue.system_interface.shell.desktop_routes import desktop_inventory_fields
+from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
+from imbue.system_interface.shell.desktop_routes import register_desktop_routes
 from imbue.system_interface.shell.dockview_document import Direction
 from imbue.system_interface.shell.dockview_document import Placement
 from imbue.system_interface.shell.dockview_document import add_panel
@@ -46,11 +48,15 @@ from imbue.system_interface.shell.dockview_document import panel_id_for_address
 from imbue.system_interface.shell.dockview_document import remove_panel
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
+from imbue.system_interface.shell.errors import DesktopConflictError
+from imbue.system_interface.shell.errors import DesktopNotFoundError
+from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import EverythingIsNotAProjectError
 from imbue.system_interface.shell.errors import InstanceCreateRefusedError
 from imbue.system_interface.shell.errors import InstanceNotListedError
 from imbue.system_interface.shell.errors import InvalidAddressError
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import LayoutNotFoundError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoTargetClientError
@@ -60,8 +66,11 @@ from imbue.system_interface.shell.errors import ProjectNotFoundError
 from imbue.system_interface.shell.errors import ProjectValueError
 from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StaleLayoutSaveError
+from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.errors import UnknownAppError
+from imbue.system_interface.shell.errors import WallpaperNotFoundError
+from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.instance_relay import RelayOutcome
 from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
@@ -71,13 +80,17 @@ from imbue.system_interface.shell.instance_relay import relay_start
 from imbue.system_interface.shell.instance_relay import relay_stop
 from imbue.system_interface.shell.inventory import build_inventory_document
 from imbue.system_interface.shell.layout_ops import DocumentOpArguments
+from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.layout_ops import SELF_ADDRESS
 from imbue.system_interface.shell.layout_ops import is_addressed_op
 from imbue.system_interface.shell.layout_ops import is_creating_op
+from imbue.system_interface.shell.layout_ops import is_desktop_op
 from imbue.system_interface.shell.layout_ops import is_document_op
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import is_transient_op
 from imbue.system_interface.shell.layout_ops import layout_inspect
+from imbue.system_interface.shell.layout_ops import parse_op_requester
+from imbue.system_interface.shell.layout_ops import requester_address
 from imbue.system_interface.shell.layouts import layout_wire_json
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
@@ -98,21 +111,20 @@ from imbue.system_interface.shell.primitives import mint_tab_id
 from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.shell.projects import seed_shortcuts
 from imbue.system_interface.shell.projects import validated_shortcut
+from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
+from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
+from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
+from imbue.system_interface.shell.route_helpers import HTTP_CREATED
+from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
+from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
+from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
+from imbue.system_interface.shell.route_helpers import detail_response
+from imbue.system_interface.shell.route_helpers import op_only_args
+from imbue.system_interface.shell.route_helpers import require_client
+from imbue.system_interface.shell.route_helpers import require_loopback
+from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
-
-LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
-
-HTTP_OK: Final[int] = 200
-HTTP_CREATED: Final[int] = 201
-HTTP_NO_CONTENT: Final[int] = 204
-HTTP_BAD_REQUEST: Final[int] = 400
-HTTP_FORBIDDEN: Final[int] = 403
-HTTP_NOT_FOUND: Final[int] = 404
-HTTP_CONFLICT: Final[int] = 409
-HTTP_PRECONDITION_FAILED: Final[int] = 412
-HTTP_INTERNAL_ERROR: Final[int] = 500
-HTTP_BAD_GATEWAY: Final[int] = 502
-HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 
 class ProjectMetadataRequest(FrozenModel):
@@ -144,10 +156,6 @@ class ProjectShortcutRemoveRequest(FrozenModel):
     action: ActionId = Field(description="The action")
 
 
-def _detail(message: str, status_code: int) -> ResponseReturnValue:
-    return jsonify({"detail": message}), status_code
-
-
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
     match error:
         case (
@@ -158,31 +166,35 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | ClientNotFoundError()
             | PanelNotFoundError()
             | InstanceNotListedError()
+            | DesktopNotFoundError()
+            | WindowNotFoundError()
+            | WallpaperNotFoundError()
         ):
-            return _detail(str(error), HTTP_NOT_FOUND)
-        case ProjectConflictError() | StaleLayoutSaveError():
-            return _detail(str(error), HTTP_CONFLICT)
+            return detail_response(str(error), HTTP_NOT_FOUND)
+        case (
+            ProjectConflictError()
+            | StaleLayoutSaveError()
+            | DesktopConflictError()
+            | LastDesktopError()
+            | StalePlacementsSaveError()
+        ):
+            return detail_response(str(error), HTTP_CONFLICT)
         case (
             ProjectValueError()
             | InvalidAddressError()
             | InvalidShellValueError()
             | AppLifecycleRefusedError()
             | LayoutOpError()
+            | DesktopValueError()
         ):
-            return _detail(str(error), HTTP_BAD_REQUEST)
+            return detail_response(str(error), HTTP_BAD_REQUEST)
         case NoTargetClientError():
-            return _detail(str(error), HTTP_PRECONDITION_FAILED)
+            return detail_response(str(error), HTTP_PRECONDITION_FAILED)
         case InstanceCreateRefusedError():
-            return _detail(error.detail, error.status_code)
+            return detail_response(error.detail, error.status_code)
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
-            return _detail(str(error), HTTP_INTERNAL_ERROR)
-
-
-def _require_loopback() -> ResponseReturnValue | None:
-    if (request.remote_addr or "") not in LOOPBACK_CLIENT_HOSTS:
-        return _detail("this route is only callable from loopback", HTTP_FORBIDDEN)
-    return None
+            return detail_response(str(error), HTTP_INTERNAL_ERROR)
 
 
 def _project_id(raw: str) -> ProjectId:
@@ -222,16 +234,16 @@ def _instance_key_or_raise(raw_key: str) -> InstanceKey:
 
 
 def app_changed(name: str) -> ResponseReturnValue:
-    refusal = _require_loopback()
+    refusal = require_loopback()
     if refusal is not None:
         return refusal
     if not _shell().inventory.nudge(name):
-        return _detail(f"No registered app named {name!r}", HTTP_NOT_FOUND)
+        return detail_response(f"No registered app named {name!r}", HTTP_NOT_FOUND)
     return "", HTTP_NO_CONTENT
 
 
 def tab_instance(tab_id: str) -> ResponseReturnValue:
-    refusal = _require_loopback()
+    refusal = require_loopback()
     if refusal is not None:
         return refusal
     report = parse_request_body(TabInstanceReport)
@@ -242,7 +254,7 @@ def tab_instance(tab_id: str) -> ResponseReturnValue:
     for found_tab in found:
         shown = found_tab.params.address
         if shown.app != report.app:
-            return _detail(f"tab {tab_id!r} shows {shown}, not the app {report.app!r}", HTTP_BAD_REQUEST)
+            return detail_response(f"tab {tab_id!r} shows {shown}, not the app {report.app!r}", HTTP_BAD_REQUEST)
     address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))
     for stored in shell.rebind_tab(TabId(tab_id), address):
         if not is_everything_view(stored.view_id):
@@ -253,7 +265,7 @@ def tab_instance(tab_id: str) -> ResponseReturnValue:
 
 
 def client_activity_route() -> ResponseReturnValue:
-    refusal = _require_loopback()
+    refusal = require_loopback()
     if refusal is not None:
         return refusal
     report = parse_request_body(ClientActivityReport)
@@ -291,9 +303,7 @@ def relay_create_route(name: str) -> ResponseReturnValue:
     return _relay_response(outcome)
 
 
-def _relay_keyed(
-    name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]
-) -> ResponseReturnValue:
+def _relay_keyed(name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]) -> ResponseReturnValue:
     """One instance verb through the relay: the app's answer as it is, and a refetch of its list when it accepted."""
     entry = _entry_or_raise(name)
     _instance_key_or_raise(key)
@@ -361,7 +371,7 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
             case _ as unreachable:
                 assert_never(unreachable)
     except SupervisorProgramActionError as e:
-        return _detail(str(e), HTTP_BAD_GATEWAY)
+        return detail_response(str(e), HTTP_BAD_GATEWAY)
     logger.info(
         "{} app {} (program {})",
         "Stopped" if action is AppLifecycleAction.STOP else "Started",
@@ -510,47 +520,47 @@ def inventory_document() -> ResponseReturnValue:
             ).values()
         ]
         for client in clients
+        if client.active_view is not None
     }
-    return jsonify(
-        build_inventory_document(
-            shell.inventory.entries(),
-            shell.projects.list_projects(),
-            clients,
-            shell.broadcaster.connected_client_ids(),
-            docked_by_client_id,
-        )
+    document = build_inventory_document(
+        shell.inventory.entries(),
+        shell.projects.list_projects(),
+        clients,
+        shell.broadcaster.connected_client_ids(),
+        docked_by_client_id,
     )
+    return jsonify({**document, **desktop_inventory_fields(shell, document["clients"])})
 
 
 # ---------- the agent-facing op route (contracts.md section 12) ----------
 
 
 def layout_broadcast() -> ResponseReturnValue:
-    refusal = _require_loopback()
+    refusal = require_loopback()
     if refusal is not None:
         return refusal
     try:
         body = json.loads(request.get_data())
     except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
-        return _detail("Invalid JSON in request body", HTTP_BAD_REQUEST)
+        return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
     if not isinstance(body, dict):
-        return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
+        return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
     op = body.get("op")
     args_raw = body.get("args", {})
-    raw_requester = body.get("requester")
-    if raw_requester is None:
-        raw_requester = ""
-    if not isinstance(raw_requester, str):
-        return _detail("``requester`` must be an address", HTTP_BAD_REQUEST)
+    # Held to the requester rule like every other identifier the route takes: a requester that is neither an
+    # address nor an ``{app, marker}`` object is refused rather than dropped, since dropping it would silently
+    # cost the op its attribution.
     try:
-        requester = _requester_address(raw_requester)
-    except InvalidAddressError as e:
-        return _detail(f"``requester`` is not an address: {e}", HTTP_BAD_REQUEST)
+        requester = parse_op_requester(body.get("requester"))
+    except (InvalidAddressError, LayoutOpError, ValueError) as e:
+        return detail_response(f"``requester`` is not an address: {e}", HTTP_BAD_REQUEST)
     if not isinstance(op, str) or not is_known_op(op):
-        return _detail(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
+        return detail_response(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
     if not isinstance(args_raw, dict):
-        return _detail("``args`` must be a JSON object", HTTP_BAD_REQUEST)
+        return detail_response("``args`` must be a JSON object", HTTP_BAD_REQUEST)
+    if is_desktop_op(op, args_raw):
+        return dispatch_desktop_op(_shell(), op, args_raw, requester)
     return _dispatch_layout_op(_shell(), op, args_raw, requester)
 
 
@@ -559,9 +569,11 @@ def _shell() -> ShellState:
 
 
 def register_shell_routes(application: Flask) -> None:
-    """Register every shell route of contracts.md sections 5, 6, 9, and 12 on ``application``."""
+    """Register every shell route of contracts.md sections 5, 6, 9, and 12, and the desktop interface's routes, on
+    ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
     application.register_error_handler(AppInstancesError, answer_typed_error)
+    register_desktop_routes(application)
     application.add_url_rule(
         "/api/apps/<name>/changed",
         view_func=app_changed,
@@ -715,7 +727,7 @@ def _find_view(shell: ShellState, requested: str) -> tuple[str | None, ResponseR
         if project.id == requested or project.name.strip().lower() == requested.strip().lower():
             return str(project.id), None
     known = ", ".join([project.name for project in projects] + ["Everything"])
-    return None, _detail(f"View {requested!r} not found (known views: {known})", HTTP_NOT_FOUND)
+    return None, detail_response(f"View {requested!r} not found (known views: {known})", HTTP_NOT_FOUND)
 
 
 def _requested_view(args_raw: dict[str, Any]) -> str | None:
@@ -739,58 +751,14 @@ def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | No
     return None, None
 
 
-def _is_known_client(shell: ShellState, client_id: str) -> bool:
-    return shell.clients.get_client(client_id) is not None or client_id in shell.broadcaster.connected_client_ids()
-
-
-def _resolve_client(shell: ShellState, args_raw: dict[str, Any], requester: Address | None) -> ClientId | None:
-    """The client an op addresses: ``args.client``, else the client that last messaged the requester's instance, else
-    the one connected client; None when nothing settles it."""
-    explicit = args_raw.get("client")
-    if isinstance(explicit, str) and explicit:
-        # Held to the client id rule before it names a layout file.
-        client_id = ClientId(explicit)
-        if not _is_known_client(shell, client_id):
-            raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
-        return client_id
-    # Only an instance has a client that last messaged it; a bare app names none.
-    if requester is not None and requester.key is not None:
-        attributed = find_client_id_for_instance(shell.activity.read_events(), str(requester.app), str(requester.key))
-        if attributed is not None and _is_known_client(shell, attributed):
-            return ClientId(attributed)
-    connected = shell.broadcaster.connected_client_ids()
-    if len(connected) == 1:
-        return ClientId(next(iter(connected)))
-    return None
-
-
-def _require_client(shell: ShellState, args_raw: dict[str, Any], requester: Address | None) -> ClientId:
-    """Exactly one client, or a 412 that lists the connected ones: an op is never applied to a guessed client."""
-    client_id = _resolve_client(shell, args_raw, requester)
-    if client_id is not None:
-        return client_id
-    connected_clients = shell.broadcaster.get_connected_client_infos()
-    client_summary = (
-        ", ".join(
-            f"{info['client_id']} (view={info['active_view']}, device={info['device_kind']})"
-            for info in connected_clients
-        )
-        or "none"
-    )
-    raise NoTargetClientError(
-        "Could not tell which client this op is for: no client has messaged the requesting agent and "
-        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `layout.py context`). "
-        f"Connected clients: {client_summary}."
-    )
-
-
 def _active_view_of_client(shell: ShellState, client_id: ClientId) -> str | None:
+    """The view a client of the tabbed shell is on; None for a client that has only ever reported a desktop."""
     record = shell.clients.get_client(client_id)
     if record is not None:
-        return str(record.active_view)
+        return str(record.active_view) if record.active_view is not None else None
     for info in shell.broadcaster.get_connected_client_infos():
         if info["client_id"] == client_id:
-            return info["active_view"]
+            return info["active_view"] or None
     return None
 
 
@@ -811,8 +779,9 @@ def _resolve_op_view(
 
 
 def _dispatch_layout_op(
-    shell: ShellState, op: str, args_raw: dict[str, Any], requester: Address | None
+    shell: ShellState, op: str, args_raw: dict[str, Any], op_requester: OpRequester | None
 ) -> ResponseReturnValue:
+    requester = requester_address(op_requester) if op_requester is not None else None
     match op:
         case "inspect":
             return _op_inspect(shell, args_raw, requester)
@@ -825,7 +794,7 @@ def _dispatch_layout_op(
         case _ if is_transient_op(op):
             return _op_transient(shell, op, args_raw, requester)
         case _:
-            return _detail(f"Op {op!r} has no handler", HTTP_INTERNAL_ERROR)
+            return detail_response(f"Op {op!r} has no handler", HTTP_INTERNAL_ERROR)
 
 
 def _title_by_address(shell: ShellState) -> dict[str, str]:
@@ -837,7 +806,7 @@ def _title_by_address(shell: ShellState) -> dict[str, str]:
 
 
 def _op_inspect(shell: ShellState, args_raw: dict[str, Any], requester: Address | None) -> ResponseReturnValue:
-    client_id = _resolve_client(shell, args_raw, requester)
+    client_id = resolve_client(shell, args_raw, _op_requester_of(requester))
     view_id: str | None
     if client_id is not None and _requested_view(args_raw) is None:
         view_id, error = _active_view_of_client(shell, client_id), None
@@ -868,11 +837,15 @@ def _op_context(shell: ShellState, requester: Address | None) -> ResponseReturnV
 def _op_load(shell: ShellState, args_raw: dict[str, Any], requester: Address | None) -> ResponseReturnValue:
     requested = args_raw.get("view")
     if not isinstance(requested, str) or not requested:
-        return _detail("'load' requires a view name in args.view", HTTP_BAD_REQUEST)
+        return detail_response("'load' requires a view name in args.view", HTTP_BAD_REQUEST)
     view_id, error = _find_view(shell, requested)
     if error is not None or view_id is None:
-        return error if error is not None else _detail("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
-    client_id = _require_client(shell, args_raw, requester)
+        return (
+            error
+            if error is not None
+            else detail_response("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
+        )
+    client_id = require_client(shell, args_raw, _op_requester_of(requester))
     shell.set_client_active_view(client_id, ViewId(view_id))
     logger.info(
         "layout op=load requester={} view={} target_client={}",
@@ -883,29 +856,19 @@ def _op_load(shell: ShellState, args_raw: dict[str, Any], requester: Address | N
     return jsonify({"ok": True, "view_id": view_id, "target_client_id": str(client_id)})
 
 
-# The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
-_TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"view", "client"})
-
-
-def _op_only_args(args_raw: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in args_raw.items() if key not in _TARGET_ARG_KEYS}
-
-
 def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
     try:
-        return DocumentOpArguments.model_validate(_op_only_args(args_raw))
+        return DocumentOpArguments.model_validate(op_only_args(args_raw))
     except ValidationError as e:
         raise LayoutOpError(f"bad op arguments: {e.errors()[0]['msg']}") from e
 
 
-def _requester_address(raw: str) -> Address | None:
-    """The requester the op names (``layout.py`` sends the caller's own instance), or None for none.
-
-    Held to the address rule like every other identifier the route takes: a requester that is
-    not an address is refused rather than dropped, since dropping it would silently cost the op
-    its attribution. Raises InvalidAddressError.
-    """
-    return Address(raw) if raw else None
+@pure
+def _op_requester_of(requester: Address | None) -> OpRequester | None:
+    """The address verbs' requester as the client resolution reads it."""
+    if requester is None:
+        return None
+    return OpRequester(app=requester.app, marker=str(requester.key) if requester.key is not None else "")
 
 
 def _resolve_op_address(raw: str, requester: Address | None) -> Address:
@@ -963,7 +926,7 @@ def _create_through_relay(
     ).encode()
     outcome = relay_create(shell.http_client, entry, body)
     if outcome.status_code >= HTTP_BAD_REQUEST:
-        raise InstanceCreateRefusedError(outcome.status_code, _relay_detail(outcome))
+        raise InstanceCreateRefusedError(outcome.status_code, _relaydetail_response(outcome))
     try:
         record = json.loads(outcome.body)["instance"]
         created = _CreatedInstance(
@@ -979,7 +942,7 @@ def _create_through_relay(
     return created
 
 
-def _relay_detail(outcome: RelayOutcome) -> str:
+def _relaydetail_response(outcome: RelayOutcome) -> str:
     try:
         parsed = json.loads(outcome.body)
     except ValueError:
@@ -1134,10 +1097,12 @@ def _op_document(
 ) -> ResponseReturnValue:
     """Apply one arrangement op to the target client's layout file and announce the write (contracts.md section 12)."""
     arguments = _parse_document_arguments(args_raw)
-    client_id = _require_client(shell, args_raw, requester)
+    client_id = require_client(shell, args_raw, _op_requester_of(requester))
     view_raw, error = _resolve_op_view(shell, args_raw, client_id)
     if error is not None or view_raw is None:
-        return error if error is not None else _detail("Failed to resolve the target view", HTTP_INTERNAL_ERROR)
+        return (
+            error if error is not None else detail_response("Failed to resolve the target view", HTTP_INTERNAL_ERROR)
+        )
     view_id = ViewId(view_raw)
     if not shell.projects.is_view_known(view_id):
         raise ProjectNotFoundError(view_raw)
@@ -1189,9 +1154,9 @@ def _refuse_unregistered_address(shell: ShellState, args_raw: dict[str, Any]) ->
     try:
         address = Address(str(raw_address))
     except InvalidAddressError as e:
-        return _detail(str(e), HTTP_BAD_REQUEST)
+        return detail_response(str(e), HTTP_BAD_REQUEST)
     if shell.inventory.entry(str(address.app)) is None:
-        return _detail(f"No registered app named {address.app!r}", HTTP_NOT_FOUND)
+        return detail_response(f"No registered app named {address.app!r}", HTTP_NOT_FOUND)
     return None
 
 
@@ -1211,8 +1176,10 @@ def _op_transient(
         refusal = _refuse_unregistered_address(shell, args_raw)
         if refusal is not None:
             return refusal
-    op_args = _op_only_args(args_raw)
-    target_client_id = None if _is_machine_wide(op, args_raw) else str(_require_client(shell, args_raw, requester))
+    op_args = op_only_args(args_raw)
+    target_client_id = (
+        None if _is_machine_wide(op, args_raw) else str(require_client(shell, args_raw, _op_requester_of(requester)))
+    )
     shell.broadcaster.broadcast_layout_op(
         op,
         op_args,

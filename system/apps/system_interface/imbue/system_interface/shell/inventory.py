@@ -241,6 +241,7 @@ class AppInventory(MutableModel):
     # a sweep fetch that started before a create must not overwrite the refetch that followed it.
     _fetch_lock_by_name: dict[str, threading.Lock] = PrivateAttr(default_factory=dict)
     _last_broadcast_json: str | None = PrivateAttr(default=None)
+    _is_registry_read: bool = PrivateAttr(default=False)
     _observer: Any | None = PrivateAttr(default=None)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -289,6 +290,12 @@ class AppInventory(MutableModel):
     def listed_addresses(self) -> set[Address]:
         return {address for entry in self.entries() for address in entry.addresses()}
 
+    @property
+    def is_registry_read(self) -> bool:
+        """Whether the registry has been read once, so an inventory of no apps means no apps rather than not yet."""
+        with self._lock:
+            return self._is_registry_read
+
     def find_instance(self, address: Address) -> tuple[AppInventoryEntry, InventoryInstance] | None:
         entry = self.entry(str(address.app))
         if entry is None:
@@ -317,6 +324,7 @@ class AppInventory(MutableModel):
             return
         is_changed = False
         with self._lock:
+            self._is_registry_read = True
             previous = dict(self._entry_by_name)
             self._entry_by_name = {}
             self._registry_order = []

@@ -18,11 +18,14 @@ from app_instances.data_types import InstanceStatus
 from app_instances.primitives import InstanceKey
 from app_instances.primitives import InstanceTitle
 from app_instances.primitives import InstanceUrl
+from app_manifest.primitives import AppName
 from flask import Flask
 from pydantic import Field
 
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import AppInventory
@@ -30,8 +33,13 @@ from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
 from imbue.system_interface.shell.inventory import InstanceFetcherInterface
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import DeviceKind
+from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPath
+from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -56,6 +64,9 @@ def registry_row_toml(
     label: str = "",
     action_params: Mapping[str, Sequence[str]] | None = None,
     launcher_rank: int | None = None,
+    # Each launch path as ``(id, label, path)``; its params are the action of the same id's.
+    launch_paths: Sequence[tuple[str, str, str]] = (),
+    default_shortcut_launch: str | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``action_params`` names each action's params by action id."""
@@ -74,12 +85,23 @@ def registry_row_toml(
     if launcher_rank is not None:
         lines.append(f"launcher_rank = {launcher_rank}")
     if default_shortcut is not None:
-        lines.append(f'default_shortcut = {{ action = "{default_shortcut[0]}", mode = "{default_shortcut[1]}" }}')
+        launch_key = f', launch = "{default_shortcut_launch}"' if default_shortcut_launch is not None else ""
+        lines.append(
+            f'default_shortcut = {{ action = "{default_shortcut[0]}"{launch_key}, mode = "{default_shortcut[1]}" }}'
+        )
     for action_id, label_text in actions:
         lines.append("[[apps.actions]]")
         lines.append(f'id = "{action_id}"')
         lines.append(f'label = "{label_text}"')
         params = (action_params or {}).get(action_id, ())
+        if params:
+            lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
+    for launch_id, launch_label, launch_path in launch_paths:
+        lines.append("[[apps.launch_paths]]")
+        lines.append(f'id = "{launch_id}"')
+        lines.append(f'label = "{launch_label}"')
+        lines.append(f'path = "{launch_path}"')
+        params = (action_params or {}).get(launch_id, ())
         if params:
             lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
     return "\n".join(lines) + "\n"
@@ -102,6 +124,8 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             program="terminal",
             actions=[("new", "New terminal")],
             default_shortcut=("new", "new"),
+            launch_paths=[("new", "New terminal", "/new")],
+            default_shortcut_launch="new",
         ),
         registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
         *extra_rows,
@@ -230,4 +254,30 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
         else None,
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
+    )
+
+
+def window_record(window_id: WindowId, app: str, path: str, is_settling: bool = False) -> Window:
+    """A window record with a fixed opening time and an empty title."""
+    return Window(
+        id=window_id,
+        app=AppName(app),
+        path=WindowPath(path),
+        title=WindowTitle(""),
+        opened_at=TEST_NOW,
+        is_settling=is_settling,
+    )
+
+
+def desktop_with_windows(*windows: Window) -> Desktop:
+    """The ``home`` desktop holding ``windows`` and no shortcuts."""
+    return Desktop(
+        id=DesktopId("home"),
+        name="Home",
+        color="#2f6b4f",
+        glyph=0,
+        sharing=SharingMode.SHARED,
+        wallpaper=None,
+        shortcuts=(),
+        windows=windows,
     )

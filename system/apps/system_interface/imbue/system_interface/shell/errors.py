@@ -81,3 +81,39 @@ class AppLifecycleRefusedError(ShellError, ValueError):
 
 class SupervisorProgramActionError(ShellError, RuntimeError):
     """Supervisord refused, or could not be reached for, a stop or start."""
+
+
+class DesktopNotFoundError(ShellError, LookupError):
+    """No desktop has the given id (or name)."""
+
+    def __init__(self, desktop: str) -> None:
+        self.desktop = desktop
+        super().__init__(f"Desktop '{desktop}' not found")
+
+
+class DesktopConflictError(ShellError, ValueError):
+    """A new desktop's id collides with an existing desktop."""
+
+
+class LastDesktopError(ShellError, ValueError):
+    """The last remaining desktop cannot be deleted (answered 409)."""
+
+
+class DesktopValueError(ShellError, ValueError):
+    """A desktop's name, colour, glyph, shortcut, wallpaper, or a window's app or path is not usable."""
+
+
+class WindowNotFoundError(ShellError, LookupError):
+    """No window on the desktop has the given id."""
+
+    def __init__(self, window: str) -> None:
+        self.window = window
+        super().__init__(f"Window '{window}' not found")
+
+
+class StalePlacementsSaveError(ShellError, ValueError):
+    """A browser's placements save is based on an older layout than the one stored (answered 409)."""
+
+
+class WallpaperNotFoundError(ShellError, LookupError):
+    """No bundled or file wallpaper has the given kind and name."""

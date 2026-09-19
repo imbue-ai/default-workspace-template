@@ -86,8 +86,10 @@ class WebSocketBroadcaster(MutableModel):
         client_id: str,
         active_view: str,
         device_kind: str,
+        active_desktop: str = "",
     ) -> None:
-        """Record (or update) the self-reported identity of one connected client."""
+        """Record (or update) the self-reported identity of one connected client: its id, and the view and desktop
+        it is on (each "" when the client's shell has no such notion)."""
         with self._lock:
             if client_queue not in self._client_queues:
                 return
@@ -95,6 +97,7 @@ class WebSocketBroadcaster(MutableModel):
                 "client_id": client_id,
                 "active_view": active_view,
                 "device_kind": device_kind,
+                "active_desktop": active_desktop,
             }
 
     def get_connected_client_infos(self) -> list[dict[str, str]]:
@@ -203,6 +206,25 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
         """A client's stored active view moved; its other windows switch to it."""
         self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
+
+    def broadcast_desktops_updated(self, desktops: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
+        self.broadcast({"type": "desktops_updated", "desktops": desktops})
+
+    def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
+        """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""
+        self.broadcast(
+            {
+                "type": "placements_updated",
+                "desktop_id": desktop_id,
+                "client_id": client_id,
+                "save_id": save_id,
+            }
+        )
+
+    def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
+        """A client's stored active desktop moved; its other windows switch to it."""
+        self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})
 
     def broadcast_layout_op(
         self,

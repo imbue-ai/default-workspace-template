@@ -308,7 +308,9 @@ def test_set_client_info_and_view_lookup() -> None:
 
     assert broadcaster.connected_client_ids() == {"client-1"}
     infos = broadcaster.get_connected_client_infos()
-    assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
+    assert infos == [
+        {"client_id": "client-1", "active_view": "everything", "device_kind": "desktop", "active_desktop": ""}
+    ]
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:
@@ -381,4 +383,26 @@ def test_layout_updated_and_active_view_changed_are_typed_events() -> None:
         "type": "active_view_changed",
         "client_id": "client-1",
         "view_id": "project-1",
+    }
+
+
+def test_desktops_placements_and_active_desktop_events_are_typed() -> None:
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+
+    broadcaster.broadcast_desktops_updated([{"id": "home"}])
+    broadcaster.broadcast_placements_updated("home", "client-1", "save-0123456789abcdef")
+    broadcaster.broadcast_active_desktop_changed("client-1", "home")
+
+    assert json.loads(_get_message(client_queue)) == {"type": "desktops_updated", "desktops": [{"id": "home"}]}
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "placements_updated",
+        "desktop_id": "home",
+        "client_id": "client-1",
+        "save_id": "save-0123456789abcdef",
+    }
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "active_desktop_changed",
+        "client_id": "client-1",
+        "desktop_id": "home",
     }
