@@ -633,6 +633,76 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 
 ## Findings
 
+### 2026-09-18 — follow-up fixes and remaining live coverage
+
+**Result: the remaining command-level live checks passed under the practical acceptance criteria.**
+
+The failed-copy path now returns an emergency outcome before any service restart,
+keeps the recovery copies, and names the incomplete restoration. This is independent
+of whether concurrent package installation is supported. The change adds no retry
+or environment-management mechanism.
+
+Verified against the deployed change in `minds-staging-criticaltest`, using the real
+apply, rollback, preview, tracker, supervised services, and a private Playwright browser.
+The code was deployed at `d82b937b32e1255f52143b8817737f2f4faab23b` before fixtures.
+The source fix is in template commit `3e36fbe17`.
+
+| Scenario | Additional live evidence |
+|---|---|
+| B7 | A running HTTP fixture returned 404 with a distinctive body; boot refused, quoted that body, retained its diagnostic log and removed active state. |
+| C1 | A private account index supplied a different target account to the preview. A request from the preview page received the explicit account-switch refusal; live chat data stayed identical. A test chat process retained its memory-priority score across the 60-second sweep. |
+| C3 | Tab and rail menus hid mutation verbs; picker and New Tab actions were inert. Pinning persisted in the preview copy with a byte-identical live layout directory. A real supervised chat stop produced the stopped placeholder without Start after the normal liveness sweep; chat was restarted. |
+| C13 | Additional missing-value, unsupported-sibling and conflicting-worktree invocations refused. |
+| E1 | The freshness command was empty against the fixed baseline, named the deliberately changed chat source while it was served, and was empty again after recovery. |
+| E13 | A synthetic abandoned progress record refused rollback; CLI confirm removed the notice and kept its copies. The untouched test record was restored before testing an actual rollback. |
+| E14 | A chat that passed preflight but returned 503 for its instance list exhausted the normal health budget and automatically rolled back: exit 2 after 269.68 seconds, no kept point, healthy pages and instances afterwards. |
+| E18 | A freshly provisioned second worktree booted a composed chat/shell preview while the earlier apply's notice remained available. |
+| E23 | A browser rollback request during the real unhealthy apply returned 409 without launching rollback. Since a fresh apply removes the previous point before writing its marker, the response was “There is no update to roll back.” The scenario now accepts this safe superseded-point refusal. |
+| E24, failed copy | Moving one kept copy aside caused exit 3, an explicit failure in the browser, unchanged service PIDs, retained copies and emergency state. A repeat refused; closing the notice kept the copies. Manual restoration recovered the page. |
+| E20 / F3 | Temporary supervised launch settings put chat, shell and terminal on their real per-app uv tools. A shared manifest update kept the root environment, mngr tool and all three app tools (964,456 KiB total). Rollback removed sentinel files planted in each tool, restarted all three apps, kept the observer PID, and passed health in 22.11 seconds. Confirm removed the point. |
+| E15 / E24, tool variant | Removed Flask from the kept chat tool, then restored it through real rollback. Chat could not boot, rollback returned 3 and kept both copies and emergency state; Close retained them. Reload showed the emergency banner. Restoring the valid tool copy by hand brought chat and its observer-backed instances API back healthy. |
+| X6 | Two disposable command agents exposed real chat instances and supplied distinct tracker identities. The second saw the first's lease and owner after the first stopped. The test's authorized takeover removed the orphan preview, worktree and lease; both test agents were destroyed. |
+
+The earlier intermittent unlisted-instance browser test passed again in isolation
+(16.82 seconds). No speculative timing change was made. Semantic evaluation of an
+independent hardening worker remains outside this plan's stated command-testing scope.
+
+Automated verification: update-self scripts **342 passed**; all `.agents` scripts on
+macOS **770 passed, 8 skipped**, and Linux **777 passed, 1 skipped**. Ruff passed; vet's
+final code review reported no issues. The regression tests cover a real copy error
+both with ordinary app restarts and with a required full workspace restart, even
+when the fake health responses would otherwise pass.
+
+Harness corrections are retained in the evidence. Initial account requests named an
+unknown or already-selected account and correctly hit those refusals first; the
+private account fixture reached the secondary-mode guard. One sweep assertion sampled
+before 60 seconds. Initial stopped-app sampling preceded the 10-second liveness sweep.
+The first pin comparison overlapped another test's live-page refresh; the serial repeat
+passed. Browser menu/hover synchronization needed correction. A destination changed
+into a file triggered the clean-tree precondition because the directory-only ignore
+rule no longer applied; moving the kept copy aside reached the intended live copy-failure
+path. None of these harness attempts is counted as a successful product observation.
+
+The tool-repair helper initially sampled health immediately after supervisor accepted
+Start, before the HTTP listener bound. A settled follow-up confirmed built frontend,
+healthy observer and working instance list. This was a harness timing issue, not a
+failed repair. The existing staging Mind-app refresh endpoint occasionally returned
+502; the actual workspace pages, sockets and service health were checked directly.
+
+Final restoration applied the original launch configuration and test-free source through
+the real apply. Staging HEAD is `7605ae48811b66e8691a3e08c1a41217d846b58a`; its tracked
+tree equals the fixed deployment baseline `d82b937b32e1255f52143b8817737f2f4faab23b`.
+The rollback fix remains deployed. Both built-page checks and the observer were healthy,
+only the original Welcome chat remained, and the terminal instance list was empty.
+All test worktrees, previews, agents, leases, notices, emergency records and active
+recovery snapshots were removed; fixture branches and diagnostic evidence remain.
+
+Evidence: `data/.tasks/critical-test-round3` in the container,
+`.test_output/criticaltest-round3` in the local mngr worktree, and
+`.test_output/criticaltest-round3-2026-09-18.tar.gz`. The archive contains the drivers,
+JSONL observations, logs, screenshots and test XML; it excludes bulky environment
+backup copies. Earlier findings below remain the historical record.
+
 ### Acceptance reassessment after the second run
 
 The user clarified that this flow should make critical-app editing reasonably safe;
