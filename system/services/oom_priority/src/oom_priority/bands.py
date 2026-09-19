@@ -217,10 +217,6 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # too. It is also a small HTTP server, so shedding it frees almost nothing.
     "owner-exec": 5,
     "terminal": 10,
-    # ttyd, on its own origin, framed by the terminal app's wrapper page: a shed pty drops
-    # every terminal pane's connection (the tmux sessions survive), so it sits right beside
-    # the app that frames it.
-    "terminal-pty": 12,
     "system_interface": 20,
     # The chat app (the agent harness UI): just above the shell it is embedded
     # in, and below every other service, since a shed chat app costs every open
