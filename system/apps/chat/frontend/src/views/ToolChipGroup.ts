@@ -143,13 +143,23 @@ const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
  *  the row's own `-ml-2` for this one child. */
 const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-2 basis-[calc(100%-0.5rem)] rounded-md border px-3 py-1.5";
 
-const PANE_CODE_CLASS = "font-mono text-(length:--font-size-helper) leading-normal break-all whitespace-pre-wrap";
+/** The code itself adds only how it wraps; the pane around it sets the face. */
+const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
+
+/** The pane itself carries the face and size, so everything in it -- the verb,
+ *  the command, and the space BETWEEN them -- is set alike. The space is an
+ *  ordinary text node, and a text node takes the face of whatever contains it:
+ *  left on the pane's default it was a sans space beside monospace text, which
+ *  read as no space at all. */
+const PANE_CLASS = "py-0.5 font-mono text-(length:--font-size-helper) leading-normal";
 
 function renderPane(marker: string, text: string, extra = "", verb?: string): m.Vnode {
-  return m("div", { class: `${marker} py-0.5 ${extra}`.trim() }, [
-    // Prose, beside the machine text rather than above it, so a one-line input
-    // stays one line.
-    verb ? m("span", { class: "tool-call-verb mr-1.5 text-secondary" }, verb) : null,
+  return m("div", { class: `${marker} ${PANE_CLASS} ${extra}`.trim() }, [
+    // Beside the command rather than above it, so a one-line input stays one
+    // line, and in the command's own face so the two read as one line rather
+    // than as a label stuck to a value.
+    verb ? m("span", { class: "tool-call-verb text-secondary" }, verb) : null,
+    verb ? " " : null,
     m(
       "pre",
       { class: `m-0 overflow-x-auto border-0 bg-transparent p-0${verb ? " inline align-top" : ""}` },
