@@ -96,7 +96,18 @@ def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["new", "//new", "/new?message=hi", "/new#top", "/new one", "/new\t", "/" + "a" * 2048],
+    [
+        "new",
+        "//new",
+        "/new?message=hi",
+        "/new#top",
+        "/new one",
+        "/new\t",
+        "/a%20b",
+        '/a"b',
+        "/café",
+        "/" + "a" * 2048,
+    ],
 )
 def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> None:
     with pytest.raises(ValidationError, match="invalid launch path"):
@@ -110,7 +121,7 @@ def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> No
         )
 
 
-@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~"])
+@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="])
 def test_launch_path_values_that_follow_the_rule_are_accepted(path: str) -> None:
     manifest = AppManifest.model_validate(
         {

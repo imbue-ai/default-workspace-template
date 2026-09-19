@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 from typing import Any, Final, Self
+from urllib.parse import quote
 
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
@@ -32,9 +33,11 @@ LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = ACTION_ID_PATTERN
 
 # A launch path is a path under the app's origin that the shell opens a window at: rooted
 # with one slash (``//`` would read as another host), no query string (the shell appends the
-# params as one), and nothing a URL would have to escape.
+# params as one), and nothing a URL would have to escape: only RFC 3986's path characters
+# (alphanumerics, ``-._~``, the sub-delimiters, ``:@``, and ``/``), which ``quote`` leaves as they are.
 MAX_LAUNCH_PATH_LENGTH: Final[int] = 2048
 _LAUNCH_PATH_FORBIDDEN_CHARACTERS: Final[frozenset[str]] = frozenset({"?", "#"})
+_LAUNCH_PATH_SAFE_CHARACTERS: Final[str] = "/-._~!$&'()*+,;=:@"
 
 # Where the shell reaches an app's instances API: loopback only, one port a socket can listen on.
 INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -152,11 +155,10 @@ def describe_launch_path_problem(value: str) -> str | None:
         return f"invalid launch path {value!r}: a launch path starts with a single '/'"
     if len(value) > MAX_LAUNCH_PATH_LENGTH:
         return f"invalid launch path {value!r}: at most {MAX_LAUNCH_PATH_LENGTH} characters"
-    for character in value:
-        if character in _LAUNCH_PATH_FORBIDDEN_CHARACTERS:
-            return f"invalid launch path {value!r}: no query string or fragment; the shell appends the params"
-        if character.isspace() or ord(character) < 32 or ord(character) == 127:
-            return f"invalid launch path {value!r}: no whitespace or control characters"
+    if any(character in _LAUNCH_PATH_FORBIDDEN_CHARACTERS for character in value):
+        return f"invalid launch path {value!r}: no query string or fragment; the shell appends the params"
+    if quote(value, safe=_LAUNCH_PATH_SAFE_CHARACTERS) != value:
+        return f"invalid launch path {value!r}: nothing a URL would escape (no whitespace, quotes, or non-ASCII)"
     return None
 
 
