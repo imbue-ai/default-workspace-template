@@ -6,7 +6,12 @@ from app_instances.testing import RecordingNudger
 from flask import Flask
 from flask.testing import FlaskClient
 
-from terminal_app.pages import PageConfig, SessionPage, build_pages_blueprint, render_page
+from terminal_app.pages import (
+    PageConfig,
+    SessionPage,
+    build_pages_blueprint,
+    render_page,
+)
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import FakeTmux, make_terminal_record, make_tmux_session
