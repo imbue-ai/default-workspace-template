@@ -477,3 +477,62 @@ def test_script_runs_without_a_registry_file_for_read_ops(layout_server: Pipelin
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     views = json.loads(result.stdout)
     assert any(view["id"] == "everything" for view in views)
+
+
+def _post_op(
+    harness: PipelineHarness, op: str, args: dict[str, Any], requester: dict[str, str]
+) -> tuple[int, dict[str, Any]]:
+    """Post one desktop verb to the op route the way the desktop interface's ``layout.py`` will."""
+    body = json.dumps({"op": op, "args": args, "requester": requester}).encode()
+    request = urllib.request.Request(
+        f"{harness.base_url}/api/layout/broadcast",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def _get_json(harness: PipelineHarness, path: str) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{harness.base_url}{path}", timeout=10) as response:
+        return json.loads(response.read())
+
+
+def test_desktop_verbs_open_and_close_a_window_in_the_clients_layout_with_no_browser_connected(
+    layout_server: PipelineHarness,
+) -> None:
+    """The desktop vocabulary on the op route: ``open`` at the app's synthesized launch path lands a window on the
+    default desktop and a placement in the target client's file, and ``close`` takes both away, whether or not a
+    window is open; the writes are announced to that client."""
+    requester = {"app": _SEEDED_APP_NAME, "marker": _SEEDED_KEY}
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "", "desktop", active_desktop="home")
+    try:
+        status, listed = _post_op(layout_server, "desktops", {}, requester)
+        assert status == 200 and [desktop["id"] for desktop in listed["desktops"]] == ["home"]
+
+        status, opened = _post_op(layout_server, "open", {"app": _STUB_APP_NAME}, requester)
+        assert status == 200, opened
+        window_id = opened["window_id"]
+        (window,) = opened["desktop"]["windows"]
+        assert window["app"] == _STUB_APP_NAME and window["path"] == "/" and window["is_settling"] is True
+        assert [placement["window_id"] for placement in opened["layout"]["placements"]] == [window_id]
+        stored = _get_json(layout_server, "/api/placements/home?client=client-1")
+        assert [placement["window_id"] for placement in stored["placements"]] == [window_id]
+        assert [desktop["windows"][0]["id"] for desktop in _get_json(layout_server, "/api/desktops")["desktops"]] == [
+            window_id
+        ]
+
+        status, closed = _post_op(layout_server, "close", {"window": window_id}, requester)
+        assert status == 200 and closed["desktop"]["windows"] == [] and closed["layout"]["placements"] == []
+        types = [message["type"] for message in drain_messages(client_queue)]
+        assert "desktops_updated" in types and "placements_updated" in types
+
+        status, refused = _post_op(layout_server, "focus", {"window": window_id}, requester)
+        assert status == 404 and window_id in refused["detail"]
+    finally:
+        layout_server.broadcaster.unregister(client_queue)

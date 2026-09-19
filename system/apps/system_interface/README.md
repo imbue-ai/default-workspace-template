@@ -59,6 +59,51 @@ Its state lives under `data/.state/system_interface/`: `projects.json`,
 `clients.json`, the migration marker, and the client-activity event log
 (`events/client_activity/events.jsonl`, what `layout.py context` reads).
 
+### The desktop model, beside the tabbed one
+
+The shell is moving from a tabbed dock to a desktop (the spec is
+`docs/system/blueprint/desktop-interface/plan-desktop-interface.md`, with the
+exact shapes in `contracts.md` beside it). The backend of that model is in
+place and served beside the routes above, which the current frontend still
+uses; the desktop frontend replaces it in a later phase, and the tabbed
+model's routes, stores, and state files go after that.
+
+- **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
+  sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
+  under its origin, and the title its page last reported; shared), and per
+  client a `DesktopLayout` of `Placement`s (frame in fractions of the
+  backdrop, state, minimized; the order is the stack).
+- **State files**: `desktops.json`, `placements/<desktop>/<client>.json`, and
+  the client records, which now carry `active_desktop` beside the tabbed
+  shell's `active_view` (`clients.json` stays at version 1 until the old
+  fields go). A fresh workspace gets one desktop, `Home`, seeded from every
+  registered app's `default_shortcut` on the first read after the registry
+  has been read. Wallpapers are listed from `static/wallpapers/` (bundled)
+  and `data/.apps/system_interface/wallpapers/` (files).
+- **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
+  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
+  free cell, reading order, shortcut placement) as pure functions over the
+  records. The rules the frontend also applies pass the shared vectors in
+  `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
+- **Routes** (`shell/desktop_routes.py`): `/api/desktops...` (create,
+  settings, wallpaper, delete, shortcuts), `/api/desktops/<id>/windows...`
+  (open with `if_present`, close, location), `/api/placements/<desktop>`
+  (read, save with the same save-id and stamp rules as the layouts),
+  `/api/wallpapers` and `/wallpapers/<kind>/<name>`. `GET /api/inventory` and
+  `GET /api/clients` carry the desktop fields beside the old ones, and each
+  `app` object carries its `launch_paths`.
+- **The socket** adds `desktops_updated`, `placements_updated`, and
+  `active_desktop_changed`, and accepts a `client_state` report naming
+  `active_desktop` beside the old shape.
+- **The op route** speaks both vocabularies: an op carrying `address` or
+  `view` is a tabbed-shell op, one carrying `window`, `app`, or `desktop` (or
+  a verb only the desktop has: `desktops`, `list`, `minimize`, `place`,
+  `navigate`, `shortcuts`, `shortcut_set`, `shortcut_move`,
+  `shortcut_remove`, `wallpaper`) is a desktop op. The requester may be the
+  address form or `{app, marker}`; `self` names the requester's app's window
+  whose path carries the marker.
+
 The backend is the `imbue/system_interface/shell/` subpackage (inventory,
 relay, projects, layouts, clients, client activity, layout ops, the pure
 dockview document editor, routes, state); the package root holds the process

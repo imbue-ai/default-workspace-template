@@ -36,6 +36,7 @@ from imbue.system_interface.shell.primitives import ADDRESS_SCHEME
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
 MESSAGE_EVENT_TYPE: Final[EventType] = EventType("message")
 VIEW_SWITCH_EVENT_TYPE: Final[EventType] = EventType("view_switch")
+DESKTOP_SWITCH_EVENT_TYPE: Final[EventType] = EventType("desktop_switch")
 
 # Message text is truncated at write time: the log exists to say which client asked, not to
 # duplicate the apps' own transcripts.
@@ -63,6 +64,14 @@ class ViewSwitchEvent(EventEnvelope):
     device_kind: str = Field(description="'desktop' or 'mobile'")
     from_view_id: str = Field(description="The view left ('' when unknown)")
     to_view_id: str = Field(description="The view entered")
+
+
+class DesktopSwitchEvent(EventEnvelope):
+    """A client changed its active desktop (desktop contracts.md section 6)."""
+
+    client_id: str = Field(description="The switching client")
+    from_desktop_id: str = Field(description="The desktop left ('' when unknown)")
+    to_desktop_id: str = Field(description="The desktop entered")
 
 
 def _now_iso() -> IsoTimestamp:
@@ -125,6 +134,19 @@ class ClientActivityLog(MutableModel):
             )
         )
 
+    def append_desktop_switch(self, client_id: str, from_desktop_id: str, to_desktop_id: str) -> None:
+        self._append(
+            DesktopSwitchEvent(
+                timestamp=_now_iso(),
+                type=DESKTOP_SWITCH_EVENT_TYPE,
+                event_id=_new_event_id(),
+                source=CLIENT_ACTIVITY_EVENT_SOURCE,
+                client_id=client_id,
+                from_desktop_id=from_desktop_id,
+                to_desktop_id=to_desktop_id,
+            )
+        )
+
     def read_events(self) -> list[dict[str, Any]]:
         """Every parseable event line, in file (chronological) order."""
         path = self.events_path
@@ -163,11 +185,19 @@ def _event_view_id(event: dict[str, Any]) -> str | None:
 
 
 @pure
+def _event_desktop_id(event: dict[str, Any]) -> str | None:
+    if event.get("type") == DESKTOP_SWITCH_EVENT_TYPE:
+        return str(event.get("to_desktop_id", "")) or None
+    return None
+
+
+@pure
 def _empty_client_summary(client_id: str) -> dict[str, Any]:
     return {
         "client_id": client_id,
         "device_kind": "",
         "active_view": None,
+        "active_desktop": None,
         "last_seen": "",
         "is_connected": False,
         "recent_messages": [],
@@ -199,6 +229,9 @@ def summarize_client_activity(
         view_id = _event_view_id(event)
         if view_id is not None:
             summary["active_view"] = view_id
+        desktop_id = _event_desktop_id(event)
+        if desktop_id is not None:
+            summary["active_desktop"] = desktop_id
         if event.get("type") == MESSAGE_EVENT_TYPE:
             summary["recent_messages"].append(
                 {
@@ -214,7 +247,8 @@ def summarize_client_activity(
         client_id = connected["client_id"]
         summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
         summary["is_connected"] = True
-        summary["active_view"] = connected["active_view"]
+        summary["active_view"] = connected["active_view"] or None
+        summary["active_desktop"] = connected.get("active_desktop") or None
         summary["device_kind"] = connected["device_kind"]
     return sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True)
 
