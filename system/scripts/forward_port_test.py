@@ -673,17 +673,44 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     ]
 
 
-def test_manifest_registration_refuses_a_launch_path_without_a_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("declaration", "expected_error"),
+    [
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\n',
+            "every launch path needs a string 'id', 'label', and 'path'",
+            id="launch-path-without-a-path",
+        ),
+        pytest.param(
+            'launch_paths = "new"\n',
+            "launch_paths must be an array of tables",
+            id="launch-paths-not-an-array",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nparams = [{label = "Path"}]\n',
+            "every launch path param needs a string 'name'",
+            id="launch-path-param-without-a-name",
+        ),
+        pytest.param(
+            '[default_shortcut]\naction = "open"\nlaunch = 3\nmode = "focus"\n',
+            "default_shortcut.launch must be a string",
+            id="default-shortcut-launch-not-a-string",
+        ),
+    ],
+)
+def test_manifest_registration_refuses_a_malformed_launch_declaration(
+    tmp_path: Path, declaration: str, expected_error: str
+) -> None:
     apps_file = tmp_path / "apps.toml"
     manifest = _write_manifest(
         tmp_path,
-        'name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\n\n[[launch_paths]]\nid = "new"\nlabel = "New"\n',
+        f'name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\n\n{declaration}',
     )
 
     result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
 
     assert result.returncode != 0
-    assert "every launch path needs a string 'id', 'label', and 'path'" in result.stderr
+    assert expected_error in result.stderr
     assert not apps_file.exists()
 
 
