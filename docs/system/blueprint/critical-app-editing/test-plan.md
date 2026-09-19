@@ -584,10 +584,20 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   (`touch system/scratch.txt && git add system/scratch.txt`) and press Roll back: 409, the
   band shows the script's dirty-tree message verbatim, the notice has no `progress` (the
   script refused before writing any). Undo the staging; Roll back succeeds. Then, with a
-  real apply in flight (E11's setup), press Roll back: 409 in the script's "an apply is
-  running" words.
+  real apply in flight (E11's setup), submit a rollback request from the browser: 409,
+  with no rollback launched. A fresh apply removes the previous point before writing
+  its marker, so "There is no update to roll back" is the expected refusal once it has
+  superseded the notice; the "an apply is running" refusal applies when a point and
+  live marker coexist. Exact refusal wording is not a separate safety requirement.
 - **E24 A rollback that fails keeps its copies, and Close leaves them.** Run last, in a
-  workspace you can afford to break. Two variants:
+  workspace you can afford to break. Three variants:
+  - a failed copy: make one recorded snapshot unavailable (keep it elsewhere for repair),
+    then Roll back. Even if the apps still answer healthy, exit 3, name the copy that
+    could not be restored, keep the remaining copies and write emergency state. Do not
+    restart services over the incomplete restoration. A second rollback is refused;
+    Close leaves the copies and emergency state. Put the missing copy back and repair
+    the affected destination by hand. This also applies when the point needs a full
+    workspace restart; it must not claim that the files were restored.
   - E15's bundle variant: empty the kept chat bundle copy, Roll back. Pass: the outcome
     says the previous version did not come back healthy and that the copies are kept,
     `emergency.json` exists, exit 3 in the log, the snapshots dir is still there, the
@@ -639,6 +649,8 @@ scenarios A4/A5, C15, E2–E7, E15, E19, E21 and E24 now reflect that goal.
 - The root-venv failure during overlapping `uv run` synchronization is retained as staging
   evidence, not a blocker requiring support for concurrent environment installation.
   Supported recovery entrypoints must still serialize apply/rollback/confirm operations.
+  Reporting success after a failed copy is a separate recovery defect: the follow-up
+  fix below makes that outcome a failure and preserves the recovery copies.
 - Known-list behavior and fast observer recovery are acceptable without the exact transient
   status and wording the earlier plan prescribed.
 
