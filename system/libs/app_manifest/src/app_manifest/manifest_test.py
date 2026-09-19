@@ -94,6 +94,19 @@ def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
         )
 
 
+@pytest.mark.parametrize("launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
+def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
+    with pytest.raises(ValidationError, match="invalid launch path id"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": launch_path_id, "label": "New", "path": "/new"}],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "path",
     [
