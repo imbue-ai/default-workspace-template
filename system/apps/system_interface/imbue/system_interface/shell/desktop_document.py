@@ -443,10 +443,11 @@ def default_launch_path_id(row: RegistryRow) -> LaunchPathId | None:
     if row.default_shortcut is None:
         return None
     offered = {launch_path.id for launch_path in effective_launch_paths(row)}
-    launch = row.default_shortcut.launch
-    if launch is None and str(row.default_shortcut.action) in offered:
-        launch = LaunchPathId(str(row.default_shortcut.action))
-    return launch if launch is not None and launch in offered else None
+    declared = row.default_shortcut.launch
+    if declared is not None:
+        return declared if declared in offered else None
+    action = str(row.default_shortcut.action)
+    return LaunchPathId(action) if action in offered else None
 
 
 @pure
