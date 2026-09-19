@@ -223,7 +223,7 @@ export const FAST_ROW_DETAIL = "type-helper text-faint";
 /** The turn-limit field's row: the same height and padding as a menu row, no highlight -- a
  *  number you type is not something you pick. `whitespace-nowrap` because the words either side
  *  of the field are one sentence, and a menu row is one line. */
-export const FAST_LIMIT_ROW = "fast-mode-limit flex h-8 items-center gap-2 whitespace-nowrap px-3 text-secondary";
+export const FAST_LIMIT_ROW = `fast-mode-limit ${ROW_STATIC} whitespace-nowrap text-secondary`;
 /** The field's box. The width lives HERE rather than in the field's own `extra`: the shared input
  *  recipe is `w-full`, and two width utilities on one element are settled by the order Tailwind
  *  emits them in rather than by the order the caller wrote them. A box the field fills is
