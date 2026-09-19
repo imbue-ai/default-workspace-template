@@ -86,7 +86,7 @@ class WebSocketBroadcaster(MutableModel):
         client_id: str,
         active_view: str,
         device_kind: str,
-        active_desktop: str = "",
+        active_desktop: str,
     ) -> None:
         """Record (or update) the self-reported identity of one connected client: its id, and the view and desktop
         it is on (each "" when the client's shell has no such notion)."""
