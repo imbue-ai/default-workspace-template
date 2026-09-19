@@ -633,25 +633,35 @@ def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
     """Apply one desktop verb (desktop contracts.md section 8): the read-only ones answer the desktops or the
-    inventory; the rest resolve their client and desktop, edit the files, and answer the resulting state."""
+    inventory, a whole-app ``refresh`` reaches every client; the rest resolve their client and desktop, edit the
+    files, and answer the resulting state."""
     if op in DESKTOP_READ_OPS:
         desktops = [desktop_wire_json(desktop) for desktop in shell.list_desktops()]
         logger.info("layout op={} requester={} desktops={}", op, requester, len(desktops))
         return jsonify({"ok": True, "desktops": desktops})
     arguments = _parse_desktop_arguments(args_raw)
+    # The rules an op's own arguments settle come before any client is looked for, so a caller is told what to
+    # fix rather than which client to name.
+    if op == LOAD_OP and _requested_desktop(args_raw) is None:
+        raise LayoutOpError("'load' requires a desktop name in args.desktop")
+    if op == "refresh" and arguments.app:
+        return _refresh_app(shell, arguments.app, requester)
     target = _resolve_target(shell, args_raw, requester)
     window_id: WindowId | None = None
-    if op == LOAD_OP:
-        if _requested_desktop(args_raw) is None:
-            raise LayoutOpError("'load' requires a desktop name in args.desktop")
-    elif op == "open":
-        window_id = shell.open_window(target.desktop.id, _open_request(shell, arguments, target.client_id)).window.id
-    elif op == "refresh":
-        return _op_refresh(shell, arguments, target, requester)
-    elif op in DESKTOP_SHORTCUT_OPS:
-        _op_shortcuts(shell, op, arguments, target)
-    else:
-        window_id = _op_window(shell, op, arguments, target, requester)
+    match op:
+        case "load":
+            # Resolving the target already switched the client to ``args.desktop``.
+            pass
+        case "open":
+            window_id = shell.open_window(
+                target.desktop.id, _open_request(shell, arguments, target.client_id)
+            ).window.id
+        case "refresh":
+            return _refresh_window(shell, arguments, target, requester)
+        case _ if op in DESKTOP_SHORTCUT_OPS:
+            _op_shortcuts(shell, op, arguments, target)
+        case _:
+            window_id = _op_window(shell, op, arguments, target, requester)
     logger.info(
         "layout op={} requester={} desktop={} client={} args={}",
         op,
@@ -663,25 +673,36 @@ def dispatch_desktop_op(
     return _answer(shell, target, window_id)
 
 
-def _op_refresh(
+@pure
+def _requester_wire(requester: OpRequester | None) -> str:
+    """The requester as a ``layout_op`` message carries it: ``<app>`` or ``<app>:<marker>``, empty for none."""
+    if requester is None:
+        return ""
+    return str(requester.app) + (f":{requester.marker}" if requester.marker else "")
+
+
+def _refresh_app(shell: ShellState, app_raw: str, requester: OpRequester | None) -> ResponseReturnValue:
+    """The transient whole-app ``refresh``: every page of the app on every client, so no client is targeted."""
+    app = _app_name_or_raise(app_raw, "app")
+    shell.require_app_entry(str(app))
+    shell.broadcaster.broadcast_layout_op(
+        "refresh", {"app": str(app)}, requester=_requester_wire(requester), target_client_id=None
+    )
+    logger.info("layout op=refresh requester={} app={} (every client)", requester, app)
+    return jsonify({"ok": True, "target_client_id": None})
+
+
+def _refresh_window(
     shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> ResponseReturnValue:
-    """The transient ``refresh``: one window's page on the target client, or every page of an app on every client."""
-    requester_wire = (
-        "" if requester is None else str(requester.app) + (f":{requester.marker}" if requester.marker else "")
-    )
-    if arguments.app:
-        app = _app_name_or_raise(arguments.app, "app")
-        shell.require_app_entry(str(app))
-        shell.broadcaster.broadcast_layout_op(
-            "refresh", {"app": str(app)}, requester=requester_wire, target_client_id=None
-        )
-        logger.info("layout op=refresh requester={} app={} (every client)", requester, app)
-        return jsonify({"ok": True, "target_client_id": None})
+    """The transient one-window ``refresh``: the window's page on the target client."""
     layout = shell.read_desktop_layout(target.desktop.id, target.client_id)
     window = _resolve_window(target.desktop, layout, arguments.window, requester)
     shell.broadcaster.broadcast_layout_op(
-        "refresh", {"window": str(window.id)}, requester=requester_wire, target_client_id=str(target.client_id)
+        "refresh",
+        {"window": str(window.id)},
+        requester=_requester_wire(requester),
+        target_client_id=str(target.client_id),
     )
     logger.info("layout op=refresh requester={} window={} client={}", requester, window.id, target.client_id)
     return jsonify({"ok": True, "target_client_id": str(target.client_id)})
