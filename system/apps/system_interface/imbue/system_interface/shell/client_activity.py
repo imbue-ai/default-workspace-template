@@ -207,14 +207,15 @@ def _empty_client_summary(client_id: str) -> dict[str, Any]:
 @pure
 def summarize_client_activity(
     events: Sequence[dict[str, Any]],
-    # The broadcaster's registrations: each carries ``client_id``, ``active_view``, and ``device_kind``.
+    # The broadcaster's registrations: each carries ``client_id``, ``active_view``, ``active_desktop``, and
+    # ``device_kind`` (the view or the desktop is "" for a client whose shell has no such notion).
     connected_clients: Sequence[Mapping[str, str]],
 ) -> list[dict[str, Any]]:
     """Fold the log into one summary per client, most recently seen first (the ``context`` op).
 
-    Every connected client is listed with its live view and device kind, whether or not the
-    log holds anything for it: a client that has neither messaged nor switched views yet has
-    no event, and is still the one an agent's op should land on.
+    Every connected client is listed with its live view or desktop and its device kind, whether or
+    not the log holds anything for it: a client that has neither messaged nor switched views or
+    desktops yet has no event, and is still the one an agent's op should land on.
     """
     summary_by_client_id: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -242,7 +243,7 @@ def summarize_client_activity(
             )
             del summary["recent_messages"][:-RECENT_MESSAGES_PER_CLIENT]
     # The live registrations are fresher than the log (and the only record of a client that
-    # has logged nothing yet), so they settle the view and the device kind.
+    # has logged nothing yet), so they settle the view, the desktop, and the device kind.
     for connected in connected_clients:
         client_id = connected["client_id"]
         summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
