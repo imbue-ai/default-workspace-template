@@ -73,6 +73,7 @@ def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
     assert response.status_code == 200
     config = _config_of(response.text)
     assert config["session"] is None
+    assert config["tab"] is None
     assert config["page"] is None
     assert "<title>Terminal</title>" in response.text
 
@@ -129,7 +130,7 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
     page = SessionPage(
         name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1&arg=", pty_label="</script>"
     )
-    page_html = render_page(PageConfig(session="terminal-1", tab="", shell_label="", page=page))
+    page_html = render_page(PageConfig(session="terminal-1", tab=None, shell_label="", page=page))
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')

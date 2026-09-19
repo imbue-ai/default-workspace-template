@@ -123,7 +123,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   async function refresh(session) {
     if (session !== current) return;
     const params = new URLSearchParams();
-    if (config.tab !== "") params.set("tab", config.tab);
+    if (config.tab !== null) params.set("tab", config.tab);
     let response;
     try {
       response = await fetch(`api/sessions/${encodeURIComponent(session)}?${params}`);
@@ -151,7 +151,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     }
     const params = new URLSearchParams();
     params.set("session", session);
-    if (config.tab !== "") params.set("tab", config.tab);
+    if (config.tab !== null) params.set("tab", config.tab);
     history.replaceState(null, "", `/?${params}`);
     current = session;
     void refresh(session);
@@ -208,7 +208,7 @@ class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
     session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
-    tab: str = Field(description="The tab id the shell put in the URL, or \"\"")
+    tab: TerminalTabId | None = Field(description="The tab id the shell put in the URL, or None for none")
     shell_label: str = Field(description="The shell's origin label, or \"\" when none is registered")
     page: SessionPage | None = Field(description="The session's page, when there is a session")
 
@@ -270,7 +270,7 @@ def build_pages_blueprint(
         session = _session_name(raw_session) if raw_session != "" else None
         config = PageConfig(
             session=session,
-            tab=tab_id or "",
+            tab=tab_id,
             shell_label=read_origin_label(registry_path, SHELL_APP_NAME),
             page=session_page(session, tab_id) if session is not None else None,
         )
