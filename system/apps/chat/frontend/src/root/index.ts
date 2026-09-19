@@ -133,7 +133,7 @@ const ChatRoot: m.Component = {
     return m(
       "div",
       {
-        class: "chat-root flex h-screen w-screen overflow-hidden bg-bg",
+        class: "chat-root flex h-screen w-screen overflow-hidden bg-page",
         "data-compact": isCompact ? "true" : "false",
       },
       [
