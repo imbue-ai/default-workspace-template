@@ -598,7 +598,9 @@ def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_
         assert [(event["type"], event["to_desktop_id"]) for event in events] == [("desktop_switch", "gone")]
         # The redirected window is told where it landed, once; a report of that desktop then changes nothing.
         assert [
-            message["desktop_id"] for message in drain_messages(client_queue) if message["type"] == "active_desktop_changed"
+            message["desktop_id"]
+            for message in drain_messages(client_queue)
+            if message["type"] == "active_desktop_changed"
         ] == ["home"]
         settled = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(settled, client_queue, shell, is_first_report=False) is True
