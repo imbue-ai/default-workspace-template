@@ -363,12 +363,12 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
-/** The provisional record of ``chatId``, while the app lists it as one. */
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
 export function getProvisionalChats(): ProvisionalChat[] {
   return provisionalChats;
 }
 
+/** The provisional record of ``chatId``, while the app lists it as one. */
 export function getProvisionalChat(chatId: string): ProvisionalChat | undefined {
   return provisionalChats.find((p) => p.chat_id === chatId);
 }
