@@ -275,7 +275,8 @@ def list_wallpapers_route() -> ResponseReturnValue:
 def serve_wallpaper(kind: str, name: str) -> Response:
     try:
         wallpaper = Wallpaper(kind=WallpaperKind(kind), name=WallpaperName(name))
-    except ValueError:
+    except ValueError as e:
+        logger.debug("Refused a wallpaper request for kind {!r} and name {!r}: {}", kind, name, e)
         return Response(status=404)
     path = resolve_wallpaper_file(wallpaper, _wallpaper_directories())
     if path is None:
