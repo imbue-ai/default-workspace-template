@@ -252,6 +252,25 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   root dependency), deletes that script, and the next restart is a spawn error
   with nothing to recover it.
 
+  An app that needs a credential (an API key the user supplied through the
+  `connect-external-service` skill's secret card) declares it in `app.toml` and
+  runs under the wrapper. Pass `--secrets-file <name>` to the scaffold, or edit
+  the two by hand: `[[secrets]]` in the manifest names the file, its variables,
+  and a one-line note (`publish-template` reads it), and the program command
+  wraps the entry point so the file's variables reach the process and nothing
+  else does:
+
+  ```toml
+  [[secrets]]
+  file = "example"
+  variables = ["EXAMPLE_API_KEY"]
+  note = "An Example API key from the account's settings page"
+  ```
+
+  ```ini
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  ```
+
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
   (`new WebSocket("/ws")`), cookies (`Set-Cookie: Path=/`), and

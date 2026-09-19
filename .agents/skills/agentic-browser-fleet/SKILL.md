@@ -205,8 +205,9 @@ the user to "check the tab" for results.
   other. Drive several at once just by varying the name.
 - **Tabs:** `playwright-cli tab-list` / `tab-new` / `tab-select` / `tab-close`, within one
   browser. The fleet's `ls --include-tabs` shows the same tabs in the same order.
-- **Drive the browser yourself, in this chat.** A `launch-task` sub-agent runs in a separate,
-  isolated container with no access to this workspace's fleet. If a sub-agent needs something
+- **Drive the browser yourself, in this chat.** A `launch-task` sub-agent runs in a separate
+  worktree of this same workspace, so it could reach the fleet, but the browser and its pane
+  belong to this chat: the user watches and takes over here. If a sub-agent needs something
   from the web, have it tell you what it needs and you do the browsing.
 
 ## Exit codes -- branch on these

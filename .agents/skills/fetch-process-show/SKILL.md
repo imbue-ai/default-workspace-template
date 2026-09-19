@@ -38,8 +38,10 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 Ask only what blocks (phase 1). Then a small research pass (phase 2) and a
 proposed plan (phase 3), with these data specifics:
 
-For external services, load the `latchkey` skill first (it documents auth flows,
-permission requests, and credential handling you need before running any
+For external services, load the `connect-external-service` skill first (it routes
+you to the user's connected accounts, a new connection, an MCP server, a key on
+a secret card, or the browser, and documents the permission requests and
+credential handling you need before running any
 `latchkey` command), then run:
 
 ```bash

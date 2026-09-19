@@ -70,9 +70,9 @@ to one specific workspace at a time.
 When a call comes back rejected (a "not permitted by the user" message / 403),
 file a permission request and wait for the user to approve it. Mind uses a
 dedicated `type: "workspace"` request (distinct from the predefined-service
-requests in the `latchkey` skill). It goes in a tool call of its own, with
+requests in `.agents/skills/connect-external-service/references/latchkey.md`). It goes in a tool call of its own, with
 nothing else in it and its output untouched -- see "File exactly one permission
-request per tool call" in the `latchkey` skill for why:
+request per tool call" there for why:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
@@ -93,7 +93,7 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   act on. Omit it / set `null` for the non-targeted verbs (`read`, `create`), or
   to request a verb across *all* workspaces.
 - After posting, **wait for a system message** telling you whether the user
-  approved or denied (same as the `latchkey` skill's permission flow). Re-run
+  approved or denied (same as the latchkey permission flow in the `connect-external-service` skill). Re-run
   your call once approved.
 
 Tip: request exactly the verbs the task needs, with a clear rationale -- the
@@ -242,6 +242,6 @@ retrying a gated call.
   with `GET /api/schema`, trust the schema.
 - Don't expose the proxy/gateway mechanics to the user unless they ask -- talk in
   terms of "your workspaces".
-- For general latchkey usage and the predefined-service permission flow, see the
-  `latchkey` skill; this skill only adds the Mind-specific `type: "workspace"`
+- For general latchkey usage and the predefined-service permission flow, see
+  `.agents/skills/connect-external-service/references/latchkey.md`; this skill only adds the Mind-specific `type: "workspace"`
   permission request and the workspace routes.

@@ -83,7 +83,7 @@ If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
 permission -- initiate it yourself like any other latchkey permission request, see
-the `latchkey` skill, and tell the user an approval is waiting in minds). Fetch
+`.agents/skills/connect-external-service/references/latchkey.md`, and tell the user an approval is waiting in minds). Fetch
 the URL directly rather than persisting a gateway-URL remote:
 
 ```bash

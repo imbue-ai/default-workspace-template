@@ -77,6 +77,13 @@ Key fields:
   supervisord writes AUTO logs into its `childlogdir` (`/var/log/supervisor`)
   instead.
 
+A service that needs a credential the user supplied through the
+`connect-external-service` skill's secret card runs its entry point under
+`python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command>`
+inside the `bash -c` string, so the file's variables reach that process and
+nothing else does; the value goes in no config file and no command line, and
+the secrets guard refuses every other read of the file.
+
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.

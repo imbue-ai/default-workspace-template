@@ -85,7 +85,7 @@ exit 0
 """
 
 _HOST = "http://latchkey-self.invalid/permission-requests"
-# The canonical filing, exactly as the latchkey skill documents it.
+# The canonical filing, exactly as the connect-external-service skill's latchkey reference documents it.
 _REQUEST = f"latchkey curl -XPOST {_HOST} -H 'Content-Type: application/json' -d '{{\"agent_id\": \"a1\"}}'"
 # What mngr's lifecycle extension turns a command into when it rewrites `input.command`
 # (see its `rewriteBashCommand`): two commands prepended, `;`-joined.

@@ -92,5 +92,11 @@ crystallized skill emits `outline-approval` then `final-creation`). On top of
 whatever it lists, `question` (`type: gate`) is valid on every run: any worker
 may stop mid-flight and ask its lead, whatever the operation.
 
+One thing a worker never does: request a secret. There is no chat here to show a
+secret card in, so a credential the work turns out to need (an API key for a
+service, a token for an integration) goes into your report as a need the lead
+requests through the `connect-external-service` skill, with the file and variable
+names you would have asked for.
+
 That is the entire worker. Everything else is in the references you loaded in
 Step 2.

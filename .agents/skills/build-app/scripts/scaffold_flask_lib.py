@@ -77,7 +77,9 @@ RESERVED_NAMES = frozenset(
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
-_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+_FORWARD_PORT_PATH = (
+    Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+)
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -164,7 +166,8 @@ def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     ports: set[int] = set()
     for path in _supervisord_conf_files(supervisord_conf):
         ports.update(
-            int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+            int(match.group(1))
+            for match in LOCALHOST_PORT_RE.finditer(path.read_text())
         )
     return ports
 
@@ -414,7 +417,9 @@ def _display_name(description: str, explicit: str | None) -> str:
     candidate = explicit if explicit is not None else description
     candidate = candidate.strip()
     if not candidate:
-        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
+        sys.exit(
+            "error: the display name must not be empty (--display-name, or --description when it is omitted)"
+        )
     if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
         sys.exit(
             f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
@@ -443,7 +448,9 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
-    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name))
+    (lib_dir / "app.toml").write_text(
+        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name)
+    )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
@@ -468,7 +475,7 @@ program = "{name}"
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -510,7 +517,21 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
+def _entry_point_command(name: str, secrets_file: str | None) -> str:
+    """The program's entry point, wrapped so a declared secret file's variables reach it.
+
+    `with_secrets.py` is the one sanctioned reader of data/.secrets/ (see the
+    connect-external-service skill): it loads the file into the child's environment
+    and execs the app, so the value appears in no config file and no command line.
+    """
+    if secrets_file is None:
+        return name
+    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {name}"
+
+
+def _write_supervisord_program(
+    path: Path, name: str, package: str, port: int, secrets_file: str | None
+) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -524,7 +545,12 @@ def _write_supervisord_program(path: Path, name: str, package: str, port: int) -
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(
+            name=name,
+            package=package,
+            port=port,
+            entry_point=_entry_point_command(name, secrets_file),
+        )
     )
 
 
@@ -588,7 +614,11 @@ def main() -> None:
         default=None,
         help="what users see for the app (the manifest's display_name, at most 64 characters); defaults to the description",
     )
-    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
+    parser.add_argument(
+        "--icon-file",
+        required=True,
+        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
+    )
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
@@ -602,6 +632,11 @@ def main() -> None:
         "--repo-root",
         default=None,
         help="repo root (defaults to nearest ancestor containing pyproject.toml + system/supervisord.conf)",
+    )
+    parser.add_argument(
+        "--secrets-file",
+        default=None,
+        help="the <name> of a data/.secrets/<name>.env the app needs (requested through the connect-external-service skill); the program runs under with_secrets.py so its variables reach the app",
     )
     parser.add_argument(
         "--skip-uv-sync",
@@ -623,9 +658,17 @@ def main() -> None:
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
-        repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
+        repo_root,
+        args.name,
+        args.description,
+        display_name,
+        port,
+        list(args.extra_dep),
+        icon_markup,
     )
-    _write_supervisord_program(program_path, args.name, package, port)
+    _write_supervisord_program(
+        program_path, args.name, package, port, args.secrets_file
+    )
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)

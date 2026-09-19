@@ -237,7 +237,7 @@ findings name which third-party services the user's own creations reach. Grants
 are keyed to the host, so none of the old workspace's carried over. File **one
 batched permission request per scope** here -- before the user starts using
 anything -- rather than letting each migrated app hit a denial the first time they
-open it. Use the `latchkey` skill's `type: "predefined"` request, one call per
+open it. Use the `type: "predefined"` request from `.agents/skills/connect-external-service/references/latchkey.md`, one call per
 scope, all of them back-to-back, with a rationale naming the creation that needs
 it.
 

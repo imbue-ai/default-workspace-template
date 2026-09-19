@@ -76,7 +76,8 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * call out of its tool result.
  *
  * An agent asks the user for permission by POSTing to the reserved
- * `latchkey-self.invalid/permission-requests` host (see the latchkey skill).
+ * `latchkey-self.invalid/permission-requests` host (see the connect-external-service
+ * skill's `references/latchkey.md`).
  * The created request's JSON -- request_id, rationale, request_type, and a
  * type-specific payload -- routinely runs past the transcript's per-result
  * output limit, so it is read from the `permission_request` field the backend

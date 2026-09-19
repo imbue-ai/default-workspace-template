@@ -80,6 +80,12 @@ the repo root:
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
 
+A job that needs a credential the user supplied through the
+`connect-external-service` skill's secret card runs its command under
+`python3 /home/user/workspace/system/scripts/with_secrets.py /home/user/workspace/data/.secrets/<name>.env -- <command...>`
+(after the env wrapper), which puts the file's variables in that process's
+environment; never source or read the file in the cron line itself.
+
 The one exception is the built-in `update-apply-recover` guard, which carries
 its own `PATH` line and `cd` (see the map below). Every job you write goes
 through the wrapper.

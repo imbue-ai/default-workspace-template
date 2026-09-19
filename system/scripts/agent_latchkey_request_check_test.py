@@ -24,7 +24,7 @@ _BODY = (
     """"payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, """
     """"rationale": "read your servers"}'"""
 )
-# The canonical filing, exactly as the latchkey skill documents it.
+# The canonical filing, exactly as the connect-external-service skill's latchkey reference documents it.
 _REQUEST = (
     f"latchkey curl -XPOST {_HOST} -H 'Content-Type: application/json' -d {_BODY}"
 )
