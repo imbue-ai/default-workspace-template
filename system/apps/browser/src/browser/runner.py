@@ -252,30 +252,45 @@ def index() -> Response:
     return response
 
 
+def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Response":
+    """Register a new browser and return it at once (the Chromium launch runs in the background), or the refusal.
+
+    What ``POST /browsers`` and the ``new`` launch path share: 503 while Chromium is still
+    installing, 400 for a start page that is not an absolute http(s) URL or a name the fleet
+    cannot take, 409 for a duplicate name or a full fleet, 503 when the launch cannot be
+    registered. A missing or empty ``raw_url`` opens the home page.
+    """
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _error({"error": reason}, 503)
+    start_url: str | None = None
+    if raw_url:
+        try:
+            start_url = str(AbsoluteHttpUrl(raw_url))
+        except InvalidInstanceValueError as e:
+            return _error({"error": f"url: {e}"}, 400)
+    try:
+        # Returns fast: registers init + spawns the serialized launch on the loop.
+        return bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
+    except InvalidBrowserNameError as e:
+        return _error({"error": str(e)}, 400)
+    except (DuplicateBrowserNameError, FleetFullError) as e:
+        return _error({"error": str(e)}, 409)
+    except _STARTUP_ERRORS as e:
+        logger.error("failed to register browser: {}", e)
+        return _error({"error": f"Could not start browser: {e}"}, 503)
+
+
 def new_browser() -> Response:
     """``GET /new[?url=]``, the ``new`` launch path: create a browser and redirect to its viewer page.
 
     The same create as ``POST /browsers`` with no name, answered as a redirect so a window
     opened at the launch path lands on the browser it made and reports that path as its own.
     """
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _error({"error": reason}, 503)
-    raw_url = request.args.get(START_URL_PARAM)
-    start_url: str | None = None
-    if raw_url is not None and raw_url != "":
-        try:
-            start_url = str(AbsoluteHttpUrl(raw_url))
-        except InvalidInstanceValueError as e:
-            return _error({"error": f"url: {e}"}, 400)
-    try:
-        session = bridge.run(manager.create(None, start_url), timeout=_ROUTE_TIMEOUT)
-    except FleetFullError as e:
-        return _error({"error": str(e)}, 409)
-    except _STARTUP_ERRORS as e:
-        logger.error("failed to register browser: {}", e)
-        return _error({"error": f"Could not start browser: {e}"}, 503)
-    return redirect(str(instance_url_for_browser(BrowserName(session.browser_id))), code=302)
+    started = _start_browser(None, request.args.get(START_URL_PARAM))
+    if isinstance(started, Response):
+        return started
+    return redirect(str(instance_url_for_browser(BrowserName(started.browser_id))), code=302)
 
 
 def health() -> Response:
@@ -341,29 +356,12 @@ def create_browser() -> Response:
     Response ``{"name": <chosen-name>}``. Errors: 400 invalid name or url, 409 duplicate name or
     fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
     still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _error({"error": reason}, 503)
     body = _body()
-    name = body.get("name")
     raw_url = body.get("url")
-    start_url: str | None = None
-    if raw_url is not None:
-        try:
-            start_url = str(AbsoluteHttpUrl(str(raw_url)))
-        except InvalidInstanceValueError as e:
-            return _error({"error": f"url: {e}"}, 400)
-    try:
-        # Returns fast: registers init + spawns the serialized launch on the loop.
-        session = bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
-    except InvalidBrowserNameError as e:
-        return _error({"error": str(e)}, 400)
-    except (DuplicateBrowserNameError, FleetFullError) as e:
-        return _error({"error": str(e)}, 409)
-    except _STARTUP_ERRORS as e:
-        logger.error("failed to register browser: {}", e)
-        return _error({"error": f"Could not start browser: {e}"}, 503)
-    return jsonify({"name": session.browser_id})
+    started = _start_browser(body.get("name"), None if raw_url is None else str(raw_url))
+    if isinstance(started, Response):
+        return started
+    return jsonify({"name": started.browser_id})
 
 
 def close_browser(browser_id: str) -> Response:
