@@ -97,7 +97,7 @@ If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
 permission -- initiate it yourself like any other latchkey permission request,
-see the `latchkey` skill). Fetch the URL directly rather than persisting a
+see `.agents/skills/connect-external-service/references/latchkey.md`). Fetch the URL directly rather than persisting a
 gateway-URL remote:
 
 ```bash
@@ -230,7 +230,7 @@ or would you rather it read something else, like email?"
 conversation:**
 
 1. Initiate every activation requirement YOURSELF, now -- one latchkey
-   permission request per `requires_permission:` line (see the `latchkey` skill: `latchkey curl -XPOST
+   permission request per `requires_permission:` line (see `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey curl -XPOST
    http://latchkey-self.invalid/permission-requests`; the request opens the
    approval/login flow in the minds app). Each request is its own tool call,
    with nothing else in it; when a template needs several, file them one after
@@ -269,8 +269,20 @@ conversation:**
    - **cargo entries with rust absent** -- an upgrade will not help; rust has to
      be installed first.
 
-3. Wire up any `requires_secret:` values (ask the user for them), start the
-   services, and get the app running against THEIR data.
+3. **File one secret request per `[[requirements.secret]]` entry**, alongside
+   the permission requests and with the same posture: run the
+   `connect-external-service` skill's `request_secret.py` with the entry's
+   `file` and `variables` (and its `note` in your rationale), each in a tool
+   call of its own, then end the turn. When a `Secret stored:` message arrives
+   for an entry, merge that entry's servers from `.mcp.template.json` into the
+   workspace's `.mcp.json` (the file ships renamed so nothing starts before its
+   secret exists; a codex chat also needs the entry in its own config -- see the
+   skill's `references/mcp.md`) and start the programs that run under the file.
+   A `Secret declined:` message leaves that server and program out; the install
+   still completes, and you tell the user what stays unstarted and why. A legacy
+   entry with only a `name` is one bare variable: request it as a file named
+   after the app. Then start the remaining services and get the app running
+   against THEIR data.
 4. **Definition of done for a data-backed app: the user can open it and see
    their OWN data.** A service that starts cleanly or an endpoint that returns
    200 is NOT done — open the app's actual output yourself and confirm it

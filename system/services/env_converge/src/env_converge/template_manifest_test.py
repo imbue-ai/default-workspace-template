@@ -17,6 +17,7 @@ from env_converge.template_manifest import (
     TemplateManifestParseError,
     check_env_d_units,
     check_markdown_agreement,
+    check_secret_references,
     check_unfinished_placeholders,
     find_manifest_path,
     load_template_manifest,
@@ -663,3 +664,69 @@ def test_a_manifest_with_no_format_key_is_treated_as_ours(tmp_path: Path) -> Non
     manifest = _manifest(_MINIMAL_TOML.replace('format = "v2"\n', ""), tmp_path)
 
     assert manifest.format == CURRENT_MANIFEST_FORMAT
+
+
+def test_a_secret_requirement_names_a_file_with_variables_or_a_legacy_bare_name(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        _MINIMAL_TOML
+        + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["WIDGET_TOKEN"]\nnote = "a token"\n'
+        + '\n[[requirements.secret]]\nname = "SLACK_SIGNING_SECRET"\n',
+        tmp_path,
+    )
+    modern, legacy = manifest.requirements.secret
+    assert (modern.file, modern.variables, modern.name) == (
+        "widget",
+        ("WIDGET_TOKEN",),
+        None,
+    )
+    assert (legacy.file, legacy.variables, legacy.name) == (
+        None,
+        (),
+        "SLACK_SIGNING_SECRET",
+    )
+    for bad in (
+        '\n[[requirements.secret]]\nfile = "widget"\n',
+        '\n[[requirements.secret]]\nnote = "nothing named"\n',
+        '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\nname = "A"\n',
+    ):
+        with pytest.raises(TemplateManifestParseError):
+            _manifest(_MINIMAL_TOML + bad, tmp_path)
+
+
+def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
+    tmp_path: Path,
+) -> None:
+    _write_tree(tmp_path)
+    (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
+    (tmp_path / "system/supervisord.conf.d/widget.conf").write_text(
+        'command=bash -c "python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget"\n'
+    )
+    (tmp_path / ".mcp.template.json").write_text(
+        '{"mcpServers": {"m": {"args": ["data/.secrets/mailer.env"]}}}'
+    )
+
+    problems = validate_template_tree(tmp_path)
+
+    assert len(problems) == 2
+    assert any(
+        "widget.conf" in problem and "widget.env" in problem for problem in problems
+    )
+    assert any(
+        ".mcp.template.json" in problem and "mailer.env" in problem
+        for problem in problems
+    )
+
+    declared = (
+        _manifest(
+            _MINIMAL_TOML
+            + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\n'
+            + '\n[[requirements.secret]]\nfile = "mailer"\nvariables = ["B"]\n',
+            tmp_path / "declared",
+        )
+        if (tmp_path / "declared").mkdir() is None
+        else None
+    )
+    assert declared is not None
+    assert check_secret_references(tmp_path, declared) == ()

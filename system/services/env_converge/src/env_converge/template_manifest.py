@@ -49,7 +49,7 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 # The three files a template publishes at its repo root. No slug in any of
 # them: one template per repo, overriding rather than accumulating.
@@ -80,6 +80,11 @@ class TemplateManifestNotFoundError(TemplateManifestError, FileNotFoundError):
     def __init__(self, path: Path) -> None:
         self.path = path
         super().__init__(f"No template manifest at {path}")
+
+
+class InvalidSecretRequirementError(TemplateManifestError, ValueError):
+    """Raised (inside validation, so it surfaces as a parse error) when a secret requirement
+    names neither a file with variables nor a legacy bare name, or names both."""
 
 
 class TemplateManifestParseError(TemplateManifestError, ValueError):
@@ -181,10 +186,37 @@ class PermissionRequirement(FrozenManifestModel):
 
 
 class SecretRequirement(FrozenManifestModel):
-    """One secret the adopter must supply."""
+    """One data/.secrets/<file>.env the adopter must supply, with the variables it sets.
 
-    name: NonEmptyString = Field(description="Environment variable or config key")
-    note: str = Field(default="", description="What it is for and where it goes")
+    Aggregated by the publish flow from the included apps' and skills' declarations;
+    the adopting agent files one secret card per entry (the connect-external-service
+    skill) and activates what runs under the file once it is stored.
+    """
+
+    file: NonEmptyString | None = Field(
+        default=None,
+        description="The <file> of data/.secrets/<file>.env the card writes",
+    )
+    variables: tuple[NonEmptyString, ...] = Field(
+        default=(), description="The variables the card asks for, in order"
+    )
+    # CLEANUP: drop `name` (and the either/or rule below) once no published template
+    # predates the file-and-variables shape; until then a manifest naming one bare
+    # variable still loads, and use-template asks for it by name.
+    name: NonEmptyString | None = Field(
+        default=None, description="Legacy: a bare environment variable or config key"
+    )
+    note: str = Field(default="", description="What it is for and where to get it")
+
+    @model_validator(mode="after")
+    def _one_shape(self) -> "SecretRequirement":
+        if self.file is not None and self.variables and self.name is None:
+            return self
+        if self.file is None and not self.variables and self.name is not None:
+            return self
+        raise InvalidSecretRequirementError(
+            "a secret requirement names a file with at least one variable (or, legacy, a bare name), not both"
+        )
 
 
 class LlmRequirement(FrozenManifestModel):
@@ -628,6 +660,42 @@ def check_markdown_agreement(
     return tuple(problems)
 
 
+# A secret file a snapshot's MCP config or supervisord program runs under: the same
+# reference the publish flow's writer aggregates from, read here off the assembled tree.
+SECRET_REFERENCE_PATTERN = re.compile(r"data/\.secrets/([a-z0-9][a-z0-9-]*)\.env")
+MCP_TEMPLATE_FILE_NAME = ".mcp.template.json"
+SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
+
+
+def check_secret_references(
+    repo_root: Path, manifest: TemplateManifest
+) -> tuple[str, ...]:
+    """Problems where the tree runs under a secret file the manifest does not declare.
+
+    An adopter is asked for exactly the declared files, so a program or MCP server
+    that names an undeclared one starts with no credential and fails silently.
+    """
+    declared = {
+        item.file for item in manifest.requirements.secret if item.file is not None
+    }
+    candidates = [repo_root / MCP_TEMPLATE_FILE_NAME, repo_root / ".mcp.json"]
+    dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
+    if dropins.is_dir():
+        candidates.extend(sorted(dropins.glob("*.conf")))
+    problems: list[str] = []
+    for path in candidates:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for file in sorted(set(SECRET_REFERENCE_PATTERN.findall(text))):
+            if file not in declared:
+                problems.append(
+                    f"{path.relative_to(repo_root).as_posix()} runs under data/.secrets/{file}.env, "
+                    "which no [[requirements.secret]] entry declares"
+                )
+    return tuple(problems)
+
+
 def check_unfinished_placeholders(*texts: str) -> tuple[str, ...]:
     """Problems where a generated FILL-IN block was never replaced.
 
@@ -682,6 +750,7 @@ def validate_template_tree(
         thumbnail_text = thumbnail_path.read_text(encoding="utf-8", errors="replace")
 
     problems.extend(check_env_d_units(manifest))
+    problems.extend(check_secret_references(repo_root, manifest))
     # `check_env_d_units` proves a unit is named right and WOULD ship if it
     # existed; only the assembled tree can prove it does. A declared unit with
     # a typo in its path passes every name check and then simply never runs on

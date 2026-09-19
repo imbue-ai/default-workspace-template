@@ -17,6 +17,7 @@ from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
+from app_manifest.primitives import EnvVarName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
@@ -24,6 +25,7 @@ from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
+from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
@@ -50,7 +52,9 @@ class ActionParam(FrozenModel):
 
     name: NonEmptyStr = Field(description="The key in the create body's params")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
-    required: bool = Field(default=False, description="Whether the create refuses a body without it")
+    required: bool = Field(
+        default=False, description="Whether the create refuses a body without it"
+    )
 
 
 class AppAction(FrozenModel):
@@ -58,15 +62,20 @@ class AppAction(FrozenModel):
 
     id: ActionId = Field(description="The id shortcuts and layout.py refer to")
     label: NonEmptyStr = Field(description="The action's user-facing label")
-    params: tuple[ActionParam, ...] = Field(default=(), description="The create body's documented params")
+    params: tuple[ActionParam, ...] = Field(
+        default=(), description="The create body's documented params"
+    )
 
 
 class AppReference(FrozenModel):
     """An artifact outside the app's own directory that belongs to the app."""
 
-    path: ReferencePath = Field(description="The literal repo-root-relative file or directory")
+    path: ReferencePath = Field(
+        description="The literal repo-root-relative file or directory"
+    )
     note: ReferenceNote | None = Field(
-        default=None, description="One line: why it belongs to the app and which surface it uses"
+        default=None,
+        description="One line: why it belongs to the app and which surface it uses",
     )
 
 
@@ -74,7 +83,8 @@ class ScopeRules(FrozenModel):
     """What an app's footprint leaves out on top of the built-in exclusions."""
 
     exclude: tuple[ExcludeGlob, ...] = Field(
-        default=(), description="Repo-root-relative gitignore-style globs no pass ever considers"
+        default=(),
+        description="Repo-root-relative gitignore-style globs no pass ever considers",
     )
 
 
@@ -88,10 +98,38 @@ class WiringRules(FrozenModel):
     )
 
 
+class SecretDeclaration(FrozenModel):
+    """One data/.secrets/<file>.env the app runs under (through with_secrets.py), so a
+    published template can ask an adopter for exactly those variables."""
+
+    file: SecretFileName = Field(description="The <file> of data/.secrets/<file>.env")
+    variables: tuple[EnvVarName, ...] = Field(
+        description="The variables the file must set; at least one"
+    )
+    note: ReferenceNote | None = Field(
+        default=None,
+        description="One line for the adopter: what the value is and where to get it",
+    )
+
+    @model_validator(mode="after")
+    def _check_variables(self) -> Self:
+        if not self.variables:
+            raise InvalidManifestValueError(
+                f"secret {str(self.file)!r} must list at least one variable"
+            )
+        if len(set(self.variables)) != len(self.variables):
+            raise InvalidManifestValueError(
+                f"secret {str(self.file)!r} lists a variable twice"
+            )
+        return self
+
+
 class DefaultShortcut(FrozenModel):
     """The rail row a new project is seeded with for this app."""
 
-    action: ActionId = Field(description="A declared action id, or 'open' for a single-instance app")
+    action: ActionId = Field(
+        description="A declared action id, or 'open' for a single-instance app"
+    )
     mode: ShortcutMode = Field(description="focus or new")
 
 
@@ -100,15 +138,34 @@ class AppManifest(FrozenModel):
 
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
-    icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
-    instances: bool = Field(default=False, description="Whether the app serves the instances API")
-    instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served when not at the app URL")
-    critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
-    priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
+    icon: IconPath | None = Field(
+        default=None,
+        description="The icon file, relative to the manifest; required unless internal",
+    )
+    instances: bool = Field(
+        default=False, description="Whether the app serves the instances API"
+    )
+    instances_url: InstancesUrl | None = Field(
+        default=None,
+        description="Where the instances API is served when not at the app URL",
+    )
+    critical: bool = Field(
+        default=False,
+        description="No Stop verb; snapshot-and-rollback target in the update apply",
+    )
+    priority: PriorityName = Field(
+        default=DEFAULT_PRIORITY, description="The memory-shedding band name"
+    )
+    program: ProgramName = Field(
+        description="The supervisord program that runs the app (defaults to the name)"
+    )
     internal: bool = Field(default=False, description="Hidden from every open surface")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
-    actions: tuple[AppAction, ...] = Field(default=(), description="The declared create actions")
+    default_shortcut: DefaultShortcut | None = Field(
+        default=None, description="The rail row a new project is seeded with"
+    )
+    actions: tuple[AppAction, ...] = Field(
+        default=(), description="The declared create actions"
+    )
     launcher_rank: int | None = Field(
         default=None,
         ge=1,
@@ -116,15 +173,24 @@ class AppManifest(FrozenModel):
         "an app without one follows every ranked app",
     )
     references: tuple[AppReference, ...] = Field(
-        default=(), description="The artifacts outside the app's directory that belong to it"
+        default=(),
+        description="The artifacts outside the app's directory that belong to it",
     )
     scope: ScopeRules = Field(
-        default_factory=ScopeRules, description="The app's own exclusions from its footprint"
+        default_factory=ScopeRules,
+        description="The app's own exclusions from its footprint",
     )
     wiring: WiringRules = Field(
-        default_factory=WiringRules, description="The extra supervisord programs the app owns"
+        default_factory=WiringRules,
+        description="The extra supervisord programs the app owns",
     )
-    handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
+    secrets: tuple[SecretDeclaration, ...] = Field(
+        default=(),
+        description="The secret files the app runs under, for publish-template to aggregate",
+    )
+    handles: dict[str, Any] = Field(
+        default_factory=dict, description="Reserved; must be absent or empty"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -138,11 +204,17 @@ class AppManifest(FrozenModel):
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.instances_url is not None and not self.instances:
-            raise InvalidManifestValueError("instances_url is only allowed with instances = true")
+            raise InvalidManifestValueError(
+                "instances_url is only allowed with instances = true"
+            )
         if self.actions and not self.instances:
-            raise InvalidManifestValueError("actions are only allowed with instances = true")
+            raise InvalidManifestValueError(
+                "actions are only allowed with instances = true"
+            )
         if self.handles:
-            raise InvalidManifestValueError("handles must be absent or empty in this release")
+            raise InvalidManifestValueError(
+                "handles must be absent or empty in this release"
+            )
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(
@@ -150,14 +222,23 @@ class AppManifest(FrozenModel):
             )
         wiring_programs = list(self.wiring.programs)
         if len(set(wiring_programs)) != len(wiring_programs):
-            raise InvalidManifestValueError(f"wiring programs must be unique, got {wiring_programs}")
+            raise InvalidManifestValueError(
+                f"wiring programs must be unique, got {wiring_programs}"
+            )
         if self.program in wiring_programs:
             raise InvalidManifestValueError(
                 f"wiring programs must not repeat the app's own program {str(self.program)!r}"
             )
         action_ids = [action.id for action in self.actions]
         if len(set(action_ids)) != len(action_ids):
-            raise InvalidManifestValueError(f"action ids must be unique, got {action_ids}")
+            raise InvalidManifestValueError(
+                f"action ids must be unique, got {action_ids}"
+            )
+        secret_files = [secret.file for secret in self.secrets]
+        if len(set(secret_files)) != len(secret_files):
+            raise InvalidManifestValueError(
+                f"secret files must be unique, got {secret_files}"
+            )
         if self.default_shortcut is not None:
             allowed_ids = set(action_ids) if self.instances else {OPEN_ACTION_ID}
             if self.default_shortcut.action not in allowed_ids:
@@ -195,7 +276,9 @@ def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
     return f"{app_directory.relative_to(repo_root).as_posix()}/"
 
 
-def _is_inside_another_apps_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
+def _is_inside_another_apps_directory(
+    repo_root: Path, reference_path: ReferencePath
+) -> bool:
     """Whether a reference reaches into some app package under system/apps/."""
     parts = reference_path.split("/")
     # A file that sits directly in system/apps/ (its README) is not an app; only a
@@ -207,7 +290,9 @@ def _is_inside_another_apps_directory(repo_root: Path, reference_path: Reference
     )
 
 
-def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
+def _find_symlinked_component(
+    repo_root: Path, reference_path: ReferencePath
+) -> str | None:
     """The first component of a reference that is itself a symlink, or None when none is.
 
     Git reports a changed file under the real directory and never under a symlink to it
@@ -228,7 +313,9 @@ def _check_references_against_repo_root(
     """Raises ManifestLoadError when a reference sits where it may not, or names nothing that exists."""
     own_app_directory = app_package_directory(repo_root, path)
     for reference in manifest.references:
-        if own_app_directory is not None and is_path_covered_by(own_app_directory, reference.path):
+        if own_app_directory is not None and is_path_covered_by(
+            own_app_directory, reference.path
+        ):
             raise ManifestLoadError(
                 f"manifest {path} is invalid: reference {str(reference.path)!r} is inside the app's "
                 f"own directory {own_app_directory!r}, which is already implicit"
@@ -272,10 +359,16 @@ def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
     try:
         manifest = AppManifest.model_validate(data)
     except ValidationError as e:
-        raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
+        raise ManifestLoadError(
+            f"manifest {path} is invalid: {describe_validation_error(e)}"
+        ) from e
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
-        raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
-    resolved_repo_root = repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
+        raise ManifestLoadError(
+            f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it"
+        )
+    resolved_repo_root = (
+        repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
+    )
     if resolved_repo_root is not None:
         _check_references_against_repo_root(path, manifest, resolved_repo_root)
     return manifest
@@ -286,4 +379,3 @@ def manifest_icon_path(manifest_path: Path, manifest: AppManifest) -> Path | Non
     if manifest.icon is None:
         return None
     return manifest_path.parent / manifest.icon
-

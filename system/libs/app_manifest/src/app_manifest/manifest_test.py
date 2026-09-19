@@ -384,7 +384,9 @@ exclude = ["system/apps/news/frontend/dist/**"]
 def test_wiring_programs_are_unique_and_never_the_apps_own() -> None:
     base = {"name": "news", "display_name": "News", "icon": "icon.svg"}
 
-    assert AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb"]}}).wiring.programs == ("xvfb",)
+    assert AppManifest.model_validate(
+        {**base, "wiring": {"programs": ["xvfb"]}}
+    ).wiring.programs == ("xvfb",)
     with pytest.raises(ValidationError, match="unique"):
         AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb", "xvfb"]}})
     with pytest.raises(ValidationError, match="own program"):
@@ -398,7 +400,10 @@ def test_a_manifest_reads_its_references_and_scope() -> None:
             "display_name": "News",
             "icon": "icon.svg",
             "references": [
-                {"path": ".agents/skills/news-refresh", "note": "Drives the ingest route"},
+                {
+                    "path": ".agents/skills/news-refresh",
+                    "note": "Drives the ingest route",
+                },
                 {"path": "system/scripts/run_news.sh"},
             ],
             "scope": {"exclude": ["system/apps/news/frontend/dist/**"]},
@@ -492,7 +497,9 @@ def test_a_reference_path_naming_a_glob_says_so() -> None:
         )
 
 
-@pytest.mark.parametrize("note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201])
+@pytest.mark.parametrize(
+    "note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201]
+)
 def test_a_reference_note_must_be_one_non_empty_line(note: str) -> None:
     with pytest.raises(ValidationError, match="note"):
         AppManifest.model_validate(
@@ -547,7 +554,9 @@ def test_an_exclude_glob_cannot_negate_its_way_past_the_built_in_excludes() -> N
         )
 
 
-def test_load_manifest_derives_the_repo_root_from_the_apps_layout(tmp_path: Path) -> None:
+def test_load_manifest_derives_the_repo_root_from_the_apps_layout(
+    tmp_path: Path,
+) -> None:
     manifest_path = write_app_manifest(
         tmp_path, "news", _REFERENCING_MANIFEST, is_icon_written=True
     )
@@ -590,7 +599,9 @@ def test_load_manifest_rejects_a_reference_inside_the_apps_own_directory(
         load_manifest(manifest_path, repo_root=tmp_path)
 
 
-def test_load_manifest_rejects_a_reference_to_another_apps_directory(tmp_path: Path) -> None:
+def test_load_manifest_rejects_a_reference_to_another_apps_directory(
+    tmp_path: Path,
+) -> None:
     manifest_path = write_app_manifest(
         tmp_path,
         "news",
@@ -620,7 +631,9 @@ def test_load_manifest_accepts_a_reference_to_a_file_directly_under_the_apps_dir
 
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
-    assert [reference.path for reference in manifest.references] == ["system/apps/README.md"]
+    assert [reference.path for reference in manifest.references] == [
+        "system/apps/README.md"
+    ]
 
 
 def test_load_manifest_rejects_a_reference_that_goes_through_a_symlinked_directory(
@@ -656,3 +669,39 @@ def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root
 
     with pytest.raises(ManifestLoadError, match="does not exist"):
         load_manifest(manifest_path, repo_root=tmp_path)
+
+
+def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> (
+    None
+):
+    data = {
+        **_full_manifest_data(),
+        "secrets": [
+            {
+                "file": "widget",
+                "variables": ["WIDGET_TOKEN", "WIDGET_ORG"],
+                "note": "a Widget API token",
+            },
+            {"file": "mailer", "variables": ["SMTP_PASSWORD"]},
+        ],
+    }
+    manifest = AppManifest.model_validate(data)
+    assert [
+        (str(secret.file), tuple(secret.variables)) for secret in manifest.secrets
+    ] == [
+        ("widget", ("WIDGET_TOKEN", "WIDGET_ORG")),
+        ("mailer", ("SMTP_PASSWORD",)),
+    ]
+    assert manifest.secrets[1].note is None
+    for bad in (
+        [
+            {"file": "widget", "variables": ["A"]},
+            {"file": "widget", "variables": ["B"]},
+        ],
+        [{"file": "widget", "variables": []}],
+        [{"file": "widget", "variables": ["A", "A"]}],
+        [{"file": "Widget", "variables": ["A"]}],
+        [{"file": "widget", "variables": ["1A"]}],
+    ):
+        with pytest.raises(ValidationError):
+            AppManifest.model_validate({**_full_manifest_data(), "secrets": bad})

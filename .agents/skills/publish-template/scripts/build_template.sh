@@ -351,6 +351,13 @@ git clean -fdxq
 # apps/foo even when apps/ already exists on the base -- never nesting apps/apps.
 rsync -a "$STAGE/" "$REPO/"
 
+# An included .mcp.json ships as .mcp.template.json: nothing may activate on
+# adoption before the secrets its servers run under exist, so use-template merges
+# each entry into the adopter's .mcp.json only once that entry's file is stored.
+if [ -f "$REPO/.mcp.json" ]; then
+    mv "$REPO/.mcp.json" "$REPO/.mcp.template.json"
+fi
+
 # --- 4. (carry-forward already handled in step 1's staging) ------------------
 
 # --- 5. secret scan (authoritative, hard-failing blocker) --------------------
@@ -445,6 +452,7 @@ fi
 yaml_scalar() {
     python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
+requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES" 2>/dev/null || true)"
 title_yaml="$(yaml_scalar "$TITLE")"
 description_yaml="$(yaml_scalar "$manifest_description")"
 thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
@@ -472,6 +480,11 @@ if [ -n "$PREVIOUS_MANIFEST_TOML" ]; then
     manifest_toml_args+=(--previous-manifest "$PREVIOUS_MANIFEST_TOML")
 fi
 manifest_toml_args+=(--description "$manifest_description")
+# The secrets the included apps and skills declare are aggregated into the TOML
+# and checked against the live workspace's own data/.secrets/ files; the matching
+# requires_secret: lines land in template.md below, so the two agree from the start.
+REQUIRES_SECRET_LINES="$SCAN_TOOLS_DIR/requires-secret-lines.md"
+manifest_toml_args+=(--repo-root "$REPO" --workspace-dir "$data_source" --secret-lines-output "$REQUIRES_SECRET_LINES")
 
 # `uv run --no-project` (no workspace resolution, so none of the cold-base
 # fragility the smoke check warns about) rather than a bare python3: the writer
@@ -551,15 +564,22 @@ theirs. Two kinds of entry, handled at different times:
 - **Adaptation** -- what must be DECIDED or REWIRED, in prose. Worked through
   interactively with the user, after activation.
 
+${requires_secret_lines}
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with both kinds of entry.
+with both kinds of entry. Any \`requires_secret:\` lines already above this
+comment were generated from the included apps' and skills' declarations (and
+match the \`[[requirements.secret]]\` entries in ${MANIFEST_TOML}); leave them
+as they are and do not repeat them.
 
 ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_\`):
 
 - requires_permission: <latchkey scope> / <permission schema> (user-approved;
   the adopting agent initiates this via a latchkey permission request during
   setup -- it must not merely mention it)
-- requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+- requires_secret: data/.secrets/<file>.env with <VAR_A, VAR_B> (what it is for
+  and where to get it) -- normally generated, see above; declare a new one in
+  the app's app.toml [[secrets]] or the skill's SKILL.md secrets: rather than
+  writing it here by hand
 - requires_llm: <how the code reaches Claude, and what an adopter needs>
   (include this line whenever the app calls an LLM: name the method it was
   built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via

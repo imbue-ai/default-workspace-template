@@ -42,6 +42,13 @@ PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 ICON_SUFFIX: Final[str] = ".svg"
 
+# The <file> of data/.secrets/<file>.env, as the chat app's secret card writes it, and a
+# POSIX shell identifier for each variable the file sets (what `source` accepts).
+SECRET_FILE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9][a-z0-9-]{0,63}$"
+)
+ENV_VAR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 @pure
 def describe_app_name_problem(name: str) -> str | None:
@@ -88,6 +95,44 @@ class DisplayName(str):
         if len(value) > MAX_DISPLAY_NAME_LENGTH:
             raise InvalidManifestValueError(
                 f"display_name must be at most {MAX_DISPLAY_NAME_LENGTH} characters, got {len(value)}"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+class SecretFileName(str):
+    """The <file> of a data/.secrets/<file>.env an app runs under: a lowercase slug."""
+
+    def __new__(cls, value: str) -> Self:
+        if not SECRET_FILE_NAME_PATTERN.fullmatch(value):
+            raise InvalidManifestValueError(
+                f"invalid secret file {value!r}: names match ^[a-z0-9][a-z0-9-]{{0,63}}$ (the <file> of data/.secrets/<file>.env)"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+class EnvVarName(str):
+    """An environment variable a secret file sets: a POSIX shell identifier."""
+
+    def __new__(cls, value: str) -> Self:
+        if not ENV_VAR_NAME_PATTERN.fullmatch(value):
+            raise InvalidManifestValueError(
+                f"invalid variable name {value!r}: names are letters, digits and underscores, not starting with a digit"
             )
         return super().__new__(cls, value)
 

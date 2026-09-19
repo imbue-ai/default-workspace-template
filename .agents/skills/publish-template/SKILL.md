@@ -498,12 +498,22 @@ worktree to a clean template base and deletes gitignored state -- including
      the channel name itself). The whole point of a modification is that the
      value does not ship; restating it here would publish it.
    - `[requirements]` -- one `[[requirements.permission]]` per
-     `requires_permission:` line you wrote, one `[[requirements.secret]]` per
-     `requires_secret:`, and a `[requirements.llm]` table if there is a
-     `requires_llm:` line. One-for-one with the markdown, both directions --
-     that is the half the validator cross-checks. Mirror the adaptation
-     bullets as `[[requirements.adaptation]]` entries too; those are prose on
-     both sides, so they are not compared.
+     `requires_permission:` line you wrote, and a `[requirements.llm]` table if
+     there is a `requires_llm:` line. One-for-one with the markdown, both
+     directions -- that is the half the validator cross-checks. Mirror the
+     adaptation bullets as `[[requirements.adaptation]]` entries too; those are
+     prose on both sides, so they are not compared.
+   - The `[[requirements.secret]]` entries (and the matching `requires_secret:`
+     lines in `template.md`) are **generated, not written**: the assembly
+     aggregates every `[[secrets]]` in an included app's `app.toml` and every
+     `secrets:` list in an included skill's SKILL.md front matter, plus every
+     `data/.secrets/<file>.env` the snapshot's `.mcp.template.json` and
+     supervisord programs run under. It refuses to assemble when a referenced
+     file has no declaration or a declared variable is missing from this
+     workspace's own file -- fix the declaration at its source (the
+     `connect-external-service` skill documents the shapes) and re-run. An
+     included `.mcp.json` ships renamed to `.mcp.template.json`, so nothing
+     activates on adoption before its secrets exist.
    - `[environment]` -- what the included code needs INSTALLED beyond the stock
      template. Derive it from the CODE, not from whatever happens to be
      installed on this machine: every binary it shells out to, every global
@@ -879,7 +889,7 @@ assembly -- happens IN `$WT`, never `/home/user/workspace`.
 ## 7. Ensure GitHub access (latchkey -- do NOT use the gh CLI)
 
 GitHub access goes through **latchkey's github permissioning**, exactly like
-every other connector in this template (see the `latchkey` skill). If §0 already
+every other connector in this template (see `.agents/skills/connect-external-service/references/latchkey.md`). If §0 already
 asked the user to connect their account, the probes below simply find the grant
 in place and this section is a no-op -- it always probes before requesting, so
 running it after an early request never duplicates anything. Do NOT use

@@ -99,6 +99,10 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
 
     (source / "system/apps/demo").mkdir(parents=True)
     (source / "system/apps/demo/main.py").write_text("x = 1\n")
+    # An MCP server the app relies on: included, it must ship as .mcp.template.json.
+    (source / ".mcp.json").write_text(
+        '{"mcpServers": {"demo": {"command": "demo-mcp", "args": []}}}\n'
+    )
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "the app being published", cwd=source)
     return source, base_ref
@@ -170,6 +174,8 @@ def _assemble(
             "A demo.",
             "--include",
             "system/apps/demo",
+            "--include",
+            ".mcp.json",
             *extra,
         ],
         cwd=cwd,
@@ -212,6 +218,13 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
 
 
 @_needs_scanners
+def test_an_included_mcp_config_ships_renamed_so_nothing_activates_before_its_secrets(
+    built_snapshot: Path,
+) -> None:
+    assert not (built_snapshot / ".mcp.json").exists()
+    assert '"demo-mcp"' in (built_snapshot / ".mcp.template.json").read_text()
+
+
 def test_the_manifest_trio_is_written(built_snapshot: Path) -> None:
     # The three files an adopter's tooling looks for. Absence of the TOML is
     # what marks a repo as the older v1 format, so a missing one is not a
