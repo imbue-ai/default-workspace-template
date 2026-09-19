@@ -13,7 +13,7 @@ def _log(tmp_path: Path) -> ClientActivityLog:
 
 def _connected(client_id: str, active_view: str, device_kind: str) -> dict[str, str]:
     """A live registration as the broadcaster reports it."""
-    return {"client_id": client_id, "active_view": active_view, "device_kind": device_kind}
+    return {"client_id": client_id, "active_view": active_view, "device_kind": device_kind, "active_desktop": ""}
 
 
 def test_messages_are_appended_truncated_and_read_back_in_order(tmp_path: Path) -> None:

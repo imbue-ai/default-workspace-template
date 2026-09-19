@@ -248,7 +248,7 @@ def summarize_client_activity(
         summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
         summary["is_connected"] = True
         summary["active_view"] = connected["active_view"] or None
-        summary["active_desktop"] = connected.get("active_desktop") or None
+        summary["active_desktop"] = connected["active_desktop"] or None
         summary["device_kind"] = connected["device_kind"]
     return sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True)
 
