@@ -120,13 +120,14 @@ def test_health_answers(pages_client: FlaskClient) -> None:
     assert pages_client.get("/api/health").json == {"status": "ok"}
 
 
-def test_render_page_keeps_a_script_closer_out_of_the_config() -> None:
+def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
     page = SessionPage(
-        name="terminal-1", title="Terminal 1", pty_path="/?arg=_&arg=session&arg=terminal-1&arg=", pty_label="</script>"
+        name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1&arg=", pty_label="</script>"
     )
-    html = render_page(PageConfig(session="terminal-1", tab="", shell_label="", page=page))
+    page_html = render_page(PageConfig(session="terminal-1", tab="", shell_label="", page=page))
 
-    start = html.index('id="terminal-config">') + len('id="terminal-config">')
-    raw_config = html[start : html.index("</script>", start)]
+    assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
+    start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
+    raw_config = page_html[start : page_html.index("</script>", start)]
     assert "</script" not in raw_config
     assert json.loads(raw_config)["page"]["pty_label"] == "</script>"

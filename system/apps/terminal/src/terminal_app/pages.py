@@ -8,6 +8,7 @@ the browser from the labels this module reads out of the registry, the way every
 derives another app's origin.
 """
 
+import html
 import json
 from pathlib import Path
 from typing import Final
@@ -230,7 +231,7 @@ def render_page(config: PageConfig) -> str:
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
     encoded = json.dumps(config.model_dump(mode="json")).replace("</", "<\\/")
     return (
-        _PAGE_TEMPLATE.replace("__TITLE__", title.replace("<", "&lt;"))
+        _PAGE_TEMPLATE.replace("__TITLE__", html.escape(title))
         .replace("__CONFIG_ID__", _CONFIG_ELEMENT_ID)
         .replace("__CONFIG__", encoded)
     )
