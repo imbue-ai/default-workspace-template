@@ -93,7 +93,11 @@ class HeapTrimmer:
         """Run one trim now, on the calling thread. A no-op without ``malloc_trim``."""
         if self._trim is None:
             return
-        self._trim()
+        # Logged only when the allocator actually released pages (it answers 1 for
+        # released, 0 for nothing to release), so the log carries the evidence that
+        # this path ran and is reclaiming without a line a minute saying it did not.
+        if self._trim() == 1:
+            logger.debug("Returned freed heap to the OS")
 
     def _run(self) -> None:
         while not self._stop_event.wait(timeout=self._interval_seconds):
