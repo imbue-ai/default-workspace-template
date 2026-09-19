@@ -612,6 +612,12 @@ def desktop_wire_json(desktop: Desktop) -> dict[str, Any]:
 
 
 @pure
+def window_wire_json(window: Window) -> dict[str, Any]:
+    """The ``window`` object of desktop contracts.md section 4.1."""
+    return window.model_dump(mode="json")
+
+
+@pure
 def desktop_layout_wire_json(layout: DesktopLayout) -> dict[str, Any]:
     """The ``layout`` object of desktop contracts.md section 4.2."""
     return layout.model_dump(mode="json")
