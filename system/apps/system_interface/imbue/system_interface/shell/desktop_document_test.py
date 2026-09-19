@@ -16,8 +16,8 @@ from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
-from imbue.system_interface.shell.data_types import Placement
 from imbue.system_interface.shell.data_types import ShortcutTarget
+from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
 from imbue.system_interface.shell.desktop_document import GridDimensions
@@ -318,12 +318,14 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
 # Layouts
 
 
-def _layout(*placements: Placement) -> DesktopLayout:
+def _layout(*placements: WindowPlacement) -> DesktopLayout:
     return DesktopLayout(version=1, updated_at=None, placements=placements)
 
 
-def _placement(window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL) -> Placement:
-    return Placement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
+def _placement(
+    window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL
+) -> WindowPlacement:
+    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
 
 
 def test_windows_without_a_placement_read_as_minimized_at_the_bottom_and_stale_placements_are_dropped() -> None:

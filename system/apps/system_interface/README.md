@@ -71,7 +71,7 @@ model's routes, stores, and state files go after that.
 - **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
   sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
-  client a `DesktopLayout` of `Placement`s (frame in fractions of the
+  client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized; the order is the stack).
 - **State files**: `desktops.json`, `placements/<desktop>/<client>.json`, and
   the client records, which now carry `active_desktop` beside the tabbed

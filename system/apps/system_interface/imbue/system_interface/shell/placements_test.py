@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from imbue.system_interface.shell.data_types import Placement
+from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
@@ -18,8 +18,8 @@ _WIN_2 = WindowId("win-0000000000000002")
 _LIVE = frozenset({_WIN_1, _WIN_2})
 
 
-def _placement(window_id: WindowId) -> Placement:
-    return Placement(window_id=window_id, frame=cascade_frame(0), state=WindowState.NORMAL, is_minimized=False)
+def _placement(window_id: WindowId) -> WindowPlacement:
+    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=WindowState.NORMAL, is_minimized=False)
 
 
 def test_a_layout_reads_empty_until_written_and_drops_placements_of_closed_windows(tmp_path: Path) -> None:
