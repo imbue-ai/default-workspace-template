@@ -227,9 +227,15 @@ def _cell_distance(first: GridCell, second: GridCell) -> float:
 
 
 @pure
+def _nearness_key(cell: GridCell, target: GridCell) -> tuple[float, int, int]:
+    """Sorts cells by Euclidean distance from the target, ties by lower column then lower row."""
+    return (_cell_distance(cell, target), cell.column, cell.row)
+
+
+@pure
 def _nearest_of(candidates: Sequence[GridCell], target: GridCell) -> GridCell | None:
     """The candidate at the least Euclidean distance from the target, ties by lower column then lower row."""
-    return min(candidates, key=lambda cell: (_cell_distance(cell, target), cell.column, cell.row), default=None)
+    return min(candidates, key=lambda cell: _nearness_key(cell, target), default=None)
 
 
 @pure
@@ -254,18 +260,23 @@ def nearest_free_cell(
         return nearest if nearest is not None else clamped
     if target not in occupied:
         return target
-    # Each ring of the unbounded grid holds more cells than the last, so a ring one wider than the number of
-    # occupied cells cannot be fully occupied; the nearest free cell is found by then.
-    for radius in range(1, len(occupied) + 2):
-        ring = [
+    # The search widens a square around the target one ring at a time. A square one wider than the number of
+    # occupied cells cannot be fully occupied, so a candidate turns up within that many rings; and since every
+    # cell outside a square of radius R lies at least R + 1 away, the best candidate is final once the square
+    # has grown past its distance, which takes at most sqrt(2) times as many rings again.
+    best: GridCell | None = None
+    for radius in range(1, 2 * (len(occupied) + 2)):
+        square = [
             GridCell(column=column, row=row)
             for column in range(max(0, target.column - radius), target.column + radius + 1)
             for row in range(max(0, target.row - radius), target.row + radius + 1)
             if GridCell(column=column, row=row) not in occupied
         ]
-        nearest = _nearest_of(ring, target)
-        if nearest is not None:
-            return nearest
+        nearest = _nearest_of(square, target)
+        if nearest is not None and (best is None or _nearness_key(nearest, target) < _nearness_key(best, target)):
+            best = nearest
+        if best is not None and radius + 1 > _cell_distance(best, target):
+            return best
     raise AssertionError("the unbounded grid always holds a free cell")
 
 
