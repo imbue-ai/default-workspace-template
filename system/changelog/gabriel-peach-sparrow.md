@@ -1,1 +1,3 @@
 The shared embed module (`system/libs/workspace_ui`) now handles the minds embed contract's new `minds:focus-chat` message (contract v4): the Mind app sends it when the user opens a chat agent's notification, and the system interface shows that chat. Like the other newer contract types, the constant is probed off the vendored snapshot so a build against an older snapshot still compiles.
+
+The notify-user script addresses the notifications route with `MNGR_AGENT_ID`, not `MINDS_CHAT_ID`: Latchkey authorizes the runtime agent, while the Mind app derives the stable conversation destination from that agent's `chat_id` label. This fixes notifications being refused when the conversation and runtime agent ids differ.

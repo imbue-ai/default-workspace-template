@@ -3,8 +3,9 @@
 
 The message goes to the app's per-agent notifications route through the
 latchkey gateway's ``minds-api-proxy`` (the gateway injects the app's API key;
-this script never holds one), addressed as this chat's agent so the app can
-name the chat and land a click in it.
+this script never holds one), addressed as the current runtime agent for
+authorization. The app reads that agent's chat_id label for the stable
+conversation destination, including after a chat moves between agents.
 
 Exit codes:
     0  -- the app accepted the notification
@@ -16,11 +17,9 @@ Usage:
     python3 .agents/skills/notify-user/scripts/notify_user.py [--title TITLE] MESSAGE
 
 Environment:
-    MINDS_CHAT_ID, MNGR_AGENT_ID
-                                This chat's agent id (the chat app sets
-                                MINDS_CHAT_ID on every agent it creates;
-                                MNGR_AGENT_ID stands in for an agent that is
-                                its own chat).
+    MNGR_AGENT_ID              Current runtime agent id, registered with the
+                              gateway. MINDS_CHAT_ID identifies a conversation,
+                              not the agent authorized to call this route.
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
     LATCHKEY_GATEWAY_PASSWORD   agent environment. Both must be present.
     LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
@@ -44,7 +43,6 @@ import sys
 import urllib.error
 import urllib.request
 
-ENV_CHAT_ID = "MINDS_CHAT_ID"
 ENV_AGENT_ID = "MNGR_AGENT_ID"
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
@@ -73,11 +71,6 @@ class HttpClient:
             return None, str(exc)
 
 
-def resolve_chat_agent_id(environ: dict[str, str]) -> str:
-    """This chat's agent id, or ``""`` when the environment names none."""
-    return environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
-
-
 def notify(
     message: str,
     title: str | None,
@@ -97,11 +90,11 @@ def notify(
             "the notification did not go out.\n"
         )
         return False
-    chat_agent_id = resolve_chat_agent_id(environ)
-    if not chat_agent_id:
+    agent_id = environ.get(ENV_AGENT_ID, "")
+    if not agent_id:
         sys.stderr.write(
-            f"notify-user: neither {ENV_CHAT_ID} nor {ENV_AGENT_ID} is set, so this chat cannot be "
-            "named; the notification did not go out.\n"
+            f"notify-user: {ENV_AGENT_ID} is not set, so the sending agent cannot be "
+            "identified; the notification did not go out.\n"
         )
         return False
     headers = {
@@ -118,7 +111,7 @@ def notify(
     if title:
         payload["title"] = title.strip()
     status, text = http.post_json(
-        f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{chat_agent_id}/notifications",
+        f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{agent_id}/notifications",
         payload,
         headers,
         timeout=_TIMEOUT_SECONDS,
