@@ -24,16 +24,3 @@ declare global {
     chatPageEmbed?: ChatPageEmbedApi;
   }
 }
-
-/** Whether ``window.parent`` is a same-origin document (the chat root) rather than the shell.
- *
- * Reading a cross-origin parent's location throws, which is the whole test: the shell frames
- * chat pages from its own origin, and only the root frames them from the chat's. */
-export function isFramedBySameOrigin(): boolean {
-  if (window.parent === window) return false;
-  try {
-    return window.parent.location.origin === window.location.origin;
-  } catch {
-    return false;
-  }
-}
