@@ -1400,9 +1400,7 @@ def _rename_chat(chat_id: str) -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     try:
         agent_manager.rename_chat(chat_id, rename_request.title)
-    except ChatConvergingError as e:
-        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    except AgentNameConflictError as e:
+    except (ChatConvergingError, AgentNameConflictError) as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except AgentRenameError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
