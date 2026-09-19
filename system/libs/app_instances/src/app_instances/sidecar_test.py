@@ -1,3 +1,5 @@
+import os
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -20,6 +22,7 @@ from app_instances.sidecar import (
     run_sidecar_app,
     serve_in_background,
     split_instances_url,
+    wait_for_shutdown_signal,
 )
 from app_instances.testing import (
     LOOPBACK_HOST,
@@ -28,6 +31,7 @@ from app_instances.testing import (
     StubInstanceSource,
     free_port,
     is_port_accepting,
+    wait_until,
     write_sidecar_manifest,
 )
 
@@ -151,6 +155,49 @@ def test_run_sidecar_refuses_to_run_off_the_main_thread(tmp_path: Path) -> None:
 
     assert len(raised) == 1
     assert "main thread" in str(raised[0])
+
+
+def test_wait_for_shutdown_signal_refuses_to_run_off_the_main_thread() -> None:
+    raised: list[BaseException] = []
+
+    def run_in_thread() -> None:
+        try:
+            wait_for_shutdown_signal()
+        except SidecarError as e:
+            raised.append(e)
+
+    worker = threading.Thread(target=run_in_thread)
+    worker.start()
+    worker.join(timeout=5)
+
+    assert len(raised) == 1
+    assert "main thread" in str(raised[0])
+
+
+def test_wait_for_shutdown_signal_returns_128_plus_the_signal() -> None:
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)
+    }
+
+    def send_sigterm_once_the_wait_listens() -> None:
+        # Only a handler the wait installed may receive the signal: the default disposition
+        # would end the test process.
+        is_listening = wait_until(
+            lambda: signal.getsignal(signal.SIGTERM)
+            is not previous_handlers[signal.SIGTERM],
+            5.0,
+        )
+        if is_listening:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    sender = threading.Thread(target=send_sigterm_once_the_wait_listens)
+    try:
+        sender.start()
+        assert wait_for_shutdown_signal() == 128 + signal.SIGTERM
+    finally:
+        sender.join(timeout=5)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def test_register_app_writes_the_manifest_row_with_its_instances_url(
