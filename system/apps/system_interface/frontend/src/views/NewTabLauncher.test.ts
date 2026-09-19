@@ -234,8 +234,7 @@ describe("NewTabLauncher", () => {
     return Array.from(root.querySelectorAll<HTMLElement>("[data-section]")).map((section) => section.dataset.section!);
   }
 
-  /** Open a table's filter menu and uncheck the app the menu shows as ``displayName``. The
-   *  menu portals to <body>, so its rows are found on the document rather than the root. */
+  /** Open a table's filter menu and uncheck the app the menu shows as ``displayName``. */
   function uncheckAppInFilter(sectionKey: string, displayName: string): void {
     root.querySelector<HTMLElement>(`[data-section="${sectionKey}"] button[aria-expanded]`)!.click();
     m.redraw.sync();

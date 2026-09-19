@@ -3,11 +3,10 @@
  * The card must react to the FIRST click, on its own.
  *
  * This is the one thing `ModelProviderMenu.test.ts` cannot catch: its `click()` helper
- * re-renders by hand afterwards, which supplies exactly the redraw whose absence was the bug.
- * The card and its flyouts are drawn through `Portal` -> `m.render`, mithril's manual API,
- * which does not wire auto-redraw into event handlers. Every handler inside them set state and
- * nothing re-rendered: a row click opened no flyout, a trash click armed no "Remove?", and the
- * click after that landed outside and tore the whole thing down.
+ * re-renders by hand afterwards, which supplies exactly the redraw in question. The card and
+ * its flyouts are drawn through `Portal` -> `m.render`, mithril's manual API, which does not
+ * wire auto-redraw into event handlers, so a handler inside them that only sets state repaints
+ * nothing.
  *
  * So this file MOUNTS the component (auto-redraw on, like the real app) and never renders by
  * hand. If the portal stops driving redraws again, these fail.
@@ -113,9 +112,9 @@ async function press(selector: string): Promise<void> {
 }
 
 beforeEach(() => {
-  // Unmount the previous root before wiping the DOM, so its `onremove` runs: the component
-  // takes a document-level mousedown listener and the portal leaves a host on <body>, and
-  // neither is cleaned up by replacing innerHTML out from under it.
+  // Unmount the previous root before wiping the DOM, so its `onremove` runs: an open menu holds
+  // window listeners and leaves a portal host on <body>, and neither is cleaned up by replacing
+  // innerHTML out from under it.
   const previous = document.getElementById("root");
   if (previous !== null) m.mount(previous, null);
   document.body.innerHTML = '<div id="root"></div>';
@@ -187,7 +186,8 @@ describe("the card without a hand-cranked redraw", () => {
     await press('[data-menu-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
 
-    // The bug: mousedown read as outside, the popover went away, and the click never landed.
+    // A mousedown on the bin must not read as one outside the popover, or the click that was
+    // meant to arm the confirmation lands on nothing.
     expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
     expect(document.body.textContent).toContain("Remove account");
     expect(deleted).toEqual([]);

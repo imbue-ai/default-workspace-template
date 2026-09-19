@@ -19,17 +19,16 @@
  *   `submenu` kind.
  *
  * Callers describe rows (`MenuRow`) and get the whole behaviour; a `custom` row is the escape
- * hatch for content that is not a plain row (a slider, a switch, a search field). The chrome --
- * `menuCardClass`, `menuRowClass`, `menuDividerClass` -- is exported for that custom content
- * so it can dress like the rows around it.
+ * hatch for content that is not a plain row (a slider, a switch, a search field). The chrome is
+ * exported for that custom content, so it can dress like the rows around it.
  *
  * Everything portals to <body>: menus open from inside dockview's clipping overlays and from
  * inside modals, and a card that extends past its panel would otherwise be cut off at the
- * panel's edge. They sit on `--z-popover`, above the modal overlays, because a popover is the
- * most recently opened thing on screen and one opened from a modal has to paint over it.
+ * panel's edge. They sit on `--z-popover`, above the modal overlays, so one opened from a
+ * modal paints over it.
  *
- * The Tailwind scanner reads utility names from the literals in this file (base.css's
- * `@source` covers every .ts file): keep every utility name a contiguous literal.
+ * The Tailwind scanner reads utility names from the literals in this file: keep every utility
+ * name a contiguous literal.
  */
 
 import m from "mithril";
@@ -50,10 +49,8 @@ import { Portal } from "../portal";
 
 // Chrome
 
-/** The floating card: the primary surface with a hairline border, the 16px radius of the
- *  workspace's largest surfaces, and the overlay elevation shadow. Positioning is the caller's
- *  -- `fixed` here, `absolute` for a card that lives in its parent -- along with min-width and
- *  text size. */
+/** The floating card. Positioning is the caller's -- `fixed` here, `absolute` for a card that
+ *  lives in its parent -- along with min-width and text size. */
 export function menuCardClass(extra = ""): string {
   const parts = ["z-(--z-popover) rounded-xl border border-default bg-surface py-1 shadow-overlay"];
   if (extra !== "") parts.push(extra);
@@ -70,16 +67,14 @@ export interface MenuRowOptions {
 }
 
 /** The keyboard-focus treatment for a focusable row (a real <button>). Inset so the ring stays
- *  inside the card instead of the OS default halo overhanging it. Inert on a non-focusable row,
- *  so it rides the base. Exported so other list surfaces can borrow the row's shape. */
+ *  inside the card instead of overhanging it. */
 export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /** The row's highlight: a slab inset 4px from the card's edges, with the 12px radius the
- *  card's own 16px corner leaves 4px in, so the highlight looks concentric with the card.
- *  The width is explicit rather than `w-full` (which adds the 8px of margin and overflows the
- *  card) or `auto` (a <button> shrink-to-fits even at `display: flex`, and the highlight
- *  stops short of a trailing tick). `px-2` completes the 12px the text gets from the card's
- *  edge. Exported so other list surfaces can borrow the row's shape. */
+ *  card's own 16px corner leaves 4px in, so the highlight looks concentric with the card. The
+ *  width is spelled out because `w-full` adds the 8px of margin and overflows the card, and a
+ *  <button> left to size itself stops short of a trailing tick. `px-2` completes the 12px the
+ *  text gets from the card's edge. */
 export const MENU_ROW_SLAB = "mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2";
 
 function rowGapClass(tightGap: boolean | undefined): string {
@@ -101,9 +96,8 @@ export function menuDividerClass(): string {
   return "my-1 border-t border-default";
 }
 
-/** Text truncated from the FRONT. `openrouter/qwen/qwen-2.5-72b-instruct` is a path whose head
- *  repeats down a whole list and whose tail is the only part that tells one row from another,
- *  so dropping the head is the only truncation that leaves anything to read by.
+/** Text truncated from the FRONT, for a value whose tail is the part that tells one row from
+ *  another (a model path like `openrouter/qwen/qwen-2.5-72b-instruct`).
  *
  *  `direction: rtl` is what moves the ellipsis: it puts the line's END at the LEFT, which is
  *  the side the box overflows, and text too long to fit hangs its beginning off there. The
@@ -132,10 +126,9 @@ export type MenuRowIcon = IconName | { markup: string };
 export type MenuRowTone = "default" | "danger" | "quiet";
 
 interface MenuRowBase {
-  /** A stable hook (`data-menu-row`) so a test can address a row by what it is rather than by
-   *  its text or its classes. */
+  /** A stable hook (`data-menu-row`) so a test can address a row by what it is. */
   key?: string;
-  /** Shown on hover, above the row so the bubble never covers the rows beneath it. */
+  /** Shown on hover, above the row. */
   tooltip?: string;
 }
 
@@ -148,9 +141,7 @@ export interface ActionRow extends MenuRowBase {
   /** Greys the row and ignores its clicks. aria-disabled rather than a native `disabled`, so
    *  `tooltip` stays reachable to say why. */
   isDisabled?: boolean;
-  /** Content after the label: a check on the current item, a control of the row's own. It
-   *  sits BESIDE the row's button rather than inside it, so it is free to be a button
-   *  itself. */
+  /** Content after the label: a check on the current item, a control of the row's own. */
   trailing?: m.Children;
   /** 4px gap between glyph and label instead of 8px, for rows whose glyph is a small square. */
   tightGap?: boolean;
@@ -159,9 +150,7 @@ export interface ActionRow extends MenuRowBase {
   extraClass?: string;
   /** The box the icon sits in, when the default 16px square is the wrong size for the glyph. */
   iconBoxClass?: string;
-  /** Leave the menu up after the pick, for an action that reports back into the menu -- one
-   *  whose failure is shown as a line under the rows. The default is to close: a pick is a
-   *  pick. */
+  /** Leave the menu up after the pick, for an action that reports back into the menu. */
   keepsOpen?: boolean;
   onSelect: () => void;
 }
@@ -191,8 +180,7 @@ export interface SubmenuRow extends MenuRowBase {
 }
 
 /** A row that states a value and offers nothing to do about it here. Keeps the hover
- *  highlight, because a row that does not react at all reads as broken rather than as fixed;
- *  its tooltip is where it says what would change it. */
+ *  highlight, because a row that does not react at all reads as broken rather than as fixed. */
 export interface ValueRow extends MenuRowBase {
   kind: "value";
   label: string;
@@ -216,8 +204,8 @@ export interface DividerRow {
 }
 
 /** Anything that is not a plain row. The menu wraps it in a row slot that takes the hover like
- *  every other row (so pointing at it closes an open submenu), and otherwise leaves it alone --
- *  closing the menu from inside it is the content's own call. */
+ *  every other row, and otherwise leaves it alone -- closing the menu from inside it is the
+ *  content's own call. */
 export interface CustomRow {
   kind: "custom";
   key: string;
@@ -236,21 +224,19 @@ export const MENU_PART_ATTR = "data-menu-part";
 /** Marks a row by its `key`: `[data-menu-row="providers"]`. */
 export const MENU_ROW_ATTR = "data-menu-row";
 
-/** How long the pointer rests on a row before that row's submenu opens. Near-instant, unlike
- *  the tooltip's 250ms: a submenu is what the pointer came for. Not zero, so a flick across
- *  two or three rows does not flash their submenus up in turn. */
+/** How long the pointer rests on a row before that row's submenu opens. Near-instant, but not
+ *  zero, so a flick across two or three rows does not flash their submenus up in turn. */
 const SUBMENU_HOVER_DELAY_MS = 40;
 
-/** How long the safe triangle survives once the pointer is inside it. Crossing to the submenu
- *  takes well under this; a pointer still in the wedge after it has stopped on a row, and the
- *  wedge lets go so that row can open its own submenu. */
+/** How long the safe triangle survives once the pointer is inside it: longer than the crossing
+ *  takes, and short enough that a pointer parked in the wedge lets the row under it open its
+ *  own submenu. */
 const SAFE_TRIANGLE_GRACE_MS = 400;
 
-/** How long an open submenu survives the pointer leaving the menu-and-submenu pair.
- *
- *  Long enough to forgive the seam between the two boxes and a corner clipped on the way
- *  across, short enough that a submenu does not sit over the page once the pointer has gone
- *  somewhere else entirely. */
+/** How long an open submenu survives the pointer leaving the menu-and-submenu pair. Long
+ *  enough to forgive the seam between the two boxes and a corner clipped on the way across,
+ *  short enough that a submenu does not sit over the page once the pointer has gone somewhere
+ *  else entirely. */
 const SUBMENU_LEAVE_DELAY_MS = 220;
 
 /** The submenu tucks 5px under the menu's edge -- the card's 1px border plus the 4px the row
@@ -259,25 +245,22 @@ const SUBMENU_LEAVE_DELAY_MS = 220;
 const SUBMENU_OVERLAP = 5;
 
 /** The distance from a submenu's outer top edge to the top of its first row: the card's 1px
- *  border plus its 4px vertical padding. What `placeSubmenu` subtracts so the first ROW lands
- *  on the opening row, not the box. */
+ *  border plus its 4px vertical padding. */
 const SUBMENU_PADDING = 5;
 
-/** A row is 32px tall. Ten of them before a submenu scrolls: fewer and a long catalog reads
- *  as a keyhole; many more and the submenu is a wall. */
+/** A row is 32px tall. Ten of them before a submenu scrolls: fewer reads as a keyhole, many
+ *  more as a wall. */
 const MENU_ROW_HEIGHT = 32;
 const SUBMENU_DEFAULT_MAX_HEIGHT = 2 * SUBMENU_PADDING + 10 * MENU_ROW_HEIGHT;
 
-/** The invisible sheet under an open menu. It takes every hover and every press that is not on
- *  the menu itself, so while the menu is up nothing behind it lights up, wakes a tooltip, or
- *  receives a click. Same layer as the menu, which stays on top of it by rendering after it as
- *  a sibling. `menu-sheet` is a bare marker with no CSS attached. */
+/** The invisible sheet under an open menu. Same layer as the menu, which stays on top of it by
+ *  rendering after it as a sibling. `menu-sheet` is a bare marker with no CSS attached. */
 const SHEET_CLASS = "menu-sheet fixed inset-0 z-(--z-popover)";
 
 const CARD_TEXT = "text-(length:--font-size-row)";
 
 /** The 12px the calc subtracts is `MENU_MARGIN` on each side: a menu taller than the window
- *  (a switcher with many projects) scrolls between the margins rather than running off it. */
+ *  scrolls between the margins rather than running off it. */
 const MENU_CARD_CLASS = menuCardClass(
   `fixed max-h-[calc(100vh-12px)] overflow-y-auto overscroll-contain ${CARD_TEXT}`,
 );
@@ -286,8 +269,7 @@ const SUBMENU_CARD_CLASS = menuCardClass(`fixed flex flex-col overflow-hidden ${
 
 const ICON_BOX_CLASS = "flex w-4 shrink-0 items-center justify-center";
 const ROW_LABEL_CLASS = "min-w-0 flex-1 truncate";
-/** A submenu row's or value row's label sits one colour step back from its value, so the menu
- *  reads as a spec sheet. */
+/** A submenu row's or value row's label sits one colour step back from its value. */
 const KEY_LABEL_CLASS = "text-secondary";
 const KEY_VALUE_CLASS = "ml-auto flex min-w-0 items-center gap-1.5";
 const KEY_SUB_CLASS = "type-helper text-faint";
@@ -318,9 +300,8 @@ export interface MenuOptions {
   role?: "menu" | "dialog";
   onOpen?: () => void;
   onClose?: () => void;
-  /** Run whenever the open submenu changes, with the new key or null. What is scoped to a
-   *  submenu -- an armed confirmation, a search query -- is reset here rather than at every
-   *  site that could change the submenu. */
+  /** Run whenever the open submenu changes, with the new key or null: where state scoped to a
+   *  submenu -- an armed confirmation, a search query -- is reset. */
   onSubmenuChange?: (key: string | null) => void;
   /** Whether `key`'s open submenu is holding unfinished work -- a half-typed rename, an armed
    *  confirmation, a search query. While it answers true, hover cannot take the submenu down
@@ -337,8 +318,8 @@ export interface Menu {
   /** Whether `key`'s submenu is the open one. */
   isSubmenuOpen(key: string): boolean;
   /** Open against the anchor's box -- or against the anchor ELEMENT itself, which is better
-   *  when the caller has it: a window resize then re-measures the element and the menu
-   *  follows it, where a box can only be re-clamped to the new window. */
+   *  when the caller has it: a window resize re-measures the element and the menu follows
+   *  it. */
   open(anchor: MenuAnchor | HTMLElement): void;
   close(): void;
   toggle(anchor: MenuAnchor | HTMLElement): void;
@@ -363,8 +344,7 @@ export function createMenu(options: MenuOptions): Menu {
 
   // Where the menu sits, captured when it opens. Open iff non-null.
   let anchor: MenuAnchor | null = null;
-  // The element the menu hangs off, when the caller gave one rather than a box: what a
-  // window resize re-measures so the menu can follow it.
+  // The element the menu hangs off, when the caller gave one rather than a box.
   let anchorElement: HTMLElement | null = null;
   // The menu card's box once placed: what the safe triangle reads the submenu's near edge
   // against.
@@ -376,7 +356,7 @@ export function createMenu(options: MenuOptions): Menu {
   // The submenu's box once placed, and re-measured on every redraw that changes it.
   let submenuRect: DOMRect | null = null;
   // The height a scrolling submenu is pinned at while it is open; null while it has never
-  // filled its cap. A filtered list shrinks inside the box rather than shrinking it.
+  // filled its cap.
   let submenuLockedHeight: number | null = null;
 
   // The safe triangle's apex: the pointer's last position on the row whose submenu is open,
@@ -415,8 +395,8 @@ export function createMenu(options: MenuOptions): Menu {
   }
 
   /** Whether hover may change the open submenu right now. It may not while the caller has
-   *  unfinished work in it: what hover opened, hover normally dismisses, but a drifting
-   *  pointer must not throw away something the user is mid-way through typing or arming. */
+   *  unfinished work in it: a drifting pointer must not throw away something the user is
+   *  mid-way through typing or arming. */
   function isSubmenuHeld(): boolean {
     return openSubmenu !== null && options.holdsSubmenuOpen?.(openSubmenu) === true;
   }
@@ -425,8 +405,8 @@ export function createMenu(options: MenuOptions): Menu {
    *  construction rather than by remembering to at every site. */
   function setSubmenu(next: string | null): void {
     if (next !== openSubmenu) {
-      // A new submenu is a new box in a new place: nothing has travelled towards it yet, and
-      // the old one's measurements describe a box that is gone.
+      // A new submenu is a new box in a new place: the old one's measurements, and any trip
+      // towards it, describe something that is gone.
       clearSafeApex();
       submenuRect = null;
       submenuLockedHeight = null;
@@ -445,7 +425,7 @@ export function createMenu(options: MenuOptions): Menu {
 
   /** The window has changed shape: the menu keeps its anchor rather than closing, so
    *  re-measure the anchor (when it is an element that is still on the page) and let the
-   *  redraw re-place the card against it and the new window. */
+   *  redraw re-place the card. */
   function onResize(): void {
     if (anchorElement !== null && anchorElement.isConnected) {
       const rect = anchorElement.getBoundingClientRect();
@@ -482,8 +462,7 @@ export function createMenu(options: MenuOptions): Menu {
   }
 
   /** The pointer has left the menu or the submenu: a pending hover no longer opens, and an
-   *  open submenu closes once its grace runs out, since what hover opened hover dismisses.
-   *  The menu itself stays: a click opened it, and only a click or Escape closes it. */
+   *  open submenu closes once its grace runs out. */
   function handleStackLeave(): void {
     cancelHoverIntent();
     if (openSubmenu === null) return;
@@ -500,9 +479,7 @@ export function createMenu(options: MenuOptions): Menu {
   }
 
   /** Whether the pointer is on its way to the submenu that is already open, rather than
-   *  changing its mind about which row it wants. Only ever true while a submenu is up AND the
-   *  pointer has been on the row that opened it, so the wedge cannot outlive the trip it was
-   *  measured for. */
+   *  changing its mind about which row it wants. */
   function isTravellingToSubmenu(point: MenuPoint): boolean {
     if (openSubmenu === null || safeApex === null || submenuRect === null || menuRect === null) return false;
     // Which of the submenu's edges faces the menu -- `placeSubmenu` puts it on either side.
@@ -529,22 +506,21 @@ export function createMenu(options: MenuOptions): Menu {
   /** Every menu row's pointer and keyboard handling, in one recipe.
    *
    *  `submenu` is the submenu the row opens, or null for a row that opens nothing -- and a row
-   *  that opens nothing still takes the hover, closing whatever is open. Within the menu the
-   *  pointer decides what is showing; only outside it does a click still have to.
+   *  that opens nothing still takes the hover, closing whatever is open.
    *
-   *  `mousemove` rather than `mouseenter`, for two reasons. It keeps the safe triangle's apex
-   *  on the pointer's actual last position over the owning row instead of on wherever it first
-   *  crossed the edge. And a row entered THROUGH the triangle -- protected, so it opened
-   *  nothing -- gets another chance as soon as the pointer moves off the wedge, which a single
-   *  enter event cannot give it. */
+   *  `mousemove` rather than `mouseenter`: it keeps the safe triangle's apex on the pointer's
+   *  actual last position over the owning row instead of on wherever it first crossed the
+   *  edge, and a row entered THROUGH the triangle -- protected, so it opened nothing -- gets
+   *  another chance as soon as the pointer moves off the wedge, which a single enter event
+   *  cannot give it. */
   function hoverRowAttrs(submenu: SubmenuRow | null): m.Attributes {
     return {
       onmousemove: (event: MouseEvent) => {
         const row = event.currentTarget as HTMLElement;
         const point: MenuPoint = { x: event.clientX, y: event.clientY };
-        // On the row whose submenu is up: this is the trip's starting point, right up until
-        // the pointer leaves. Every move here restarts it, so the apex is the true exit point
-        // and the grace clock only ever runs on a trip that has actually set off.
+        // On the row whose submenu is up: every move here restarts the trip, so the apex is
+        // the pointer's true exit point and the grace clock only ever runs on a trip that has
+        // actually set off.
         if (submenu !== null && submenu.key === openSubmenu) {
           clearSafeApex();
           safeApex = point;
@@ -560,7 +536,7 @@ export function createMenu(options: MenuOptions): Menu {
         }
         if (isTravellingToSubmenu(point)) {
           // Started across. Arriving cancels this (the submenu's own `mouseenter`); parking in
-          // the wedge instead lets it run out, and the row underneath gets its turn.
+          // the wedge instead lets it run out, so the row underneath gets its turn.
           if (safeApexTimer === null) {
             safeApexTimer = window.setTimeout(() => {
               safeApexTimer = null;
@@ -582,11 +558,10 @@ export function createMenu(options: MenuOptions): Menu {
           redraw();
         }, SUBMENU_HOVER_DELAY_MS);
       },
-      // Keyboard focus opens immediately -- there is no aiming to wait for, and a tab that has
-      // landed on a row is as deliberate as an intent delay could ever prove. `focusin`, which
-      // bubbles, so a row whose focusable part is a child is covered too. `:focus-visible`
-      // keeps a mouse click out of this path: it focuses the row as well, and opening from
-      // here would race the click's own toggle.
+      // Keyboard focus opens immediately: there is no aiming to wait for. `focusin` bubbles,
+      // so a row whose focusable part is a child is covered too. `:focus-visible` keeps a
+      // mouse click out of this path: it focuses the row as well, and opening from here would
+      // race the click's own toggle.
       onfocusin: (event: FocusEvent) => {
         const focused = event.target as HTMLElement | null;
         if (focused === null || !focused.matches(":focus-visible")) return;
@@ -667,15 +642,14 @@ export function createMenu(options: MenuOptions): Menu {
         type: "button",
         role: "menuitem",
         class: menuRowClass({ extra: TONE_CLASS.default }),
-        // The row is a disclosure, and a hover menu has to say so out loud: the chevron is the
-        // only other clue, and it is decoration to a screen reader.
+        // The chevron is decoration to a screen reader, so the row says out loud that it is a
+        // disclosure.
         "aria-haspopup": "true",
         "aria-expanded": isOpen ? "true" : "false",
         ...rowKeyAttr(row.key),
         ...tooltipAttrs(row.tooltip),
         ...hoverRowAttrs(row),
-        // Click still toggles, and is the only way in on a touch screen, where there is no
-        // hover to intend anything with.
+        // Click still toggles: on a touch screen there is no hover to intend anything with.
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           cancelHoverIntent();
@@ -805,8 +779,6 @@ export function createMenu(options: MenuOptions): Menu {
         style: `left: 0; top: 0; ${sizing}`,
         oncreate: place,
         onupdate: place,
-        // The other half of the pair, for the same leave rule: moving between the menu and
-        // its submenu is not leaving, but moving off both of them is.
         onmouseenter: cancelStackLeave,
         onmouseleave: handleStackLeave,
       },
@@ -818,8 +790,8 @@ export function createMenu(options: MenuOptions): Menu {
     const width = row.width ?? options.width;
     const maxHeight = row.maxHeight ?? SUBMENU_DEFAULT_MAX_HEIGHT;
     // The safe triangle's base is this box, and its height follows its contents -- so measure
-    // on arrival AND on every redraw that changes them (a filtered list is shorter, and a
-    // triangle pointing at the box's old bottom would guard rows nobody is heading through).
+    // on arrival AND on every redraw that changes them: a triangle pointing at the box's old
+    // bottom would guard rows nobody is heading through.
     const place = (vnode: m.VnodeDOM): void => {
       const element = vnode.dom as HTMLElement;
       if (submenuLockedHeight === null) element.style.height = "";
@@ -838,10 +810,10 @@ export function createMenu(options: MenuOptions): Menu {
         margin: MENU_MARGIN,
         overlap: SUBMENU_OVERLAP,
       });
-      // A submenu that has filled its cap keeps that height for as long as it stays open. Its
-      // list may be filtered shorter on the next redraw, and a box that shrank would be
-      // re-placed lower -- sliding the card, and the rows being aimed at, out from under the
-      // pointer mid-keystroke. The -1 forgives sub-pixel rounding in the measurement.
+      // A submenu that has filled its cap keeps that height for as long as it stays open: a
+      // box that shrank with a filtered list would be re-placed lower, sliding the rows being
+      // aimed at out from under the pointer mid-keystroke. The -1 forgives sub-pixel rounding
+      // in the measurement.
       if (submenuLockedHeight === null && size.height >= placed.maxHeight - 1) {
         submenuLockedHeight = placed.maxHeight;
       }
@@ -862,8 +834,8 @@ export function createMenu(options: MenuOptions): Menu {
         style: `left: 0; top: 0; ${width === undefined ? "min-width: 180px;" : `width: ${width}px;`} max-height: ${maxHeight}px;`,
         oncreate: place,
         onupdate: place,
-        // Arrived. The trip is over, so the wedge that protected it closes and the menu's rows
-        // answer the pointer normally again the moment it goes back.
+        // Arrived: the trip is over, so the wedge that protected it lets the menu's rows
+        // answer the pointer normally again.
         onmouseenter: () => {
           cancelStackLeave();
           cancelHoverIntent();
@@ -881,7 +853,7 @@ export function createMenu(options: MenuOptions): Menu {
       [MENU_PART_ATTR]: "sheet",
       // Mouse DOWN, not click: a click fires wherever the press ENDED, and a press that starts
       // on the menu and is released past its edge is not a dismissal. preventDefault keeps the
-      // press from moving focus or starting a selection through the sheet.
+      // press from moving focus or starting a selection.
       onmousedown: (event: MouseEvent) => {
         event.preventDefault();
         event.stopPropagation();

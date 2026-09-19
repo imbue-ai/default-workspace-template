@@ -286,8 +286,7 @@ describe("Sidebar", () => {
       expand();
       root.querySelector<HTMLElement>(".project-rail-all-apps")!.click();
       m.redraw.sync();
-      // terminal is pinned in this fixture, so the popover offers chat. The popover is a row
-      // of the shared menu, which portals to <body>.
+      // terminal is pinned in this fixture, so the popover offers chat.
       document.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
       m.redraw.sync();
       expect(attrs.onRunAppAction).toHaveBeenCalled();

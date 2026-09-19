@@ -282,8 +282,6 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     "in-project": new Set(),
     "on-machine": new Set(),
   };
-  // One filter menu per section, made on first use. The shared menu handles its own sheet,
-  // Escape and placement; only one is ever open.
   const filterMenus = new Map<LauncherSectionKey, Menu>();
   let query = "";
   let startShownCount = START_PAGE_SIZE;
@@ -321,7 +319,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     attrs.onRunAction(target.app, target.action.id, { [MESSAGE_PARAM]: message });
   }
 
-  // ---------- the search field ----------
+  // the search field
 
   function searchField(): m.Vnode {
     return m(
@@ -368,10 +366,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  // ---------- the tables ----------
+  // the tables
 
-  /** The section's filter: a check per app, and a reset under them. A check toggles without
-   *  closing, so several can be changed in one visit. */
+  /** The section's filter. A check toggles without closing, so several apps go in one visit. */
   function filterMenuRows(section: LauncherSection, actionTiles: readonly LaunchTile[]): MenuRow[] {
     const hidden = hiddenAppsBySection[section.key];
     const isPristine = hidden.size === 0;
@@ -490,7 +487,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     ]);
   }
 
-  // ---------- "Open new" ----------
+  // "Open new"
 
   /** One tile: a quarter of the row (four to a row, less the three 8px gaps between them), so the
    *  built-in four fill the first row and any further app wraps under them at the same size. */
@@ -557,7 +554,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     ]);
   }
 
-  // ---------- "Start something" ----------
+  // "Start something"
 
   function startTile(option: StartOption, attrs: NewTabLauncherAttrs): m.Vnode {
     const isCatalogOffered = attrs.catalog.kind !== "disabled";
@@ -660,7 +657,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     return startSomethingSection(visibleStartOptions(START_OPTIONS, startShownCount), attrs, seeMore);
   }
 
-  // ---------- "Start from a template" ----------
+  // "Start from a template"
 
   function openDetail(template: CatalogTemplate): void {
     detailTemplate = template;
@@ -701,7 +698,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  // ---------- search results ----------
+  // search results
 
   function searchResults(attrs: NewTabLauncherAttrs, nowMs: number): m.Children {
     const trimmed = query.trim();
@@ -738,7 +735,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     ];
   }
 
-  // ---------- the page ----------
+  // the page
 
   function restingPage(attrs: NewTabLauncherAttrs, nowMs: number): m.Children {
     return [

@@ -291,7 +291,7 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
         yield server
 
 
-# ---------- helpers ----------
+# helpers
 
 
 def _projects(base_url: str) -> dict[str, dict[str, Any]]:
@@ -564,7 +564,7 @@ def _wait_for_surface_shown(page: Page, address: str, stamp: str | None = None) 
     return _surface_report(page, address, stamp)
 
 
-# ---------- the shell ----------
+# the shell
 
 
 @pytest.mark.timeout(30, func_only=False)
@@ -892,7 +892,7 @@ def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
 
 
-# ---------- projects and views ----------
+# projects and views
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1061,7 +1061,7 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         )
 
 
-# ---------- verbs ----------
+# verbs
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1361,7 +1361,7 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
         expect(page.locator(".project-rail-search")).to_be_visible(timeout=5000)
 
 
-# ---------- the launcher ----------
+# the launcher
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1384,8 +1384,7 @@ def test_launcher_app_filter_hides_an_app_and_reset_restores_it(tmp_path: Path, 
         expect(stub_row).to_have_count(1, timeout=15000)
 
         section.locator("button[aria-expanded]").click()
-        # The filter is the shared menu, which portals to <body>: its rows are on the page, not
-        # under the section that opened it.
+        # The filter menu portals to <body>, so its rows are on the page, not under the section.
         menu = page.locator('[data-menu-part="menu"]')
         notes_checkbox = menu.locator("label", has_text=_SECOND_APP_DISPLAY_NAME)
         expect(notes_checkbox).to_be_visible(timeout=5000)
@@ -1470,7 +1469,7 @@ def test_new_tab_says_when_the_template_catalog_could_not_be_loaded(tmp_path: Pa
         expect(page.locator(".new-tab-template-shelf")).to_have_count(0)
 
 
-# ---------- the tab strip ----------
+# the tab strip
 
 
 @pytest.mark.timeout(180, func_only=False)
@@ -1627,7 +1626,7 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         page.mouse.up()
 
 
-# ---------- devices ----------
+# devices
 
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting
 # with the Playwright version; the client classifies itself as mobile off the UA string.
@@ -1668,7 +1667,7 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
             context.close()
 
 
-# ---------- the layout file is the truth ----------
+# the layout file is the truth
 
 
 @pytest.mark.timeout(120, func_only=False)

@@ -16,10 +16,8 @@
  * message runs on.
  *
  * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
- * (`components/menu`), not this file's: it opens on a click of the chip, its submenus open on
- * hover, and it is dismissed the way it was summoned. What this file owns is the rows -- the
- * effort slider, the account list with its controls, the model list with its search, the
- * fast-mode chooser -- and the data behind them.
+ * (`components/menu`), not this file's. What this file owns is the rows and the data behind
+ * them.
  */
 
 import m from "mithril";
@@ -92,18 +90,16 @@ function capitalizeEffort(level: string): string {
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
-/** How many rows a searched model list shows at most. Past this a query, not a scroll, is the
- *  way to the model. */
+/** Past this many rows, a query rather than a scroll is the way to a model. */
 const MODEL_SEARCH_CAP = 100;
 
-/** The slider's filled portion, deepening with effort: 70% lightness at the bottom of the
- *  scale, 40% at the top. Darker than 40% reads as near-black rather than as a deep green. */
+/** The slider's filled portion, deepening with effort. It stops at 40% lightness: darker than
+ *  that reads as near-black rather than as a deep green. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
 export function ModelProviderMenu(): m.Component<{ chatId: string }> {
-  // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
   // time the picker opens (so a login mid-session shows up). `null` means "offer the whole
@@ -116,10 +112,10 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   // opens (D2 -- so a subscription-tier change shows up live). `null` until the first fetch (or when
   // the harness is not dynamic). Codex has no static catalog, so these ARE the picker's model rows.
   let dynamicOptions: CatalogModelOption[] | null = null;
-  // Whether this open of the menu has already fetched its offerable models. The menu's own
-  // open warms them, and with hover-opened submenus a pointer crossing the Model row would
-  // otherwise re-run a `pi --list-models` that takes up to 15s. Fresh per open is what
-  // matters -- a /login between two opens still shows up -- so this resets with the menu.
+  // Whether this open of the menu has already fetched its offerable models: with hover-opened
+  // submenus a pointer crossing the Model row would otherwise re-run a `pi --list-models` that
+  // takes up to 15s. Fresh per open is what matters -- a /login between two opens still shows
+  // up -- so this resets with the menu.
   let offeredFetchedForOpen = false;
   // The account rows' own transient state -- an armed "Remove?", an open rename field.
   // Cleared whenever the submenu or the menu closes, so someone who clicked the bin to see
@@ -131,8 +127,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   let draggingEffortIndex: number | null = null;
   // What the fast submenu's turn-limit field shows while it is being typed into, or null when it
   // shows the stored limit: mithril re-asserts `value` on every redraw, and every keystroke
-  // causes one. Held open while it is non-null, so a drifting pointer cannot take the half-typed
-  // number down with the submenu.
+  // causes one.
   let limitDraft: string | null = null;
   // What the last view saw, for the menu's own open hook to read: which chat is showing, and
   // whether its picker is the kind whose model list is worth warming.
@@ -157,11 +152,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     onOpen: () => {
       modelQuery = "";
       offeredFetchedForOpen = false;
-      // Warm the model list the moment the MENU opens, not when the submenu does: the fetch is
-      // the slow part (pi shells out to `pi --list-models`), and by the time a pointer has
-      // crossed the menu it is usually already back. With hover-opened submenus this is what
-      // makes the Model row cheap to pass over -- by the time the hover lands, the list is warm
-      // and its own request is a no-op.
+      // Warm the model list on the MENU's open rather than the submenu's: the fetch is the slow
+      // part, and by the time a pointer has crossed the menu it is usually already back.
       if (viewedPickerIsFetched) warmOfferedModels(viewedChatId);
     },
     onClose: () => {
@@ -227,7 +219,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
 
   /** The effort slider, or null when there is nothing to slide.
    *
-   * Two deliberate choices, both decided rather than discovered:
+   * Two choices worth naming:
    *
    * 1. `onchange`, not `oninput`. The `input` event fires once per notch passed during a
    *    drag -- and every notch here is a live switch typed into the agent's pane (claude), a
@@ -269,14 +261,12 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
         m("span", { class: css.SLIDER_WRAP }, [
-          // A dot at each level: without them the slider is a bare line and the levels it can
-          // land on are guesswork. Every level EXCEPT the one the thumb is on -- there the ball
-          // is the mark, and it is dropped from the list rather than hidden in place, because a
-          // keyed list may not carry holes.
+          // A dot at each level EXCEPT the one the thumb is on, where the ball is the mark. It
+          // is dropped from the list rather than hidden in place, because a keyed list may not
+          // carry holes.
           //
-          // A dot takes the colour of what it is drawn ON, which is the fill below the thumb
-          // and the bare track above it: one mark in two colours reads as a scale the fill is
-          // swallowing, where one colour throughout reads as dots disappearing under it.
+          // A dot takes the colour of what it is drawn ON: the fill below the thumb, the bare
+          // track above it.
           m(
             "span",
             { class: css.SLIDER_TICKS },
@@ -299,10 +289,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             max: shown.length - 1,
             step: 1,
             disabled: !opts.interactive,
-            // Mithril re-asserts `value` on every redraw, which would snap the thumb back
-            // under the pointer mid-drag on any harness that does not move the chip
-            // optimistically -- codex is exactly that. Holding the dragged index locally and
-            // clearing it on release keeps the thumb where the finger is.
             value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
@@ -411,7 +397,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
                   FAST_MODE_LABELS[mode],
                   // These rows are the bare mode names, so auto carries its own "(off now)":
                   // without it this row would read "Auto" while the row that opened the submenu,
-                  // which states the same mode through `fastModeLabel`, reads "Auto (off now)".
+                  // stating the same mode, reads "Auto (off now)".
                   isCurrent && mode === "auto" && state.is_switched
                     ? m("span", { class: "ml-1.5 type-helper text-faint" }, "(off now)")
                     : null,
@@ -464,8 +450,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       // The switch reads "is what new chats start in the mode I am looking at", so pressing it
       // moves the setting here -- which is how the setting reaches all three modes, a row at a
       // time. The setting names exactly one mode, so on the mode holding it there is no "off" to
-      // return to and the switch goes inert: at full strength, since it is stating the setting
-      // rather than refusing to work.
+      // return to and the switch goes inert.
       m("div", { class: css.FAST_DEFAULT_ROW }, [
         m("span", { class: css.ROW_LABEL }, defaultLabel),
         m(
@@ -545,8 +530,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     const defaultId = getDefaultAccountId();
     const pendingId = getPendingAccountId(chatId);
     const chat = getChatById(chatId);
-    // The account rows (or the one line standing in for them when there are none), plus the
-    // "+ Add a provider" row under them.
     return [
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -620,12 +603,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
     const hasSearchField = searchable || all.length > 8;
     return [
-      // ABOVE the list: the field is where the pointer arrives and where the typing starts, so
-      // it sits at the head of the submenu rather than under a list it filters. It stays put
-      // while the list scrolls beneath it.
-      //
-      // The shared input recipe, with the magnifier laid over its left padding: the field owns
-      // its own frame and focus ring, so nothing here re-styles either.
+      // ABOVE the list: the field is where the pointer arrives and where the typing starts, and
+      // it stays put while the list scrolls beneath it.
       hasSearchField
         ? m("div", { class: css.SEARCH_WRAP }, [
             m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
@@ -665,8 +644,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
                       setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
-                      // The pick is done; the menu stays, with the new model's effort and fast
-                      // rows there to adjust.
+                      // The menu stays, with the new model's effort and fast rows there to adjust.
                       menu.closeSubmenu();
                     },
                   },
@@ -740,9 +718,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           // A stable hook for the composer's own styles and for tests.
           class: `model-selector-trigger ${css.TRIGGER}`,
           ...menu.triggerAttrs(),
-          // The workspace's own bubble, not a native `title`: one tooltip mechanism everywhere
-          // (and this one can say what the button DOES, where a native title is stuck reading
-          // as a label for what is already written on the chip).
           ...hoverTooltipAttrs("Change model or provider", "above"),
         },
         pending !== null
@@ -752,7 +727,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             ]
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
-              // is already read apart from the words and a dot beside it doubles the punctuation.
+              // is already read apart from the words.
               m("span", matched?.label ?? account?.provider ?? "Model"),
               shownEfforts.length > 1 && currentEffort !== null
                 ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
@@ -773,9 +748,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
 
       const rows: MenuRow[] = [];
       if (pending !== null) {
-        // While a switch is armed the menu describes the TARGET: the account the next send moves
-        // the chat to and, for a handoff, the model picked for it, which opens the dialog again
-        // to change. A rebind keeps the agent's model, so it has no row to offer.
+        // The target's own rows. A handoff takes the model picked for it, which the Model row
+        // opens the dialog again to change; a rebind keeps the agent's model and has no row.
         rows.push({
           kind: "submenu",
           key: "providers",
@@ -810,7 +784,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
         rows.push({ kind: "divider" });
         if (matched !== null) {
           // A read-only harness gets a row that states the model and nothing more: no chevron,
-          // no list. Its models are switched from its own terminal.
+          // no list.
           rows.push(
             interactive
               ? {
@@ -851,8 +825,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
               }),
           });
           if (matched.supports_fast) {
-            // Read-only leaves the mode stated and nothing to open, the same way the Model row
-            // stands down: the chooser would offer a switch the harness cannot take.
             rows.push(
               interactive
                 ? {

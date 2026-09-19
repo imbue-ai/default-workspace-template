@@ -187,8 +187,6 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
           ? `Stop opening new chats on ${row.provider} by default`
           : `Open new chats on ${row.provider} by default`,
         "aria-pressed": opts.isDefault ? "true" : "false",
-        // The short visible form of the aria-label above it: a label on the control says which
-        // of three same-sized glyphs this one is, which nothing else in the row does.
         ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
@@ -205,8 +203,8 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
             });
         },
       },
-      // Outlined even when it is the default -- `ROW_STAR_PINNED` fills it in CSS, which keeps
-      // the stroke that `filled` would drop and with it the size the glyph reads at.
+      // Outlined always: the pinned class fills it in CSS, which keeps the stroke that `filled`
+      // would drop and with it the size the glyph reads at.
       m.trust(icon("star", { size: 13 })),
     ),
     m(

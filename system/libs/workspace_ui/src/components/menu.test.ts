@@ -49,8 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // What an owner's `onremove` does: a menu left open would keep its Escape listener on the
-  // window, and the next test's menu would never hear the key.
+  // What an owner's `onremove` does.
   menu.dispose();
   m.render(root, null);
   root.remove();
@@ -167,7 +166,6 @@ describe("a menu", () => {
     const rowButton = row("go").querySelector<HTMLElement>('[role="menuitem"]')!;
     expect(rowButton.querySelector("button")).toBeNull();
     expect(rowButton.textContent).toBe("Go");
-    // The trailing button acts alone: no row pick, and the menu stays up.
     row("go").querySelector<HTMLElement>(".probe-edit")!.click();
     expect(edited).toHaveBeenCalledTimes(1);
     expect(picked).not.toHaveBeenCalled();
@@ -201,7 +199,6 @@ describe("a menu", () => {
     expect(opened).toHaveBeenCalledTimes(1);
     menu.close();
     expect(closed).toHaveBeenCalledTimes(1);
-    // Closing a closed menu is not a second close.
     menu.close();
     expect(closed).toHaveBeenCalledTimes(1);
   });
@@ -262,7 +259,6 @@ describe("a submenu", () => {
     expect(part("submenu")).not.toBeNull();
     vi.advanceTimersByTime(1);
     expect(part("submenu")).toBeNull();
-    // The menu itself is untouched: a drift only ever closes a submenu.
     expect(menu.isOpen()).toBe(true);
     expect(changes).toEqual(["colour", null]);
   });
@@ -290,8 +286,7 @@ describe("a submenu", () => {
   it("does not open for a row the pointer has already moved on from", () => {
     menu.open(ANCHOR);
     row("colour").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 110 }));
-    // The pointer settles on a plain row before the intent delay has run out: the count the
-    // first row started must die with the move, not open a submenu under the wrong row.
+    // The pointer settles on a plain row before the intent delay has run out.
     vi.advanceTimersByTime(20);
     row("other").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 150 }));
     vi.advanceTimersByTime(100);
@@ -314,14 +309,12 @@ describe("a submenu", () => {
     menu.open(ANCHOR);
     row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(part("submenu")).not.toBeNull();
-    // Neither the pointer leaving the pair nor another row taking the hover closes it.
     part("submenu")!.dispatchEvent(new MouseEvent("mouseleave"));
     vi.advanceTimersByTime(1000);
     expect(part("submenu")).not.toBeNull();
     row("other").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 150 }));
     vi.advanceTimersByTime(100);
     expect(part("submenu")).not.toBeNull();
-    // A deliberate click still takes it down, work or no work.
     row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(part("submenu")).toBeNull();
   });
@@ -401,8 +394,7 @@ describe("a submenu", () => {
       const box = part("submenu")!;
       expect(box.style.height).toBe("330px");
       expect(box.style.top).toBe("432px");
-      // The list is filtered down to a few rows: the box and its place both hold, rather
-      // than shrinking and sliding down under the pointer.
+      // The list is filtered down to a few rows.
       contentHeight = 100;
       render();
       expect(box.style.height).toBe("330px");

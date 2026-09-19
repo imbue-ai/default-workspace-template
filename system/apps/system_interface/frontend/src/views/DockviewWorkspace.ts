@@ -200,7 +200,7 @@ let initialized = false;
 // panel one at a time, which must not be mistaken for the user emptying the dock.
 let isApplyingLayout = false;
 
-// ---------- What a panel shows ----------
+// What a panel shows
 //
 // Dockview is the one authority: what a panel shows is the ``params`` dockview keeps on it
 // (``PanelParams``), passed to ``addPanel``, restored by ``fromJSON``, serialized by ``toJSON``, and
@@ -241,7 +241,7 @@ function instancePanels(): { panel: IDockviewPanel; params: InstancePanelParams 
   return found;
 }
 
-// ---------- Active-view state ----------
+// Active-view state
 
 // The project registry, as last listed or pushed. Everything is never in here.
 let availableProjects: ProjectInfo[] = [];
@@ -275,7 +275,7 @@ let viewMountGeneration = 0;
 // file that arrangement under the incoming view's id; autosave waits for the two to agree.
 let settledViewGeneration = 0;
 
-// ---------- Tabs ----------
+// Tabs
 
 // Equal-width tabs. ``TAB_STRIP_RESERVED_PX`` is the space every strip keeps for its "+" and
 // the first tab's leading margin; the ideal width is what is left over, divided by the tabs,
@@ -356,12 +356,11 @@ function tabIconMarkupForPanel(params: PanelParams | null): string {
   return appIconMarkup(app.icon, TAB_GLYPH_SIZE, fallback, app.name);
 }
 
-// ---------- The tab kebab menu ----------
+// The tab kebab menu
 
 // The one open tab menu. It renders into a root of its own on <body>: the tab strip is
-// dockview's DOM rather than mithril's, so there is no mounted tree for the menu to live in,
-// and the strip clips its own overflow besides. The root is made on first use, since this
-// module is also imported where there is no document.
+// dockview's DOM rather than mithril's, so there is no mounted tree for the menu to live in.
+// The root is made on first use, since this module is also imported where there is no document.
 let tabMenuHost: HTMLElement | null = null;
 let tabMenuRows: MenuRow[] = [];
 let onTabMenuClosed: (() => void) | null = null;
@@ -389,10 +388,7 @@ function closeTabMenu(): void {
   tabMenu.close();
 }
 
-/**
- * Open a tab's kebab menu against ``anchor``. Pressing the kebab again while the menu is up
- * lands on the menu's own sheet, which is what closes it.
- */
+/** Open a tab's kebab menu against ``anchor``. */
 function openTabMenuAt(
   anchor: MenuAnchor | HTMLElement,
   entries: readonly TabMenuEntry[],
@@ -546,7 +542,7 @@ async function executeDelete(address: string): Promise<void> {
   m.redraw();
 }
 
-// ---------- The tab ----------
+// The tab
 
 /** The live tabs, so the width recompute can size them and a click on an already-open tab can
  *  flash it. */
@@ -757,8 +753,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
             updateActionsVisibility();
           });
         };
-        // The element rather than its box, so a window resize re-measures the kebab and the
-        // menu follows the tab.
+        // The element rather than its box, so a resize re-measures the kebab and the menu follows it.
         const menuButton = createTabActionButton("Tab options", "kebab", () => {
           openMenu(menuButton);
         });
@@ -824,7 +819,7 @@ function createTabActionButton(
   return button;
 }
 
-// ---------- Equal-width tabs ----------
+// Equal-width tabs
 
 let tabWidthFrame: number | null = null;
 let tabStripObserver: ResizeObserver | null = null;
@@ -908,7 +903,7 @@ function placementInPlaceOf(panelId: string, targetGroup: DockviewGroupPanel | n
   return { position: index < 0 ? { referenceGroup: group.id } : { referenceGroup: group.id, index } };
 }
 
-// ---------- The "+" and the New Tab launcher ----------
+// The "+" and the New Tab launcher
 
 function groupForPanel(panelId: string): DockviewGroupPanel | null {
   return dockview?.panels.find((panel) => panel.id === panelId)?.api.group ?? null;
@@ -1105,7 +1100,7 @@ function launcherMemberRows(): LauncherRow[] {
   });
 }
 
-// ---------- The machine, as the sidebar and the launcher see it ----------
+// The machine, as the sidebar and the launcher see it
 
 export function getAvailableProjects(): ProjectInfo[] {
   return availableProjects;
@@ -1230,7 +1225,7 @@ function refreshPanelContent(panelId: string): void {
   if (appName !== null) reloadIframesForApp(appName);
 }
 
-// ---------- Shortcuts ----------
+// Shortcuts
 
 /** Epoch milliseconds each open panel's address was last the active one (0 for never), for the MRU rule. */
 function lastFocusedMsByAddress(): Record<string, number> {
@@ -1403,7 +1398,7 @@ export function removeShortcutFromView(appName: string, actionId: string): void 
     .finally(() => m.redraw());
 }
 
-// ---------- Panels ----------
+// Panels
 
 /** The panel currently showing ``address``, or null when the instance is not docked or is gone. */
 function panelIdForAddress(address: string): string | null {
@@ -1818,7 +1813,7 @@ function reconcilePanelsWithInventory(): void {
   syncTabTitlesFromInventory();
 }
 
-// ---------- The app contract's shell side ----------
+// The app contract's shell side
 
 /** The panel a child frame stands in for. Null for a frame the dock is not showing. */
 function panelForChildFrame(frame: HTMLIFrameElement): IDockviewPanel | null {
@@ -1892,7 +1887,7 @@ function relayLocationForChildFrame(frame: HTMLIFrameElement, payload: Record<st
   void reportInstanceLocation(parsed.app, parsed.key, path);
 }
 
-// ---------- Agent-driven layout ops ----------
+// Agent-driven layout ops
 //
 // Only the four verbs with nothing to store reach this window as messages (contracts.md section
 // 12): maximize, restore, refresh, and the interface reload. Open, focus, split, close, and move are
@@ -1971,7 +1966,7 @@ function handleRefresh(args: Record<string, unknown>, requester: string): void {
   reloadIframeForAddress(target);
 }
 
-// ---------- Live pages ----------
+// Live pages
 
 function mountLiveContent(surface: LiveSurface): void {
   m.mount(surface.element, { view: () => renderLiveContent(surface) });

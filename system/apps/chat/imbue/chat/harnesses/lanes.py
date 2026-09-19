@@ -204,7 +204,7 @@ HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.SEED: "Mind",
 }
 
-# --- claude -----------------------------------------------------------------------------
+# claude
 # The one CLI with real one-shot auth subcommands, which is why its flows were the first to
 # work and why the rest of this file is shaped the way it is.
 
@@ -277,7 +277,7 @@ LANE_ANTHROPIC = Lane(
     ),
 )
 
-# --- codex ------------------------------------------------------------------------------
+# codex
 # Its device flow is inverted from every other PTY method: the URL is fixed and the CODE is
 # what gets scraped, the user types it into the browser, and nothing comes back to the
 # terminal. The CLI polls and exits 0 on its own, so process exit is the success signal.
@@ -318,7 +318,7 @@ LANE_OPENAI = Lane(
     ),
 )
 
-# --- antigravity ------------------------------------------------------------------------
+# antigravity
 # No auth subcommand at all: bare `agy` prompts on first launch. The menu is a blind
 # keystroke script, which is exactly why `expect_before_keys` exists.
 
@@ -373,7 +373,7 @@ LANE_GOOGLE = Lane(
     ),
 )
 
-# --- pi ---------------------------------------------------------------------------------
+# pi
 # Both pi lanes are plain file writes. pi's auth.json is a map keyed by provider id, so
 # "one provider per account folder" is our rule, not pi's -- we simply never write two.
 
@@ -494,8 +494,6 @@ LANE_OPENROUTER = Lane(
         PasteMethod(
             id="api_key",
             label="Paste your OpenRouter key",
-            # Where the key comes from is the whole of what there is to say here, and
-            # `signup_url` is how a lane says that: a link the panel can render.
             description="",
             sink=PasteSink.PI_AUTH_JSON,
             signup_url="https://openrouter.ai/keys",

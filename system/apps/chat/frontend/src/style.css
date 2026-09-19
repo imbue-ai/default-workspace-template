@@ -271,28 +271,19 @@
      as a hole with two pictures behind it. */
   background: var(--c-surface);
   border-radius: inherit;
-  /* No `overflow: hidden` here, on purpose. Every child that needs clipping does its own --
-     the transcript scrolls inside its own scroller, the terminal frame carries its own corner
-     -- so a clip at the face's edge only ever caught what a child cast PAST that edge, which
-     is what trimmed the composer's shadow along the card's bottom. */
+  /* No `overflow: hidden` here: every child that needs clipping does its own, so a clip at the
+     face's edge would only ever trim what a child casts past it. */
 }
 .chat-flip-back {
   transform: rotateY(180deg);
   /* The terminal brings its own dark surface, so it sits IN the pane rather than filling it:
-     a 4px gutter, which is also what keeps the face's own corners from having to line up with
-     the pane's.
-
-     Except along the bottom, where it runs to the face's edge. That edge is where the
-     composer's bottom edge is on the other face -- the footer is the front face's last child
-     and carries no padding under it -- so turning the card over leaves the bottom line exactly
-     where it was. A 4px gutter down there would lift the terminal off a line the eye has
-     already fixed. */
+     a 4px gutter. The bottom is flush, though -- that edge is where the composer's bottom edge
+     is on the other face, so turning the card over leaves the bottom line where it was. */
   padding: 4px 4px 0;
 }
-/* The ttyd frame fills that padded box and carries the corner. 8px is what the pane's own 12px
-   corner leaves once you step 4px inward, so the terminal reads as concentric with the pane
-   rather than pasted into it -- the same inset-and-shrink the menu rows use. An iframe clips
-   its own painting to its border-radius, so the terminal's background rounds with the frame. */
+/* The ttyd frame fills that padded box and carries the corner: 8px is what the pane's own 12px
+   corner leaves once you step 4px inward, so the terminal reads as concentric with the pane. An
+   iframe clips its own painting to its border-radius, so its background rounds with the frame. */
 .terminal-frame {
   width: 100%;
   height: 100%;
@@ -309,9 +300,7 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelProviderMenuStyles`, at its own size: the knob's offset is a
-   Tailwind utility, which a `transform` here would lose to, leaving the knob outside the
-   track. */
+   itself is the shared one from `modelProviderMenuStyles`, at its own size. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -321,13 +310,12 @@
   background: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  /* The faint role, matching the model chip beside it: this is a view setting sitting under
-     the composer, not something to draw the eye down there. */
+  /* Faint, like the model chip beside it: a view setting under the composer is not something to
+     draw the eye down there. */
   color: var(--c-text-faint);
   font-size: var(--font-size-row);
   transition: color var(--dur-base);
 }
-/* Hover lifts one step, the way the model chip's does. */
 .terminal-view-toggle:hover {
   color: var(--c-text-secondary);
 }
@@ -591,7 +579,7 @@
   margin: 0.5em 0;
 }
 
-/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+/* Transcript custom scrollbar (transcript-smooth-scroll spec) */
 
 /* The transcript scroll container hides its native scrollbar entirely; the
    TranscriptScrollbar overlay replaces it (physical region in pixel space,

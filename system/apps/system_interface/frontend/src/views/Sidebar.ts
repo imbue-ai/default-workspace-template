@@ -129,12 +129,11 @@ const ROW_ICON_SIZE = 16;
 const ACTION_ICON_SIZE = 14;
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
-/** The rail's menus are the shared Menu; `project-rail-menu` is a bare marker for tests, and the
- *  rail's own text size rides along so a menu reads at the size of the rows beside it. */
+/** `project-rail-menu` is a bare marker for tests; the rail's own text size rides along so a
+ *  menu reads at the size of the rows beside it. */
 const MENU_MARKER_CLASS = `project-rail-menu ${ROW_TEXT_CLASS} text-primary`;
-/** Every menu row: a bare marker, plus `group` for the trailing controls that reveal on the
- *  row's hover. tightGap (4px) matches the rail's own rows (ROW_CLASS), so a menu row reads as
- *  tight as the rail row sitting right above it. */
+/** `group` lets a row's trailing controls reveal on the row's hover. tightGap (4px) matches the
+ *  rail's own rows (ROW_CLASS), so a menu row reads as tight as the rail row above it. */
 const MENU_ROW_EXTRA = "project-rail-menu-item group";
 const SWITCHER_MENU_WIDTH = 256;
 
@@ -182,7 +181,7 @@ function viewIdentityMarkup(project: ProjectInfo | null, size: number): string {
     : monogramMarkup(project.name, project.color, size);
 }
 
-// ---------- Floating menu anchors ----------
+// Floating menu anchors
 
 function anchorForEvent(event: Event): MenuAnchor {
   return (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -226,7 +225,7 @@ function railAction(options: {
   );
 }
 
-// ---------- Shortcuts ----------
+// Shortcuts
 
 /**
  * The rail a view shows, resolved against the inventory.
@@ -258,7 +257,7 @@ export function shortcutLabel(resolved: ResolvedShortcut): string {
   return resolved.mode === "new" ? resolved.action.label : resolved.app.display_name;
 }
 
-// ---------- New projects ----------
+// New projects
 
 /** The name a fresh project gets: the first "Project N" nobody is using, by name or by id. */
 export function nextProjectName(projects: readonly Pick<ProjectInfo, "name" | "id">[]): string {
@@ -278,7 +277,7 @@ export function nextGlyphIndex(usedGlyphs: readonly number[]): number {
   return usedGlyphs.length % SQUIGGLE_GLYPHS.length;
 }
 
-// ---------- The component ----------
+// The component
 
 function shortcutKey(shortcut: ProjectShortcut): string {
   return `${shortcut.app}:${shortcut.action}`;
@@ -294,16 +293,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   let menuError: string | null = null;
   let lastRenderedViewId: string | null = null;
 
-  // Which row, and which shortcut, the row and shortcut menus are open for. The menus
-  // themselves are below; these ride beside them because the shared menu knows nothing about
-  // rails.
+  // Which row, and which shortcut, the row and shortcut menus are open for.
   let menuRowAddress: string | null = null;
   let menuShortcutKey: string | null = null;
 
-  /** One of the rail's menus: the shared Menu with the rail's marker class, and the rail's
-   *  expansion tied to it -- a menu closing takes the expansion with it unless the pointer is
-   *  still on the rail, since the menu floats beside the rail and the pointer is usually off
-   *  it by the time the menu closes. */
+  /** A rail menu collapses the rail when it closes, unless the pointer is still on the rail:
+   *  the menu floats beside the rail, so the pointer is usually off it by then. */
   function railMenu(placement: "below" | "right", width: number | null, role: "menu" | "dialog" = "menu"): Menu {
     return createMenu({
       placement,
@@ -338,8 +333,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     expanded = false;
   }
 
-  /** Collapse on the window losing focus, which is how a click into a cross-origin pane is
-   *  seen. A menu stays: it closes on a press or Escape and on nothing else. */
+  /** Collapse on the window losing focus, which is how a click into a cross-origin pane is seen.
+   *  The menus close themselves. */
   function handleWindowBlur(): void {
     isPointerOverRail = false;
     if (renamingAddress !== null || isAnyMenuOpen() || !expanded) return;
@@ -371,7 +366,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     shortcutMenu.open(anchor);
   }
 
-  /** A rail action: run it, and take down whichever menu was up. */
   function pick(action: () => void): void {
     action();
     for (const menu of railMenus) menu.close();
@@ -522,7 +516,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     m.redraw();
   }
 
-  // ---------- Rail rows ----------
+  // Rail rows
 
   function railLabel(content: m.Children, extraClass: string): m.Vnode {
     return m(
@@ -830,7 +824,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
-  // ---------- Floating menus ----------
+  // Floating menus
 
   function switcherEditButton(
     project: ProjectInfo,
@@ -917,8 +911,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       tone: "quiet",
       tightGap: true,
       extraClass: MENU_ROW_EXTRA,
-      // Stays up: a create that fails says so on the line under the rows, and closes itself
-      // on success.
+      // Stays up so a create that fails can say so on the line under the rows.
       keepsOpen: true,
       onSelect: () => {
         void createNewProject(attrs);
