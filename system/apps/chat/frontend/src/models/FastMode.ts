@@ -90,11 +90,22 @@ export async function updateFastModeState(chatId: string, next: ChatFastModeStat
   }
 }
 
-/** What the model picker's fast row says for a state. */
+/** What each mode is called, everywhere one is named. Keyed by the mode rather than searched
+ *  for in a list, so every mode has a name by construction and no caller needs a fallback. */
+export const FAST_MODE_LABELS: Readonly<Record<FastModeMode, string>> = {
+  off: "Off",
+  auto: "Auto",
+  on: "On",
+};
+
+/** The three modes, in the order the chooser offers them. */
+export const FAST_MODES: readonly FastModeMode[] = ["off", "auto", "on"];
+
+/** What the model picker's fast row says for a state: the mode's name, and for auto whether it
+ *  has already run its fast turns. */
 export function fastModeLabel(state: ChatFastModeState): string {
-  if (state.mode === "off") return "Off";
-  if (state.mode === "on") return "On";
-  return state.is_switched ? "Auto (off now)" : "Auto";
+  const label = FAST_MODE_LABELS[state.mode];
+  return state.mode === "auto" && state.is_switched ? `${label} (off now)` : label;
 }
 
 /** The line under a mode in the chooser; auto's names the limit it runs to. */
@@ -104,13 +115,6 @@ export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
   const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
   return `Fast for the first ${turns}, then standard`;
 }
-
-/** The three modes, in the order the chooser offers them. */
-export const FAST_MODES: readonly { mode: FastModeMode; label: string }[] = [
-  { mode: "off", label: "Off" },
-  { mode: "auto", label: "Auto" },
-  { mode: "on", label: "On" },
-];
 
 /** Forget every chat's state, so a test starts clean. */
 export function resetFastModeForTests(): void {
