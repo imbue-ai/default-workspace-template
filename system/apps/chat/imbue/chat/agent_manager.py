@@ -650,6 +650,7 @@ def chat_snapshot_for_active_agent(
     chat: _ResolvedChat,
     is_permission_pending: bool,
     shoulder_tap_available: bool,
+    last_messaged_at: float | None = None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -684,6 +685,7 @@ def chat_snapshot_for_active_agent(
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
         ),
+        last_messaged_at=last_messaged_at,
     )
 
 
@@ -1186,9 +1188,14 @@ class AgentManager:
             pending_by_agent = {
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+        last_messaged = self._message_stamps.read()
         return [
             chat_snapshot_for_active_agent(
-                agent, chat, pending_by_agent[agent.id], self._shoulder_tap_available(agent)
+                agent,
+                chat,
+                pending_by_agent[agent.id],
+                self._shoulder_tap_available(agent),
+                last_messaged.get(chat.chat_id),
             )
             for agent, chat in listed
         ]
@@ -1204,7 +1211,9 @@ class AgentManager:
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
         if chat is None or agent is None or is_primary_agent(agent):
             return None
-        return chat_snapshot_for_active_agent(agent, chat, is_pending, self._shoulder_tap_available(agent))
+        return chat_snapshot_for_active_agent(
+            agent, chat, is_pending, self._shoulder_tap_available(agent), self._message_stamps.read().get(chat.chat_id)
+        )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
         """The agent a chat currently runs on (with its resolved dirs), or None for an id that names no chat."""

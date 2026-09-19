@@ -1,7 +1,7 @@
 [project]
 name = "terminal-app"
 version = "0.1.0"
-description = "The terminal app: runs ttyd, serves the instances API over the workspace's tmux sessions, and reports session switches and renames to the shell"
+description = "The terminal app: the wrapper page and instances API over the workspace's tmux sessions (terminal-app), and ttyd on its own origin (terminal-pty)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 terminal-app = "terminal_app.main:main"
+terminal-pty = "terminal_app.pty_main:main"
 
 [build-system]
 requires = ["hatchling"]

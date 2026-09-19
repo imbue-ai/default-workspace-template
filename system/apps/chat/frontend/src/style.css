@@ -12,6 +12,28 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
+/* The chat root's list (root/ChatRail.ts): a chat that is working wears a dot that breathes,
+   so the eye finds the live one without reading. Reduced motion holds it steady. */
+@keyframes chat-rail-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.chat-rail-dot--pulse {
+  animation: chat-rail-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-rail-dot--pulse {
+    animation: none;
+  }
+}
+
 /* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
    (the browser default) so the viewport holds steady when rows above it load or
    measure to their real height, with no per-frame JS scrollTop writes. The

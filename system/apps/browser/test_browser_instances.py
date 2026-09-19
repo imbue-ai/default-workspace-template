@@ -239,3 +239,35 @@ def test_stop_and_start_ride_the_instances_api_and_the_daemons_own_routes(monkey
     assert wait_until(lambda: fake._lifecycle == "running", 5.0)
     assert client.post("/browsers/browser-9/start").status_code == 404
     assert client.post("/_instances/browser-9/stop").status_code == 404
+
+
+def test_the_viewer_page_carries_the_shells_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-a1b2"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+
+    response = runner.application.test_client().get("/")
+
+    assert response.status_code == 200
+    assert '<meta name="workspace-shell-label" content="system_interface-a1b2">' in response.text
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+
+    response = runner.application.test_client().get("/new?url=https://example.com", follow_redirects=False)
+
+    assert response.status_code == 302, response.text
+    name = response.headers["Location"].removeprefix("/?session=")
+    assert name in runner.manager._browsers
+    assert response.headers["Location"] == f"/?session={name}"
+
+
+def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+
+    response = runner.application.test_client().get("/new?url=ftp://example.com", follow_redirects=False)
+
+    assert response.status_code == 400
+    assert "url" in response.get_json()["error"]

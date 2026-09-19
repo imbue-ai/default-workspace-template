@@ -1,0 +1,9 @@
+# The terminal's pty origin: ttyd, on an origin of its own, framed by the terminal app's
+# wrapper page (system/apps/terminal). Internal: the wrapper is what users open; this row
+# exists so ttyd has an origin the wrapper can embed (desktop-interface contracts.md section 2).
+name = "terminal-pty"
+display_name = "Terminal PTY"
+internal = true
+critical = true
+priority = "terminal"
+program = "terminal-pty"

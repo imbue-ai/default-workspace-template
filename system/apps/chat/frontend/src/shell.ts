@@ -9,13 +9,14 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addressFor } from "@imbue/workspace-ui/src/addresses";
-import { createChat, getChatById } from "./models/Chats";
+import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
+import type { ChatPageEmbedApi } from "./embedApi";
 
 /** The chat app's registered name: what its own pages address their instances under. */
 const CHAT_APP_NAME = "chat";
@@ -56,6 +57,8 @@ export interface ChatShellOptions {
    * page of the same chat in the same client would overwrite the chat page's own.
    */
   isPresenceReported: boolean;
+  /** The path this page is served at, which it reports as its location (contracts.md section 7). */
+  path: string;
 }
 
 /**
@@ -65,26 +68,32 @@ export interface ChatShellOptions {
  */
 export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;
-  connection = connectToShell({
-    onHandshake: (received) => {
-      handshake = received;
-      adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
-      // Hidden until the shell says shown: a page can load into a background tab, and open
-      // (any client's unexpired report) is what a hidden report keeps.
-      if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
-      m.redraw();
-    },
-    onShown: () => {
-      isShown = true;
-      if (isPresenceReported) reportPresence("visible");
-      m.redraw();
-    },
-    onHidden: () => {
-      isShown = false;
-      if (isPresenceReported) reportPresence("hidden");
-      m.redraw();
-    },
-  });
+  const onHandshake = (received: ShellHandshake): void => {
+    handshake = received;
+    adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
+    // Hidden until the shell says shown: a page can load into a background tab, and open
+    // (any client's unexpired report) is what a hidden report keeps.
+    if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
+    m.redraw();
+  };
+  const onShown = (): void => {
+    isShown = true;
+    if (isPresenceReported) reportPresence("visible");
+    m.redraw();
+  };
+  const onHidden = (): void => {
+    isShown = false;
+    if (isPresenceReported) reportPresence("hidden");
+    m.redraw();
+  };
+  connection = connectToShell({ onHandshake, onShown, onHidden });
+  if (connection.isFramed) {
+    // The chat root frames chat pages from this same origin and drives them by calling in
+    // rather than by messaging (it never sends the shell's messages); the shell's own frames
+    // ignore this, since a cross-origin parent cannot reach it.
+    const embedApi: ChatPageEmbedApi = { handshake: onHandshake, shown: onShown, hidden: onHidden };
+    window.chatPageEmbed = embedApi;
+  }
   if (!connection.isFramed) {
     // A direct visit has no shell to say when the page is showing; the document's own
     // visibility is the closest fact, and there is no shell-handed client id to key on.
@@ -103,7 +112,25 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     });
   }
   window.addEventListener("focus", () => connection?.focused());
+  reportChatLocation(chatId, options.path);
   return connection;
+}
+
+/** Report where this page is and what it is called, now and whenever the chat's title changes.
+ *
+ * A chat's own page is titled after the chat; a sub-agent view reports no title, so the shell
+ * titles its window after the app. */
+function reportChatLocation(chatId: string, path: string): void {
+  let reportedTitle: string | null = null;
+  const report = (): void => {
+    const title = getChatById(chatId)?.title ?? "";
+    if (title === reportedTitle) return;
+    reportedTitle = title;
+    if (title !== "") document.title = title;
+    connection?.location(path, title);
+  };
+  report();
+  addChatsUpdatedListener(report);
 }
 
 /**
