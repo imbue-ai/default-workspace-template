@@ -130,14 +130,18 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 async function ready() {
-  // minds patch: location beacon. Post the path being viewed ONE hop up -- to
-  // the dockview shell embedding this frame, never further out -- on each page
-  // load, so the shell can reopen this file-viewer instance at the same place.
-  // The shell validates the sender's origin and resolves which pane posted;
-  // the payload carries nothing but the path. The wildcard target is fine for
-  // the same reason: the path is already visible to any embedder.
+  // minds patch: location beacon. Post the path being viewed and the folder's name ONE hop
+  // up -- to the workspace shell embedding this frame, never further out -- on each page
+  // load, so the shell can reopen this file viewer at the same place and title its window
+  // (docs/system/blueprint/desktop-interface/contracts.md section 7). The shell validates the
+  // sender's origin and resolves which frame posted; the payload carries nothing but the path
+  // and the title. The wildcard target is fine for the same reason: both are already visible
+  // to any embedder.
   if (window.parent !== window) {
-    window.parent.postMessage({ type: "shell:location", path: location.pathname + location.search }, "*");
+    window.parent.postMessage(
+      { type: "shell:location", path: location.pathname + location.search, title: folderTitle(DATA.href) },
+      "*",
+    );
   }
 
   $pathsTable = document.querySelector(".paths-table");
@@ -170,6 +174,13 @@ async function ready() {
 
     await setupEditorPage();
   }
+}
+
+// minds patch: the title a file viewer's window wears: the last segment of the folder it
+// shows, or the served root's own name at the top.
+function folderTitle(href) {
+  const segments = decodeURIComponent(href).split("/").filter((segment) => segment !== "");
+  return segments.length === 0 ? "Files" : segments[segments.length - 1];
 }
 
 class Uploader {

@@ -43,6 +43,7 @@ Flask+WS pattern in system/apps/system_interface. The service owns its origin, s
 the viewer's relative URLs need no prefix or root-path awareness anywhere.
 """
 
+import html
 import json
 import os
 import queue
@@ -56,7 +57,9 @@ from app_instances.blueprint import build_instances_blueprint
 from app_instances.errors import InvalidInstanceValueError
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
 from app_instances.primitives import AbsoluteHttpUrl
-from flask import Flask, Response, jsonify, request
+from app_manifest.primitives import AppName
+from app_manifest.registry import read_origin_label, registry_path
+from flask import Flask, Response, jsonify, redirect, request
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
@@ -65,11 +68,11 @@ from browser import mediastream, telemetry
 from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.instances import FleetInstanceSource
+from browser.instances import START_URL_PARAM, FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import APP_NAME
+from browser.primitives import APP_NAME, BrowserName, instance_url_for_browser
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -87,6 +90,13 @@ from browser.wsgi import make_threaded_server
 _PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+
+# The ``new`` launch path (system/apps/browser/app.toml), and the meta tag the viewer reads the
+# shell's origin label from to import the app contract module (desktop-interface contracts.md
+# section 7).
+NEW_PATH = "/new"
+SHELL_APP_NAME = AppName("system_interface")
+SHELL_LABEL_META_NAME = "workspace-shell-label"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -234,7 +244,38 @@ def _body() -> dict[str, Any]:
 
 
 def index() -> Response:
-    return Response(_INDEX_HTML.read_text(), mimetype="text/html")
+    """The viewer page, with the shell's origin label stamped in so it can import the app contract module."""
+    shell_label = read_origin_label(registry_path(), SHELL_APP_NAME)
+    meta_tag = f'<meta name="{SHELL_LABEL_META_NAME}" content="{html.escape(shell_label, quote=True)}">'
+    response = Response(_INDEX_HTML.read_text().replace("</head>", f"{meta_tag}\n</head>", 1), mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def new_browser() -> Response:
+    """``GET /new[?url=]``, the ``new`` launch path: create a browser and redirect to its viewer page.
+
+    The same create as ``POST /browsers`` with no name, answered as a redirect so a window
+    opened at the launch path lands on the browser it made and reports that path as its own.
+    """
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _error({"error": reason}, 503)
+    raw_url = request.args.get(START_URL_PARAM)
+    start_url: str | None = None
+    if raw_url is not None and raw_url != "":
+        try:
+            start_url = str(AbsoluteHttpUrl(raw_url))
+        except InvalidInstanceValueError as e:
+            return _error({"error": f"url: {e}"}, 400)
+    try:
+        session = bridge.run(manager.create(None, start_url), timeout=_ROUTE_TIMEOUT)
+    except FleetFullError as e:
+        return _error({"error": str(e)}, 409)
+    except _STARTUP_ERRORS as e:
+        logger.error("failed to register browser: {}", e)
+        return _error({"error": f"Could not start browser: {e}"}, 503)
+    return redirect(str(instance_url_for_browser(BrowserName(session.browser_id))), code=302)
 
 
 def health() -> Response:
@@ -766,6 +807,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["GET"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
     )

@@ -23,8 +23,8 @@ from app_instances.blueprint import parse_request_body
 from app_instances.errors import AppInstancesError
 from app_instances.nudge import post_to_shell
 from app_instances.nudge import shell_base_url
-from app_manifest.errors import RegistryReadError
-from app_manifest.registry import read_registry
+from app_manifest.primitives import AppName
+from app_manifest.registry import read_origin_label
 from app_manifest.registry import registry_path
 from flask import Flask
 from flask import Response
@@ -85,6 +85,7 @@ from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
 from imbue.chat.models import AgentListResponse
 from imbue.chat.models import AgentNameConflictError
+from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
@@ -110,6 +111,8 @@ from imbue.chat.models import HeldSendResponse
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import PoweredByResponse
+from imbue.chat.models import RenameChatRequest
+from imbue.chat.models import RenameChatResponse
 from imbue.chat.models import SeedChatRequest
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.models import SendMessageResponse
@@ -142,6 +145,10 @@ logger = _loguru_logger
 # The vite build's chat entry: the document the chat's own static/ directory serves, beside its
 # assets/ and favicon.
 CHAT_DOCUMENT_FILENAME: Final[str] = "chat.html"
+# The chat root (the chat list beside an inner chat frame), the vite build's second page.
+ROOT_DOCUMENT_FILENAME: Final[str] = "root.html"
+# The chat root's launch path (contracts.md section 2): the root with a chat just created.
+NEW_CHAT_PATH: Final[str] = "/new"
 
 # What the chat origin answers when the bundle is missing: the shell's placeholder carries the
 # repair story, and a chat frame is never the page a reader is looking at on its own.
@@ -1371,6 +1378,37 @@ def _destroy_chat(chat_id: str) -> Response:
     return json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
+def _rename_chat(chat_id: str) -> Response:
+    """Rename a chat (the ``display_name`` label and the matching canonical name), as the instances API's rename does.
+
+    409 while the chat converges or when the name collides with another agent's, 400 for a
+    name mngr cannot take.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_info = _find_active_agent(chat_id)
+    if agent_info is None:
+        return _chat_not_found_response(chat_id)
+    refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "rename")
+    if refusal is not None:
+        return refusal
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        rename_request = RenameChatRequest.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    try:
+        agent_manager.rename_chat(chat_id, rename_request.title)
+    except ChatConvergingError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except AgentNameConflictError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except AgentRenameError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    return json_response(RenameChatResponse(status="ok").model_dump())
+
+
 def _stop_chat(chat_id: str) -> Response:
     """Stop a chat's agent with ``mngr stop``, the reversible counterpart to a destroy (the instances API's stop does the same)."""
     agent_manager: AgentManager = get_state().agent_manager
@@ -1431,25 +1469,41 @@ def _presence_endpoint(chat_id: str) -> Response:
 
 
 # The terminal app's registered name: the chat's terminal back face is served from its origin.
-_TERMINAL_APP_NAME: Final[str] = "terminal"
+_TERMINAL_APP_NAME: Final[AppName] = AppName("terminal")
+# The origin ttyd itself is served from since the terminal split into a wrapper and a pty
+# (desktop-interface plan section 9.2); the chat's terminal back face attaches through it.
+_TERMINAL_PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 
 
 def _terminal_origin_label() -> str:
-    """The terminal app's origin label from the registry, or "" when no terminal is registered.
+    """The origin label the chat's terminal back face attaches through: the pty's, else the terminal's, else "".
 
-    Read per page load rather than watched: a label is minted once per workspace and the
-    registry is one small file, and an unreadable registry costs the page its terminal face,
-    never the page.
+    The terminal row stands in for a workspace whose pty has not registered yet (one that has
+    not restarted onto the split), where ttyd is still the terminal origin itself.
     """
-    try:
-        rows = read_registry(registry_path())
-    except RegistryReadError as e:
-        logger.warning("Could not read the app registry for the terminal label: {}", e)
-        return ""
-    for row in rows:
-        if row.name == _TERMINAL_APP_NAME:
-            return row.label
-    return ""
+    pty_label = read_origin_label(registry_path(), _TERMINAL_PTY_APP_NAME)
+    if pty_label != "":
+        return pty_label
+    return read_origin_label(registry_path(), _TERMINAL_APP_NAME)
+
+
+def _root_document() -> Response:
+    """Serve the chat root: the chat list beside an inner frame of the selected chat (``/?chat=<id>``), and ``/new``.
+
+    The page reads its selection off its own URL, so the document is the same for every path
+    it is served at; it carries the meta tags a chat page does minus a chat identity.
+    """
+    document_path = get_state().static_directory / ROOT_DOCUMENT_FILENAME
+    if not document_path.exists():
+        _loguru_logger.warning("Served the chat not-built placeholder: no chat root bundle at {}", document_path)
+        return document_response(_CHAT_NOT_BUILT_HTML, is_frontend_built=False)
+    root_path = (request.script_root or "").rstrip("/")
+    html_content = document_path.read_text()
+    html_content = inject_base_path_meta_tag(html_content, root_path)
+    html_content = inject_hostname_meta_tag(html_content)
+    html_content = inject_primary_agent_id_meta_tag(html_content)
+    html_content = inject_terminal_label_meta_tag(html_content, _terminal_origin_label())
+    return document_response(html_content, is_frontend_built=True)
 
 
 def _chat_document(key: str) -> Response:
@@ -1581,6 +1635,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
 # Every per-chat route, as ``(suffix, view, methods)``, served at ``/api/chats/<chat_id>/<suffix>``.
 _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...]], ...]] = (
     ("destroy", _destroy_chat, ("POST",)),
+    ("rename", _rename_chat, ("POST",)),
     ("start", _start_chat, ("POST",)),
     ("stop", _stop_chat, ("POST",)),
     ("events", _get_events, ("GET",)),
@@ -1631,6 +1686,8 @@ def create_application(state: ChatAppState) -> Flask:
     source, nudger = build_chat_instance_source(state.agent_manager, start_agent)
     application.register_blueprint(build_instances_blueprint(source, nudger))
 
+    application.add_url_rule("/", view_func=_root_document, methods=["GET"])
+    application.add_url_rule(NEW_CHAT_PATH, view_func=_root_document, methods=["GET"], endpoint="new_chat_root")
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])

@@ -84,12 +84,27 @@ describe("connectToShell", () => {
     expect(handlers.onCloseRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("drops a handshake missing a field", () => {
+  it("drops a handshake without a client id", () => {
     const parent = framed();
     const onHandshake = vi.fn();
     connection = connectToShell({ onHandshake });
-    deliver({ ...HANDSHAKE, tabId: undefined }, parent);
+    deliver({ ...HANDSHAKE, clientId: undefined }, parent);
+    deliver({ ...HANDSHAKE, clientId: "" }, parent);
     expect(onHandshake).not.toHaveBeenCalled();
+  });
+
+  it("reads the tabbed shell's fields as empty when a shell does not send them", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ type: SHELL_HANDSHAKE, clientId: "client-1", windowId: "win-1", desktopId: "home", path: "/" }, parent);
+    expect(onHandshake).toHaveBeenCalledWith({
+      clientId: "client-1",
+      deviceKind: "",
+      viewId: "",
+      address: "",
+      tabId: "",
+    });
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {

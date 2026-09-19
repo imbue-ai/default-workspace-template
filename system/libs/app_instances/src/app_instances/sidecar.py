@@ -109,7 +109,7 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
         logger.warning("Registered {} slowly, in {:.1f}s", manifest_path, elapsed)
 
 
-def _load_sidecar_manifest(
+def load_instances_manifest(
     manifest_path: Path, instances_url: InstancesUrl
 ) -> AppManifest:
     """The manifest, checked to declare the instances API at the port this sidecar will serve."""
@@ -175,6 +175,27 @@ def serve_in_background(host: str, port: int, app: Flask) -> Iterator[BaseWSGISe
             )
 
 
+def wait_for_shutdown_signal() -> int:
+    """Block until SIGTERM or SIGINT arrives, and return the exit status for it (128 plus the signal number).
+
+    What an app that serves only its own servers (no wrapped child) runs on its main thread
+    after they are listening: supervisord stops it with SIGTERM, and the status says so.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        raise SidecarError("the shutdown wait must run on the main thread so it can install signal handlers")
+    received: list[int] = []
+    stop = threading.Event()
+
+    def note(signum: int, _frame: FrameType | None) -> None:
+        received.append(signum)
+        stop.set()
+
+    for forwarded_signal in _FORWARDED_SIGNALS:
+        signal.signal(forwarded_signal, note)
+    stop.wait()
+    return SIGNAL_EXIT_CODE_BASE + received[0]
+
+
 def _forward_signals_to(child: subprocess.Popen[bytes]) -> None:
     def forward(signum: int, _frame: FrameType | None) -> None:
         child.send_signal(signum)
@@ -230,7 +251,7 @@ def run_sidecar_app(
         )
     if not child_argv:
         raise SidecarError("cannot start the wrapped server: no command given")
-    manifest = _load_sidecar_manifest(manifest_path, instances_url)
+    manifest = load_instances_manifest(manifest_path, instances_url)
     nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
     host, port = split_instances_url(instances_url)
     with serve_in_background(host, port, build_app(manifest, nudger)):

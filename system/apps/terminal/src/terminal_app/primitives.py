@@ -49,6 +49,11 @@ _URL_ARGUMENT_KEY: Final[str] = "arg"
 _URL_ARGUMENT_PLACEHOLDER: Final[str] = "_"
 SESSION_DISPATCH_KEY: Final[str] = "session"
 
+# The wrapper page's query parameters: which session it frames, and the id of the tab showing
+# it (the shell's ``{tab}`` substitution, which the pty records a client's pty under).
+SESSION_QUERY_KEY: Final[str] = "session"
+TAB_QUERY_KEY: Final[str] = "tab"
+
 
 @pure
 def _has_control_characters(value: str) -> bool:
@@ -172,15 +177,25 @@ def derive_terminal_title(name: TmuxSessionName) -> InstanceTitle:
 
 
 @pure
-def instance_url_for_session(
-    name: TmuxSessionName, workdir: Workdir | None
-) -> InstanceUrl:
-    """The URL a tab opens to attach to ``name``: the ttyd argument shape, with the tab placeholder in the tab id slot."""
-    arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name, TAB_PLACEHOLDER]
+def instance_url_for_session(name: TmuxSessionName) -> InstanceUrl:
+    """The wrapper page a tab opens for ``name``, with the tab placeholder in the tab slot; the pty URL it frames is the app's own business."""
+    return InstanceUrl(f"/?{SESSION_QUERY_KEY}={name}&{TAB_QUERY_KEY}={TAB_PLACEHOLDER}")
+
+
+@pure
+def pty_path_for_session(
+    name: TmuxSessionName, tab_id: TerminalTabId | None, workdir: Workdir | None
+) -> str:
+    """The path on the pty origin that attaches to ``name``: the ttyd argument shape the dispatch reads.
+
+    The tab slot is kept even when empty, so the working directory stays the third argument
+    ``session.sh`` reads it as.
+    """
+    arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name, tab_id or ""]
     if workdir is not None:
         arguments.append(workdir)
     query = "&".join(
-        f"{_URL_ARGUMENT_KEY}={urllib.parse.quote(argument, safe='{}')}"
+        f"{_URL_ARGUMENT_KEY}={urllib.parse.quote(argument, safe='')}"
         for argument in arguments
     )
-    return InstanceUrl(f"/?{query}")
+    return f"/?{query}"

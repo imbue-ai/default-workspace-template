@@ -72,9 +72,9 @@ def test_list_merges_live_sessions_with_remembered_ones_and_hides_agents(
         ("build", "The Build", InstanceStatus.IDLE),
         ("terminal-1", "Terminal 1", InstanceStatus.STOPPED),
     ]
-    assert listed[0].url == "/?arg=_&arg=session&arg=terminal-2&arg={tab}"
+    assert listed[0].url == "/?session=terminal-2&tab={tab}"
     assert listed[0].last_active == _ACTIVITY
-    assert listed[2].url == "/?arg=_&arg=session&arg=terminal-1&arg={tab}&arg=%2Fsrv"
+    assert listed[2].url == "/?session=terminal-1&tab={tab}"
     assert listed[2].last_active is None
     assert all(record.renameable for record in listed)
 
@@ -149,7 +149,7 @@ def test_create_makes_the_session_at_once_with_the_lowest_free_number(
     assert created.status == InstanceStatus.IDLE
     assert (
         created.url
-        == "/?arg=_&arg=session&arg=terminal-4&arg={tab}&arg=%2Fhome%2Fuser%2Fworkspace"
+        == "/?session=terminal-4&tab={tab}"
     )
     assert fake_tmux.session_names() == ["terminal-1", "terminal-3", "terminal-4"]
     assert fake_tmux.creates() == [expected_new_session_call("terminal-4", "/home/user/workspace")]
@@ -173,7 +173,7 @@ def test_two_creates_get_distinct_names_and_the_default_workdir(
     default_directory = urllib.parse.quote(DEFAULT_TEST_WORKDIR, safe="")
     assert (
         second.url
-        == f"/?arg=_&arg=session&arg=terminal-2&arg={{tab}}&arg={default_directory}"
+        == "/?session=terminal-2&tab={tab}"
     )
     assert [call[5] for call in fake_tmux.creates()] == [DEFAULT_TEST_WORKDIR] * 2
 
@@ -273,7 +273,7 @@ def test_rename_changes_only_the_title_and_never_the_key_or_the_session(
     assert renamed.key == "terminal-1"
     assert renamed.title == "My Build"
     assert renamed.status == InstanceStatus.IDLE
-    assert renamed.url == "/?arg=_&arg=session&arg=terminal-1&arg={tab}&arg=%2Fsrv"
+    assert renamed.url == "/?session=terminal-1&tab={tab}"
     assert fake_tmux.session_names() == ["terminal-1"]
     assert all(call[0] == "list-sessions" for call in fake_tmux.calls())
     assert session_store.list_records() == [

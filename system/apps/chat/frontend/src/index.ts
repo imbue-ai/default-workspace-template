@@ -62,7 +62,10 @@ async function bootstrap(): Promise<void> {
   initShellPermissionResolutions();
   // Only the chat's own page reports the chat's presence: a subagent view is a second page
   // of the same chat in the same client, and its reports would overwrite the chat page's.
-  connectChatToShell(chatId, { isPresenceReported: sessionId === "" });
+  connectChatToShell(chatId, {
+    isPresenceReported: sessionId === "",
+    path: sessionId === "" ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
+  });
   void loadAccountsWithRetry();
   const rootElement = document.getElementById("app");
   if (rootElement) {

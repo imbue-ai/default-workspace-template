@@ -28,7 +28,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal")
+_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal", "terminal_pty")
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -226,6 +226,15 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
 
     assert by_name["system_interface"].internal is True
     assert by_name["system_interface"].critical is True
+    # The terminal's pty origin (desktop-interface contracts.md section 2): ttyd, framed by the
+    # terminal's wrapper page, never offered on its own.
+    assert by_name["terminal-pty"].internal is True
+    assert by_name["terminal-pty"].critical is True
+    assert by_name["terminal-pty"].program == "terminal-pty"
+    assert by_name["terminal-pty"].priority == "terminal"
+    assert by_name["terminal-pty"].instances is False
+    assert by_name["terminal-pty"].launch_paths == ()
+    assert by_name["terminal-pty"].default_shortcut is None
     assert by_name["chat"].internal is False
     assert by_name["chat"].critical is True
     assert by_name["chat"].program == "chat"

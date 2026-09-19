@@ -36,6 +36,11 @@ export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
 
+/**
+ * What the shell says about the frame it created. The client id is the one field every shell
+ * sends; the rest are the tabbed shell's (device kind, view, address, tab), which the desktop
+ * shell does not send, so a page reads them as "" there.
+ */
 export interface ShellHandshake {
   clientId: string;
   deviceKind: string;
@@ -85,11 +90,20 @@ export class ShellContractError extends Error {}
 
 const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false };
 
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
   const { clientId, deviceKind, viewId, address, tabId } = data;
-  if (typeof clientId !== "string" || typeof deviceKind !== "string") return null;
-  if (typeof viewId !== "string" || typeof address !== "string" || typeof tabId !== "string") return null;
-  return { clientId, deviceKind, viewId, address, tabId };
+  if (typeof clientId !== "string" || clientId === "") return null;
+  return {
+    clientId,
+    deviceKind: optionalString(deviceKind),
+    viewId: optionalString(viewId),
+    address: optionalString(address),
+    tabId: optionalString(tabId),
+  };
 }
 
 function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabilities {
