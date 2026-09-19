@@ -435,6 +435,14 @@ export function listInstances(): ResolvedInstance[] {
   return listed;
 }
 
+/** The address of the one instance keyed ``key`` across every listed app, or null when nothing
+ *  lists it. An instance key is unique within its app, and a key that names an agent (the chat
+ *  app keys its instances by the agent it hosts) belongs to one app, so the first match is the
+ *  match; the shell never has to know which app that is. */
+export function addressOfInstanceKeyed(key: string): string | null {
+  return listInstances().find((resolved) => resolved.instance.key === key)?.address ?? null;
+}
+
 /** Resolve to true once the app list has loaded, or to false after ``timeoutMs`` so a workspace
  *  that never reports any app still proceeds -- and the caller knows the inventory is not an
  *  answer yet. Share-critical URL construction awaits this so a restored tab never mounts an

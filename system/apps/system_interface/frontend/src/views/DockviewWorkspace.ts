@@ -78,7 +78,12 @@ import type { MenuAnchor, SidebarTabRow } from "./Sidebar";
 import { normalizeTabTitle } from "./tab-rename";
 import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import {
+  FOCUS_CHAT,
+  OPEN_SHARE_SETTINGS,
+  sendToEmbedder,
+  setEmbedderMessageHandler,
+} from "@imbue/workspace-ui/src/embed";
 import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
@@ -94,6 +99,7 @@ import {
   addProjectsUpdatedListener,
   addTabReboundListener,
   addressFor,
+  addressOfInstanceKeyed,
   appNameFromAddress,
   appStoppedDetail,
   applyProjects,
@@ -1892,22 +1898,30 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
   void openAddressWhenListed(address, targetGroup);
 }
 
-/** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
- *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
-function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<boolean> {
-  if (findInstance(address) !== null) return Promise.resolve(true);
-  return new Promise<boolean>((resolve) => {
-    const settle = (isListed: boolean): void => {
+/** Resolve to what ``lookup`` finds in the inventory: at once, when a later app list carries
+ *  it, or null once ``timeoutMs`` passes without it. */
+function whenInventoryLists<T>(lookup: () => T | null, timeoutMs: number): Promise<T | null> {
+  const listed = lookup();
+  if (listed !== null) return Promise.resolve(listed);
+  return new Promise<T | null>((resolve) => {
+    const settle = (found: T | null): void => {
       removeAppsUpdatedListener(listener);
       clearTimeout(timer);
-      resolve(isListed);
+      resolve(found);
     };
     const listener = (): void => {
-      if (findInstance(address) !== null) settle(true);
+      const found = lookup();
+      if (found !== null) settle(found);
     };
-    const timer = setTimeout(() => settle(false), timeoutMs);
+    const timer = setTimeout(() => settle(null), timeoutMs);
     addAppsUpdatedListener(listener);
   });
+}
+
+/** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
+ *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
+async function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<boolean> {
+  return (await whenInventoryLists(() => findInstance(address), timeoutMs)) !== null;
 }
 
 /** Dock ``address`` once the inventory lists it. */
@@ -2125,6 +2139,45 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
   };
 }
 
+/**
+ * The view a focus-chat ask lands in: the mounted view when it already holds the chat (Everything
+ * holds the whole machine), else the first project whose tab set contains it, else the mounted
+ * view (the open files the chat into it). Null before any view is mounted.
+ */
+export function viewIdForChatFocus(
+  mountedViewId: string | null,
+  projects: readonly ProjectInfo[],
+  address: string,
+): string | null {
+  if (mountedViewId === null) return null;
+  if (isEverythingView(mountedViewId)) return mountedViewId;
+  if (projectForViewId(projects, mountedViewId)?.tabs.includes(address) === true) return mountedViewId;
+  const holder = projects.find((project) => project.tabs.includes(address));
+  return holder === undefined ? mountedViewId : holder.id;
+}
+
+/** ``minds:focus-chat`` from the embedder: show the chat that agent is, switching views if
+ *  another one holds it. The chat is whichever listed instance is keyed by the agent id; the
+ *  shell does not know which app that is. */
+function focusChatFromEmbedder(message: Record<string, unknown>): void {
+  const agentId = message.agentId;
+  if (typeof agentId !== "string" || agentId === "") return;
+  void focusChat(agentId);
+}
+
+async function focusChat(agentId: string): Promise<void> {
+  const address = await whenInventoryLists(() => addressOfInstanceKeyed(agentId), AWAIT_ADDRESS_TIMEOUT_MS);
+  if (address === null) {
+    console.warn(`[si] focus-chat ignored: nothing lists an instance keyed ${agentId}`);
+    return;
+  }
+  const targetViewId = viewIdForChatFocus(mountedViewId, availableProjects, address);
+  if (targetViewId === null) return;
+  if (targetViewId !== mountedViewId) await switchToView(targetViewId);
+  openAddressInGroup(address, null);
+  m.redraw();
+}
+
 function closeActiveTabFromEmbedder(): void {
   const activePanel = dockview?.activePanel;
   if (!activePanel) return;
@@ -2234,6 +2287,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   document.addEventListener("pointerdown", endDrag, true);
 
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
+  setEmbedderMessageHandler(FOCUS_CHAT, focusChatFromEmbedder);
 
   // The shell side of the app contract (contracts.md section 10).
   setChildFrameMessageHandler(SHELL_FOCUSED, activatePanelForChildFrame);

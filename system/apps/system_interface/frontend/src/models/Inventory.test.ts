@@ -7,6 +7,7 @@ import {
   addLayoutOpListener,
   addLayoutUpdatedListener,
   addressFor,
+  addressOfInstanceKeyed,
   appNameFromAddress,
   appStoppedDetail,
   applyApps,
@@ -113,6 +114,15 @@ describe("the inventory", () => {
       "app:terminal?instance=terminal-2",
       "app:files",
     ]);
+  });
+
+  it("finds the one instance keyed by an agent id without knowing which app holds it", () => {
+    applyApps([
+      app("terminal", { has_instances: true, instances: [instance("terminal-1", "Terminal 1")] }),
+      app("chat", { has_instances: true, instances: [instance("agent-0a1b", "Build chat")] }),
+    ]);
+    expect(addressOfInstanceKeyed("agent-0a1b")).toBe("app:chat?instance=agent-0a1b");
+    expect(addressOfInstanceKeyed("agent-ffff")).toBeNull();
   });
 
   it("knows which apps the workspace may stop, and why a stopped one is not answering", () => {
