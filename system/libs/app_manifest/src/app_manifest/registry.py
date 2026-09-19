@@ -71,7 +71,7 @@ class RegistryRow(FrozenModel):
     instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served; absent reads as url")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new project (or desktop) is seeded with")
     actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
