@@ -423,7 +423,9 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           );
         }),
       ),
-      m("div", { class: menuDividerClass() }),
+      // The shared menu's own rule, role and all -- this submenu's content is free-form, so it
+      // borrows the chrome rather than pushing a `divider` row.
+      m("div", { role: "separator", class: menuDividerClass() }),
       state.mode === "auto"
         ? m("label", { class: css.FAST_LIMIT_ROW }, [
             "Turn off after",
