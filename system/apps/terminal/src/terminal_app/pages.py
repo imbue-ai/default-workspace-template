@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Final
 
-from app_instances.blueprint import answer_typed_error
+from app_instances.blueprint import HTTP_NOT_FOUND, answer_typed_error
 from app_instances.errors import AppInstancesError
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.json_store import NEW_ACTION_ID
@@ -48,7 +48,6 @@ SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
 PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 
 HTTP_FOUND: Final[int] = 302
-HTTP_NOT_FOUND: Final[int] = 404
 
 # The JSON script element the page reads off itself: the session it frames (or none), the tab
 # id the shell put in the URL, and the origin labels it derives the two origins from, as
