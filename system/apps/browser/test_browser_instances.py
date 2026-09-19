@@ -255,6 +255,14 @@ def test_the_viewer_page_carries_the_shells_origin_label(tmp_path: Path, monkeyp
 
 def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    # The launch is captured rather than run, so the test stays Chromium-free; what matters
+    # here is that the create registered the browser and asked for its start page.
+    launched: list[tuple[bsession.LiveBrowser, list[str] | None]] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager,
+        "_spawn_launch",
+        lambda self, session, restore_tabs=None, **k: launched.append((session, restore_tabs)),
+    )
 
     response = runner.application.test_client().get("/new?url=https://example.com", follow_redirects=False)
 
@@ -262,6 +270,7 @@ def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.Mon
     name = response.headers["Location"].removeprefix("/?session=")
     assert name in runner.manager._browsers
     assert response.headers["Location"] == f"/?session={name}"
+    assert launched == [(runner.manager._browsers[name], ["https://example.com"])]
 
 
 def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPatch) -> None:
