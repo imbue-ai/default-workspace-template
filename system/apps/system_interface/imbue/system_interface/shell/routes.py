@@ -926,7 +926,7 @@ def _create_through_relay(
     ).encode()
     outcome = relay_create(shell.http_client, entry, body)
     if outcome.status_code >= HTTP_BAD_REQUEST:
-        raise InstanceCreateRefusedError(outcome.status_code, _relaydetail_response(outcome))
+        raise InstanceCreateRefusedError(outcome.status_code, _relay_detail(outcome))
     try:
         record = json.loads(outcome.body)["instance"]
         created = _CreatedInstance(
@@ -942,7 +942,7 @@ def _create_through_relay(
     return created
 
 
-def _relaydetail_response(outcome: RelayOutcome) -> str:
+def _relay_detail(outcome: RelayOutcome) -> str:
     try:
         parsed = json.loads(outcome.body)
     except ValueError:
