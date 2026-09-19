@@ -81,13 +81,13 @@ describe("the tool chip row", () => {
       tool_name: "Edit",
       input_chars: 20,
       action_verb: "edited",
-      action_target: ".../src/views/timeline-node.ts",
+      action_target: "timeline-node.ts",
     };
     mount([chip(edit)]);
-    // The verb reads as prose and the target as the machine's own text, so they
-    // are separate elements rather than one string.
+    // Separate elements because they are separate facts, though they are set alike
+    // -- the chip reads as one sentence, not as console output in a pill.
     expect(root.querySelector(".tool-chip-verb")?.textContent).toBe("edited");
-    expect(root.querySelector(".tool-chip-target")?.textContent).toBe(".../src/views/timeline-node.ts");
+    expect(root.querySelector(".tool-chip-target")?.textContent).toBe("timeline-node.ts");
   });
 
   it("prefers the agent's own words when the tool recorded any", () => {
@@ -131,12 +131,12 @@ describe("the tool chip row", () => {
       tool_name: "Edit",
       input_chars: 20,
       action_verb: "edited",
-      action_target: ".../src/views/timeline-node.ts",
+      action_target: "timeline-node.ts",
     };
     mount([chip(edit)]);
     // The row truncates a long target, and the chip no longer names its tool
     // anywhere -- the title is where both are recoverable.
-    expect(chipButtons()[0].title).toBe("edited .../src/views/timeline-node.ts\nEdit");
+    expect(chipButtons()[0].title).toBe("edited timeline-node.ts\nEdit");
   });
 
   it("shows no detail until a chip is picked", () => {

@@ -70,8 +70,8 @@ function toolIcon(toolName: string): IconName {
  *    description of what the command is for, and the agent writes one every time
  *    ("Read the transcript container markup"). Nothing beats it, so it wins.
  * 2. Otherwise, what the call did: a past-tense verb and the thing it acted on
- *    ("read ChatPanel.ts", `searched "font-size" in src/views`). The two halves are
- *    set in different type, so they stay apart.
+ *    ("read ChatPanel.ts", `searched "font-size" in views`). A file is named, not
+ *    pathed -- the parser shortens it, and the whole path is in the panel.
  *
  * The fallbacks below that are for events this app parsed before the fields
  * existed, and for the harnesses whose parsers do not stamp them yet: the live
@@ -119,14 +119,20 @@ const CHIP_BASE =
   "px-2 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
   "hover:bg-fill-hover";
 
-/** The verb is prose about what happened, so it keeps the reading face and never
- *  shrinks -- it is the short half, and clipping it would lose the sentence. */
-const CHIP_VERB_CLASS = "tool-chip-verb shrink-0 whitespace-nowrap";
-
-/** The target is the machine's own text -- a path, a pattern, a command -- so it
- *  takes the monospace face, and it is the half that gives way when a chip runs
- *  out of room. */
-const CHIP_TARGET_CLASS = "tool-chip-target min-w-0 truncate font-mono opacity-80";
+/**
+ * The two halves of a chip's phrase read as ONE sentence: same face, same size,
+ * same colour, separated by an ordinary word space. They were set apart at first
+ * -- the target in mono, as the machine's own text -- which made every chip look
+ * like a line of console output wearing a pill. A chip is a thing to read, so it
+ * is set like reading.
+ *
+ * They stay separate elements because they are separate facts, which the tests
+ * and the e2e suite locate individually. Both are bare markers: the wrapping
+ * label owns the layout, so the space between them is a real text node rather
+ * than the row's flex gap -- as flex children they sat a gap apart, which at this
+ * size read as a double space.
+ */
+const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
 
 /** The detail panel: a bordered box with no fill of its own, so it reads as an
  *  annotation on the row rather than as another block in the transcript.
@@ -318,11 +324,12 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
                 }),
               ),
               text.kind === "note"
-                ? m("span", { class: "tool-chip-label min-w-0 truncate" }, text.text)
-                : [
-                    m("span", { class: `tool-chip-label ${CHIP_VERB_CLASS}` }, text.verb),
-                    text.target ? m("span", { class: CHIP_TARGET_CLASS }, text.target) : null,
-                  ],
+                ? m("span", { class: CHIP_LABEL_CLASS }, text.text)
+                : m("span", { class: CHIP_LABEL_CLASS }, [
+                    m("span", { class: "tool-chip-verb" }, text.verb),
+                    text.target ? " " : null,
+                    text.target ? m("span", { class: "tool-chip-target" }, text.target) : null,
+                  ]),
             ],
           );
           if (!isOpen) return [button];
