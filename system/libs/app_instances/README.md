@@ -114,6 +114,12 @@ The shell is the only caller of the API, over loopback, at the registry row's
   it. `serve_in_background(host, port,
   app)` is the context manager it serves through (bind, daemon thread, shut
   down on exit), which tests reuse for scratch servers.
+  `load_instances_manifest(manifest_path, instances_url)` is the manifest read
+  the sidecar runs on (checked to declare the instances API at the port served),
+  and `wait_for_shutdown_signal()` blocks the main thread until `SIGTERM` or
+  `SIGINT` arrives and returns 128 plus the signal number; together they let an
+  app that serves only its own servers (the terminal, whose ttyd runs as the
+  separate `terminal-pty` program) register and wait without wrapping a child.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
   call), `RecordingNudger`, `free_port`, `is_port_accepting`, `wait_until`,
   `write_sidecar_manifest` (a valid multi-instance `app.toml` plus its icon),
