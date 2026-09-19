@@ -105,8 +105,10 @@ model's routes, stores, and state files go after that.
   whose path carries the marker.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory,
-relay, projects, layouts, clients, client activity, layout ops, the pure
-dockview document editor, routes, state); the package root holds the process
+relay, projects, layouts, desktops, placements, wallpapers, clients, client
+activity, layout ops, the pure dockview and desktop document editors, the
+tabbed and desktop routes with their shared route helpers, state); the
+package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
