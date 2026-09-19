@@ -44,6 +44,8 @@ _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
 _TASK_NOTIFICATION_OPEN = "<task-notification>"
 _TASK_NOTIFICATION_PREAMBLE = "[SYSTEM NOTIFICATION"
+_TASK_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>")
+_ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
@@ -172,14 +174,35 @@ def _match_stop_hook(content: str) -> MessageDisplay | None:
 
 
 def _match_task_notification(content: str) -> MessageDisplay | None:
-    """A background-task completion notice, bare or behind a [SYSTEM NOTIFICATION] preamble."""
+    """A background-task completion notice, bare or behind a [SYSTEM NOTIFICATION] preamble.
+
+    Shown as a NOTICE rather than a chip: the whole of it worth reading is the one
+    ``<summary>`` line, so there is nothing to expand to, and it is something the agent was
+    told rather than something the user said.
+    """
     trimmed = content.lstrip()
     is_notice = trimmed.startswith(_TASK_NOTIFICATION_OPEN) or (
         trimmed.startswith(_TASK_NOTIFICATION_PREAMBLE) and _TASK_NOTIFICATION_OPEN in content
     )
     if not is_notice:
         return None
-    return MessageDisplay(display=DisplayKind.CHIP, display_label="Background task")
+    return MessageDisplay(
+        display=DisplayKind.NOTICE,
+        display_label="Background task completed",
+        display_body=_task_notification_summary(content),
+    )
+
+
+def _task_notification_summary(content: str) -> str:
+    """The notice's ``<summary>`` line, or the raw content when it carries none.
+
+    A zero exit code is dropped: every ordinary completion carries one, so it says nothing
+    that "completed" has not already said. A non-zero one stays -- that is the whole news.
+    """
+    match = _TASK_SUMMARY_RE.search(content)
+    if match is None:
+        return content.strip()
+    return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
 
 
 def _match_browser_fleet(content: str) -> MessageDisplay | None:
