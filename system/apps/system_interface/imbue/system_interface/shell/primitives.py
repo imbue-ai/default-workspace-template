@@ -42,6 +42,9 @@ _MINTED_ID_BYTES: Final[int] = 8
 MAX_WINDOW_PATH_LENGTH: Final[int] = 2048
 MAX_WINDOW_TITLE_LENGTH: Final[int] = 256
 
+# A project's or a desktop's ``glyph`` indexes the frontend's squiggle table, which has exactly ten entries.
+GLYPH_COUNT: Final[int] = 10
+
 
 def _string_schema(cls: type, handler: GetCoreSchemaHandler) -> CoreSchema:
     return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
