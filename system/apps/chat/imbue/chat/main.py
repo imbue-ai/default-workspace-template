@@ -33,6 +33,7 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.heap_trim import HeapTrimmer
 from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
@@ -228,6 +229,15 @@ def main() -> None:
         # the one place observe is started; ``build_application`` only constructs, so
         # tests that build an app never spawn it.
         state.agent_manager.start()
+
+        # Folding the agent stream allocates and frees continuously, and glibc keeps
+        # the freed pages, so a long-lived chat app's RSS tracks its high-water mark
+        # rather than what it holds (see ``heap_trim``). Started here rather than in
+        # ``build_application`` for the same reason observe is: a manager a test
+        # builds starts no threads.
+        heap_trimmer = HeapTrimmer.build()
+        heap_trimmer.start()
+        atexit.register(heap_trimmer.stop)
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover
