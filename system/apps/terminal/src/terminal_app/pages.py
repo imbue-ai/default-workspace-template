@@ -78,7 +78,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   // the workspace coordinate of this page's own host.
   const config = JSON.parse(document.getElementById("__CONFIG_ID__").textContent);
   const COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i;
-  const RETRY_PTY_MS = 2000;
+  const RETRY_MS = 2000;
   const frame = document.getElementById("pty");
   const empty = document.getElementById("empty");
   let current = config.session;
@@ -111,7 +111,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     document.title = page.title;
     if (page.pty_label === "") {
       showEmpty("The terminal is starting...");
-      setTimeout(() => void refresh(page.name), RETRY_PTY_MS);
+      setTimeout(() => void refresh(page.name), RETRY_MS);
     } else {
       empty.hidden = true;
       frame.hidden = false;
@@ -124,7 +124,16 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     if (session !== current) return;
     const params = new URLSearchParams();
     if (config.tab !== "") params.set("tab", config.tab);
-    const response = await fetch(`api/sessions/${encodeURIComponent(session)}?${params}`);
+    let response;
+    try {
+      response = await fetch(`api/sessions/${encodeURIComponent(session)}?${params}`);
+    } catch (error) {
+      // The app is unreachable for the moment (a restart, a dropped connection): keep asking,
+      // as the page does while it waits for the pty to register.
+      console.warn("[terminal] could not refresh the session page", error);
+      setTimeout(() => void refresh(session), RETRY_MS);
+      return;
+    }
     if (!response.ok) {
       showEmpty("There is no terminal named " + session + ".");
       return;
