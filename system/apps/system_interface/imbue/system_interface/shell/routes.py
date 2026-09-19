@@ -548,9 +548,6 @@ def layout_broadcast() -> ResponseReturnValue:
         return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
     op = body.get("op")
     args_raw = body.get("args", {})
-    # Held to the requester rule like every other identifier the route takes: a requester that is neither an
-    # address nor an ``{app, marker}`` object is refused rather than dropped, since dropping it would silently
-    # cost the op its attribution.
     try:
         requester = parse_op_requester(body.get("requester"))
     except ValueError as e:
