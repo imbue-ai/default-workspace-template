@@ -113,7 +113,10 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     } else {
       empty.hidden = true;
       frame.hidden = false;
-      frame.src = originFor(page.pty_label) + page.pty_path;
+      // A navigate to the session already framed re-points at the same target: assigning the
+      // same src again would reload the frame and drop the live ttyd connection.
+      const src = originFor(page.pty_label) + page.pty_path;
+      if (frame.src !== src) frame.src = src;
     }
     connection?.location(pathFor(page.name), page.title);
   }
