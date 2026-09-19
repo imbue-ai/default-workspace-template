@@ -7,9 +7,8 @@ registers the pty's manifest, and then becomes ttyd, so supervisord's signals re
 """
 
 import os
-import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
 import click
 from app_instances.sidecar import app_url_port, register_app
@@ -82,7 +81,7 @@ def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
     )
 
 
-def run_terminal_pty(arguments: TerminalPtyArguments) -> None:
+def run_terminal_pty(arguments: TerminalPtyArguments) -> NoReturn:
     """Prepare ttyd and replace this process with it; only returns by raising."""
     argv = prepare_ttyd(arguments)
     logger.info("Starting ttyd: {}", argv)
@@ -156,7 +155,6 @@ def main(
             oom_tag_script=oom_tag_script,
         )
     )
-    sys.exit(1)
 
 
 if __name__ == "__main__":
