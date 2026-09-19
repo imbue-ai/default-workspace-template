@@ -377,6 +377,10 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     const limit = effective.fast_mode_turn_limit;
     const isDefault = effective.fast_mode_default === state.mode;
     const currentLabel = FAST_MODE_LABELS[state.mode];
+    // Written once: the switch below is a bare button with only a knob in it, so this same
+    // sentence is both the row's visible label and the switch's accessible name, and an
+    // accessible name that no longer matches the words beside it is worse than none.
+    const defaultLabel = `Use ${currentLabel} for new chats`;
     return [
       m(
         "div",
@@ -466,7 +470,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       // return to), so it goes inert -- at full strength, because that is the setting standing
       // where it was put, not a control that cannot be used.
       m("div", { class: css.FAST_DEFAULT_ROW }, [
-        m("span", { class: css.ROW_LABEL }, `Use ${currentLabel} for new chats`),
+        m("span", { class: css.ROW_LABEL }, defaultLabel),
         m(
           "span",
           { class: css.ROW_VALUE_STATIC },
@@ -477,7 +481,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
               role: "switch",
               class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
               "data-fast-mode-default": state.mode,
-              "aria-label": `Use ${currentLabel} for new chats`,
+              "aria-label": defaultLabel,
               "aria-checked": isDefault ? "true" : "false",
               "aria-disabled": isDefault ? "true" : undefined,
               // Only the not-yet-loaded case is natively disabled, and so faded: there the
