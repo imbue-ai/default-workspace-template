@@ -29,7 +29,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
-| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is a path (section 1) with no query string; `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
+| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
