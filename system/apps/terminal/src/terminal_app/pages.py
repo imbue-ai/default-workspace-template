@@ -134,8 +134,15 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       setTimeout(() => void refresh(session), RETRY_MS);
       return;
     }
-    if (!response.ok) {
+    if (response.status === 404) {
       showEmpty("There is no terminal named " + session + ".");
+      return;
+    }
+    if (!response.ok) {
+      // A gateway answering for an app that is restarting behind it, or the app itself failing:
+      // neither says the terminal is gone, so keep asking as an unreachable app is kept asked.
+      console.warn("[terminal] the session page answered " + response.status);
+      setTimeout(() => void refresh(session), RETRY_MS);
       return;
     }
     show(await response.json());
