@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from imbue.chat.heap_trim import HeapTrimmer
 from imbue.chat.heap_trim import resolve_malloc_trim
 from imbue.mngr.utils.polling import poll_until
@@ -74,5 +76,5 @@ def test_the_real_malloc_trim_is_callable_where_the_platform_has_it() -> None:
     it rather than trusting the lookup."""
     trim = resolve_malloc_trim()
     if trim is None:
-        return
+        pytest.skip("no malloc_trim on this platform; there is no symbol to call")
     assert trim() in (0, 1)
