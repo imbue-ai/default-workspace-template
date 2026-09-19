@@ -2,12 +2,12 @@
 /**
  * The card must react to the FIRST click, on its own.
  *
- * This is the one thing `ModelProviderMenu.test.ts` cannot catch: its `click()` helper re-renders by
- * hand afterwards, which supplies exactly the redraw whose absence was the bug. The card and
- * its flyouts are drawn through `Portal` -> `m.render`, mithril's manual API, which does not
- * wire auto-redraw into event handlers. Every handler inside them set state and nothing
- * re-rendered: a row click opened no flyout, a trash click armed no "Remove?", and the click
- * after that landed outside and tore the whole thing down.
+ * This is the one thing `ModelProviderMenu.test.ts` cannot catch: its `click()` helper
+ * re-renders by hand afterwards, which supplies exactly the redraw whose absence was the bug.
+ * The card and its flyouts are drawn through `Portal` -> `m.render`, mithril's manual API,
+ * which does not wire auto-redraw into event handlers. Every handler inside them set state and
+ * nothing re-rendered: a row click opened no flyout, a trash click armed no "Remove?", and the
+ * click after that landed outside and tore the whole thing down.
  *
  * So this file MOUNTS the component (auto-redraw on, like the real app) and never renders by
  * hand. If the portal stops driving redraws again, these fail.
@@ -151,8 +151,9 @@ describe("the card without a hand-cranked redraw", () => {
   it("moves the effort label with the thumb, on the portal's own redraw", async () => {
     // The label lives inside the portal, and the portal's `input` -> redraw is the only thing
     // that can repaint it mid-drag -- `m.render` wires no auto-redraw of its own. A test that
-    // hand-cranks a render (ModelProviderMenu.test.ts) supplies exactly the redraw in question, so only
-    // this file can say whether a real drag actually changes the word on screen.
+    // hand-cranks a render (ModelProviderMenu.test.ts) supplies exactly the redraw in
+    // question, so only this file can say whether a real drag actually changes the word on
+    // screen.
     const model = {
       ...OPUS,
       efforts: [
