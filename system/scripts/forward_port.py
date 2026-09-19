@@ -552,9 +552,9 @@ def _copied_default_shortcut(
     shortcut: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
     """The manifest's ``default_shortcut`` (any TOML value) as the registry row carries
-    it: ``action``, ``mode``, and ``launch`` when the manifest names one. Returns
-    ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
-    requires."""
+    it: ``action``, ``launch`` when the manifest names one, and ``mode``, in the order the
+    contract spells the inline table. Returns ``(copied, None)``, or ``(None, error)`` when
+    the value is not shaped as the manifest requires."""
     if not (
         isinstance(shortcut, dict)
         and isinstance(shortcut.get("action"), str)
@@ -564,12 +564,13 @@ def _copied_default_shortcut(
             None,
             f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
         )
-    copied: dict[str, object] = {"action": shortcut["action"], "mode": shortcut["mode"]}
+    copied: dict[str, object] = {"action": shortcut["action"]}
     launch = shortcut.get("launch")
     if launch is not None:
         if not isinstance(launch, str):
             return None, f"manifest {str(path)!r}: default_shortcut.launch must be a string"
         copied["launch"] = launch
+    copied["mode"] = shortcut["mode"]
     return copied, None
 
 

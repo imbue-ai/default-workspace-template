@@ -660,6 +660,8 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["program"] == "files"
     assert "internal" not in row
     assert row["default_shortcut"] == {"action": "new", "launch": "new", "mode": "focus"}
+    # Written in the order the contract spells the inline table (tomllib keeps file order).
+    assert list(row["default_shortcut"]) == ["action", "launch", "mode"]
     assert row["launcher_rank"] == 20
     # The row carries each action's param NAMES (the New Tab page reads them), and no ``params``
     # key at all for an action that declares none.
