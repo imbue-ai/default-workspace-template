@@ -34,10 +34,11 @@ export interface UserMessageClass {
  * Map a user_message's backend render decision onto a `UserMessageKind`.
  * Grouping and rendering both call this and act on the kind alone.
  *
- * A `permission_resolution` deliberately maps to `UserPrompt` here: the verdict
- * only suppresses the bubble when the timeline walk correlates it to an earlier,
- * still-pending permission card (see `resolutionOf` + turn-grouping); an
- * uncorrelated one renders as an ordinary message.
+ * A `permission_resolution` (and a `secret_resolution`) deliberately maps to
+ * `UserPrompt` here: the verdict only suppresses the bubble when the timeline walk
+ * correlates it to an earlier, still-pending card (see `resolutionOf`,
+ * `secretResolutionOf` + turn-grouping); an uncorrelated one renders as an
+ * ordinary message.
  */
 export function classifyUserMessage(event: ClassifiableUserMessage): UserMessageClass {
   const content = event.content || "";
@@ -151,4 +152,54 @@ export function resolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | 
     return null;
   }
   return event.request_id ?? null;
+}
+
+// --- Secret REQUEST (a tool call) ------------------------------------------
+
+/** True when a tool call is a secret request (the connect-external-service skill's
+ *  `request_secret.py`). Recognised by the backend from the untruncated input, so
+ *  the card shows while the request is still pending. */
+export function isSecretRequestCall(tc: ToolCall): boolean {
+  return tc.display === "secret_request";
+}
+
+// --- Secret RESOLUTION (a user_message notice) -----------------------------
+
+/** The outcome of a secret request: the user stored the values, declined (with an
+ *  optional note), or a newer request for the same file replaced it. */
+export type SecretResolution = "stored" | "declined" | "superseded";
+
+/** Any card verdict the walk keys by request id. */
+export type RequestResolution = PermissionResolution | SecretResolution;
+
+/** The verdict a secret notice carries, or null when the message is not one. The
+ *  backend stamps `display: "secret_resolution"` + `resolution` off the notice's
+ *  machine tag; the walk writes the verdict onto the earlier secret card. */
+export function secretResolutionOf(event: Pick<UserMessageEvent, "display" | "resolution">): SecretResolution | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  const verdict = event.resolution;
+  return verdict === "stored" || verdict === "declined" || verdict === "superseded" ? verdict : null;
+}
+
+/** The id of the request a secret notice resolves; a secret notice always carries one. */
+export function secretResolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | "request_id">): string | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  return event.request_id ?? null;
+}
+
+/** The user's note on a declined secret request: whatever follows the machine tag. */
+const SECRET_TAG_RE = /\(secret:\s*(?:stored|declined|superseded),\s*request_id:\s*[^)\s]+\)\s*/;
+
+export function secretResolutionNoteOf(event: Pick<UserMessageEvent, "display" | "content">): string | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  const match = SECRET_TAG_RE.exec(event.content);
+  if (match === null) return null;
+  const note = event.content.slice(match.index + match[0].length).trim();
+  return note === "" ? null : note;
 }

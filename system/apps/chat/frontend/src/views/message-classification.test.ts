@@ -8,6 +8,10 @@ import {
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
+  secretResolutionNoteOf,
+  secretResolutionOf,
+  secretResolutionRequestIdOf,
+  isSecretRequestCall,
 } from "./message-classification";
 
 import { UserMessageKind } from "./message-kinds";
@@ -149,5 +153,45 @@ describe("resolutionRequestIdOf", () => {
 
   it("is null for a resolution recorded before request-id embedding shipped", () => {
     expect(resolutionRequestIdOf({ display: "permission_resolution" })).toBeNull();
+  });
+});
+
+describe("secret requests and their resolutions", () => {
+  it("recognises a secret request call from the backend's display decision alone", () => {
+    expect(
+      isSecretRequestCall({ tool_call_id: "c", tool_name: "Bash", input_chars: 9, display: "secret_request" }),
+    ).toBe(true);
+    expect(
+      isSecretRequestCall({ tool_call_id: "c", tool_name: "Bash", input_chars: 9, display: "permission_request" }),
+    ).toBe(false);
+    expect(isSecretRequestCall({ tool_call_id: "c", tool_name: "Bash", input_chars: 9 })).toBe(false);
+  });
+
+  it("reads a secret notice's verdict, id, and decline note, and nothing from a permission notice", () => {
+    const declined = {
+      content:
+        "Secret declined: data/.secrets/svc.env (A) (secret: declined, request_id: secret-1) use the other account",
+      display: "secret_resolution" as const,
+      resolution: "declined" as const,
+      request_id: "secret-1",
+    };
+    expect(secretResolutionOf(declined)).toBe("declined");
+    expect(secretResolutionRequestIdOf(declined)).toBe("secret-1");
+    expect(secretResolutionNoteOf(declined)).toBe("use the other account");
+    const stored = {
+      ...declined,
+      content: "Secret stored: data/.secrets/svc.env (A) (secret: stored, request_id: secret-1)",
+    };
+    expect(secretResolutionNoteOf(stored)).toBeNull();
+    const permission = {
+      content: "granted",
+      display: "permission_resolution" as const,
+      resolution: "granted" as const,
+      request_id: "r1",
+    };
+    expect(secretResolutionOf(permission)).toBeNull();
+    expect(resolutionOf(declined)).toBeNull();
+    // Still a UserPrompt for the classifier: only the walk suppresses the bubble.
+    expect(classifyUserMessage(declined).kind).toBe(UserMessageKind.UserPrompt);
   });
 });

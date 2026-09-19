@@ -43,7 +43,8 @@
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state.
  *
- * One message is never grouped under a step: an agent permission request. It
+ * One message is never grouped under a step: an agent permission request, or a
+ * secret request (the same shape, answered on the card itself). It
  * is lifted out into a dedicated inline break (the `permission` timeline item)
  * so the user always sees it and can respond without expanding a step. The step
  * it interrupted stays open, so work resumed afterwards keeps grouping under it.
@@ -77,14 +78,18 @@ import type {
 import type { HandoffState } from "../models/Chats";
 import { SEED_HARNESS } from "../models/Response";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
-import type { PermissionResolution } from "./message-classification";
+import type { RequestResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
+import { isFiledSecretRequest, parseSecretRequest } from "./secret-card";
 import {
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
+  secretResolutionNoteOf,
+  secretResolutionOf,
+  secretResolutionRequestIdOf,
 } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
@@ -154,7 +159,9 @@ export type TimelineItem =
   | {
       kind: "permission";
       event: AssistantMessageEvent;
-      resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+      resolutionsByRequestId: ReadonlyMap<string, RequestResolution>;
+      /** The user's note on a declined secret request, by request id (shared like the verdicts). */
+      secretNotesByRequestId: ReadonlyMap<string, string>;
     }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent }
@@ -221,7 +228,31 @@ function isTkLifecycleCall(tc: ToolCall): boolean {
  *  neither breaks out of its step nor takes a place in the queue a later verdict
  *  is matched against. */
 function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): boolean {
-  return e.tool_calls.some((tc) => isFiledPermissionRequest(tc, toolResults.get(tc.tool_call_id) ?? null));
+  return e.tool_calls.some((tc) => {
+    const toolResult = toolResults.get(tc.tool_call_id) ?? null;
+    return isFiledPermissionRequest(tc, toolResult) || isFiledSecretRequest(tc, toolResult);
+  });
+}
+
+/** Supersede the pending secret cards this message's own secret requests replace: a
+ *  newer request for the same file closes the older card in this transcript, exactly
+ *  as the backend closes the older request. `pendingByFile` is the walk's running
+ *  memory of the newest unresolved request per file. */
+function supersedeOlderSecretRequests(
+  e: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
+  pendingByFile: Map<string, string>,
+  resolutionsByRequestId: Map<string, RequestResolution>,
+): void {
+  for (const tc of e.tool_calls) {
+    const details = parseSecretRequest(tc, toolResults.get(tc.tool_call_id) ?? null);
+    if (details === null) continue;
+    const older = pendingByFile.get(details.file);
+    if (older !== undefined && older !== details.requestId && !resolutionsByRequestId.has(older)) {
+      resolutionsByRequestId.set(older, "superseded");
+    }
+    pendingByFile.set(details.file, details.requestId);
+  }
 }
 
 /** The tk lifecycle command a tool call ran, or null. The backend stamps `tk_command`
@@ -503,7 +534,11 @@ export function buildSections(
   // whole transcript and looked up per-card at render time, so it is immune to
   // requests being resolved out of the order they were created, and to more
   // than one permission request being batched into one message.
-  const resolutionsByRequestId = new Map<string, PermissionResolution>();
+  const resolutionsByRequestId = new Map<string, RequestResolution>();
+  // The newest secret request per file that has not resolved yet, so a later request
+  // for the same file can mark the earlier card superseded.
+  const pendingSecretRequestByFile = new Map<string, string>();
+  const secretNotesByRequestId = new Map<string, string>();
   const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
     const section = newSection(user_event, key);
     // Re-open carried-over steps at the top of the new section.
@@ -589,6 +624,20 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
+      // The chat app's notice that a secret card was answered: the same break as a
+      // permission verdict, keyed by the request's own id (a secret notice always
+      // carries one).
+      const secretResolution = secretResolutionOf(e);
+      if (secretResolution !== null) {
+        lastSwitched = null;
+        const requestId = secretResolutionRequestIdOf(e);
+        if (requestId !== null) resolutionsByRequestId.set(requestId, secretResolution);
+        const note = secretResolutionNoteOf(e);
+        if (requestId !== null && note !== null) secretNotesByRequestId.set(requestId, note);
+        carryover = current === null ? [] : openStepsAtEnd(current);
+        current = ensureSection(null, `section-after-${e.event_id}`);
+        continue;
+      }
       if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips (Stop-hook feedback, browser-fleet nudges,
         // background task-notifications) fold into the current section as a chip
@@ -643,10 +692,11 @@ export function buildSections(
       }
       if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
         if (hasPermissionRequest(parsed.render, toolResults)) {
-          // A permission request breaks out of any open step: it must always be
-          // directly visible, never collapsed inside a step node. The step stays
-          // open (current_step_id is untouched), so work resumed after the user
+          // A permission or secret request breaks out of any open step: it must
+          // always be directly visible, never collapsed inside a step node. The step
+          // stays open (current_step_id is untouched), so work resumed after the user
           // responds keeps grouping under it.
+          supersedeOlderSecretRequests(parsed.render, toolResults, pendingSecretRequestByFile, resolutionsByRequestId);
           current.entries.push({ kind: "permission", event: parsed.render });
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
@@ -667,7 +717,15 @@ export function buildSections(
 
   const lastBuilder = builders[builders.length - 1];
   return builders.map((b) =>
-    finalizeSection(b, deco, resolutionsByRequestId, b === lastBuilder ? pending : [], agentIsIdle, b === lastBuilder),
+    finalizeSection(
+      b,
+      deco,
+      resolutionsByRequestId,
+      secretNotesByRequestId,
+      b === lastBuilder ? pending : [],
+      agentIsIdle,
+      b === lastBuilder,
+    ),
   );
 }
 
@@ -793,7 +851,8 @@ function collectEjectedProse(section: SectionBuilder, frontierId: string | null)
 function finalizeSection(
   section: SectionBuilder,
   deco: Map<string, Decoration>,
-  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
+  secretNotesByRequestId: ReadonlyMap<string, string>,
   pending: { id: string; title: string }[],
   agentIsIdle: boolean,
   is_tail: boolean,
@@ -911,7 +970,7 @@ function finalizeSection(
       // own always-visible item at its transcript position. Each card looks up
       // its own verdict in resolutionsByRequestId by its own request id.
       flushUngrouped();
-      items.push({ kind: "permission", event: entry.event, resolutionsByRequestId });
+      items.push({ kind: "permission", event: entry.event, resolutionsByRequestId, secretNotesByRequestId });
     } else if (entry.kind === "chip") {
       // Likewise a chip: it ends any in-flight ungrouped run and stands at its
       // own transcript position.

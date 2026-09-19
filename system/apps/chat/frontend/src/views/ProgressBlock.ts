@@ -227,7 +227,14 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-permission relative z-[2] mt-1.5 mb-3.5", key: `perm-${item.event.event_id}` },
-            renderPermissionItem(item.event, toolResults, chatId, item.resolutionsByRequestId),
+            renderPermissionItem(
+              item.event,
+              toolResults,
+              chatId,
+              item.resolutionsByRequestId,
+              item.event.event_id,
+              item.secretNotesByRequestId,
+            ),
           );
         }
         if (item.kind === "handoff") {

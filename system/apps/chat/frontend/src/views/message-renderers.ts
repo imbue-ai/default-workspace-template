@@ -13,9 +13,10 @@ import { openSubagentTab, startChatOnAccount } from "../shell";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
-import type { PermissionResolution } from "./message-classification";
+import type { PermissionResolution, RequestResolution, SecretResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
+import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-card";
 import { renderToolBlock, type PayloadState } from "./ToolCallBlock";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 
@@ -25,10 +26,22 @@ import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 function resolutionForCall(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
-  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
 ): PermissionResolution | null {
   const details = parsePermissionRequest(toolCall, toolResult);
-  return (details ? resolutionsByRequestId.get(details.requestId) : undefined) ?? null;
+  const resolution = details ? resolutionsByRequestId.get(details.requestId) : undefined;
+  return resolution === "granted" || resolution === "denied" || resolution === "error" ? resolution : null;
+}
+
+/** A secret request's own verdict, by its request id, or null while it awaits an answer. */
+function secretResolutionForCall(
+  toolCall: ToolCall,
+  toolResult: ToolResultEvent | null,
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
+): SecretResolution | null {
+  const details = parseSecretRequest(toolCall, toolResult);
+  const resolution = details ? resolutionsByRequestId.get(details.requestId) : undefined;
+  return resolution === "stored" || resolution === "declined" || resolution === "superseded" ? resolution : null;
 }
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
@@ -522,7 +535,8 @@ export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   chatId: string,
-  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution> = new Map(),
+  secretNotesByRequestId: ReadonlyMap<string, string> = new Map(),
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -589,6 +603,15 @@ export function renderAssistantMessageChildren(
       );
       continue;
     }
+    // A secret request renders as the secret card: the inputs the user answers on,
+    // then the verdict once the chat app's notice lands (or the page's own submit).
+    if (isFiledSecretRequest(toolCall, result)) {
+      const resolution = secretResolutionForCall(toolCall, result, resolutionsByRequestId);
+      const details = parseSecretRequest(toolCall, result);
+      const note = details ? (secretNotesByRequestId.get(details.requestId) ?? null) : null;
+      children.push(m(SecretCard, { toolCall, toolResult: result, resolution, note }));
+      continue;
+    }
     children.push(renderToolCallBlock(toolCall, result, chatId, event.event_id));
   }
   return children;
@@ -605,8 +628,9 @@ export function renderPermissionItem(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   chatId: string,
-  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
   domId: string = event.event_id,
+  secretNotesByRequestId: ReadonlyMap<string, string> = new Map(),
 ): m.Vnode {
   // ``domId`` defaults to the event id but a top-level permission row passes its
   // row key (``perm-<event_id>``) so the rendered root's ``id`` matches the key
@@ -616,6 +640,6 @@ export function renderPermissionItem(
   return m(
     "div",
     { id: domId, class: "message message-assistant mb-5", key: event.event_id },
-    renderAssistantMessageChildren(event, toolResults, chatId, resolutionsByRequestId),
+    renderAssistantMessageChildren(event, toolResults, chatId, resolutionsByRequestId, secretNotesByRequestId),
   );
 }

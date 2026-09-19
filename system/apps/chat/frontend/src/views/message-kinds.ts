@@ -95,6 +95,12 @@ export enum UserMessageKind {
    */
   PermissionResolution = "permission-resolution",
   /**
+   * A secret-card notice (stored / declined / superseded): the same shape as a
+   * permission verdict, for the secret card -- detected by `secretResolutionOf` and
+   * handled by the same dedicated branch in turn-grouping.ts.
+   */
+  SecretResolution = "secret-resolution",
+  /**
    * A subtle inline status message (e.g. "Context was compacted").
    */
   StatusMessage = "status-message",
@@ -154,6 +160,14 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "onto the EARLIER permission-request card, and a fresh turn section opens " +
       "with no user bubble. Handled by parsePermissionResolution + turn-grouping, " +
       "not classifyUserMessage.",
+  },
+  [UserMessageKind.SecretResolution]: {
+    rail: Rail.None,
+    boundary: true,
+    netVisual:
+      "No row. Its verdict (stored / declined / superseded) is written onto the EARLIER " +
+      "secret card, and the message opens a new turn section with no user bubble. " +
+      "Handled by secretResolutionOf + turn-grouping, never by classifyUserMessage.",
   },
   [UserMessageKind.StatusMessage]: {
     rail: Rail.User,

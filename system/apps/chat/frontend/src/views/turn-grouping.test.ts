@@ -9,7 +9,7 @@ import type {
 import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
-import type { PermissionResolution } from "./message-classification";
+import type { RequestResolution } from "./message-classification";
 
 // --- Event builders ---
 
@@ -141,6 +141,30 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
     is_api_error: false,
     api_error_kind: null,
     is_provider_fault: false,
+  };
+}
+
+/** A secret-request message: the request script run as a Bash call, carrying the
+ *  backend's `secret_request` display decision. */
+function secretMsg(ts: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
+  return {
+    ...permissionMsg(ts, callId, "", id),
+    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_chars: 140, display: "secret_request" }],
+  };
+}
+
+/** The result of a filed secret request: the echoed object, structured as `secret_request`. */
+function secretResult(ts: string, callId: string, requestId: string, file: string): ToolResultEvent {
+  return {
+    timestamp: ts,
+    type: "tool_result",
+    event_id: `r-${callId}`,
+    source: "test",
+    tool_call_id: callId,
+    tool_name: "Bash",
+    output_chars: 200,
+    is_error: false,
+    secret_request: { request_id: requestId, file, env_path: `data/.secrets/${file}.env`, variables: ["A"] },
   };
 }
 
@@ -1327,12 +1351,13 @@ describe("permission request breaks", () => {
 
 type PermissionItem = {
   kind: "permission";
-  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>;
+  secretNotesByRequestId: ReadonlyMap<string, string>;
 };
 
 /** The verdict a card would show: its own request's id looked up in the id-keyed
  *  map -- mirrors resolutionForCall in message-renderers.ts. */
-function verdictFor(item: PermissionItem, requestId: string): PermissionResolution | null {
+function verdictFor(item: PermissionItem, requestId: string): RequestResolution | null {
   return item.resolutionsByRequestId.get(requestId) ?? null;
 }
 
@@ -1729,5 +1754,88 @@ describe("agent switches", () => {
     // in the retiring agent's turn.
     expect(sections[1].items.map((i) => i.kind)).toEqual(["step"]);
     expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "handoff"]);
+  });
+});
+
+describe("secret requests", () => {
+  // The secret card is the permission card's sibling: lifted out of any open step,
+  // resolved by its own request id when the chat app's notice lands, and the notice
+  // opens a fresh turn with no user bubble.
+
+  it("lifts a secret request out of the open step and marks it stored by id, carrying the step over", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "connect me to the widget API"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Connect to the widget API")),
+      secretMsg("2026-05-01T01:00:02Z", "sec"),
+      secretResult("2026-05-01T01:00:02Z", "sec", "secret-1", "svc"),
+      userMsg(
+        "2026-05-01T01:00:03Z",
+        "Secret stored: data/.secrets/svc.env (A) (secret: stored, request_id: secret-1)",
+        "u-res",
+        { display: "secret_resolution", resolution: "stored", request_id: "secret-1" },
+      ),
+      workMsg("2026-05-01T01:00:04Z", "Bash", "w-after"),
+      result("2026-05-01T01:00:04Z", "w-after", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections).toHaveLength(2);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "permission"]);
+    expect(verdictFor(sections[0].items[1] as PermissionItem, "secret-1")).toBe("stored");
+    expect(sections[1].user_event).toBeNull();
+    expect(stepItems(sections[1].items)[0].is_carryover).toBe(true);
+  });
+
+  it("carries the decline note onto the card by id", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      secretMsg("2026-05-01T01:00:01Z", "sec"),
+      secretResult("2026-05-01T01:00:01Z", "sec", "secret-1", "svc"),
+      userMsg(
+        "2026-05-01T01:00:02Z",
+        "Secret declined: data/.secrets/svc.env (A) (secret: declined, request_id: secret-1) not this account",
+        "u-res",
+        { display: "secret_resolution", resolution: "declined", request_id: "secret-1" },
+      ),
+    ];
+    const sections = run(events);
+    const item = sections[0].items[0] as PermissionItem;
+    expect(verdictFor(item, "secret-1")).toBe("declined");
+    expect(item.secretNotesByRequestId.get("secret-1")).toBe("not this account");
+  });
+
+  it("marks an earlier pending request for the same file superseded when a later one appears", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      secretMsg("2026-05-01T01:00:01Z", "sec-1"),
+      secretResult("2026-05-01T01:00:01Z", "sec-1", "secret-1", "svc"),
+      secretMsg("2026-05-01T01:00:02Z", "sec-other"),
+      secretResult("2026-05-01T01:00:02Z", "sec-other", "secret-other", "other"),
+      secretMsg("2026-05-01T01:00:03Z", "sec-2"),
+      secretResult("2026-05-01T01:00:03Z", "sec-2", "secret-2", "svc"),
+    ];
+    const sections = run(events);
+    const item = sections[0].items[0] as PermissionItem;
+    expect(verdictFor(item, "secret-1")).toBe("superseded");
+    expect(verdictFor(item, "secret-other")).toBeNull();
+    expect(verdictFor(item, "secret-2")).toBeNull();
+  });
+
+  it("does not supersede a request that had already been answered", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      secretMsg("2026-05-01T01:00:01Z", "sec-1"),
+      secretResult("2026-05-01T01:00:01Z", "sec-1", "secret-1", "svc"),
+      userMsg(
+        "2026-05-01T01:00:02Z",
+        "Secret stored: data/.secrets/svc.env (A) (secret: stored, request_id: secret-1)",
+        "u-res",
+        { display: "secret_resolution", resolution: "stored", request_id: "secret-1" },
+      ),
+      secretMsg("2026-05-01T01:00:03Z", "sec-2"),
+      secretResult("2026-05-01T01:00:03Z", "sec-2", "secret-2", "svc"),
+    ];
+    const sections = run(events);
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "secret-1")).toBe("stored");
   });
 });

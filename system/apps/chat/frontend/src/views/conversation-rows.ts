@@ -149,6 +149,7 @@ function buildRows(
         // always-visible card so the user can act on it without expanding a step.
         const permissionEvent = item.event;
         const resolutionsByRequestId = item.resolutionsByRequestId;
+        const secretNotesByRequestId = item.secretNotesByRequestId;
         const permKey = `perm-${permissionEvent.event_id}`;
         rows.push({
           key: permKey,
@@ -156,7 +157,15 @@ function buildRows(
           anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
-          render: () => renderPermissionItem(permissionEvent, toolResults, chatId, resolutionsByRequestId, permKey),
+          render: () =>
+            renderPermissionItem(
+              permissionEvent,
+              toolResults,
+              chatId,
+              resolutionsByRequestId,
+              permKey,
+              secretNotesByRequestId,
+            ),
         });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
