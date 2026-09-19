@@ -40,6 +40,7 @@ from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_wire_json
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.data_types import window_wire_json
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
@@ -231,7 +232,7 @@ def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
     outcome = _shell().open_window(desktop_id, body)
     return (
-        jsonify({"window": outcome.window.model_dump(mode="json"), "is_new": outcome.is_new}),
+        jsonify({"window": window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
     )
 
@@ -244,7 +245,7 @@ def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowLocationReport)
     window = _shell().report_window_location(desktop_id, WindowId(window_id), body.path, body.title)
-    return jsonify(window.model_dump(mode="json"))
+    return jsonify(window_wire_json(window))
 
 
 # Section 5.4: placements
