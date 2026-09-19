@@ -105,7 +105,11 @@ function commitRename(row: ChatRow): void {
   m.redraw();
   if (title === "" || title === row.title) return;
   renameChat(row.chatId, title).catch((error: unknown) => {
-    if (rename !== null) return;
+    if (rename !== null) {
+      // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
+      console.warn(`Could not rename chat ${row.chatId}`, error);
+      return;
+    }
     rename = { chatId: row.chatId, draft: title, error: error instanceof Error ? error.message : String(error) };
     m.redraw();
   });
