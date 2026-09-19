@@ -431,11 +431,13 @@ class ShellState(MutableModel):
         ):
             resolved = report.model_copy_update(to_update(report.field_ref().active_desktop, desktops[0].id))
         outcome = self.clients.record_report(resolved, datetime.now(timezone.utc))
-        # Only a report that moved the stored view or desktop is broadcast: a window following a push reports
-        # what it was pushed to, which matches the record, so the chain ends after one hop.
+        # Only a report that moved the stored view or desktop, or that was redirected off a desktop that no longer
+        # exists, is broadcast: a window following a push reports what it was pushed to, which matches the record,
+        # so the chain ends after one hop.
         if outcome.is_active_view_changed and outcome.record.active_view is not None:
             self.broadcaster.broadcast_active_view_changed(str(report.client_id), str(outcome.record.active_view))
-        if outcome.is_active_desktop_changed and outcome.record.active_desktop is not None:
+        is_redirected = resolved is not report
+        if (outcome.is_active_desktop_changed or is_redirected) and outcome.record.active_desktop is not None:
             self.broadcaster.broadcast_active_desktop_changed(
                 str(report.client_id), str(outcome.record.active_desktop)
             )

@@ -570,7 +570,7 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
 
 def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_switches(app: Flask) -> None:
     """The desktop shell's report names a desktop and no view; a desktop that no longer exists lands the client on the
-    first one, and a switch is logged once."""
+    first one, which its windows are told, and a switch is logged once."""
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
@@ -596,8 +596,12 @@ def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_
         assert landed is not None and landed.active_desktop == "home"
         events = shell.activity.read_events()
         assert [(event["type"], event["to_desktop_id"]) for event in events] == [("desktop_switch", "gone")]
-        assert not any(
-            message for message in drain_messages(client_queue) if message["type"] == "active_desktop_changed"
-        )
+        # The redirected window is told where it landed, once; a report of that desktop then changes nothing.
+        assert [
+            message["desktop_id"] for message in drain_messages(client_queue) if message["type"] == "active_desktop_changed"
+        ] == ["home"]
+        settled = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(settled, client_queue, shell, is_first_report=False) is True
+        assert drain_messages(client_queue) == []
     finally:
         shell.broadcaster.unregister(client_queue)
