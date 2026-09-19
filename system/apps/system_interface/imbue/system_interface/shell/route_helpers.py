@@ -83,7 +83,7 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     connected_clients = shell.broadcaster.get_connected_client_infos()
     client_summary = (
         ", ".join(
-            f"{info['client_id']} (view={info['active_view']}, desktop={info.get('active_desktop', '')}, "
+            f"{info['client_id']} (view={info['active_view']}, desktop={info['active_desktop']}, "
             f"device={info['device_kind']})"
             for info in connected_clients
         )
