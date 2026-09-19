@@ -13,6 +13,11 @@
  * the `type-*` roles and the shadow tokens. Tailwind v4 emits nothing for an
  * unknown utility, so a name this app does not define is a silent no-op;
  * `style-modules.test.ts` guards against that.
+ *
+ * Two utilities for the same property on one element are settled by the order
+ * Tailwind emits them in, not the order the caller wrote them. Where a recipe
+ * below could collide with one a caller adds, it takes the value as an argument
+ * or leaves it to a wrapper rather than trusting the class string's order.
  */
 
 import { MENU_ROW_FOCUS, MENU_ROW_SLAB } from "@imbue/workspace-ui/src/components/menu";
@@ -121,12 +126,10 @@ export type SwitchSize = keyof typeof SWITCH_SIZES;
 
 /** The track. Colour is the caller's -- `SWITCH_ON` / `SWITCH_OFF` below.
  *
- *  `isInert` is for a switch that is ALREADY at the only position it can hold, which is settled
- *  rather than unavailable: it keeps its full colour and only loses the pointer. The `disabled:`
- *  fade below is for the other thing -- a switch that cannot be used yet because what it toggles
- *  has not loaded. A control taking the cursor as a parameter rather than a second class string
- *  is deliberate: two `cursor-*` utilities on one element are settled by the order Tailwind
- *  emits them in, not by the order the caller wrote them. */
+ *  `isInert` is for a switch ALREADY at the only position it can hold, which is settled rather
+ *  than unavailable: it keeps its full colour and only loses the pointer. The `disabled:` fade
+ *  is for the other thing -- a switch that cannot be used yet because what it toggles has not
+ *  loaded. The cursor is a parameter because a caller cannot override one from outside. */
 export function switchClass(size: SwitchSize, isInert = false): string {
   return (
     `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
@@ -209,15 +212,12 @@ export const SUBMENU_EMPTY = "type-helper text-faint px-3 py-2";
 export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-fill-hover cursor-pointer`;
 
 // The fast-mode submenu
-/** A fast-mode row is the only two-line row in these menus: three modes is a short list, and what
- *  separates them is not their names but what each one DOES ("Fast for the first 5 turns, then
- *  standard") -- a line that cannot ride the row's own and would be lost entirely in a tooltip
- *  on a list you are choosing from. Hence the shared slab and focus ring with padding in place
- *  of the fixed height. The lines are kept short enough to hold at 300px, so the three rows are
- *  one height.
+/** A fast-mode row is the only two-line row in these menus: what separates the modes is not
+ *  their names but what each one does, and that line cannot ride the row's own. Hence the shared
+ *  slab and focus ring with padding in place of the fixed height. Keep each line short enough to
+ *  hold at `MENU_WIDTH`, so the rows stay one height.
  *
- *  No width of its own: the slab carries one, and a `w-full` beside it wins by however Tailwind
- *  happens to order the two, taking the row 8px past the slab's margins -- which puts its
+ *  No width of its own: the slab carries one, and a second beside it would put this row's
  *  trailing tick in a different lane from every other row's. */
 const FAST_ROW_SHAPE = `flex items-center gap-1.5 py-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
 export const FAST_ROW = `${FAST_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
@@ -230,20 +230,16 @@ export const FAST_ROW_DETAIL = "type-helper text-faint";
  *  number you type is not something you pick. `whitespace-nowrap` because the words either side
  *  of the field are one sentence, and a menu row is one line. */
 export const FAST_LIMIT_ROW = `fast-mode-limit ${ROW_STATIC} whitespace-nowrap text-secondary`;
-/** The field's box. The width lives HERE rather than in the field's own `extra`: the shared input
- *  recipe is `w-full`, and two width utilities on one element are settled by the order Tailwind
- *  emits them in rather than by the order the caller wrote them. A box the field fills is
- *  decided by the caller either way. */
+/** The field's box. The width lives HERE rather than in the field's own `extra`, because the
+ *  shared input recipe is already `w-full`; a box the field fills is the caller's either way. */
 export const FAST_LIMIT_FIELD = "inline-flex w-[72px] shrink-0";
 /** The steppers stay out. Chromium's user-agent sheet fades `::-webkit-inner-spin-button` to
  *  nothing until the field is hovered or focused, which leaves a number field looking like a
- *  text field: the one affordance saying "this is a number you can nudge" only appears once you
- *  have already gone looking. An author `opacity` outranks the UA sheet's.
+ *  text field; an author `opacity` outranks it.
  *
- *  The gap either side of the arrows is the STEPPER's margin, not the field's padding. The
- *  arrows are the last box in the content area and the number is right-aligned against them, so
- *  padding can only move the pair together: the arrows' own margin is the one thing that puts
- *  space between them and the digits. */
+ *  Their margin, not the field's padding, is what holds the digits off them: the arrows are the
+ *  last box in the content area and the number is right-aligned against them, so padding moves
+ *  the pair together. */
 export const FAST_LIMIT_INPUT_EXTRA =
   "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-row) " +
   "[&::-webkit-inner-spin-button]:opacity-100 [&::-webkit-inner-spin-button]:ml-1.5";

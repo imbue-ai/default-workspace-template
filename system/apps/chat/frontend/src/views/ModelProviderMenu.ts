@@ -377,9 +377,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
     const limit = effective.fast_mode_turn_limit;
     const isDefault = effective.fast_mode_default === state.mode;
     const currentLabel = FAST_MODE_LABELS[state.mode];
-    // Written once: the switch below is a bare button with only a knob in it, so this same
-    // sentence is both the row's visible label and the switch's accessible name, and an
-    // accessible name that no longer matches the words beside it is worse than none.
+    // One sentence: the switch below is a bare button with only a knob in it, so this is both
+    // the row's visible label and the switch's accessible name, and the two have to agree.
     const defaultLabel = `Use ${currentLabel} for new chats`;
     return [
       m(
@@ -398,11 +397,10 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
               class: isCurrent ? css.FAST_ROW_SELECTED : css.FAST_ROW,
               onclick: () => {
                 if (isCurrent) return;
-                // Another mode takes the turn-limit field away, and a draft outliving the
-                // field it was typed into would hold the submenu open with nothing on screen
-                // to hold it for. The field's own `onblur` cannot be relied on here: removing
-                // a focused element fires no blur, and on macOS a press on a button does not
-                // move focus off the field in the first place.
+                // Another mode takes the turn-limit field away, and a draft outliving it would
+                // hold the submenu open for a field nobody can see. The field's own `onblur` does
+                // not fire here: an element removed while focused never blurs, and on macOS a
+                // press on a button does not move focus off it to begin with.
                 limitDraft = null;
                 chooseFastMode(chatId, mode, getEventsForChat(chatId));
               },
@@ -427,8 +425,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           );
         }),
       ),
-      // The shared menu's own rule, role and all -- this submenu's content is free-form, so it
-      // borrows the chrome rather than pushing a `divider` row.
+      // The shared menu's own rule, role and all: this submenu's content is free-form, so it
+      // borrows the chrome instead of getting a `divider` row.
       m("div", { role: "separator", class: menuDividerClass() }),
       state.mode === "auto"
         ? m("label", { class: css.FAST_LIMIT_ROW }, [
@@ -463,12 +461,11 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
             limit === 1 ? "turn" : "turns",
           ])
         : null,
-      // The switch reads "is what new chats start in the mode I am looking at". It is live
-      // whenever they differ, and pressing it moves the setting here -- which is how the setting
-      // reaches all three modes, one row at a time. On the mode that already holds it there is
-      // nothing left to press (the setting names exactly one mode, so there is no "off" to
-      // return to), so it goes inert -- at full strength, because that is the setting standing
-      // where it was put, not a control that cannot be used.
+      // The switch reads "is what new chats start in the mode I am looking at", so pressing it
+      // moves the setting here -- which is how the setting reaches all three modes, a row at a
+      // time. The setting names exactly one mode, so on the mode holding it there is no "off" to
+      // return to and the switch goes inert: at full strength, since it is stating the setting
+      // rather than refusing to work.
       m("div", { class: css.FAST_DEFAULT_ROW }, [
         m("span", { class: css.ROW_LABEL }, defaultLabel),
         m(
