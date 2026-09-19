@@ -289,8 +289,8 @@ supervisorctl status <name>
 
 `update` does not wait for the start, so a healthy new app reads `STARTING`
 for its first 30 seconds -- that is the `startsecs` window the program block
-sets, not a failure. `BACKOFF` or `FATAL` is the failure signal, and a broken app reaches
-it well before the window is up. On either, read its log
+sets, not a failure. `BACKOFF` or `FATAL` is the failure signal, and a broken
+app reaches it well before the window is up. On either, read its log
 (`/var/log/supervisor/<name>-stderr.log`) or run
 `supervisorctl tail <name> stderr`.
 
