@@ -386,7 +386,14 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
               "data-fast-mode": mode,
               class: isCurrent ? css.FAST_ROW_SELECTED : css.FAST_ROW,
               onclick: () => {
-                if (!isCurrent) chooseFastMode(chatId, mode, getEventsForChat(chatId));
+                if (isCurrent) return;
+                // Another mode takes the turn-limit field away, and a draft outliving the
+                // field it was typed into would hold the submenu open with nothing on screen
+                // to hold it for. The field's own `onblur` cannot be relied on here: removing
+                // a focused element fires no blur, and on macOS a press on a button does not
+                // move focus off the field in the first place.
+                limitDraft = null;
+                chooseFastMode(chatId, mode, getEventsForChat(chatId));
               },
             },
             [
