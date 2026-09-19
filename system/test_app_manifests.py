@@ -218,6 +218,29 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     assert manifest.priority != "user"
 
 
+def _console_scripts(package: str) -> set[str]:
+    return set(
+        tomllib.loads((_APPS_DIR / package / "pyproject.toml").read_text())
+        .get("project", {})
+        .get("scripts", {})
+    )
+
+
+@pytest.mark.parametrize("package", ("system_interface", "chat", "terminal"))
+def test_every_critical_built_in_previews_from_its_own_entry_point(
+    package: str,
+) -> None:
+    # A critical app's preview table names the app's real console script, so a preview
+    # boots the tool the program itself runs rather than a stale spelling of it.
+    manifest = load_manifest(_APPS_DIR / package / MANIFEST_FILENAME)
+
+    assert manifest.critical is True
+    assert manifest.preview.command, f"{package} declares no preview command"
+    assert manifest.preview.command[0] in _console_scripts(package), (
+        f"{package}'s preview runs {manifest.preview.command[0]!r}, which its pyproject does not export"
+    )
+
+
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
         manifest.name: manifest

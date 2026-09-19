@@ -22,6 +22,7 @@
 
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
 import { matchesQuery } from "../models/search";
@@ -554,7 +555,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   /** One tile: a quarter of the row (four to a row, less the three 8px gaps between them), so the
    *  built-in four fill the first row and any further app wraps under them at the same size. */
   function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
-    const isDisabled = attrs.isAwaitingCreate === true;
+    // A preview shell creates nothing: its backend refuses the create, so the tile is inert.
+    const isDisabled = attrs.isAwaitingCreate === true || isPreviewShell();
     const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
     return m(
       "div",

@@ -22,7 +22,7 @@ leading label for the inner service's name.
 
 Run via bare ``python3`` (standard library only, no venv needed):
 
-    python3 preview_wrapper_server.py --port 8200 --inner-service si-preview-app \\
+    python3 preview_wrapper_server.py --port 8200 --inner-service chat-preview-app \\
         --title "my-change"
 """
 
@@ -33,17 +33,22 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def build_wrapper_html(inner_service: str, title: str) -> str:
+def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") -> str:
     """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
 
     ``title`` is shown in the banner (HTML-escaped). The inner iframe ``src`` is
     assigned from JavaScript because the inner service's origin is a sibling of
     the wrapper's own and can only be derived from ``location.host`` at render
-    time (see the module docstring).
+    time (see the module docstring); ``inner_path`` is the path opened on it, so
+    a preview can land on the page the user is looking at (a chat's conversation)
+    rather than the app's root.
     """
+    if not inner_path.startswith("/"):
+        raise ValueError(f"inner path must start with '/', got {inner_path!r}")
     safe_title = html.escape(title)
-    # json.dumps yields a safe, quoted JS string literal for the service name.
+    # json.dumps yields safe, quoted JS string literals for the service name and path.
     service_literal = json.dumps(inner_service)
+    path_literal = json.dumps(inner_path)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -114,9 +119,10 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     // system/libs/workspace_ui/src/origin.ts; if it changes, this sibling-swap
     // must change too.
     var previewService = {service_literal};
+    var previewPath = {path_literal};
     var host = location.host;
     var innerHost = previewService + host.slice(host.indexOf("."));
-    var previewTarget = location.protocol + "//" + innerHost + "/";
+    var previewTarget = location.protocol + "//" + innerHost + previewPath;
     document.getElementById("preview-frame").setAttribute("src", previewTarget);
   </script>
 </body>
@@ -147,8 +153,10 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
     return _WrapperHandler
 
 
-def serve(port: int, inner_service: str, title: str) -> None:
-    page_html = build_wrapper_html(inner_service=inner_service, title=title)
+def serve(port: int, inner_service: str, title: str, inner_path: str) -> None:
+    page_html = build_wrapper_html(
+        inner_service=inner_service, title=title, inner_path=inner_path
+    )
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(page_html))
     server.serve_forever()
 
@@ -169,8 +177,18 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Human-readable label shown in the preview banner.",
     )
+    parser.add_argument(
+        "--inner-path",
+        default="/",
+        help="The path the frame opens on the inner service (default: /).",
+    )
     args = parser.parse_args(argv)
-    serve(port=args.port, inner_service=args.inner_service, title=args.title)
+    serve(
+        port=args.port,
+        inner_service=args.inner_service,
+        title=args.title,
+        inner_path=args.inner_path,
+    )
     return 0
 
 

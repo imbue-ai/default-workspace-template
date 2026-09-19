@@ -8,6 +8,7 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -1690,8 +1691,26 @@ class _Clock:
         return self.value
 
 
+# Every supervised program a fixture tree can run, so the canned status answers
+# whatever set the verdict asks about.
+_FIXTURE_PROGRAMS = ("system_interface", "chat", "terminal", "files", "browser")
+
+
+def _supervisor_status(
+    pid: int, programs: Sequence[str] = _FIXTURE_PROGRAMS
+) -> _Result:
+    """A ``supervisorctl status`` answer: every program settled on ``pid``."""
+    return _Result(
+        stdout="".join(
+            f"{program}   RUNNING   pid {pid}, uptime 0:00:05\n" for program in programs
+        )
+    )
+
+
 def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner = _RecordingRunner(repo_root=repo_root)
+    # A live stack that has settled: the same pid on every status call.
+    runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
     # Clean for the precondition check. The rollback's own "is anything staged
     # to commit" question is the index diff, and by then the restore has
     # staged the reverted paths.
@@ -1847,6 +1866,7 @@ _PROVISION = ("bash", update_layout.PROVISIONER_SCRIPT)
 
 _FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
 _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+_CHAT_FRONTEND_DIFF = "M\tsystem/apps/chat/frontend/src/views/Thread.ts\n"
 _VENDORED_DIFF = "M\tsystem/vendor/mngr/libs/mngr/imbue/mngr/api/list.py\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
@@ -3147,9 +3167,29 @@ def test_an_unhealthy_critical_app_after_the_restart_rolls_back(
     assert code == 2
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
     assert (
-        "the chat app did not become healthy after restart "
-        f"({_instances_url(_CHAT_ROW_URL)} answered HTTP 503)"
+        "the workspace did not settle into a healthy state after restart "
+        f"(the chat app's instances API at {_instances_url(_CHAT_ROW_URL)} answered HTTP 503)"
     ) in capsys.readouterr().err
+
+
+def _settle_instances(
+    http: _FakeHttp,
+    repo_root: Path,
+    app: update_probes.CriticalInstanceApp,
+    attempts: int,
+) -> str | None:
+    """``wait_settled`` over one app's instances API alone: a healthy shell, no pid check."""
+    return update_probes.wait_settled(
+        http,
+        repo_root,
+        _RecordingRunner(repo_root=repo_root),
+        _no_sleep,
+        shell_url=f"{_LIVE_BASE}{update_probes.HEALTH_PATH}",
+        programs=["chat"],
+        instance_apps=[app],
+        require_stable_pid=False,
+        attempts=attempts,
+    )
 
 
 def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
@@ -3172,11 +3212,7 @@ def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
     http = _FakeHttp(_all_healthy, page_responder)
     (app,) = update_probes.read_critical_instance_apps(apply_repo)
 
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 10, 0.0, _no_sleep
-    )
-
-    assert failure is None
+    assert _settle_instances(http, apply_repo, app, attempts=10) is None
     assert http.page_urls[:3] == [_instances_url(_LIVE_BASE)] * 3
     assert http.page_urls[3] == _instances_url(_CHAT_ROW_URL)
 
@@ -3189,9 +3225,7 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
     http = _FakeHttp(_all_healthy, _shell_catch_all_page)
 
     # No registry at all: the app never registered.
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 3, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=3)
     assert (
         failure
         == f"the app registry at {update_layout.APPS_REGISTRY_PATH} never listed 'chat'"
@@ -3203,9 +3237,7 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
     # registration that never happened.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     (apply_repo / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 2, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=2)
     assert failure is not None
     assert failure.startswith(
         f"the app registry at {update_layout.APPS_REGISTRY_PATH} could not be read "
@@ -3215,21 +3247,20 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
 
     # A row that stays on the shell's port: the catch-all's HTML is named as such.
     _write_registry(apply_repo, {"chat": _LIVE_BASE})
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 2, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=2)
     assert failure is not None
     assert failure.startswith(
-        f"{_instances_url(_LIVE_BASE)} answered 200 but as 'text/html'"
+        f"the chat app's instances API at {_instances_url(_LIVE_BASE)} "
+        "answered 200 but as 'text/html'"
     )
 
     # A server that does not answer at all.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     silent = _FakeHttp(_all_healthy, lambda url: None)
-    failure = update_probes.wait_instances_healthy(
-        silent, apply_repo, app, 2, 0.0, _no_sleep
+    failure = _settle_instances(silent, apply_repo, app, attempts=2)
+    assert failure == (
+        f"the chat app's instances API at {_instances_url(_CHAT_ROW_URL)} did not answer"
     )
-    assert failure == f"{_instances_url(_CHAT_ROW_URL)} did not answer"
 
 
 def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_api(
@@ -3249,8 +3280,10 @@ def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_
     apps = update_probes.read_critical_instance_apps(repo_root)
 
     assert apps == (
-        update_probes.CriticalInstanceApp("chat", None),
-        update_probes.CriticalInstanceApp("terminal", _TERMINAL_INSTANCES_URL),
+        update_probes.CriticalInstanceApp("chat", None, "chat"),
+        update_probes.CriticalInstanceApp(
+            "terminal", _TERMINAL_INSTANCES_URL, "terminal"
+        ),
     )
     assert "skipping the app at" in capsys.readouterr().err
     # A tree with no apps directory declares nothing.
@@ -6909,3 +6942,705 @@ def test_a_worker_bundle_flag_must_name_a_known_app_and_a_path(value: str) -> No
 def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
     with pytest.raises(SystemExit, match="names chat twice"):
         update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
+
+
+def test_a_fast_forward_apply_cannot_keep_a_rollback_point(apply_repo: Path) -> None:
+    """rollback-last reverts the kept point as a merge, which a fast-forward never lands."""
+    with pytest.raises(SystemExit, match="cannot be combined with --ff-only"):
+        update_self.main(
+            [
+                "apply",
+                "--merge-ref",
+                "HEAD",
+                "--ff-only",
+                "--keep-rollback-point",
+                "--repo-root",
+                str(apply_repo),
+            ]
+        )
+    assert update_apply_contract.read_marker(apply_repo) is None
+    assert _rollback_point(apply_repo) is None
+
+
+# --- the kept rollback point and the notice ----------------------------------
+
+
+def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | None":
+    return update_apply_contract.read_last_good(repo_root)
+
+
+def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path) -> int:
+    return update_apply.apply_update(
+        _MERGE_REF,
+        repo_root,
+        ff_only=False,
+        worker_bundles=None,
+        target_ref=None,
+        runner=runner,
+        http=_FakeHttp(_all_healthy),
+        spawner=_FakeSpawner(),
+        sleeper=_no_sleep,
+        base_url=_LIVE_BASE,
+        now=_Clock(),
+        today=_TODAY,
+        is_pid_live=lambda pid: False,
+        expend=_tagging_expend,
+        sweep_homes=(),
+        keep_rollback_point=True,
+    )
+
+
+def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> None:
+    """The careful flow's apply leaves its copies and a record naming what it touched;
+    an ordinary apply leaves neither, as before."""
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.rollback_to == _ROLLBACK
+    assert (
+        record.merge_sha == _ROLLBACK
+    )  # the fixture's HEAD answers the same sha before and after
+    assert record.apps == ["system_interface"]
+    assert record.programs == ["system_interface"]
+    assert record.needs_system_services_restart is False
+    assert {snapshot.name for snapshot in record.snapshots} == {"bundle", "chat_bundle"}
+    assert _snapshot_copy(apply_repo, "bundle").exists()
+    assert not _marker_exists(apply_repo)
+
+    plain = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    assert _apply(plain, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+    # The next apply, kept or not, replaces the point: the old record and copies are gone.
+    assert _rollback_point(apply_repo) is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+
+
+def test_the_record_names_every_critical_app_the_apply_touched(
+    apply_repo: Path,
+) -> None:
+    """A shared-library change rebuilds both bundles, so both bundle owners are touched;
+    a change under one app's directory touches that app; a non-critical app never counts."""
+    _write_instances_app(apply_repo, "chat")
+    _write_instances_app(apply_repo, "terminal", instances_url=_TERMINAL_INSTANCES_URL)
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    runner = _apply_runner(
+        "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
+        "M\tsystem/apps/browser/src/browser/session.py\n",
+        apply_repo,
+    )
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface", "terminal"]
+    assert record.programs == ["chat", "system_interface", "terminal"]
+
+
+def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
+    apply_repo: Path,
+) -> None:
+    """A shared backend manifest moves every app tool's closure, so the apply reinstalls
+    (and copies aside) each critical app's tool environment: a rollback that restores
+    those copies has to restart those apps too, so the record names them, not the shell
+    alone."""
+    _write_app(apply_repo, "chat", "chat", "chat-app", True)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface"]
+    assert record.programs == ["chat", "system_interface"]
+
+
+@pytest.mark.parametrize(
+    ("diff", "needs_restart"),
+    [
+        (_FRONTEND_DIFF, False),
+        ("M\tsystem/scripts/bootstrap.sh\n", True),
+        ("M\tsystem/libs/bootstrap/src/bootstrap/main.py\n", True),
+        ("M\tsystem/Dockerfile\n", True),
+        (_PROVISIONER_DIFF, True),
+    ],
+)
+def test_a_diff_that_reaches_the_workspaces_own_setup_needs_the_services_agent_restarted(
+    apply_repo: Path, diff: str, needs_restart: bool
+) -> None:
+    runner = _apply_runner(diff, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.needs_system_services_restart is needs_restart
+
+
+def _rollback_runner(repo_root: Path) -> _RecordingRunner:
+    runner = _RecordingRunner(repo_root=repo_root)
+    runner.respond(("git", "status", "--porcelain"), _Result(stdout=""))
+    runner.respond(("git", "diff", "--cached", "--quiet"), _Result(returncode=1))
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout=_CHAT_FRONTEND_DIFF.split("\t")[1]),
+    )
+    runner.respond(("supervisorctl", "status"), _supervisor_status(5151))
+    return runner
+
+
+def _rollback(
+    runner: _RecordingRunner, repo_root: Path, http: _FakeHttp | None = None
+) -> int:
+    return update_apply.rollback_last(
+        repo_root,
+        runner=runner,
+        http=http if http is not None else _FakeHttp(_all_healthy),
+        sleeper=_no_sleep,
+        base_url=_LIVE_BASE,
+        now=_Clock(),
+        is_pid_live=lambda pid: False,
+    )
+
+
+def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_programs(
+    apply_repo: Path,
+) -> None:
+    """A rollback from the notice is the apply's forward revert plus the copies put back,
+    restarting only what the apply touched -- never the services agent."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    # A chat frontend change: one ``npm run build`` rebuilds both bundles, so the
+    # shell is touched as a bundle owner even though none of its files changed.
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.programs == ["chat", "system_interface"]
+    # The apply's copies are the bundles; scribble on the live one so the restore is visible.
+    live_index = apply_repo / update_layout.CHAT_FRONTEND_BUILD_INDEX
+    kept_index = _snapshot_copy(apply_repo, "chat_bundle") / "chat.html"
+    kept_text = kept_index.read_text()
+    live_index.write_text("<!doctype html>the update's build")
+    runner = _rollback_runner(apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _rollback(runner, apply_repo, http)
+
+    assert code == 0
+    assert runner.ran("git", "revert", "-m", "1", "--no-commit", record.merge_sha)
+    commit = next(call for call in runner.calls if call[:2] == ["git", "commit"])
+    assert commit[-1].startswith(update_apply._ROLLBACK_SUBJECT_PREFIX)
+    assert runner.argvs_starting("supervisorctl", "restart") == [
+        ["supervisorctl", "restart", "chat", "system_interface"]
+    ]
+    assert not runner.ran(*_RESTART)
+    assert live_index.read_text() == kept_text
+    assert _instances_url(_CHAT_ROW_URL) in http.page_urls
+    assert _refreshed_the_view(runner, apply_repo)
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == "Rolled back to the previous version."
+    assert settled.progress is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+    # A second rollback of a settled point is refused; confirming closes it.
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+
+
+def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
+    apply_repo: Path,
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(runner, apply_repo)
+
+    assert code == 0
+    assert runner.ran("git", "revert")
+    assert not runner.ran("supervisorctl", "restart")
+    assert not runner.ran(*_RESTART)
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert (
+        record.outcome is not None
+        and update_apply.SERVICES_RESTART_COMMAND in record.outcome
+    )
+
+
+def test_a_rollback_whose_workspace_does_not_settle_records_an_emergency(
+    apply_repo: Path,
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_BACKEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(runner, apply_repo, _FakeHttp(lambda url: 503))
+
+    assert code == 3
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.outcome is not None
+    assert "did not come back healthy" in record.outcome
+
+
+@pytest.mark.parametrize(
+    "supervisord_path",
+    [
+        update_layout.SUPERVISORD_CONF,
+        f"{update_layout.SUPERVISORD_DROPIN_DIR}chat.conf",
+    ],
+)
+def test_rolling_back_reloads_the_supervisord_table_when_the_update_changed_it(
+    apply_repo: Path, supervisord_path: str
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_BACKEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(
+            stdout=f"{supervisord_path}\nsystem/apps/system_interface/imbue/system_interface/server.py\n"
+        ),
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.ran("supervisorctl", "reread")
+    assert runner.ran("supervisorctl", "update")
+
+
+def test_a_rollback_that_dies_partway_settles_the_notice_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """A record left mid-rollback is one the shell refuses every verb on, so a rollback
+    that fails in a way nobody predicted has to settle it on the way out.
+
+    The copies stay: the tree is half-restored at that point, and they are what an agent
+    finishes the job by hand from.
+    """
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "commit"),
+        subprocess.CalledProcessError(1, ["git", "commit"], stderr="index locked"),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _rollback(runner, apply_repo)
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.progress is None, "the notice would refuse both verbs forever"
+    assert record.outcome is not None and "stopped partway through" in record.outcome
+    assert "CalledProcessError" in record.outcome
+    assert record.snapshots and all(
+        Path(snapshot.copy).exists() for snapshot in record.snapshots
+    )
+
+
+def test_a_rollback_whose_revert_conflicts_aborts_it_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """Work committed since the update can make the forward revert conflict. Nothing has
+    changed at that point, so the revert is aborted and the record settled with git's
+    reason; the copies stay, since the agent the outcome sends the user to finishes the
+    revert by hand and restores the previous version from them."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "revert", "-m"),
+        _Result(returncode=1, stderr="CONFLICT (content): Merge conflict in chat.html"),
+    )
+
+    assert _rollback(runner, apply_repo) == 1
+
+    assert runner.ran("git", "revert", "--abort")
+    assert not runner.ran("git", "commit")
+    assert not runner.ran("supervisorctl", "restart")
+    assert not _refreshed_the_view(runner, apply_repo)
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.progress is None
+    assert settled.outcome is not None
+    assert "could not be reverted" in settled.outcome
+    assert "Merge conflict in chat.html" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    # Settled, the point is refused a second rollback; Close drops the record and leaves the copies.
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+@pytest.mark.parametrize("is_other_rollback_running", [True, False])
+def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
+    apply_repo: Path, is_other_rollback_running: bool
+) -> None:
+    """A rollback-last run by hand can land beside the one the shell launched; and a
+    rollback killed outright leaves its progress behind unsettled. Either way another
+    run must refuse before it reverts anything: it would settle the record over the
+    first run's, or revert the revert the first run (or an agent) already committed."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    if not is_other_rollback_running:
+        record.progress = update_apply._ROLLBACK_PROGRESS_RESTORING
+        update_apply_contract.write_last_good(record, apply_repo)
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+    runner = _rollback_runner(apply_repo)
+    lock_path = update_apply_contract.rollback_lock_path(apply_repo)
+
+    with open(lock_path, "w") as lock_file:
+        if is_other_rollback_running:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _rollback(runner, apply_repo)
+
+    assert code == 1
+    assert not runner.ran("git", "revert")
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+def test_confirm_refuses_while_a_rollback_holds_the_lock(apply_repo: Path) -> None:
+    """A confirm landing after a just-launched rollback read the record, but before it wrote
+    its progress, would discard the copies that rollback is about to restore from."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = update_apply.confirm_last(apply_repo)
+
+    assert code == 1
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+
+
+def test_closing_the_notice_of_a_failed_rollback_keeps_the_copies_it_kept(
+    apply_repo: Path,
+) -> None:
+    """A rollback that could not restore health settles the notice with an outcome saying the
+    copies are still kept for an agent, and the emergency record names where. The one verb
+    the settled notice offers is Close, which runs confirm-last: it closes the record and
+    leaves the copies exactly where that outcome points."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    assert (
+        _rollback(_rollback_runner(apply_repo), apply_repo, _FakeHttp(lambda url: 503))
+        == 3
+    )
+
+    assert update_apply.confirm_last(apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_an_apply_refuses_to_replace_a_point_a_rollback_is_restoring_from(
+    apply_repo: Path,
+) -> None:
+    """A fresh apply replaces the kept point by discarding its copies, which a running
+    rollback-last is restoring from; it refuses rather than pulling them out from under it."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _apply(
+            _apply_runner(_FRONTEND_DIFF, apply_repo),
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+        )
+
+    assert code == 1
+    assert not _marker_exists(apply_repo)
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+def test_rollback_and_confirm_without_a_kept_point_change_nothing(
+    apply_repo: Path,
+) -> None:
+    runner = _rollback_runner(apply_repo)
+    assert _rollback(runner, apply_repo) == 1
+    assert not runner.ran("git", "revert")
+    assert update_apply.confirm_last(apply_repo) == 0
+
+
+def test_a_settled_verdict_needs_a_streak_on_unchanging_pids_across_every_program(
+    apply_repo: Path,
+) -> None:
+    """The verdict resets on a pid change and passes only once every program held its pid
+    through the streak; a program supervisord does not report RUNNING never settles."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    apps = update_probes.read_critical_instance_apps(apply_repo)
+    programs = ["system_interface", "chat"]
+
+    def settle(status_answers: list[_Result], attempts: int) -> str | None:
+        runner = _RecordingRunner(repo_root=apply_repo)
+        runner.respond(("supervisorctl", "status"), status_answers)
+        return update_probes.wait_settled(
+            _FakeHttp(_all_healthy),
+            apply_repo,
+            runner,
+            _no_sleep,
+            shell_url=f"{_LIVE_BASE}{update_probes.HEALTH_PATH}",
+            programs=programs,
+            instance_apps=apps,
+            require_stable_pid=True,
+            attempts=attempts,
+        )
+
+    assert (
+        settle([_supervisor_status(1)], attempts=update_probes.SETTLED_HEALTHY_PROBES)
+        is None
+    )
+
+    # The chat turning over on the second probe restarts the streak: three more are needed.
+    # (The canned list is consumed as it is answered, so each call gets a fresh one.)
+    def turning() -> list[_Result]:
+        mixed = (
+            _supervisor_status(1, ["system_interface"]).stdout
+            + _supervisor_status(2, ["chat"]).stdout
+        )
+        return [_supervisor_status(1), _Result(stdout=mixed), _supervisor_status(2)]
+
+    assert settle(turning(), attempts=update_probes.SETTLED_HEALTHY_PROBES + 2) is None
+    assert (
+        settle(turning(), attempts=update_probes.SETTLED_HEALTHY_PROBES + 1) is not None
+    )
+    # A program that is not RUNNING is named.
+    finding = settle([_supervisor_status(1, ["system_interface"])], attempts=2)
+    assert finding is not None and "chat" in finding
+
+
+def test_a_green_verdict_requires_the_service_to_stop_turning_over(
+    apply_repo: Path,
+) -> None:
+    """A single 200 can land in the gap between two restarts of a settling stack.
+
+    The apply once printed "confirmed healthy" on exactly that, and seconds later
+    the live UI did not answer and supervisord had a new pid. The verdict arms the
+    automatic rollback, so it has to describe settled state.
+    """
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    # A different pid on every status call for the apply's entire budget, so no
+    # run of consecutive probes ever shares one. The canned list's last entry
+    # repeats once exhausted, which is the stack finally settling -- so the
+    # rollback that follows can confirm the UI and this stays an ordinary exit 2.
+    runner.respond(
+        ("supervisorctl", "status"),
+        [
+            _supervisor_status(7000 + offset)
+            for offset in range(update_probes.HEALTH_ATTEMPTS + 1)
+        ],
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2, "a stack that is still restarting is not a healthy apply"
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+
+
+def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through(
+    apply_repo: Path,
+) -> None:
+    """The confirmation restarts on a pid change rather than failing on one: a restart
+    landing mid-confirmation is exactly the normal case this budget exists for."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond(
+        ("supervisorctl", "status"),
+        [_supervisor_status(7001), _supervisor_status(7002)],
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+
+
+def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
+    assert update_self.main(["confirm-last", "--repo-root", str(apply_repo)]) == 0
+    assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
+
+
+# --- what the kept point names, and what a rollback checks -------------------
+
+
+def test_a_bundle_rebuilt_from_unchanged_source_does_not_make_its_owner_touched(
+    apply_repo: Path,
+) -> None:
+    """One build at the npm root rewrites both bundles, so a chat frontend change rebuilds
+    the shell's too; the record names the shell only when its bundle's source changed,
+    which the stamps say."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    # The pre-apply bundle carries the stamp the emulated build will write again.
+    _write_bundle(apply_repo, stamp="same-source")
+    runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
+    runner.build_stamp = "same-source"
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat"]
+    assert record.programs == ["chat"]
+
+    # A build whose stamps differ, or that has none to compare, touches every owner.
+    for build_stamp in ("other-source", None):
+        _write_bundle(apply_repo, stamp="same-source")
+        runner = _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo)
+        runner.build_stamp = build_stamp
+        assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+        record = _rollback_point(apply_repo)
+        assert record is not None and record.apps == ["chat", "system_interface"]
+
+
+def test_a_merge_that_changed_nothing_keeps_no_rollback_point(apply_repo: Path) -> None:
+    """``rollback_to`` is HEAD for such a merge, so a kept point would offer to revert
+    whatever merge HEAD already was."""
+    runner = _apply_runner("", apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+
+
+def test_a_rollback_with_no_program_to_restart_skips_the_restart(
+    apply_repo: Path,
+) -> None:
+    """A supervisord drop-in alone touches no program's code or bundle; supervisorctl
+    refuses a bare ``restart``, and there is nothing to hold a pid steady for."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner("M\tsystem/supervisord.conf.d/chat.conf\n", apply_repo),
+            apply_repo,
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.programs == [] and record.apps == []
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout="system/supervisord.conf.d/chat.conf\n"),
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.ran("supervisorctl", "reread")
+    assert not runner.ran("supervisorctl", "restart")
+    settled = _rollback_point(apply_repo)
+    assert (
+        settled is not None
+        and settled.outcome == "Rolled back to the previous version."
+    )
+
+
+def _unbuilt_health_page(url: str) -> update_runtime.FetchedPage | None:
+    """The chat's health route as it answers over a missing bundle: 200, and its own word that it
+    serves the placeholder. Every other page is the built app's."""
+    if url.endswith(update_probes.APP_HEALTH_PATH) and url.startswith(_CHAT_ROW_URL):
+        return update_runtime.FetchedPage(
+            status=200,
+            body='{"status": "ok", "is_frontend_built": false}',
+            headers={"content-type": "application/json"},
+        )
+    return _built_app_page(url)
+
+
+def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """The instances API answers over a missing bundle, so a restored copy that restored no
+    page would otherwise read as a rollback that worked, and the copies would be discarded
+    on that word. The app's own health route says whether its page is there."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(
+        runner,
+        apply_repo,
+        _FakeHttp(_all_healthy, page_responder=_unbuilt_health_page),
+    )
+
+    assert code == 3
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.outcome is not None
+    assert "is_frontend_built: false" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert not _refreshed_the_view(runner, apply_repo)

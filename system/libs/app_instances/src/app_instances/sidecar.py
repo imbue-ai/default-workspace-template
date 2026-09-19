@@ -23,7 +23,7 @@ from werkzeug.serving import LISTEN_QUEUE, BaseWSGIServer, make_server
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
 from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
-from app_instances.nudge import ShellNudger, shell_base_url
+from app_instances.nudge import ShellNudger, SilentNudger, shell_base_url
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
@@ -110,9 +110,15 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
 
 
 def _load_sidecar_manifest(
-    manifest_path: Path, instances_url: InstancesUrl
+    manifest_path: Path, instances_url: InstancesUrl, is_registered: bool
 ) -> AppManifest:
-    """The manifest, checked to declare the instances API at the port this sidecar will serve."""
+    """The manifest, checked to declare the instances API at the port this sidecar will serve.
+
+    The manifest's ``instances_url`` is where the shell reaches the *registered* app's
+    API, so a registered sidecar must serve exactly there. An unregistered boot (a
+    preview on free ports) serves the API wherever it was told to and points no
+    registry row at it, so the manifest's declaration is not its to match.
+    """
     try:
         manifest = load_manifest(manifest_path)
     except ManifestLoadError as e:
@@ -121,6 +127,8 @@ def _load_sidecar_manifest(
         raise SidecarError(
             f"manifest {manifest_path} does not declare instances = true"
         )
+    if not is_registered:
+        return manifest
     if manifest.instances_url is None:
         raise SidecarError(
             f"manifest {manifest_path} declares no instances_url; "
@@ -215,14 +223,18 @@ def run_sidecar_app(
     # Builds the Flask app served at instances_url from the loaded manifest and the nudger the
     # sidecar made for it; an app that serves routes of its own beside the blueprint mounts them here.
     build_app: Callable[[AppManifest, InstanceNudgerInterface], Flask],
+    # A throwaway boot (a preview on free ports) must not re-point the live app's registry
+    # row, and has no shell to nudge: the live shell lists the live app's instances.
+    is_registered: bool = True,
 ) -> int:
     """Serve an app's Flask app beside a wrapped server, and return the exit status to end the program with.
 
     In order: the app starts listening at ``instances_url`` (so the shell's first fetch after
     registration succeeds), the app is registered through ``forward_port.py --manifest`` with
-    ``app_url``, the child is spawned, SIGTERM and SIGINT are forwarded to it, and its exit code
-    (128 plus the signal number for a signal death) is returned once it ends. Must run on the main
-    thread, which is where signal handlers can be installed.
+    ``app_url`` (unless ``is_registered`` is false, in which case the app nudges no shell either),
+    the child is spawned, SIGTERM and SIGINT are
+    forwarded to it, and its exit code (128 plus the signal number for a signal death) is returned
+    once it ends. Must run on the main thread, which is where signal handlers can be installed.
     """
     if threading.current_thread() is not threading.main_thread():
         raise SidecarError(
@@ -230,12 +242,17 @@ def run_sidecar_app(
         )
     if not child_argv:
         raise SidecarError("cannot start the wrapped server: no command given")
-    manifest = _load_sidecar_manifest(manifest_path, instances_url)
-    nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
+    manifest = _load_sidecar_manifest(manifest_path, instances_url, is_registered)
+    nudger: InstanceNudgerInterface = (
+        ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
+        if is_registered
+        else SilentNudger()
+    )
     host, port = split_instances_url(instances_url)
     with serve_in_background(host, port, build_app(manifest, nudger)):
-        with log_span("Registering {} at {}", manifest.name, app_url):
-            register_app(manifest_path, app_url)
+        if is_registered:
+            with log_span("Registering {} at {}", manifest.name, app_url):
+                register_app(manifest_path, app_url)
         with log_span(
             "Starting the wrapped server of {}: {}", manifest.name, list(child_argv)
         ):

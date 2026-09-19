@@ -15,6 +15,11 @@ from typing import NamedTuple
 # (idempotent) for the files it reads (:func:`read_provisioner_inputs`).
 PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
 
+# The supervisord program table: the daemon's config and the per-program drop-ins its
+# ``[include]`` glob pulls in. A rollback re-reads it when the update changed either.
+SUPERVISORD_CONF = "system/supervisord.conf"
+SUPERVISORD_DROPIN_DIR = "system/supervisord.conf.d/"
+
 
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of

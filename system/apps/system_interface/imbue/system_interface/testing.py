@@ -211,6 +211,8 @@ def build_test_state(
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
+    is_preview: bool = False,
+    repo_root: Path | None = None,
     template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -218,9 +220,12 @@ def build_test_state(
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
-    is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
-    the network for it; with one, the store fetches the config's URL through it.
+    and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
+    the read-only preview shell. ``repo_root`` is where the update notice reads its record
+    and finds the update-self script (a fresh temp directory by default, so no test reads the
+    real workspace's). The template catalog is disabled (no URL) unless a
+    ``template_catalog_fetcher`` is given, so no test reaches the network for it; with one, the
+    store fetches the config's URL through it.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_config = config if config is not None else Config()
@@ -229,6 +234,7 @@ def build_test_state(
         registry_path=registry_path(),
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
+        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
     )
     template_catalog = build_template_catalog_store(
         catalog_url=resolved_config.system_interface_template_catalog_url
@@ -237,7 +243,9 @@ def build_test_state(
         state_directory=state_directory,
         fetcher=template_catalog_fetcher,
     )
-    return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
+    return SystemInterfaceState(
+        config=resolved_config, shell=shell, is_preview=is_preview, template_catalog=template_catalog
+    )
 
 
 def _find_free_port() -> int:

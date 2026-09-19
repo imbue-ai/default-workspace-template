@@ -12,6 +12,7 @@ from flask import Flask
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
 from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.nudge import SilentNudger
 from app_instances.sidecar import (
     app_url_port,
     child_exit_code,
@@ -247,3 +248,32 @@ def test_app_url_port_reads_the_wrapped_servers_port_from_the_app_url() -> None:
         app_url_port(AppUrl("http://localhost"))
     with pytest.raises(SidecarError, match="names no usable port"):
         app_url_port(AppUrl("http://localhost:seven"))
+
+
+def test_an_unregistered_sidecar_serves_wherever_it_is_told_regardless_of_the_manifests_url(
+    tmp_path: Path,
+) -> None:
+    """A preview boots the sidecar on a free port and registers nothing, so the manifest's
+    ``instances_url`` (where the live, registered app's API is) is not its to match; and it
+    nudges no shell, since the live shell lists the live app's instances, not a preview's."""
+    manifest_path = _write_manifest(
+        tmp_path, 'instances = true\ninstances_url = "http://127.0.0.1:8301"\n'
+    )
+    handed_nudgers: list[InstanceNudgerInterface] = []
+
+    def build_app(_manifest: AppManifest, nudger: InstanceNudgerInterface) -> Flask:
+        handed_nudgers.append(nudger)
+        return build_instances_app(StubInstanceSource(), nudger)
+
+    code = run_sidecar_app(
+        manifest_path=manifest_path,
+        app_url=AppUrl("http://localhost:8300"),
+        instances_url=InstancesUrl("http://127.0.0.1:8302"),
+        child_argv=[sys.executable, "-c", "pass"],
+        build_app=build_app,
+        is_registered=False,
+    )
+
+    assert code == 0
+    assert len(handed_nudgers) == 1
+    assert isinstance(handed_nudgers[0], SilentNudger)

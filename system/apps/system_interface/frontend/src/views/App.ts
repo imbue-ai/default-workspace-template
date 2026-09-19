@@ -24,6 +24,7 @@ import {
   requestInstanceLifecycle,
 } from "./DockviewWorkspace";
 import { Sidebar } from "./Sidebar";
+import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { SidebarTabRow } from "./Sidebar";
 import type { AppAction, AppRecord, ProjectShortcut, ShortcutMode } from "../models/Inventory";
@@ -38,6 +39,7 @@ export function App(): m.Component {
         { class: "app-layout flex h-screen flex-col" },
         [
           m(UpdateStalenessBanner),
+          m(UpdateNoticeBanner),
           // min-h-0: a flex item's automatic minimum size is its content's, so without this the
           // row can grow with the viewport but never shrink back.
           // pt/pl-1: the canvas runs edge to edge, with the padding as the outermost pane gap (the

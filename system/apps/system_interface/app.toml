@@ -5,3 +5,13 @@ display_name = "Workspace"
 internal = true
 critical = true
 priority = "system_interface"
+
+# A preview shell is the real workspace with one app swapped and every mutating
+# verb refused: it boots read-only over a seeded copy of the live state directory
+# and a copied registry whose rows for previewed sibling apps point at their
+# previews (the preview script writes that copy and fills {registry}).
+[preview]
+command = ["system-interface", "--preview", "--state-dir", "{copy:state}"]
+env = {SYSTEM_INTERFACE_PORT = "{port:main}", SYSTEM_INTERFACE_HOST = "{host}", MINDS_APPS_FILE = "{registry}"}
+copies = {state = "data/.state/system_interface"}
+health_path = "/api/health"

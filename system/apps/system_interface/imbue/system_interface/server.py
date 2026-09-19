@@ -31,11 +31,14 @@ from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
+from imbue.system_interface.shell.routes import HTTP_NOT_FOUND
 from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.template_catalog import TemplateCatalogAvailability
 from imbue.system_interface.template_catalog import catalog_wire_json
+from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
+from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
 
@@ -330,20 +333,31 @@ def _shell_update_staleness() -> str | None:
     seconds per open tab for the length of an outage, and the placeholder
     itself never asks (it carries no banner). Reading staleness forks git, and
     an outage is precisely when the tree has moved and both of its reads run.
+    Skipped for a preview shell too: it serves a worktree the live tree is
+    expected to differ from, so the banner would only ever say so.
     """
-    if request.method == "HEAD":
+    if request.method == "HEAD" or get_state().is_preview:
         return None
     return get_state().update_staleness.staleness()
 
 
+def _inject_preview_meta_tag(html_content: str, is_preview: bool) -> str:
+    """Mark a preview shell's page so the frontend hides the verbs the backend refuses."""
+    if not is_preview:
+        return html_content
+    return inject_meta_tag(html_content, PREVIEW_META_TAG, PREVIEW_META_CONTENT)
+
+
 def _index() -> Response:
-    index_path = get_state().static_directory / "index.html"
+    state = get_state()
+    index_path = state.static_directory / "index.html"
     if index_path.exists():
         staleness = _shell_update_staleness()
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
         html_content = inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
+        html_content = _inject_preview_meta_tag(html_content, state.is_preview)
         return document_response(html_content, is_frontend_built=True)
     return _frontend_not_built_response()
 
@@ -399,7 +413,10 @@ def _frontend_not_built_response() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
-    # Every other path is a client-side route and renders the app shell.
+    # Every other path is a client-side route and renders the app shell -- except an
+    # unknown API path, whose caller wants an answer it can parse, not a page.
+    if path == API_PREFIX.strip("/") or path.startswith(API_PREFIX):
+        return json_response({"detail": f"No such API route: /{path}"}, status_code=HTTP_NOT_FOUND)
     return _index()
 
 
@@ -408,6 +425,9 @@ def _health_endpoint() -> Response:
     is_frontend_built = (get_state().static_directory / "index.html").exists()
     return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
 
+
+# Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
+API_PREFIX: Final[str] = "api/"
 
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
@@ -562,6 +582,12 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
                     "projects": [project_wire_json(project) for project in shell.projects.list_projects()],
                 }
             )
+        )
+        # The notice too, so a window that reconnects after a rollback restarted this shell
+        # sees the outcome without a fetch of its own.
+        notice = shell.update_notice.current()
+        websocket.send(
+            json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
 
         is_client_registered = False

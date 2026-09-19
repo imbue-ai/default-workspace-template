@@ -18,12 +18,16 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
   cross-field rule of the contract is a validator), `AppAction`,
   `DefaultShortcut`, `ShortcutMode`, `AppReference` (`path`, optional `note`),
-  `ScopeRules` (`exclude`), `load_manifest(path, repo_root=None)` (reads,
-  validates, checks the icon file exists beside the manifest, and -- against the
-  repo root, given or derived from a `system/apps/<package>/app.toml` layout --
-  that every reference exists, sits neither in the app's own directory nor in
-  another app's, and goes through no symlinked directory, which git never
-  reports a changed file through), `repo_root_for_manifest`,
+  `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
+  a throwaway instance boots, with named free ports, a scratch copy of the
+  directories it names, and placeholders in its command, args, and env;
+  absent, it is `scaffold_preview_spec(name)`, the build-app convention, so
+  every app previews by construction), `load_manifest(path, repo_root=None)`
+  (reads, validates, checks the icon file exists beside the manifest, and --
+  against the repo root, given or derived from a `system/apps/<package>/app.toml`
+  layout -- that every reference exists, sits neither in the app's own
+  directory nor in another app's, and goes through no symlinked directory,
+  which git never reports a changed file through), `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides

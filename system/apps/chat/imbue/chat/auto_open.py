@@ -46,8 +46,8 @@ AUTO_OPEN_LABELS: Final[tuple[str, ...]] = ("auto_open", "assist")
 # The shell has no hook for a client arriving, so a window opened later is found by asking.
 FLUSH_INTERVAL_SECONDS: Final[float] = 3.0
 
-# Beside the chat app's other per-workspace state (see ``message_stamps``).
-DEFAULT_LEDGER_PATH: Final[Path] = Path("data/.apps/chat/auto_opened_chats.json")
+# Beside the chat app's other per-workspace state (see ``message_stamps``), in its data directory.
+LEDGER_FILENAME: Final[str] = "auto_opened_chats.json"
 
 _DELIVERED_KEY: Final = "delivered"
 
