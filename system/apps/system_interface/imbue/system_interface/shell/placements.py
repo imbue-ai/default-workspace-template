@@ -50,7 +50,7 @@ class StoredDesktopLayout(FrozenModel):
 
 
 @pure
-def empty_desktop_layout() -> DesktopLayout:
+def _empty_desktop_layout() -> DesktopLayout:
     return DesktopLayout(version=PLACEMENTS_FILE_VERSION, updated_at=None, placements=())
 
 
@@ -95,7 +95,7 @@ class PlacementStore(MutableModel):
         with STATE_FILES_LOCK:
             stored = self._read_file(self._path(desktop_id, client_id))
         if stored is None:
-            return empty_desktop_layout()
+            return _empty_desktop_layout()
         return drop_stale_placements(stored, live_window_ids)
 
     def _write_unlocked(self, desktop_id: str, client_id: str, layout: DesktopLayout, now: datetime) -> DesktopLayout:
@@ -115,7 +115,7 @@ class PlacementStore(MutableModel):
         changed, all under the state lock so a browser's save cannot land in between and be overwritten."""
         with STATE_FILES_LOCK:
             stored = self._read_file(self._path(desktop_id, client_id))
-            current = drop_stale_placements(stored, live_window_ids) if stored is not None else empty_desktop_layout()
+            current = drop_stale_placements(stored, live_window_ids) if stored is not None else _empty_desktop_layout()
             edited = transform(current)
             if stored is not None and is_same_layout(stored, edited):
                 return PlacementsEditOutcome(layout=stored, is_written=False)

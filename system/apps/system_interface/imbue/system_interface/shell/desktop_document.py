@@ -212,12 +212,12 @@ def reading_order_cell(index: int, columns: int) -> GridCell:
 
 
 @pure
-def clamp_cell_into_grid(cell: GridCell, dimensions: GridDimensions) -> GridCell:
+def _clamp_cell_into_grid(cell: GridCell, dimensions: GridDimensions) -> GridCell:
     return GridCell(column=min(cell.column, dimensions.columns - 1), row=min(cell.row, dimensions.rows - 1))
 
 
 @pure
-def is_cell_inside_grid(cell: GridCell, dimensions: GridDimensions) -> bool:
+def _is_cell_inside_grid(cell: GridCell, dimensions: GridDimensions) -> bool:
     return cell.column < dimensions.columns and cell.row < dimensions.rows
 
 
@@ -249,7 +249,7 @@ def nearest_free_cell(
     unbounded below and to the right, so a free cell always exists within a few rings of the target.
     """
     if dimensions is not None:
-        clamped = clamp_cell_into_grid(target, dimensions)
+        clamped = _clamp_cell_into_grid(target, dimensions)
         free = [
             GridCell(column=column, row=row)
             for column in range(dimensions.columns)
@@ -281,7 +281,7 @@ def nearest_free_cell(
 
 
 @pure
-def first_free_cell_in_reading_order(occupied: AbstractSet[GridCell], columns: int) -> GridCell:
+def _first_free_cell_in_reading_order(occupied: AbstractSet[GridCell], columns: int) -> GridCell:
     index = 0
     while reading_order_cell(index, columns) in occupied:
         index += 1
@@ -295,7 +295,7 @@ def place_shortcuts(shortcuts: Sequence[DesktopShortcut], dimensions: GridDimens
     claimed: set[GridCell] = set()
     placed_by_index: dict[int, GridCell] = {}
     for index, shortcut in enumerate(shortcuts):
-        if is_cell_inside_grid(shortcut.cell, dimensions) and shortcut.cell not in claimed:
+        if _is_cell_inside_grid(shortcut.cell, dimensions) and shortcut.cell not in claimed:
             claimed.add(shortcut.cell)
             placed_by_index[index] = shortcut.cell
     for index, shortcut in enumerate(shortcuts):
@@ -378,19 +378,19 @@ def _is_same_target(shortcut: DesktopShortcut, app: AppName, launch: LaunchPathI
 
 
 @pure
-def find_shortcut(desktop: Desktop, app: AppName, launch: LaunchPathId) -> DesktopShortcut | None:
+def _find_shortcut(desktop: Desktop, app: AppName, launch: LaunchPathId) -> DesktopShortcut | None:
     return next((shortcut for shortcut in desktop.shortcuts if _is_same_target(shortcut, app, launch)), None)
 
 
 @pure
-def occupied_cells(shortcuts: Sequence[DesktopShortcut]) -> set[GridCell]:
+def _occupied_cells(shortcuts: Sequence[DesktopShortcut]) -> set[GridCell]:
     return {shortcut.cell for shortcut in shortcuts}
 
 
 @pure
 def with_shortcut(desktop: Desktop, shortcut: DesktopShortcut) -> Desktop:
     """The desktop with the shortcut, replacing the entry for the same (app, launch) in place or appending it."""
-    existing = find_shortcut(desktop, shortcut.target.app, shortcut.target.launch)
+    existing = _find_shortcut(desktop, shortcut.target.app, shortcut.target.launch)
     if existing is None:
         shortcuts = (*desktop.shortcuts, shortcut)
     else:
@@ -411,14 +411,14 @@ def without_shortcut(desktop: Desktop, app: AppName, launch: LaunchPathId) -> De
 @pure
 def with_shortcut_moved(desktop: Desktop, app: AppName, launch: LaunchPathId, cell: GridCell) -> Desktop:
     """The desktop with the shortcut in ``cell``; a shortcut already there moves to the nearest free cell."""
-    moved = find_shortcut(desktop, app, launch)
+    moved = _find_shortcut(desktop, app, launch)
     if moved is None:
         return desktop
     occupant = next(
         (shortcut for shortcut in desktop.shortcuts if shortcut.cell == cell and shortcut is not moved), None
     )
     others = tuple(shortcut for shortcut in desktop.shortcuts if shortcut is not moved and shortcut is not occupant)
-    displaced_cell = nearest_free_cell(cell, occupied_cells(others) | {cell}, None) if occupant is not None else None
+    displaced_cell = nearest_free_cell(cell, _occupied_cells(others) | {cell}, None) if occupant is not None else None
     shortcuts: list[DesktopShortcut] = []
     for shortcut in desktop.shortcuts:
         if shortcut is moved:
@@ -433,7 +433,7 @@ def with_shortcut_moved(desktop: Desktop, app: AppName, launch: LaunchPathId, ce
 @pure
 def next_shortcut_cell(desktop: Desktop) -> GridCell:
     """Where a shortcut added with no cell goes: the first free cell in reading order over the seeding grid."""
-    return first_free_cell_in_reading_order(occupied_cells(desktop.shortcuts), SEED_GRID_COLUMNS)
+    return _first_free_cell_in_reading_order(_occupied_cells(desktop.shortcuts), SEED_GRID_COLUMNS)
 
 
 @pure

@@ -42,7 +42,7 @@ class WallpaperListing(FrozenModel):
 
 
 @pure
-def wallpaper_url(wallpaper: Wallpaper) -> str:
+def _wallpaper_url(wallpaper: Wallpaper) -> str:
     return f"{WALLPAPER_ROUTE_PREFIX}/{wallpaper.kind.value}/{wallpaper.name}"
 
 
@@ -71,7 +71,7 @@ def _list_kind(kind: WallpaperKind, directories: WallpaperDirectories) -> list[W
             logger.debug("Skipped a wallpaper file with an unusable name at {}: {}", path, e)
             continue
         wallpaper = Wallpaper(kind=kind, name=name)
-        listings.append(WallpaperListing(kind=kind, name=name, url=wallpaper_url(wallpaper)))
+        listings.append(WallpaperListing(kind=kind, name=name, url=_wallpaper_url(wallpaper)))
     return listings
 
 
