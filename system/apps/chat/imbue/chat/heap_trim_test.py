@@ -49,6 +49,26 @@ def test_stop_is_idempotent_and_safe_without_start() -> None:
     trimmer.stop()
 
 
+def test_a_trimmer_started_again_after_a_stop_really_trims() -> None:
+    """A restarted trimmer must trim, not spawn a thread that exits on its first wait
+    because the previous stop's flag is still set."""
+    calls: list[int] = []
+    trimmer = HeapTrimmer.build(trim=lambda: calls.append(1) or 0, interval_seconds=0.01)
+
+    trimmer.start()
+    assert poll_until(lambda: len(calls) >= 1, timeout=5.0, poll_interval=0.01)
+    trimmer.stop()
+
+    after_stop = len(calls)
+    trimmer.start()
+    try:
+        assert poll_until(lambda: len(calls) > after_stop, timeout=5.0, poll_interval=0.01), (
+            "a trimmer restarted after a stop never trimmed again"
+        )
+    finally:
+        trimmer.stop()
+
+
 def test_the_real_malloc_trim_is_callable_where_the_platform_has_it() -> None:
     """The resolved symbol is the actual allocator call the app relies on, so exercise
     it rather than trusting the lookup."""
