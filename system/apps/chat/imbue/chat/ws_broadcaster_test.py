@@ -67,7 +67,7 @@ def test_broadcast_chats_updated() -> None:
     agent = AgentStateItem(id="a1", name="agent-1", state="RUNNING", labels={}, work_dir=None)
     own_chat = _ResolvedChat(chat_id=ChatId("a1"), member_agent_ids=("a1",), active_agent_id="a1", record=None)
     snapshot = chat_snapshot_for_active_agent(
-        agent, own_chat, is_permission_pending=False, shoulder_tap_available=False
+        agent, own_chat, is_permission_pending=False, shoulder_tap_available=False, last_messaged_at=None
     )
     broadcaster.broadcast_chats_updated([snapshot])
 
