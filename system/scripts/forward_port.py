@@ -66,6 +66,7 @@ import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -147,6 +148,8 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 _MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
 _MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
+# A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
+_TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
 
 # The registry keys a manifest owns. A manifest registration rewrites every one
 # of them (absent in the manifest means absent on the row), so a stale value
@@ -532,43 +535,37 @@ def _read_manifest(
             copied_shortcut["launch"] = launch
         fields["default_shortcut"] = copied_shortcut
 
-    launch_paths = raw.get("launch_paths")
-    if launch_paths is not None:
-        if not isinstance(launch_paths, list):
-            return (
-                {},
-                None,
-                f"manifest {str(path)!r}: launch_paths must be an array of tables",
-            )
-        copied_launch_paths: list[dict[str, object]] = []
-        for launch_path in launch_paths:
-            copied_launch_path, launch_path_error = _copied_launch_path(launch_path, path)
-            if copied_launch_path is None:
-                return {}, None, launch_path_error
-            copied_launch_paths.append(copied_launch_path)
-        fields["launch_paths"] = copied_launch_paths
-
-    actions = raw.get("actions")
-    if actions is not None:
-        if not isinstance(actions, list):
-            return (
-                {},
-                None,
-                f"manifest {str(path)!r}: actions must be an array of tables",
-            )
-        copied_actions: list[dict[str, object]] = []
-        for action in actions:
-            copied_action, action_error = _copied_action(action, path)
-            if copied_action is None:
-                return {}, None, action_error
-            copied_actions.append(copied_action)
-        fields["actions"] = copied_actions
+    for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
+        entries = raw.get(key)
+        if entries is not None:
+            copied_entries, entries_error = _copied_tables(entries, path, key, copy_entry)
+            if copied_entries is None:
+                return {}, None, entries_error
+            fields[key] = copied_entries
 
     icon = raw.get("icon")
     if icon is not None and not isinstance(icon, str):
         return {}, None, f"manifest {str(path)!r}: icon must be a string path"
     icon_path = path.parent / icon if icon is not None else None
     return fields, icon_path, None
+
+
+def _copied_tables(
+    entries: Any, path: Path, key: str, copy_entry: _TableCopier
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    """A manifest array of tables (``actions`` or ``launch_paths``) as the registry row
+    carries it, each entry copied by ``copy_entry``. Returns ``(copied, None)``, or
+    ``(None, error)`` when the value is not an array or an entry is not shaped as the
+    manifest requires."""
+    if not isinstance(entries, list):
+        return None, f"manifest {str(path)!r}: {key} must be an array of tables"
+    copied: list[dict[str, object]] = []
+    for entry in entries:
+        copied_entry, entry_error = copy_entry(entry, path)
+        if copied_entry is None:
+            return None, entry_error
+        copied.append(copied_entry)
+    return copied, None
 
 
 def _copied_action(
@@ -643,6 +640,13 @@ def _copied_param_names(
             f"manifest {str(path)!r}: every {owner} param needs a string 'name'",
         )
     return [param["name"] for param in params], None
+
+
+# The manifest arrays of tables copied onto the row, each with the copier for its entries.
+_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
+    ("actions", _copied_action),
+    ("launch_paths", _copied_launch_path),
+)
 
 
 def _upsert(
