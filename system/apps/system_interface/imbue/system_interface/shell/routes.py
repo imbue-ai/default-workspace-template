@@ -529,7 +529,7 @@ def inventory_document() -> ResponseReturnValue:
         shell.broadcaster.connected_client_ids(),
         docked_by_client_id,
     )
-    return jsonify({**document, **desktop_inventory_fields(shell, document["clients"])})
+    return jsonify({**document, **desktop_inventory_fields(shell, clients, document["clients"])})
 
 
 # The agent-facing op route (contracts.md section 12)
