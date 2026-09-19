@@ -169,15 +169,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
         m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
         opts.badge !== undefined
-          ? m(
-              "span",
-              {
-                class:
-                  "account-row-badge ml-1 shrink-0 rounded-full bg-accent-light px-1.5 " +
-                  "text-(length:--font-size-helper) font-medium text-accent",
-              },
-              opts.badge,
-            )
+          ? m("span", { class: `account-row-badge ${css.NEXT_BADGE} ml-1 shrink-0 font-medium` }, opts.badge)
           : null,
       ],
     ),

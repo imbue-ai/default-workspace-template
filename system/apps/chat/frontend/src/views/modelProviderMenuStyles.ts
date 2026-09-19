@@ -43,6 +43,12 @@ export const TRIGGER =
 /** The separators between the chip's three parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
 
+/** The "next" pill: the mark on whatever states the account this chat's next message switches
+ *  to. It is drawn in two places -- on the chip, which reads as the target while the switch is
+ *  armed, and on that account's row in the provider list -- and the two are one mark, so they
+ *  share one recipe. Each site adds its own spacing and weight for the text it sits beside. */
+export const NEXT_BADGE = "rounded-full bg-accent-light px-1.5 text-(length:--font-size-helper) text-accent";
+
 // The rows that are not plain rows
 /** A row that holds a control rather than a value: the same height and padding as the shared
  *  row, without its highlight -- a slider is not something one picks. */
