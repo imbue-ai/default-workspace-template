@@ -1691,10 +1691,15 @@ def _run_rollback(
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_RESTORING)
     failed = restore_snapshots(record.snapshots)
     if failed:
-        sys.stderr.write(
-            f"warning: could not restore {', '.join(sorted(failed))}; the restored tree serves "
-            "whatever the program rebuilds from it.\n"
+        reason = (
+            f"The source was reverted, but recovery could not restore: {', '.join(sorted(failed))}. "
+            "The previous version's copies are still kept. Ask your agent to repair "
+            "the incomplete restoration before restarting the workspace."
         )
+        write_emergency(repo_root, reason, record.driven_by, now)
+        _settle_rollback_record(record, repo_root, reason)
+        sys.stderr.write(f"rollback incomplete: {reason}\n")
+        return 3
     changed = git_out(
         runner, repo_root, ["diff", "--name-only", record.rollback_to, record.merge_sha]
     ).splitlines()

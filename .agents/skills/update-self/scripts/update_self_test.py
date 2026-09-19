@@ -7154,6 +7154,45 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     assert _rollback_point(apply_repo) is None
 
 
+@pytest.mark.parametrize(
+    "diff",
+    [_CHAT_FRONTEND_DIFF, _CHAT_FRONTEND_DIFF + "M\tsystem/scripts/bootstrap.sh\n"],
+)
+def test_a_failed_snapshot_restore_keeps_recovery_copies_even_when_health_would_pass(
+    apply_repo: Path, diff: str
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(_apply_runner(diff, apply_repo), apply_repo)
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    failed_copy = record.snapshots[0]
+    # A real filesystem failure: the destination stopped being a directory.
+    # The kept copy is intact and still available for manual repair.
+    shutil.rmtree(failed_copy.source)
+    Path(failed_copy.source).write_text("obstructed recovery destination")
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo, _FakeHttp(_all_healthy)) == 3
+
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.outcome is not None
+    assert f"could not restore: {failed_copy.name}" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert settled.progress is None
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert not runner.ran("supervisorctl", "restart")
+    assert not runner.ran(*_RESTART)
+    assert not _refreshed_the_view(runner, apply_repo)
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+
+
 def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
     apply_repo: Path,
 ) -> None:
