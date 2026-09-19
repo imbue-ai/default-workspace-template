@@ -1426,6 +1426,25 @@ def test_a_desktop_op_with_no_client_to_target_is_a_412(client: FlaskClient) -> 
     refused = _desktop_op(client, "open", {"app": "terminal"}, None)
     assert refused.status_code == 412 and "--client" in refused.get_json()["detail"]
     assert _desktop_op(client, "open", {"app": "terminal", "client": "ghost"}, None).status_code == 404
+    # An argument the op itself needs is reported before any client is looked for.
+    assert _desktop_op(client, "load", {}, None).status_code == 400
+
+
+def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:
+    first_queue = _register_desktop_client(app, "c1", "home")
+    second_queue = _register_desktop_client(app, "c2", "home")
+    window_id = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]["id"]
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    # With two clients connected and none named, a whole-app refresh still goes out to both, while a
+    # one-window refresh cannot tell which client's page it means.
+    everywhere = _desktop_op(client, "refresh", {"app": "terminal"}, None)
+    assert everywhere.status_code == 200 and everywhere.get_json()["target_client_id"] is None
+    assert _desktop_op(client, "refresh", {"window": window_id}, None).status_code == 412
+    for client_queue in (first_queue, second_queue):
+        ops = [message for message in drain_messages(client_queue) if message["type"] == "layout_op"]
+        assert [(message["args"], message["target_client_id"]) for message in ops] == [({"app": "terminal"}, None)]
 
 
 @pytest.mark.parametrize(
