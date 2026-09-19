@@ -34,10 +34,12 @@ import {
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { ChatRail } from "./ChatRail";
+import type { ChatRailAttrs } from "./ChatRail";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
+import type { ChatRow } from "./rows";
 import { isNewChatPath, newChatParamsFromSearch, rootPathFor, selectionFromSearch } from "./selection";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -157,7 +159,7 @@ const ChatRoot: m.Component = {
   },
 };
 
-function railAttrs(rows: ReturnType<typeof groupedRows>, isCompact: boolean): m.Attributes {
+function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs {
   return {
     rows,
     selectedChatId,
