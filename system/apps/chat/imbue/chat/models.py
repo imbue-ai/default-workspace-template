@@ -493,7 +493,6 @@ class ChatSnapshot(FrozenModel):
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
-        default=None,
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
     )
 
