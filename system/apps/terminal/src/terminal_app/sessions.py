@@ -507,6 +507,11 @@ class TmuxSessionSource(InstanceSourceInterface):
         self._write_session_id_file(bound)
         return bound
 
+    def remembered_record(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
+        """The store's record of the terminal named ``name``, or None for a session the store never saw."""
+        with self._lock:
+            return self._record_named(name)
+
     def _record_named(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
         return next(
             (record for record in self.store.list_records() if record.name == name), None
