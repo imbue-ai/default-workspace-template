@@ -25,7 +25,7 @@ from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.discovery import write_server_registered_event
-from terminal_app.dispatch import build_session_command
+from terminal_app.dispatch import build_session_command, warn_if_oom_tag_script_is_missing
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.pages import build_pages_blueprint
 from terminal_app.primitives import Workdir
@@ -72,13 +72,17 @@ class TerminalAppArguments(FrozenModel):
 
 
 def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) -> TmuxSessionSource:
+    # The command bakes the directory in, so it is anchored here rather than left to the cwd of
+    # every shell tmux spawns.
+    oom_tag_script = arguments.oom_tag_script.absolute()
+    warn_if_oom_tag_script_is_missing(oom_tag_script)
     return TmuxSessionSource(
         tmux=SubprocessTmux(),
         store=JsonTerminalSessionStore(store_path=arguments.store_path),
         agent_session_prefix=arguments.agent_session_prefix,
         default_workdir=Workdir(os.getcwd()),
         sessions_dir=paths.sessions_dir,
-        session_command=tuple(build_session_command(arguments.oom_tag_script.absolute())),
+        session_command=tuple(build_session_command(oom_tag_script)),
     )
 
 

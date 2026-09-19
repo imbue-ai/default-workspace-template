@@ -24,6 +24,7 @@ from terminal_app.dispatch import (
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
+    warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import TtydStartError
 from terminal_app.wiring import (
@@ -59,12 +60,7 @@ def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
     """Install the dispatch scripts and the web client, register the pty, and return the ttyd command line."""
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     oom_tag_script = arguments.oom_tag_script.absolute()
-    if not oom_tag_script.is_file():
-        # Every session's shell runs through it, so a missing one exits every pane at once.
-        logger.warning(
-            "The memory-shedding tag wrapper {} does not exist; terminal sessions will not start a shell",
-            oom_tag_script,
-        )
+    warn_if_oom_tag_script_is_missing(oom_tag_script)
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
         install_dispatch_scripts(paths, oom_tag_script)
     is_client_installed = install_ttyd_web_client(
