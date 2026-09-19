@@ -3142,14 +3142,20 @@ def test_seeding_recovers_chat_message_recency_from_the_message_stamps(
 
 
 def test_message_stamps_follow_the_chats_they_stamp(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    """A send stamps the chat on disk, and a destroyed chat's stamp goes with it."""
+    """A send stamps the chat on disk and in its snapshot, and a destroyed chat's stamp goes with it."""
     stamps_path = tmp_path / "last_messaged.json"
     chat = _agent_details("chat", labels={"user_created": "true"})
+    chat_id = ChatId(str(chat.id))
     manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
     try:
         manager._handle_observe_event(make_full_agent_state_event([chat]))
-        manager.record_message_sent(ChatId(str(chat.id)))
-        assert set(MessageStampStore(path=stamps_path).read()) == {str(chat.id)}
+        assert [snapshot.last_messaged_at for snapshot in manager.get_chat_snapshots()] == [None]
+        manager.record_message_sent(chat_id)
+        stamps = MessageStampStore(path=stamps_path).read()
+        assert set(stamps) == {str(chat.id)}
+        assert [snapshot.last_messaged_at for snapshot in manager.get_chat_snapshots()] == [stamps[chat_id]]
+        snapshot = manager.get_chat_snapshot(chat_id)
+        assert snapshot is not None and snapshot.last_messaged_at == stamps[chat_id]
         manager.remove_agent(str(chat.id))
         assert MessageStampStore(path=stamps_path).read() == {}
     finally:
