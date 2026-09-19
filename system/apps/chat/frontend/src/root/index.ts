@@ -61,9 +61,21 @@ function selectedTitle(): string {
   return getChatById(selectedChatId)?.title ?? "";
 }
 
+interface ReportedLocation {
+  path: string;
+  title: string;
+}
+
+// The last location told to the shell: every chat list push re-derives it, and only a change goes up.
+let reportedLocation: ReportedLocation | null = null;
+
 function reportLocation(): void {
-  document.title = selectedTitle() || ROOT_TITLE;
-  connection?.location(rootPathFor(selectedChatId), selectedTitle());
+  const path = rootPathFor(selectedChatId);
+  const title = selectedTitle();
+  if (reportedLocation !== null && reportedLocation.path === path && reportedLocation.title === title) return;
+  reportedLocation = { path, title };
+  document.title = title || ROOT_TITLE;
+  connection?.location(path, title);
 }
 
 /** Show ``chatId`` (or nothing): the URL, the frame, the shell's location, and the unread mark follow. */
@@ -176,6 +188,8 @@ function connectRootToShell(): void {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
       pool?.setHandshake(received);
+      // Whatever went up before the shell was listening is told again.
+      reportedLocation = null;
       reportLocation();
       m.redraw();
     },
