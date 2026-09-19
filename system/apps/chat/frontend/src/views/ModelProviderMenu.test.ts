@@ -719,7 +719,7 @@ describe("the combo card", () => {
     expect(document.querySelector(".fast-limit-input")).toBeNull();
   });
 
-  it("holds the fast submenu open while a limit is half typed, and lets it go once it is filed", () => {
+  it("holds the fast submenu open while a limit is half typed, and lets it go once there is none", () => {
     // What hover opened hover dismisses -- except over a number the user is part way through,
     // which a pointer drifting off the menu must not take down with it.
     vi.useFakeTimers();
@@ -740,6 +740,23 @@ describe("the combo card", () => {
     // Filed, so there is nothing left to lose and the drift closes it again.
     limit.dispatchEvent(new Event("change", { bubbles: true }));
     render();
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+
+    // A pick that takes the field away abandons the half-typed number with it. The field's own
+    // blur cannot be counted on here: a press on a button does not move focus on macOS, and an
+    // element removed while focused fires no blur -- so a draft left behind would hold the
+    // submenu open for a field nobody can see.
+    click('[data-menu-row="fast"]');
+    const retyped = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (retyped === null) throw new Error("no turn-limit field under Auto");
+    retyped.value = "12";
+    retyped.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    click('[data-fast-mode="on"]');
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
     leaveSubmenu();
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
