@@ -3,23 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from imbue.system_interface.shell.data_types import WindowPlacement
-from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import WindowId
-from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import placement_record
 
 _WIN_1 = WindowId("win-0000000000000001")
 _WIN_2 = WindowId("win-0000000000000002")
 _LIVE = frozenset({_WIN_1, _WIN_2})
-
-
-def _placement(window_id: WindowId) -> WindowPlacement:
-    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=WindowState.NORMAL, is_minimized=False)
 
 
 def test_a_layout_reads_empty_until_written_and_drops_placements_of_closed_windows(tmp_path: Path) -> None:
@@ -27,7 +21,12 @@ def test_a_layout_reads_empty_until_written_and_drops_placements_of_closed_windo
     empty = store.read_layout("home", "c1", _LIVE)
     assert empty.placements == () and empty.updated_at is None
     saved = store.save_browser_layout(
-        "home", "c1", [_placement(_WIN_1), _placement(WindowId("win-00000000000000ff"))], None, _LIVE, TEST_NOW
+        "home",
+        "c1",
+        [placement_record(_WIN_1), placement_record(WindowId("win-00000000000000ff"))],
+        None,
+        _LIVE,
+        TEST_NOW,
     )
     assert saved is not None and [placement.window_id for placement in saved.placements] == [_WIN_1]
     assert saved.updated_at == TEST_NOW
@@ -37,7 +36,7 @@ def test_a_layout_reads_empty_until_written_and_drops_placements_of_closed_windo
 
 def test_a_browser_save_is_refused_when_stale_and_skipped_when_unchanged(tmp_path: Path) -> None:
     store = PlacementStore(state_directory=tmp_path)
-    first = store.save_browser_layout("home", "c1", [_placement(_WIN_1)], None, _LIVE, TEST_NOW)
+    first = store.save_browser_layout("home", "c1", [placement_record(_WIN_1)], None, _LIVE, TEST_NOW)
     assert first is not None
     with pytest.raises(StalePlacementsSaveError):
         store.save_browser_layout("home", "c1", [], None, _LIVE, TEST_NOW + timedelta(seconds=1))
@@ -47,7 +46,7 @@ def test_a_browser_save_is_refused_when_stale_and_skipped_when_unchanged(tmp_pat
         )
     assert (
         store.save_browser_layout(
-            "home", "c1", [_placement(_WIN_1)], first.updated_at, _LIVE, TEST_NOW + timedelta(seconds=1)
+            "home", "c1", [placement_record(_WIN_1)], first.updated_at, _LIVE, TEST_NOW + timedelta(seconds=1)
         )
         is None
     )

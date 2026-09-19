@@ -56,6 +56,7 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import desktop_with_windows
+from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_registry
@@ -322,18 +323,14 @@ def _layout(*placements: WindowPlacement) -> DesktopLayout:
     return DesktopLayout(version=1, updated_at=None, placements=placements)
 
 
-def _placement(
-    window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL
-) -> WindowPlacement:
-    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
-
-
 def test_windows_without_a_placement_read_as_minimized_at_the_bottom_and_stale_placements_are_dropped() -> None:
     desktop: Desktop = desktop_with_windows(
         window_record(_WIN_1, "chat", "/a"), window_record(_WIN_2, "files", "/b"), window_record(_WIN_3, "chat", "/c")
     )
     layout = _layout(
-        _placement(_WIN_3), _placement(WindowId("win-00000000000000ff")), _placement(_WIN_1, is_minimized=True)
+        placement_record(_WIN_3),
+        placement_record(WindowId("win-00000000000000ff")),
+        placement_record(_WIN_1, is_minimized=True),
     )
     effective = effective_placements(layout, desktop)
     assert [placement.window_id for placement in effective] == [_WIN_2, _WIN_3, _WIN_1]
@@ -345,7 +342,7 @@ def test_windows_without_a_placement_read_as_minimized_at_the_bottom_and_stale_p
 
 
 def test_the_verbs_edit_one_placement_and_the_stack() -> None:
-    layout = _layout(_placement(_WIN_1), _placement(_WIN_2))
+    layout = _layout(placement_record(_WIN_1), placement_record(_WIN_2))
     opened = with_window_placed_on_open(layout, _WIN_3)
     assert [placement.window_id for placement in opened.placements] == [_WIN_1, _WIN_2, _WIN_3]
     assert opened.placements[-1].frame == cascade_frame(2) and opened.placements[-1].is_minimized is False
@@ -365,4 +362,4 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     assert framed.placements[-1].window_id == _WIN_3 and framed.placements[-1].frame.x == 0.2
     # A window with no placement yet gets its default before the verb applies.
     absent = with_window_raised(_layout(), _WIN_1)
-    assert absent.placements == (_placement(_WIN_1),)
+    assert absent.placements == (placement_record(_WIN_1),)
