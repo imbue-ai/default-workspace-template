@@ -1,4 +1,3 @@
-import urllib.parse
 from datetime import datetime, timezone
 
 import pytest
@@ -169,12 +168,8 @@ def test_two_creates_get_distinct_names_and_the_default_workdir(
     second = session_source.create_instance(_NEW, {"workdir": ""})
 
     assert (first.key, second.key) == ("terminal-1", "terminal-2")
+    assert second.url == "/?session=terminal-2&tab={tab}"
     # A create that names no directory starts the shell where the app runs (the source's default).
-    default_directory = urllib.parse.quote(DEFAULT_TEST_WORKDIR, safe="")
-    assert (
-        second.url
-        == "/?session=terminal-2&tab={tab}"
-    )
     assert [call[5] for call in fake_tmux.creates()] == [DEFAULT_TEST_WORKDIR] * 2
 
 
