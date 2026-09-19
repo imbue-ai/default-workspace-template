@@ -747,15 +747,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
         pending !== null
           ? [
               m("span", pendingPick?.label ?? pending.harness_label),
-              m(
-                "span",
-                {
-                  class:
-                    "model-provider-menu-next-badge ml-1.5 rounded-full bg-accent-light px-1.5 " +
-                    "text-(length:--font-size-helper) text-accent",
-                },
-                "next",
-              ),
+              m("span", { class: `model-provider-menu-next-badge ${css.NEXT_BADGE} ml-1.5` }, "next"),
             ]
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
