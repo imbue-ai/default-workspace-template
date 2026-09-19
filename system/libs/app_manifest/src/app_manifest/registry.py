@@ -19,6 +19,8 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import LaunchPathId
+from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
 
 # The registry's location, exactly as system/scripts/forward_port.py and
@@ -35,6 +37,17 @@ class RegistryAction(FrozenModel):
     label: NonEmptyStr = Field(description="The action's user-facing label")
     params: tuple[NonEmptyStr, ...] = Field(
         default=(), description="The names of the create body's documented params, in manifest order"
+    )
+
+
+class RegistryLaunchPath(FrozenModel):
+    """A launch path as copied onto a registry row: the id, the label, the path, and the names of its params."""
+
+    id: LaunchPathId = Field(description="The declared launch path id")
+    label: NonEmptyStr = Field(description="The launch path's user-facing label")
+    path: LaunchPathValue = Field(description="The path under the app origin")
+    params: tuple[NonEmptyStr, ...] = Field(
+        default=(), description="The names of the query parameters the shell may append, in manifest order"
     )
 
 
@@ -58,8 +71,11 @@ class RegistryRow(FrozenModel):
     instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served; absent reads as url")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new project (or desktop) is seeded with")
     actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
+    launch_paths: tuple[RegistryLaunchPath, ...] = Field(
+        default=(), description="The paths the desktop interface opens windows at"
+    )
     launcher_rank: int | None = Field(
         default=None, description="The app's place among the New Tab page's leading tiles; absent reads as none"
     )

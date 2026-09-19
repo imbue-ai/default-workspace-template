@@ -10,7 +10,14 @@ launcher_rank = 40
 
 [default_shortcut]
 action = "new"
+launch = "new"
 mode = "focus"
+
+[[launch_paths]]
+id = "new"
+label = "New Terminal"
+path = "/new"
+params = [{name = "workdir", label = "Working directory", required = false}]
 
 [[actions]]
 id = "new"

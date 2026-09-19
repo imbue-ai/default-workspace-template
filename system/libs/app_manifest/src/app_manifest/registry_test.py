@@ -54,8 +54,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'instances_url = "http://127.0.0.1:8301"\n'
         "critical = false\n"
         'priority = "files"\n'
-        'default_shortcut = {action = "new", mode = "focus"}\n'
+        'default_shortcut = {action = "new", launch = "new", mode = "focus"}\n'
         'actions = [{id = "new", label = "New File Viewer", params = ["path"]}, {id = "recent", label = "Recent"}]\n'
+        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
     )
 
@@ -70,9 +71,17 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.action == "new"
+    assert row.default_shortcut.launch == "new"
     assert [(action.id, action.label, action.params) for action in row.actions] == [
         ("new", "New File Viewer", ("path",)),
         ("recent", "Recent", ()),
+    ]
+    assert [
+        (launch_path.id, launch_path.label, launch_path.path, launch_path.params)
+        for launch_path in row.launch_paths
+    ] == [
+        ("new", "New File Viewer", "/", ("path",)),
+        ("recent", "Recent", "/recent", ()),
     ]
     assert row.launcher_rank == 20
 

@@ -10,7 +10,14 @@ launcher_rank = 20
 
 [default_shortcut]
 action = "new"
+launch = "new"
 mode = "focus"
+
+[[launch_paths]]
+id = "new"
+label = "New File Viewer"
+path = "/"
+params = [{name = "path", label = "Path", required = false}]
 
 [[actions]]
 id = "new"

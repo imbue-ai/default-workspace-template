@@ -8,7 +8,14 @@ launcher_rank = 30
 
 [default_shortcut]
 action = "new"
+launch = "new"
 mode = "focus"
+
+[[launch_paths]]
+id = "new"
+label = "New Browser"
+path = "/new"
+params = [{name = "url", label = "Start page", required = false}]
 
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
 [wiring]

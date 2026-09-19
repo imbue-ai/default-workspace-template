@@ -36,8 +36,9 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
-| `default_shortcut` | table | no | absent | `{action = "<id>", mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. |
+| `default_shortcut` | table | no | absent | `{action = "<id>", launch = "<id>"?, mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. `launch`, optional, is the desktop interface's spelling: a declared launch path id, or `open` when the app declares none. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
+| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`: the paths the desktop interface opens windows at (`docs/system/blueprint/desktop-interface/contracts.md` section 2). `id` follows the action id rule, is unique, and is never `open` (reserved for the synthesized root launch path); `path` is rooted with one slash, carries no query string or fragment, and nothing a URL would escape; `params` is the optional `{name, label, required}` array naming the query parameters the shell may append. Declared beside `actions` until the desktop interface replaces the tabbed shell. |
 | `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `references` | array of tables | no | `[]` | Each `{path, note?}`. `path` is a literal repo-root-relative POSIX file or directory the app owns outside its own folder (no globs, no `.` or `..` segments, no empty segments, no trailing slash, no backslashes, never under `system/vendor/` or `data/`, and never through a symlinked directory, which git does not report diffs through) and is unique within the manifest. `note` is one non-empty line, at most 200 characters, saying why it belongs to the app and which surface it uses. Location rules below. |
 | `scope` | table | no | `{}` | `{exclude = ["<glob>", ...]}`. Each glob is repo-root-relative gitignore syntax (non-empty, not absolute, no `.` or `..` segments, no empty segments, no backslashes, no leading `!` -- negation would re-include a built-in). A glob that covers the app's own directory or one of its references is rejected when the footprint is computed. A hard denylist for the footprint, combined with the built-in excludes `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/dist/**`, `**/.venv/**`. |
@@ -53,10 +54,10 @@ Built-in manifests:
 | App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
 |---|---|---|---|---|---|---|
 | `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
-| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
-| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
+| `chat` | true | app URL | true | `chat` | `{action = "new", launch = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
+| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
+| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
+| `browser` | true | app URL | false | `browser` | `{action = "new", launch = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
 
 Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
@@ -75,8 +76,9 @@ Each `[[apps]]` row:
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
 | `priority` | manifest | Absent reads as `user`. |
-| `default_shortcut` | manifest | Inline table `{action, mode}`. |
+| `default_shortcut` | manifest | Inline table `{action, launch?, mode}`. |
 | `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
+| `launch_paths` | manifest | Array of inline tables `{id, label, path, params?}`; `params` as for `actions`. |
 | `launcher_rank` | manifest | Integer; absent reads as none. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
@@ -272,7 +274,8 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 
 Served by the shell at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`, as an ES module.
 Source: `system/libs/workspace_ui/src/app_contract.ts`, built by the shell's frontend as a separate library entry so the served file has no other imports.
-Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest})` returning `{focused(), location(path), open(address)}`.
+Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate?, capabilities?})` returning `{focused(), location(path, title), open(address), openPath(path, ifPresent)}`.
+The `onNavigate` handler, the `capabilities` declaration, the `title` of a location report, and `openPath` are the desktop interface's additions (`docs/system/blueprint/desktop-interface/contracts.md` section 7); the shell of this model ignores the messages it does not know (`shell:capabilities`, a path-form `shell:open`, the `title` of a location) and never sends `shell:navigate`.
 
 Trust: the shell accepts a message only when `event.source` is the `contentWindow` of an iframe it created and `event.origin` is in the workspace origin family (the same regex the minds chrome uses); the module accepts a message only when `event.source === window.parent`.
 Unknown types are ignored; shipped types never change meaning.
@@ -282,9 +285,11 @@ Unknown types are ignored; shipped types never change meaning.
 | shell to app | `shell:handshake` | `{"clientId", "deviceKind", "viewId", "address", "tabId"}`; sent after every `load` event of the frame, and again whenever the tab or view showing the page changes (a page outlives the pane that showed it) |
 | shell to app | `shell:shown` / `shell:hidden` | `{}` |
 | shell to app | `shell:close-request` | `{}` |
+| shell to app | `shell:navigate` | `{"path"}`; desktop interface only, sent to a page that declared `navigation: true` |
+| app to shell | `shell:capabilities` | `{"navigation"}`; sent once on connect; this model's shell ignores it |
 | app to shell | `shell:focused` | `{}` |
-| app to shell | `shell:location` | `{"path"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route |
-| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory |
+| app to shell | `shell:location` | `{"path", "title"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route; this model's shell ignores `title` |
+| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory. The desktop interface's form, `{"path", "ifPresent"}`, is ignored by this model's shell |
 
 The shell clears the tab's last reported path when it points the frame at a url itself; a page's own navigation, and the report it posts while loading (before the frame's `load` event), leave it standing.
 The shell reloads a docked tab's frame when the instance's listed `url` differs from the tab's last reported path (with `{tab}` substituted), which is what makes an agent's `replace-url` land and a page's own reports inert.
