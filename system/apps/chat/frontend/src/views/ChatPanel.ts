@@ -866,8 +866,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
           // the flip would be one-way. Everything here describes the conversation rather than
           // either rendering of it, which is the same reason it belongs to neither face.
-          // An 8px band under the under-bar, matching the 8px above it: the row is a caption on
-          // the composer and sits evenly in its own band.
+          // An 8px band under the under-bar, matching the 8px above it.
           !hasComposer(chatId)
             ? null
             : m(

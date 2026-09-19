@@ -172,6 +172,3 @@ export const ACCOUNT_PICK =
 /** Raises an action above the pick target's stretched box. */
 export const ACCOUNT_ACTION = "relative";
 export const ACCOUNT_BROKEN_NOTE = "shrink-0 type-helper text-danger";
-
-// The API-key screen's provider picker is the workspace's `Dropdown` (components/dropdown):
-// its trigger, sheet, list and rows are the dropdown's own.

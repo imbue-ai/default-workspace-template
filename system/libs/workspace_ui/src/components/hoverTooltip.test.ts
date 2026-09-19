@@ -64,8 +64,8 @@ describe("placeTooltip above placement", () => {
   });
 
   it("stays above when flipping below would not fit either", () => {
-    // A trigger taller than the viewport: neither side has room, so the bubble keeps its
-    // natural place over the trigger and only the edge clamp applies.
+    // A trigger taller than the viewport: neither side has room, so only the edge clamp
+    // applies.
     const anchor = { left: 400, top: 5, bottom: 795, width: 40 };
     expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "above")).toEqual({ left: 370, top: 6 });
   });

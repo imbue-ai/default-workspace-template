@@ -34,12 +34,11 @@
  *
  * The exceptions are both the same problem: a bubble under the trigger covers
  * the thing the pointer is choosing between. The project rail takes ``right``,
- * because a rail row sits directly above the row it is being compared against.
- * A list of rows whose own controls raise the tooltips -- a menu, a flyout --
- * takes ``above`` for the same reason, one axis over: the row under the pointer
- * is the one being acted on, and the rows below it are what a bubble would
- * cover. ``placeTooltip`` takes an optional ``placement`` for those, defaulting
- * to the shared centered-below behavior everywhere else.
+ * because a rail row sits directly above the row it is being compared against;
+ * a list of rows that raise their own tooltips takes ``above``, because the
+ * rows below the pointer are what a bubble would cover. ``placeTooltip`` takes
+ * an optional ``placement`` for those, defaulting to the shared centered-below
+ * behavior everywhere else.
  */
 
 import type m from "mithril";
@@ -106,9 +105,8 @@ function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport:
 }
 
 /**
- * Where the bubble goes for ``"above"`` placement: the mirror of the default --
- * centered OVER the trigger with the same gap, flipped below when it would
- * otherwise overflow the top (and there is room down there), then clamped.
+ * Where the bubble goes for ``"above"`` placement: the mirror of the default,
+ * centered OVER the trigger and flipped below on a top overflow.
  */
 function placeTooltipAbove(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
   const centered = anchor.left + anchor.width / 2 - bubble.width / 2;

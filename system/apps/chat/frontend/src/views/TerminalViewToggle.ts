@@ -5,11 +5,8 @@
  * setting rather than a place to navigate to -- which is why it is a switch and not a button,
  * and why it sits in the composer's under-bar next to the model.
  *
- * It is the model menu's switch at its `sm` size. Sitting in the under-bar beside a line of
- * helper text, it has to read as that text's equal rather than as the loudest thing down
- * there -- so the label takes the faint role and the switch takes `sm`. The size comes from
- * `SWITCH_SIZES` by name, never from scaling the switch here: a track and its knob's throw
- * only agree when they are handed out together.
+ * It is the model menu's switch at its `sm` size, taken from `SWITCH_SIZES` by name rather than
+ * scaled here: a track and its knob's throw only agree when they are handed out together.
  */
 import m from "mithril";
 

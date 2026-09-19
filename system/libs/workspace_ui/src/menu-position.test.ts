@@ -37,7 +37,6 @@ describe("placeMenu", () => {
   });
 
   it("lets a menu sit flush with an anchor that is itself at the window's left edge", () => {
-    // The rail lives at x=0: its menus hang off it rather than a margin away from it.
     const anchor = { left: 0, right: 40, top: 100, bottom: 120, width: 40 };
     expect(placeMenu(anchor, SIZE, VIEWPORT, "below")).toEqual({ left: 0, top: 124 });
   });
@@ -49,8 +48,8 @@ describe("placeMenu", () => {
   });
 });
 
-/** A menu open near the bottom of a 1280x800 window, which is where the composer puts it.
- *  `rowTop` is the row that opened the submenu; `contentHeight` is a short four-row list. */
+/** A menu open near the bottom of a 1280x800 window. `rowTop` is the row that opened the
+ *  submenu; `contentHeight` is a short four-row list. */
 const BASE = {
   menuLeft: 400,
   menuWidth: 300,
@@ -72,8 +71,6 @@ describe("placeSubmenu", () => {
   });
 
   it("slides up rather than being squeezed by the space below the row", () => {
-    // The menu opens from the composer at the bottom of the panel, so a ten-row catalog opened
-    // from a low row has nothing below it to grow into.
     const tall = placeSubmenu({ ...BASE, rowTop: 700, contentHeight: 368 });
     expect(tall.isSlid).toBe(true);
     // Slid up by exactly enough to stand on the bottom margin, and no shorter for it.
@@ -107,8 +104,7 @@ describe("placeSubmenu", () => {
   });
 
   it("pins to the left margin when the window is narrower than the box itself", () => {
-    // Neither side fits a 300px box in a 200px window; the left margin keeps the first
-    // characters readable.
+    // Neither side fits a 300px box in a 200px window.
     const pinned = placeSubmenu({ ...BASE, viewportWidth: 200, menuLeft: 20 });
     expect(pinned.left).toBe(8);
   });

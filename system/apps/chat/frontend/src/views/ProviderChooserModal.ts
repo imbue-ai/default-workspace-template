@@ -122,8 +122,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       await navigator.clipboard.writeText(value);
       copied = kind;
       copyFailed = false;
-      // Copying the link is taking step 1: the user has the page in hand, so the highlight
-      // moves on to the code.
+      // Copying the link is taking step 1, so the highlight moves on to the code.
       if (kind === "link") activeStep = 2;
     } catch {
       // Insecure context or a denied permission -- reveal the raw value instead, so the
@@ -250,7 +249,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  // --- chooser ---------------------------------------------------------------------------
+  // chooser
 
   /** IntroChooserModal's ChooserRow. */
   function laneRow(candidate: Lane): m.Vnode {
@@ -407,7 +406,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  // --- sign-in bodies --------------------------------------------------------------------
+  // sign-in bodies
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
   function openLinkStep(url: string, label: string, title = "Open the sign-in page"): m.Vnode {
@@ -598,8 +597,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m("p", { class: css.LEAD }, method?.description ?? "Pick the provider, then paste its key."),
       stepBlock(1, false, [
         stepLabel("1", "Pick your provider"),
-        // The workspace's dropdown: a pick and nothing else. It handles its own sheet, Escape
-        // and layering over this modal.
         m(Dropdown<string>, {
           options: current.key_providers.map((candidate) => ({
             value: candidate.provider_id,

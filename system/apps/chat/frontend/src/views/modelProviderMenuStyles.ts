@@ -3,11 +3,7 @@
  *
  * The menu's frame, rows, divider, sheet and submenus are the workspace's `Menu`
  * (`components/menu`), so this menu behaves and dresses like the tab menu and the
- * rail's row menus. What lives here is the part no other menu has: the composer
- * chip that opens it, the effort slider, the model list's search field, the
- * fast-mode rows, and the row geometry that reserves a lane for each of an
- * account row's trailing controls -- plus the switch the composer's under-bar
- * borrows.
+ * rail's row menus. What lives here is the part no other menu has.
  *
  * Every colour, size and elevation below comes from the semantic utility layer,
  * the `type-*` roles and the shadow tokens. Tailwind v4 emits nothing for an
@@ -24,20 +20,17 @@ import { MENU_ROW_FOCUS, MENU_ROW_SLAB } from "@imbue/workspace-ui/src/component
 
 // The menu
 /** The menu and its submenus are one width: a submenu narrower than the menu it slides out of
- *  reads as a mistake at the seam where they meet. The effort slider is a fixed 128px and
- *  needs none of this. */
+ *  reads as a mistake at the seam where they meet. */
 export const MENU_WIDTH = 300;
 
 /** Show ten rows before the model list starts scrolling. Fewer and a long catalog reads as a
- *  keyhole; many more and the submenu is a wall. Derived rather than guessed so it stays true
- *  if the row height changes. */
+ *  keyhole; many more and the submenu is a wall. */
 const SUBMENU_ROW_HEIGHT = 32;
 const SUBMENU_VISIBLE_ROWS = 10;
 /** The submenu card's border and vertical padding, above and below the rows. */
 const SUBMENU_CHROME = 2 * (1 + 4);
 /** `SEARCH_INPUT_EXTRA`'s `h-8` plus `SEARCH_WRAP`'s `mb-1.5` under it. */
 const SEARCH_FIELD_HEIGHT = 32 + 6;
-/** Ten rows, plus the search field standing over them, plus the box's own chrome. */
 export const MODEL_SUBMENU_MAX_HEIGHT =
   SUBMENU_CHROME + SUBMENU_VISIBLE_ROWS * SUBMENU_ROW_HEIGHT + SEARCH_FIELD_HEIGHT;
 
@@ -45,13 +38,12 @@ export const MODEL_SUBMENU_MAX_HEIGHT =
 export const TRIGGER =
   "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
-/** The separators between the chip's three parts, a step quieter than the values. */
+/** The separators between the chip's parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
 
 /** The "next" pill: the mark on whatever states the account this chat's next message switches
- *  to. It is drawn in two places -- on the chip, which reads as the target while the switch is
- *  armed, and on that account's row in the provider list -- and the two are one mark, so they
- *  share one recipe. Each site adds its own spacing and weight for the text it sits beside. */
+ *  to. One recipe wherever it is drawn, since it is one mark; each site adds its own spacing
+ *  and weight for the text it sits beside. */
 export const NEXT_BADGE = "rounded-full bg-accent-light px-1.5 text-(length:--font-size-helper) text-accent";
 
 // The rows that are not plain rows
@@ -73,23 +65,18 @@ export const EFFORT_VALUE = "type-helper text-primary";
 /** Wraps the track so the level dots can be positioned over it; a bare slider gives no clue
  *  where the levels are. */
 export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
-/** Inset by half the thumb's width on each side.
- *
- *  A range input's thumb CENTER travels from `thumbWidth/2` to `width - thumbWidth/2`, never to
- *  the track's actual edges -- so ticks spread across the full width put the first and last one
- *  6px outside anywhere the ball can reach, and the ball sits off its own mark at both ends.
- *  Spanning the thumb's real travel instead makes every tick a position the ball lands on. */
+/** Inset by half the thumb's width on each side, so the ticks span the thumb's real travel and
+ *  every one of them is a position the ball lands on: a range input's thumb CENTER travels from
+ *  `thumbWidth/2` to `width - thumbWidth/2`, never to the track's actual edges. */
 export const SLIDER_TICKS = "pointer-events-none absolute inset-x-1.5 top-1/2 z-10";
 /** A dot at each level, sitting ON the track (hence the container's `z-10`) rather than behind
  *  it: a 2px mark behind a 6px track is not a faint dot, it is no dot at all.
  *
  *  Placed by its CENTRE -- `left` at the level's own fraction of the thumb's travel, pulled back
- *  half its own width -- rather than by laying the dots out with `justify-between`, which spaces
- *  their BOXES and so leaves the first and last centres a pixel inside the stops they mark. At
- *  2px wide that pixel is half the dot.
+ *  half its own width -- since laying the dots out with `justify-between` would space their
+ *  BOXES, and at 2px wide the difference is half the dot.
  *
- *  The dot under the thumb is not drawn at all (see `effortRow`): the ball is the mark for the
- *  level it is parked on, and a dot showing through it reads as a second, smaller mark. */
+ *  The dot under the thumb is not drawn at all; see `effortRow`. */
 const SLIDER_TICK_SHAPE = "absolute top-0 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full";
 /** A dot below the thumb, over the filled part of the track: the surface colour, since what it
  *  is drawn on is the green rather than the track. */
@@ -112,11 +99,7 @@ export const SLIDER =
  *
  *  Each row is arithmetic: the knob is the track's height less 2px of inset top and bottom,
  *  and the on-position is `width - inset - knob`, which leaves the knob the same 2px from
- *  either end.
- *
- *  Both switches in the chat are `sm`: the composer's under-bar "Source view", beside a line of
- *  helper text, and the fast submenu's default row, in a column of settings. `md` is the
- *  full-size step. */
+ *  either end. */
 const SWITCH_SIZES = {
   md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
   sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
@@ -163,9 +146,8 @@ export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z
 /** Room for the magnifier, and the dense-chrome row size the rest of the submenu sits at. */
 export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
 /** The list under the search field, the part of the submenu that scrolls. A slim, always-visible
- *  track: the list is anchored at its base and grows upward, so its top edge is not somewhere
- *  the eye naturally checks for "more", and an overlay scrollbar that only appears mid-scroll
- *  says nothing until it is too late (the track's own rules are in style.css). */
+ *  track, because an overlay scrollbar that only appears mid-scroll says nothing about there
+ *  being more until it is too late (the track's own rules are in style.css). */
 export const SUBMENU_SCROLL = "model-submenu-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain";
 
 /** The shared row shape for the rows this menu draws itself: the menu's own slab and focus
@@ -175,10 +157,9 @@ const SUBMENU_ROW_SHAPE = `flex h-8 items-center gap-1.5 ${MENU_ROW_SLAB} text-l
 /** An ACCOUNT row reserves its right edge for the star, the rename pencil and the bin, which are
  *  positioned against the row's WRAPPER rather than the row, so they stay put while the
  *  highlight insets around them, and the provider name never reflows when they appear. 80px is
- *  the outermost of the three at its far edge (`right-15` plus its own 20px), so the reserve
- *  says exactly what is in the row and not a pixel more. Model rows do not reserve it: they
- *  carry only the tick, and the reserve would truncate every model name for controls never
- *  drawn on them. */
+ *  the outermost of the three at its far edge (`right-15` plus its own 20px). Model rows carry
+ *  only the tick and reserve nothing, or the reserve would truncate every model name for
+ *  controls never drawn on them. */
 const ACCOUNT_ROW_BASE = `${SUBMENU_ROW_SHAPE} pr-20`;
 export const SUBMENU_ROW = `${SUBMENU_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const SUBMENU_ROW_SELECTED = `${SUBMENU_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
@@ -192,18 +173,16 @@ export const SUBMENU_ROW_NAME = "truncate";
 export const SUBMENU_ROW_SUB = "type-helper text-faint";
 /** The MODEL row's tick: the last thing in the row, pushed out by `ml-auto` and so landing on
  *  the row's own `px-2` padding edge -- which is where the account rows' pinned tick sits too,
- *  13px in from the submenu's edge, so the two lists' ticks share one line. Both ticks stand in
- *  the same 20x20 box the row's control buttons do, centred in it: a bare 13px glyph and a 13px
- *  glyph centred in a 20px button do not share a centre line even when their boxes end on the
- *  same pixel, since the button's padding puts its glyph 3.5px further in. */
+ *  13px in from the submenu's edge, so the two lists' ticks share one line. Both ticks stand
+ *  centred in the same 20x20 box the row's control buttons do, so every mark at a row's end
+ *  shares a centre line however it is drawn. */
 export const SUBMENU_CHECK = "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent";
 /** The same tick on a row that also carries controls: pinned to the row's right edge as a
  *  SIBLING of the button, since buttons cannot nest.
  *
- *  It stands down while the row is hovered. The three controls want the row's end -- a control
- *  group that stops short of the edge to leave a mark room reads as misaligned -- and the tick
- *  is the one thing there that can afford to go: what it says is still said by the row's own
- *  selected fill, and it comes straight back when the pointer leaves. */
+ *  It stands down while the row is hovered, so the controls can end flush with the row: what it
+ *  says is still said by the row's own selected fill, and it comes straight back when the
+ *  pointer leaves. */
 export const SUBMENU_CHECK_PINNED =
   "pointer-events-none absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center " +
   "justify-center text-accent group-hover/conn:hidden";
@@ -212,10 +191,10 @@ export const SUBMENU_EMPTY = "type-helper text-faint px-3 py-2";
 export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-fill-hover cursor-pointer`;
 
 // The fast-mode submenu
-/** A fast-mode row is the only two-line row in these menus: what separates the modes is not
- *  their names but what each one does, and that line cannot ride the row's own. Hence the shared
- *  slab and focus ring with padding in place of the fixed height. Keep each line short enough to
- *  hold at `MENU_WIDTH`, so the rows stay one height.
+/** A fast-mode row runs to two lines: what separates the modes is not their names but what each
+ *  one does, and that line cannot ride the row's own. Hence the shared slab and focus ring with
+ *  padding in place of the fixed height. Keep each line short enough to hold at `MENU_WIDTH`, so
+ *  the rows stay one height.
  *
  *  No width of its own: the slab carries one, and a second beside it would put this row's
  *  trailing tick in a different lane from every other row's. */
@@ -226,9 +205,8 @@ export const FAST_ROW_SELECTED = `${FAST_ROW_SHAPE} bg-fill-active text-primary 
  *  widening it. */
 export const FAST_ROW_TEXT = "flex min-w-0 flex-col";
 export const FAST_ROW_DETAIL = "type-helper text-faint";
-/** The turn-limit field's row: the same height and padding as a menu row, no highlight -- a
- *  number you type is not something you pick. `whitespace-nowrap` because the words either side
- *  of the field are one sentence, and a menu row is one line. */
+/** The turn-limit field's row. `whitespace-nowrap` because the words either side of the field
+ *  are one sentence, and a menu row is one line. */
 export const FAST_LIMIT_ROW = `fast-mode-limit ${ROW_STATIC} whitespace-nowrap text-secondary`;
 /** The field's box. The width lives HERE rather than in the field's own `extra`, because the
  *  shared input recipe is already `w-full`; a box the field fills is the caller's either way. */
@@ -249,8 +227,7 @@ export const FAST_DEFAULT_ROW = `fast-mode-default ${ROW_STATIC}`;
 
 /** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
  *  row's reserved right padding. It takes the row's LAST lane, the one the tick occupies at
- *  rest -- the tick hides for the hover, so the three controls end flush with the row's end
- *  rather than one slot short of it. */
+ *  rest. */
 export const ROW_TRASH =
   "absolute right-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded text-faint transition-colors hover:text-danger group-hover/conn:inline-flex";
@@ -266,16 +243,13 @@ export const ROW_STAR =
 /** The star of the account new chats open on: visible whether or not the row is hovered, since
  *  it is a fact about the account rather than a control that only matters under a pointer.
  *
- *  Its resting lane depends on whether the row also carries a tick. With one it sits BESIDE the
- *  tick, one lane in, so the row's two marks read as a pair at its end. Without one it takes
- *  the last lane itself: a lone mark stopping a slot short of the row's end reads as
- *  misaligned, not as room held for something that is not there. On hover it steps out to the
- *  control lane it shares with the pencil and the bin either way, which is the only way a group
- *  flush with the row's end can also keep its own order.
+ *  Its resting lane depends on whether the row also carries a tick: BESIDE the tick, one lane
+ *  in, when there is one, and the last lane itself when there is not, so the row's marks always
+ *  end flush with it. On hover it steps out to the control lane it shares with the pencil and
+ *  the bin either way.
  *
- *  `fill-current` rather than the icon's own `filled`, which drops the stroke: a star painted
- *  by its fill alone is a stroke-width smaller all round than the outline beside it. Filling
- *  the outlined glyph keeps one silhouette and changes only what is inside it. */
+ *  `fill-current` rather than the icon's own `filled`, which drops the stroke and so draws a
+ *  star a stroke-width smaller all round than the outline beside it. */
 export function rowStarPinnedClass(hasTick: boolean): string {
   return (
     `absolute ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15 top-1/2 inline-flex ` +

@@ -66,8 +66,8 @@ const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
   fastModeLoads: [] as string[],
   fastModeChoices: [] as [string, string][],
 }));
-// Only the backend-backed half is faked. The words -- `fastModeLabel`, `fastModeDetail` and the
-// mode list -- are the real ones, so what the rows read here is what the menu really says.
+// Only the backend-backed half is faked; the words the rows read are the real ones, so what
+// this asserts on is what the menu really says.
 vi.mock("../models/FastMode", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/FastMode")>()),
   getFastModeState: () => fastModeState.state,
@@ -144,8 +144,8 @@ function click(selector: string): void {
   render();
 }
 
-/** Take the pointer off the open submenu and wait out the menu's leave grace. Fake timers only:
- *  the grace is the shared menu's own constant, so this overshoots it rather than restating it. */
+/** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
+ *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
   const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
   if (submenu === null) throw new Error("no submenu to leave");
@@ -184,9 +184,7 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. Not in
- *  the `beforeEach`: most of the file runs on a model with no fast mode, and the row's absence
- *  there is itself asserted. */
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. */
 function withFastModel(): void {
   const model = { ...OPUS, supports_fast: true };
   catalogState.catalog = catalogOf({ options: [model] });
@@ -436,8 +434,6 @@ describe("the combo card", () => {
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {
-    // A dot below the thumb sits on the fill and a dot above it on the bare track, so one
-    // colour throughout would sink into one of the two.
     const efforts = [
       { level: "low", in_picker: true },
       { level: "medium", in_picker: true },
@@ -649,8 +645,7 @@ describe("the combo card", () => {
   it("states the chat's fast mode on the fast row and picks another from its submenu", () => {
     // The row says which of the three modes the chat is in rather than showing a switch, since
     // auto is neither on nor off; the submenu is where the modes are picked and auto's turn
-    // limit lives, and it STAYS UP on a pick, because picking auto is usually followed by
-    // setting the limit it runs to.
+    // limit lives.
     withFastModel();
     chatSettingsState.settings = {
       fast_mode_default: "auto",
@@ -671,13 +666,11 @@ describe("the combo card", () => {
     if (submenu === null) throw new Error("no fast-mode submenu");
     expect(submenu.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
     expect(submenu.querySelector('[data-fast-mode="on"]')?.getAttribute("aria-checked")).toBe("false");
-    // Auto's own row carries both what auto does and that it has already happened.
     expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain(
       "Fast for the first 3 turns, then standard",
     );
     expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain("(off now)");
 
-    // Pressing the mode the chat is already in chooses nothing again.
     click('[data-fast-mode="auto"]');
     expect(fastModeChoices).toEqual([]);
     click('[data-fast-mode="on"]');
@@ -719,8 +712,6 @@ describe("the combo card", () => {
   });
 
   it("holds the fast submenu open while a limit is half typed, and lets it go once there is none", () => {
-    // What hover opened hover dismisses -- except over a number the user is part way through,
-    // which a pointer drifting off the menu must not take down with it.
     vi.useFakeTimers();
     withFastModel();
     render();
@@ -741,10 +732,8 @@ describe("the combo card", () => {
     leaveSubmenu();
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
 
-    // A pick that takes the field away abandons the half-typed number with it. The field's own
-    // blur cannot be counted on here: a press on a button does not move focus on macOS, and an
-    // element removed while focused fires no blur -- so a draft left behind would hold the
-    // submenu open for a field nobody can see.
+    // A pick that takes the field away abandons the half-typed number with it, without relying
+    // on the field's own blur.
     click('[data-menu-row="fast"]');
     const retyped = document.querySelector<HTMLInputElement>(".fast-limit-input");
     if (retyped === null) throw new Error("no turn-limit field under Auto");

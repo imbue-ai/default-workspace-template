@@ -1,15 +1,12 @@
 /**
- * The workspace's dropdown: a form control that picks ONE value from a list.
- *
- * It looks like a menu -- the same floating card, the same rows -- and it is deliberately not
- * one. Picking an option only ever selects it: no verbs, no side effects, no controls on the
- * rows, no submenus. What it holds is the same shape a `<select>` holds, and its trigger is
- * shaped like the field beside it because that is what it is.
+ * The workspace's dropdown: a form control that picks ONE value from a list. It wears the
+ * menu's floating card and row shape, but picking an option only ever selects it -- no verbs,
+ * no side effects, no controls on the rows, no submenus.
  *
  * It opens on a click and closes on a pick, a press outside, or Escape, behind an invisible
- * sheet like every menu -- so a press that closes it never also lands on the field underneath.
- * It portals to <body> on `--z-popover`, above the modal overlays, so one opened inside a
- * modal paints over it.
+ * sheet so a press that closes it never also lands on the field underneath. It portals to
+ * <body> on `--z-popover`, above the modal overlays, so one opened inside a modal paints over
+ * it.
  *
  * The Tailwind scanner reads utility names from the literals in this file: keep every utility
  * name a contiguous literal.
@@ -25,8 +22,7 @@ import { Portal } from "../portal";
 export interface DropdownOption<V extends string> {
   value: V;
   label: string;
-  /** A quieter qualifier shown beside the label on the trigger once picked -- the env var a
-   *  key is saved under. */
+  /** A quieter qualifier shown beside the label on the trigger once picked. */
   detail?: string;
 }
 
@@ -45,7 +41,7 @@ export const DROPDOWN_PART_ATTR = "data-dropdown-part";
 /** Marks an option by its value. */
 export const DROPDOWN_OPTION_ATTR = "data-dropdown-option";
 
-/** The field-shaped trigger. Sized and framed like a text input (see `inputClass`), since a
+/** The field-shaped trigger. Sized and framed like a text input (see `inputClass`), so a
  *  dropdown and the field beside it read as one form. */
 const TRIGGER_CLASS =
   "flex w-full items-center justify-between gap-2 rounded-md border border-default bg-surface " +
@@ -61,7 +57,7 @@ const CARET_OPEN_CLASS = "rotate-180";
 
 /** The sheet under the open list. `dropdown-sheet` is a bare marker with no CSS attached. */
 const SHEET_CLASS = "dropdown-sheet fixed inset-0 z-(--z-popover) cursor-default";
-/** The list wears the shared floating-card chrome and scrolls past eight or so rows. */
+/** The list wears the shared floating-card chrome, and scrolls once it outgrows its cap. */
 const LIST_CLASS = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
 /** The shared menu row shape -- the menu's own slab and focus ring -- minus its hover: the
  *  picked row keeps its steady accent fill, so only the idle variant hovers. */
@@ -191,8 +187,8 @@ export function Dropdown<V extends string>(): m.Component<DropdownAttrs<V>> {
                 m("div", {
                   class: SHEET_CLASS,
                   [DROPDOWN_PART_ATTR]: "sheet",
-                  // Mouse DOWN, not click: a click fires wherever the press ENDED, and selecting
-                  // text in the list and releasing past its edge is not a dismissal.
+                  // Mouse DOWN, not click: a click fires wherever the press ENDED, and a press
+                  // released past the list's edge is not a dismissal.
                   onmousedown: (event: MouseEvent) => {
                     event.preventDefault();
                     event.stopPropagation();

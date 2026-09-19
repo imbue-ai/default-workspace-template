@@ -90,27 +90,23 @@ export async function updateFastModeState(chatId: string, next: ChatFastModeStat
   }
 }
 
-/** What each mode is called, everywhere one is named. Keyed by the mode, so every mode has a
- *  name by construction, and written in the order the chooser offers them in. */
+/** What each mode is called, everywhere one is named. */
 export const FAST_MODE_LABELS: Readonly<Record<FastModeMode, string>> = {
   off: "Off",
   auto: "Auto",
   on: "On",
 };
 
-/** The modes, in the order the chooser offers them. Read off the table above, which the type
- *  keeps complete: a second list of modes would be one nothing checks. */
+/** The modes, in the order the chooser offers them, read off the table above. */
 export const FAST_MODES: readonly FastModeMode[] = Object.keys(FAST_MODE_LABELS) as FastModeMode[];
 
-/** What the model picker's fast row says for a state: the mode's name, and for auto whether it
- *  has already run its fast turns. */
+/** What the model picker's fast row says for a state. */
 export function fastModeLabel(state: ChatFastModeState): string {
   const label = FAST_MODE_LABELS[state.mode];
   return state.mode === "auto" && state.is_switched ? `${label} (off now)` : label;
 }
 
-/** The line under a mode in the chooser; auto's names the limit it runs to. Every mode is
- *  named, so a new one is a compile error here rather than a wrong sentence. */
+/** The line under a mode in the chooser; auto's names the limit it runs to. */
 export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
   switch (mode) {
     case "off":

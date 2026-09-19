@@ -3,15 +3,10 @@
  * (`placeMenu`), where a submenu sits against the row that opened it (`placeSubmenu`), and the
  * wedge a pointer on its way to that submenu is allowed to cross (`isInSafeTriangle`).
  *
- * A MENU hangs off its anchor -- under it, over it, or beside it -- and flips to the opposite
- * side when it would overflow the window and there is room on the other one, then clamps
- * `MENU_MARGIN` from the edges.
- *
- * A SUBMENU's first row lines up with the row that opened it, so the row you pointed at and
- * the list it produced read as one line continuing sideways. When a long list level with a
- * low row would run off the screen, the submenu SLIDES UP by exactly as much as it takes to
- * fit, keeping its height. Only a list too tall for the window at all is capped, and then it
- * scrolls.
+ * A SUBMENU's first row lines up with the row that opened it, so the two read as one line
+ * continuing sideways. When a long list opened from a low row would run off the screen, the
+ * submenu SLIDES UP by exactly as much as it takes to fit, keeping its height. Only a list too
+ * tall for the window at all is capped, and then it scrolls.
  *
  * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
  */
@@ -44,14 +39,12 @@ export type MenuAlign = "start" | "end";
 
 /** Gap kept between a menu and each window edge. */
 export const MENU_MARGIN = 6;
-/** Gap between a menu and the anchor it hangs off. One value for every menu, so a menu under a
- *  button and a menu beside a row sit the same distance from what opened them. */
+/** Gap between a menu and the anchor it hangs off. */
 export const MENU_GAP = 4;
 
 /**
- * Where a menu goes against its anchor. Prefers the asked-for side; gives way only when that
- * side has no room and the other one does, so a caller's choice holds wherever it can and the
- * fallback is the far side rather than a box half off-screen.
+ * Where a menu goes against its anchor. Prefers the asked-for side, and gives way only when
+ * that side has no room and the other one does.
  *
  * The left clamp allows a menu to sit closer than `MENU_MARGIN` to the window's left edge when
  * its ANCHOR is closer still -- the project rail lives at x=0, and its menus should hang off
@@ -121,8 +114,8 @@ export interface SubmenuPlacement {
   /** A cap, not a height: the content decides, up to this. */
   maxHeight: number;
   side: "trailing" | "leading";
-  /** Whether the alignment had to give way to fit the box on screen. Nothing positions off
-   *  this; it is here so a test can say which of the two rules it is exercising. */
+  /** Whether the alignment had to give way to fit the box on screen. Reported for tests;
+   *  nothing positions off it. */
   isSlid: boolean;
 }
 
@@ -144,16 +137,14 @@ export interface SafeTriangleBase {
  * The safe triangle: is `point` inside the wedge between `apex` and the open submenu's near
  * edge? A pointer travelling diagonally to the submenu crosses the menu's OTHER rows on the
  * way; while it is inside the wedge those rows do not take the hover. The apex is the last
- * point the pointer occupied on the row that opened the submenu, the base is the submenu's
- * near edge: every path between the two stays inside, and a pointer heading anywhere else
- * leaves it almost at once. Pure, like `placeSubmenu`: the caller measures.
+ * point the pointer occupied on the row that opened the submenu, so every path from there to
+ * the submenu stays inside and a pointer heading anywhere else leaves at once.
  */
 export function isInSafeTriangle(point: MenuPoint, apex: MenuPoint, base: SafeTriangleBase): boolean {
   const vertices: readonly MenuPoint[] = [apex, { x: base.edgeX, y: base.top }, { x: base.edgeX, y: base.bottom }];
   // Inside iff `point` sits on the same side of all three edges, walked in order -- so the
-  // cross products never disagree in sign. A degenerate triangle (an apex already on the
-  // edge, or a submenu of no height) contains only its own line, which reads as "not
-  // travelling" and simply leaves the rows unprotected.
+  // cross products never disagree in sign. A degenerate triangle (an apex already on the edge,
+  // or a submenu of no height) contains only its own line, and so protects nothing.
   let anyPositive = false;
   let anyNegative = false;
   for (let index = 0; index < vertices.length; index++) {
@@ -173,7 +164,7 @@ export function placeSubmenu(input: SubmenuPlacementInput): SubmenuPlacement {
   const trailing = menuLeft + menuWidth - overlap;
   const leading = menuLeft + overlap - submenuWidth;
   // Prefer the trailing side; flip only when the box would not fit there but would fit on the
-  // other. A submenu half off-screen is worse than one on the unexpected side.
+  // other.
   const fitsTrailing = trailing + submenuWidth <= viewportWidth - margin;
   const side: "trailing" | "leading" = fitsTrailing || leading < margin ? "trailing" : "leading";
   const wanted = side === "trailing" ? trailing : leading;
@@ -188,8 +179,7 @@ export function placeSubmenu(input: SubmenuPlacementInput): SubmenuPlacement {
   const height = Math.min(contentHeight, cap);
   // Aligned: the box sits `submenuPadding` above the row, which puts its first row ON the row.
   const aligned = rowTop - submenuPadding;
-  // The lowest top that still leaves the whole box on screen. Sliding UP to reach it is what
-  // a low row gets instead of a squeezed list.
+  // The lowest top that still leaves the whole box on screen.
   const lowestFitting = viewportHeight - margin - height;
   const top = Math.max(margin, Math.min(aligned, lowestFitting));
   return {
