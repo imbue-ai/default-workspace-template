@@ -365,7 +365,7 @@ def _toml_inline_table(table: dict[str, object]) -> str:
 
 
 def _toml_inline_table_value(value: object) -> str:
-    """A value inside an inline table: a scalar, or an array of strings (an action's param names)."""
+    """A value inside an inline table: a scalar, or an array of strings (an action's or a launch path's param names)."""
     if isinstance(value, list):
         for item in value:
             if not isinstance(item, str):
@@ -588,19 +588,11 @@ def _copied_action(
             f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
         )
     copied: dict[str, object] = {"id": action["id"], "label": action["label"]}
-    params = action.get("params")
-    if params is None:
-        return copied, None
-    if not isinstance(params, list) or not all(
-        isinstance(param, dict) and isinstance(param.get("name"), str)
-        for param in params
-    ):
-        return (
-            None,
-            f"manifest {str(path)!r}: every action param needs a string 'name'",
-        )
-    if params:
-        copied["params"] = [param["name"] for param in params]
+    param_names, params_error = _copied_param_names(action.get("params"), path, "action")
+    if param_names is None:
+        return None, params_error
+    if param_names:
+        copied["params"] = param_names
     return copied, None
 
 
@@ -625,20 +617,32 @@ def _copied_launch_path(
         "label": launch_path["label"],
         "path": launch_path["path"],
     }
-    params = launch_path.get("params")
+    param_names, params_error = _copied_param_names(launch_path.get("params"), path, "launch path")
+    if param_names is None:
+        return None, params_error
+    if param_names:
+        copied["params"] = param_names
+    return copied, None
+
+
+def _copied_param_names(
+    params: Any, path: Path, owner: str
+) -> tuple[list[str] | None, str | None]:
+    """The names of a manifest ``params`` array (an action's or a launch path's) as the
+    registry row carries them; an absent array reads as no names. Returns ``(names, None)``,
+    or ``(None, error)`` when an entry lacks a string ``name``; ``owner`` names the entry's
+    kind in that error."""
     if params is None:
-        return copied, None
+        return [], None
     if not isinstance(params, list) or not all(
         isinstance(param, dict) and isinstance(param.get("name"), str)
         for param in params
     ):
         return (
             None,
-            f"manifest {str(path)!r}: every launch path param needs a string 'name'",
+            f"manifest {str(path)!r}: every {owner} param needs a string 'name'",
         )
-    if params:
-        copied["params"] = [param["name"] for param in params]
-    return copied, None
+    return [param["name"] for param in params], None
 
 
 def _upsert(
