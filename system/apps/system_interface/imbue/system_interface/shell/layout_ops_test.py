@@ -96,8 +96,8 @@ def test_is_desktop_op_tells_the_vocabularies_apart_by_name_and_shape(
 def test_a_requester_parses_from_an_address_or_an_app_and_marker_and_the_rest_is_refused() -> None:
     assert parse_op_requester(None) is None
     assert parse_op_requester("") is None
-    keyed = parse_op_requester("app:files?instance=agent-1")
-    assert keyed == OpRequester(app=AppName("files"), marker="agent-1")
+    keyed = OpRequester(app=AppName("files"), marker="agent-1")
+    assert parse_op_requester("app:files?instance=agent-1") == keyed
     assert parse_op_requester("app:files") == OpRequester(app=AppName("files"), marker="")
     assert parse_op_requester({"app": "files", "marker": "agent-1"}) == keyed
     assert parse_op_requester({"app": "files"}) == OpRequester(app=AppName("files"), marker="")
