@@ -96,8 +96,7 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
         store.delete_desktop("research")
     with pytest.raises(DesktopNotFoundError):
         store.delete_desktop("home")
-    with pytest.raises(DesktopNotFoundError):
-        store.get_desktop("home")
+    assert [desktop.id for desktop in store.list_desktops()] == ["research"]
 
 
 def test_windows_are_opened_located_and_closed_idempotently(tmp_path: Path) -> None:
