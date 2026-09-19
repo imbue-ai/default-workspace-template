@@ -128,7 +128,7 @@ _EXTERNAL_URL_PREFIXES = ("https://", "http://")
 # rather than waited for.
 _APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 _MAX_APP_NAME_LENGTH = 32
-_RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
+_RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github"})
 _RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 _INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 

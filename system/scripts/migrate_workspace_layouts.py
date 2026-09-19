@@ -102,8 +102,11 @@ OPEN_ACTION_ID = "open"
 # The address grammar (contracts.md section 1) and the rules the stores hold their values to.
 APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 MAX_APP_NAME_LENGTH = 32
-# The names an app may not take: the origin labels the workspace keeps for itself.
-RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
+# The names an app may not take: the origin labels the workspace keeps for itself. A copy of
+# ``forward_port.py``'s ``RESERVED_NAMES`` and ``RESERVED_NAME_PREFIXES`` -- this script is
+# stdlib-only and cannot import the library that owns them -- pinned to it by a drift test in
+# ``system/scripts/forward_port_test.py``.
+RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github"})
 RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 TMUX_SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")

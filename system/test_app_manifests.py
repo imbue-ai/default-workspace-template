@@ -157,6 +157,26 @@ def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() ->
     assert unreserved == [], f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
 
 
+def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
+    # The sidecar rule is a prefix match on the app NAME (``scope.py``'s
+    # ``sidecar_prefix``), so an app named ``pr`` claims ``program:pr-review`` as its
+    # own. Reserving the first label of every standalone program (the test above)
+    # does not cover this: both sides here carry a manifest, so neither is standalone,
+    # and the collision is between two ordinary apps. Checked over every manifest in
+    # the tree, user-built apps included, since that is where two such names would meet.
+    # An app matching itself is no collision: a manifest may set ``program`` to its own
+    # ``<name>-<role>`` form, and that program IS its sidecar.
+    manifests = [load_manifest(path, repo_root=_REPO_ROOT) for path in _every_manifest_path()]
+    collisions = sorted(
+        f"{owner.name} would claim {claimed.program!r} (app {claimed.name})"
+        for owner in manifests
+        for claimed in manifests
+        if owner is not claimed and claimed.program.startswith(f"{owner.name}-")
+    )
+
+    assert collisions == [], f"apps whose names collide with another app's program: {collisions}"
+
+
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
     # Every built-in app describes itself, whatever runs it.
     missing = [

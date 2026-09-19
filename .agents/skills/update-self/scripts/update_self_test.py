@@ -1433,6 +1433,9 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
     (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
+    # A live workspace has its dependencies installed; a tree without them is the
+    # exception, and the tests that want it remove this.
+    (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(parents=True)
     for package, tool_name, executable, is_critical in _APP_FIXTURES:
         _write_app(repo_root, package, tool_name, executable, is_critical)
     return repo_root
@@ -2661,6 +2664,39 @@ def test_a_verified_worker_bundle_is_installed_without_the_npm_refresh(
     assert not runner.ran("npm", "ci")
     assert not runner.ran("npm", "run", "build")
     assert _installed_asset(apply_repo) == "console.log('worker');"
+
+
+def test_a_build_into_a_tree_with_no_node_modules_installs_first(
+    apply_repo: Path,
+) -> None:
+    # The reported apply failure: neither package.json nor package-lock.json merged,
+    # so the npm refresh was skipped by the manifest rule -- into a tree that had no
+    # node_modules at all. The build then died with `sh: 1: tsc: not found` and the
+    # whole update rolled back. Whether the manifest changed says nothing about
+    # whether the dependencies are there.
+    shutil.rmtree(apply_repo / update_layout.NPM_ROOT_DIR / "node_modules")
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran("npm", "ci")
+    assert runner.ran("npm", "run", "build")
+
+
+def test_a_build_over_installed_node_modules_skips_the_refresh(
+    apply_repo: Path,
+) -> None:
+    # The refresh is the slowest, most memory-hungry step of the apply, and shedding
+    # it rolls the whole update back -- so a tree that already has its dependencies,
+    # with no manifest change to act on, must not pay for it.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not runner.ran("npm", "ci")
+    assert runner.ran("npm", "run", "build")
 
 
 def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
@@ -5173,7 +5209,7 @@ def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
 def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
-    (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(parents=True)
+    (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(parents=True, exist_ok=True)
     (
         repo_root / update_layout.NPM_ROOT_DIR / "node_modules" / "left-pad.js"
     ).write_text("old")
@@ -5312,7 +5348,7 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     # workspace has never built a bundle, so recovery takes the rebuild branch
     # (there is no bundle copy to restore) with node_modules already back.
     node_modules = unbuilt_apply_repo / update_layout.NPM_ROOT_DIR / "node_modules"
-    node_modules.mkdir(parents=True)
+    node_modules.mkdir(parents=True, exist_ok=True)
     (node_modules / "left-pad.js").write_text("restored")
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
     # Only the forward build fails; recovery's rebuild of the known-good tree

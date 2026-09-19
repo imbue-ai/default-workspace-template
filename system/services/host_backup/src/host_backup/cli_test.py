@@ -12,7 +12,9 @@ from host_backup.cli import (
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
+    _TAIL_READ_MAX_BYTES,
     _exit_code_for_completion,
+    _read_tail_lines,
     _scan_for_inflight_tick_ids,
     _wait_for_next_completion,
 )
@@ -142,3 +144,66 @@ def test_inflight_scan_ignores_foreign_event_sources(tmp_path: Path) -> None:
         + "\n"
     )
     assert _scan_for_inflight_tick_ids(events_path, max_lines=200) == set()
+
+
+def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> None:
+    """The reported OOM kill: every event embeds the full stdout of the restic command
+    it reports, so the log reaches gigabytes on an old workspace and reading it whole
+    got `host-backup-now` killed by the watchdog before it did anything at all."""
+    events_path = tmp_path / "events.jsonl"
+    padding = "x" * 200_000
+    with events_path.open("w") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "source": "backup",
+                    "type": BackupEventType.BACKUP_STARTED.value,
+                    "tick_id": "older-than-the-window",
+                }
+            )
+            + "\n"
+        )
+        for index in range(50):
+            fh.write(
+                json.dumps(
+                    {
+                        "source": "backup",
+                        "type": BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+                        "tick_id": f"old-{index}",
+                        "stdout": padding,
+                    }
+                )
+                + "\n"
+            )
+        fh.write(
+            json.dumps(
+                {
+                    "source": "backup",
+                    "type": BackupEventType.BACKUP_STARTED.value,
+                    "tick_id": "in-flight",
+                }
+            )
+            + "\n"
+        )
+    assert events_path.stat().st_size > _TAIL_READ_MAX_BYTES
+
+    pending = _scan_for_inflight_tick_ids(events_path, max_lines=200)
+
+    # The log is 52 lines, so `max_lines` excludes nothing: the only thing that can
+    # keep the tick at the top of the file out of this answer is a window that never
+    # reached it. A scan that read the file whole reports it as in flight too.
+    assert pending == {"in-flight"}
+
+
+def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> None:
+    # A window that starts mid-file lands mid-line; that fragment is not an event and
+    # must not be handed to the caller as one.
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("first-line-is-long\nsecond\nthird\n")
+
+    assert _read_tail_lines(events_path, max_lines=10, max_bytes=14) == ["second", "third"]
+    assert _read_tail_lines(events_path, max_lines=10, max_bytes=10_000) == [
+        "first-line-is-long",
+        "second",
+        "third",
+    ]

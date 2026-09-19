@@ -18,6 +18,21 @@ import pytest
 import tomlkit
 
 
+@pytest.fixture(autouse=True)
+def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the ambient agent identity from every test for these scripts.
+
+    ``layout.py`` resolves ``self`` and every op's ``requester`` from
+    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``. Every Minds chat agent
+    runs with both set, so a test that sets only ``MNGR_AGENT_ID`` reads the
+    runner's real chat id instead and passes in CI (where neither is set) while
+    failing for every agent. Clearing both makes a test that needs an identity
+    say so explicitly.
+    """
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+
+
 def _load_script_module(module_name: str, filename: str) -> Any:
     """Import one of the scripts beside this file under ``module_name`` (they are not a package)."""
     spec = importlib.util.spec_from_file_location(

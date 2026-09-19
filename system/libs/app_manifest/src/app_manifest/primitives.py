@@ -21,7 +21,7 @@ MAX_APP_NAME_LENGTH: Final[int] = 32
 # ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this set in step
 # with ``system/supervisord.conf``.
 RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
-    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env"}
+    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github"}
 )
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 

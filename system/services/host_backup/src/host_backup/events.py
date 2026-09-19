@@ -2,9 +2,11 @@
 
 Events land at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`, one
 JSONL line per event, with the standard envelope (timestamp, type,
-event_id, source) plus event-specific fields. The full stdout/stderr of
-each restic command is embedded in the matching event so operators can
-diagnose failures without rerunning anything.
+event_id, source) plus event-specific fields. The stdout/stderr of each
+restic command is embedded in the matching event so operators can diagnose
+failures without rerunning anything, with each field capped at write time
+(see `_truncated_for_storage`) -- nothing rotates this log, and an
+uncapped `restic backup --json` progress stream grew it by megabytes a day.
 """
 
 import json
@@ -315,6 +317,29 @@ def make_event(event_type: BackupEventType, **fields: object) -> dict[str, objec
     return payload
 
 
+# How much of any one string field survives into the log. Generous for a restic
+# command's output while keeping a single event small: `restic backup --json`
+# emits one progress document per tick, which ran to hundreds of kilobytes per
+# event and, with nothing rotating this file, reached gigabytes on an old
+# workspace. Head and tail are both kept, so the command's opening lines and the
+# final summary -- the two things an operator reads -- both survive.
+_MAX_FIELD_CHARS: Final[int] = 16384
+_TRUNCATION_MARKER: Final[str] = "\n...[{dropped} characters dropped]...\n"
+
+
+def _truncated_for_storage(event: dict[str, object]) -> dict[str, object]:
+    """`event` with any over-long string field reduced to its head and tail."""
+    truncated: dict[str, object] = {}
+    for key, value in event.items():
+        if isinstance(value, str) and len(value) > _MAX_FIELD_CHARS:
+            keep = _MAX_FIELD_CHARS // 2
+            marker = _TRUNCATION_MARKER.format(dropped=len(value) - 2 * keep)
+            truncated[key] = value[:keep] + marker + value[-keep:]
+        else:
+            truncated[key] = value
+    return truncated
+
+
 def write_event(events_dir: Path | None, event: dict[str, object]) -> None:
     """Append `event` as a JSONL line to events_dir/events.jsonl.
 
@@ -335,7 +360,7 @@ def write_event(events_dir: Path | None, event: dict[str, object]) -> None:
     events_path = events_dir / "events.jsonl"
     try:
         with events_path.open("a") as fh:
-            fh.write(json.dumps(event, default=str))
+            fh.write(json.dumps(_truncated_for_storage(event), default=str))
             fh.write("\n")
     except OSError as e:
         logger.warning("Cannot append to {}: {}", events_path, e)
