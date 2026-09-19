@@ -442,6 +442,11 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
     }
 
 
+# Fractions are computed in floating point; a frame that overshoots the unit square by a rounding error is not
+# a frame outside it.
+_FRAME_TOLERANCE: Final[float] = 1e-9
+
+
 class Frame(FrozenModel):
     """A window's rectangle in fractions of the backdrop, wholly inside the unit square."""
 
@@ -459,11 +464,6 @@ class Frame(FrozenModel):
         if self.x + self.width > 1.0 + _FRAME_TOLERANCE or self.y + self.height > 1.0 + _FRAME_TOLERANCE:
             raise InvalidShellValueError("a frame lies wholly inside the unit square")
         return self
-
-
-# Fractions are computed in floating point; a frame that overshoots the unit square by a rounding error is not
-# a frame outside it.
-_FRAME_TOLERANCE: Final[float] = 1e-9
 
 
 class GridCell(FrozenModel):
