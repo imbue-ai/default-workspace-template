@@ -25,7 +25,10 @@ from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.discovery import write_server_registered_event
-from terminal_app.dispatch import build_session_command, warn_if_oom_tag_script_is_missing
+from terminal_app.dispatch import (
+    build_session_command,
+    warn_if_oom_tag_script_is_missing,
+)
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.pages import build_pages_blueprint
 from terminal_app.primitives import Workdir
