@@ -36,27 +36,27 @@ welcome_count = _load_script_module("welcome_count_for_fixtures", "welcome_count
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
-    """A registry with one row per name; the value is the app's declared action ids (none for a
-    single-instance app). An app declaring more than one action gets a ``default_shortcut`` on
-    its last one, so the primary-action rule has something to prefer over the first."""
+    """A registry with one row per name, shaped as ``forward_port.py`` writes it; the value is the
+    app's declared launch path ids (none for an app that opens at its root). An app declaring
+    more than one gets a ``default_shortcut`` on its last one."""
     doc = tomlkit.document()
     apps = tomlkit.aot()
-    for name, action_ids in rows.items():
+    for name, launch_ids in rows.items():
         entry = tomlkit.table()
         entry["name"] = name
         entry["url"] = f"http://localhost:9000/{name}"
-        entry["instances"] = len(action_ids) > 0
-        if action_ids:
-            actions = tomlkit.aot()
-            for action_id in action_ids:
-                action = tomlkit.table()
-                action["id"] = action_id
-                action["label"] = f"{action_id.capitalize()} {name}"
-                actions.append(action)
-            entry["actions"] = actions
-        if len(action_ids) > 1:
+        if launch_ids:
+            launch_paths = tomlkit.aot()
+            for launch_id in launch_ids:
+                launch_path = tomlkit.table()
+                launch_path["id"] = launch_id
+                launch_path["label"] = f"{launch_id.capitalize()} {name}"
+                launch_path["path"] = f"/{launch_id}"
+                launch_paths.append(launch_path)
+            entry["launch_paths"] = launch_paths
+        if len(launch_ids) > 1:
             default_shortcut = tomlkit.inline_table()
-            default_shortcut["action"] = action_ids[-1]
+            default_shortcut["launch"] = launch_ids[-1]
             default_shortcut["mode"] = "focus"
             entry["default_shortcut"] = default_shortcut
         apps.append(entry)
