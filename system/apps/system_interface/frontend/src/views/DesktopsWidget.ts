@@ -5,7 +5,7 @@
  */
 
 import m from "mithril";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { Desktop } from "../model/records";
 import { SQUIGGLE_GLYPHS, monogramMarkup, squiggleMarkup } from "./squiggles";
@@ -38,20 +38,18 @@ export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
       desktops.map((desktop) => {
         const isActive = desktop.id === activeDesktopId;
         return m(
-          "button",
+          Button,
           {
             key: desktop.id,
-            type: "button",
+            variant: "ghost",
+            icon: true,
+            sm: true,
+            selected: isActive,
+            extra: "desktop-switch min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
             "data-desktop-switch": desktop.id,
             "data-active": isActive ? "true" : "false",
             "aria-pressed": isActive ? "true" : "false",
             "aria-label": `Switch to ${desktop.name}`,
-            class: buttonClass("ghost", {
-              icon: true,
-              sm: true,
-              selected: isActive,
-              extra: "desktop-switch min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
-            }),
             ...hoverTooltipAttrs(desktop.name),
             onclick: () => onSwitch(desktop.id),
             oncontextmenu: (event: MouseEvent) => {
@@ -63,18 +61,16 @@ export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
         );
       }),
       m(
-        "button",
+        Button,
         {
-          type: "button",
+          variant: "ghost",
+          icon: true,
+          sm: true,
+          extra: "desktops-menu min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
           "data-desktops-menu": "",
           "aria-label": "Desktop options",
           "aria-haspopup": "menu",
           "aria-expanded": isMenuOpen ? "true" : "false",
-          class: buttonClass("ghost", {
-            icon: true,
-            sm: true,
-            extra: "desktops-menu min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
-          }),
           ...hoverTooltipAttrs("Desktop options"),
           onclick: onOpenMenu,
         },
