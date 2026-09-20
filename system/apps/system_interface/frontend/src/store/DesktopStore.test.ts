@@ -420,6 +420,25 @@ describe("windows", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-3");
   });
 
+  it("a focus shortcut whose only window of the app is settling elsewhere defers the raise instead of placing it", async () => {
+    const store = await startedStore();
+    await store.switchDesktop("work");
+    const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const work = store.getState().desktops[1];
+    socket.deliver().onDesktopsUpdated([store.getState().desktops[0], { ...work, windows: [settling] }]);
+    await store.runLaunch("docs", "new", "focus");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(store.isPlacedHere("win-3")).toBe(false);
+    expect(activeFocusedWindowId(store.getState())).toBeNull();
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        store.getState().desktops[0],
+        { ...work, windows: [{ ...settling, path: "/?doc=9", is_settling: false }] },
+      ]);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+  });
+
   it("drops a deferred restore when the user leaves the desktop", async () => {
     const store = await startedStore();
     const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });

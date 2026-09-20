@@ -508,7 +508,7 @@ export class DesktopStore {
     const run = resolveLaunchRun(this.state, app, launch, mode);
     switch (run.kind) {
       case "raise":
-        this.dispatch({ type: "window_raised", windowId: run.windowId });
+        this.raiseWindow(run.windowId);
         return;
       case "open":
         await this.openWindowAt(run.app, run.path, run.launch, "new");
