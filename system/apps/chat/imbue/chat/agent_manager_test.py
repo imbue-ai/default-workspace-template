@@ -2153,9 +2153,7 @@ def test_handle_observe_output_line_logs_stderr_as_warning(
     assert "something bad happened" in warnings[0]
 
 
-# ---------------------------------------------------------------------------
 # Activity-state integration
-# ---------------------------------------------------------------------------
 
 
 def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
@@ -2983,9 +2981,7 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
-# =============================================================================
 # Offline codex model-chip resolution from the persisted raw model-list sidecar
-# =============================================================================
 
 
 def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
