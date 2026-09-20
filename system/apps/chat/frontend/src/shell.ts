@@ -1,14 +1,16 @@
 /**
  * The chat page's side of the workspace shell: the contract connection, and the two things a
- * chat page asks the shell for -- a sibling chat, and a subagent view -- both through
- * `shell:open`, since the page lives in its own document.
+ * chat page asks the shell for -- a sibling chat, and a subagent view -- both through the path
+ * form of `shell:open` (desktop-interface contracts.md section 7), since the page lives in its
+ * own document. A sibling chat is asked for at the chat root's path for it, so the shell opens a
+ * root window showing it (the root that frames this page intercepts the request and selects the
+ * chat in place instead, see root/relay.ts).
  */
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import { addressFor } from "@imbue/workspace-ui/src/addresses";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
@@ -17,12 +19,11 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
+import { rootPathFor } from "./root/selection";
 
-/** The chat app's registered name: what its own pages address their instances under. */
-const CHAT_APP_NAME = "chat";
-
-export function chatAddress(instanceKey: string): string {
-  return addressFor(CHAT_APP_NAME, instanceKey);
+/** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
+export function subagentViewPath(key: string): string {
+  return `/${key}`;
 }
 
 let connection: ShellConnection | null = null;
@@ -154,7 +155,7 @@ export async function startChatOnAccount(
     alert(`Failed to create chat: ${(e as Error).message}`);
     return false;
   }
-  connection?.open(chatAddress(created.chatId));
+  connection?.openPath(rootPathFor(created.chatId), "focus");
   m.redraw();
   return true;
 }
@@ -162,7 +163,8 @@ export async function startChatOnAccount(
 /**
  * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
  * created first through the chat app's own instances API (its `subagent` action, on this
- * page's origin), which nudges the shell, so the shell lists it before it is asked to dock it.
+ * page's origin), which is what the tabbed shell listed; the desktop shell opens the view's
+ * page by path and needs no instance.
  * The session belongs to the chat's active agent, which is what the app keys the view on.
  */
 export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
@@ -171,6 +173,8 @@ export async function openSubagentTab(chatId: string, sessionId: string, descrip
   // failed, so the open still names the view the app would have made.
   let key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
   try {
+    // CLEANUP: drop this create once the instances API leaves the chat app (desktop-interface plan,
+    // phase 6); the desktop shell opens the view by its path alone.
     const record = await postJson<{ key?: string }>(apiUrl("/_instances"), {
       action: "subagent",
       params: { parent: chatId, session: sessionId, description },
@@ -179,5 +183,5 @@ export async function openSubagentTab(chatId: string, sessionId: string, descrip
   } catch (error) {
     console.warn(`[chat] could not create the subagent instance ${key}`, error);
   }
-  connection?.open(chatAddress(key));
+  connection?.openPath(subagentViewPath(key), "focus");
 }

@@ -2,8 +2,9 @@
 /**
  * The chat page's side of the shell: the chat's own page reports the chat's presence from the
  * shell's messages, a subagent view of the same chat reports nothing (its reports would
- * overwrite the chat page's, keyed on the same chat and client), and the tabs the page asks
- * the shell to open beside it are addressed by chat id and by the three-part subagent key.
+ * overwrite the chat page's, keyed on the same chat and client), and the windows the page asks
+ * the shell to open beside it are named by path: the chat root's path for a sibling chat, and the
+ * three-part subagent key's path for a sub-agent view.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -159,7 +160,16 @@ describe("the embed API", () => {
     expect(embed).toBeDefined();
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
-    embed.handshake({ clientId: "client-2", deviceKind: "", viewId: "", address: "", tabId: "" });
+    embed.handshake({
+      clientId: "client-2",
+      windowId: "",
+      desktopId: "",
+      path: "",
+      deviceKind: "",
+      viewId: "",
+      address: "",
+      tabId: "",
+    });
     embed.shown();
     embed.hidden();
 
@@ -176,7 +186,7 @@ describe("the embed API", () => {
 });
 
 describe("startChatOnAccount", () => {
-  it("asks the shell to open the new chat beside this one", async () => {
+  it("asks the shell to open the new chat at the root's path for it", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
@@ -187,7 +197,10 @@ describe("startChatOnAccount", () => {
 
     // Started from Everything, the chat is filed in no project.
     expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "shell:open", path: "/?chat=agent-2", ifPresent: "focus" },
+      "*",
+    );
   });
 
   it("files the new chat in the project this one is shown in", async () => {
@@ -271,7 +284,7 @@ describe("openSubagentTab", () => {
       }),
     );
     expect(parent.postMessage).toHaveBeenCalledWith(
-      { type: "shell:open", address: "app:chat?instance=agent-1.agent-7.sess-3" },
+      { type: "shell:open", path: "/agent-1.agent-7.sess-3", ifPresent: "focus" },
       "*",
     );
   });
@@ -287,7 +300,7 @@ describe("openSubagentTab", () => {
     await openSubagentTab("agent-1", "sess-3", "Explore the repo");
 
     expect(parent.postMessage).toHaveBeenCalledWith(
-      { type: "shell:open", address: "app:chat?instance=agent-1.agent-9.sess-3" },
+      { type: "shell:open", path: "/agent-1.agent-9.sess-3", ifPresent: "focus" },
       "*",
     );
   });
@@ -302,7 +315,7 @@ describe("openSubagentTab", () => {
     await openSubagentTab("agent-1", "sess-3", "Explore the repo");
 
     expect(parent.postMessage).toHaveBeenCalledWith(
-      { type: "shell:open", address: "app:chat?instance=agent-1.agent-1.sess-3" },
+      { type: "shell:open", path: "/agent-1.agent-1.sess-3", ifPresent: "focus" },
       "*",
     );
   });
