@@ -86,10 +86,26 @@ export function bindingForTarget(target: Element): GestureBinding | null {
 interface PendingPress {
   readonly binding: GestureBinding;
   readonly pointerId: number;
+  readonly pointerType: string;
   readonly pressClient: PixelPoint;
   readonly press: PixelPoint;
   isDragging: boolean;
   longPressTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** Whether a pointer is the one hovering device (a mouse or a pen) rather than one finger among several. */
+function isHoveringDevice(pointerType: string): boolean {
+  return pointerType === "mouse" || pointerType === "pen";
+}
+
+/** Whether ``event`` continues the pointer ``pending`` pressed with.
+ *
+ * A finger is its pointer id. A mouse and a pen are the same hand: some X servers report one physical
+ * mouse as a mouse for its button and as a pen for its motion (an absolute-axis virtual mouse under a
+ * VM does), so a press with one id followed by moves with another must still be one gesture. */
+export function isSamePointer(pending: { pointerId: number; pointerType: string }, event: PointerEvent): boolean {
+  if (event.pointerId === pending.pointerId) return true;
+  return isHoveringDevice(pending.pointerType) && isHoveringDevice(event.pointerType);
 }
 
 /** The pointer-event implementation of ``GestureSource``. */
@@ -125,9 +141,21 @@ export class PointerGestureSource implements GestureSource {
       if (!(event.target instanceof Element)) return;
       const binding = bindingForTarget(event.target);
       if (binding === null) return;
+      // A press on a handle owns the pointer: left to its default, a press inside an existing text
+      // selection starts a native text drag on the first move, and the browser answers that with a
+      // pointercancel that kills the gesture. Clicks and double clicks still fire.
+      event.preventDefault();
       const press = pointOf(event);
       const pressClient = { x: event.clientX, y: event.clientY };
-      pending = { binding, pointerId: event.pointerId, press, pressClient, isDragging: false, longPressTimer: null };
+      pending = {
+        binding,
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        press,
+        pressClient,
+        isDragging: false,
+        longPressTimer: null,
+      };
       if (event.pointerType !== "mouse") {
         pending.longPressTimer = setTimeout(() => {
           if (pending === null || pending.isDragging) return;
@@ -141,7 +169,7 @@ export class PointerGestureSource implements GestureSource {
     };
 
     const onPointerMove = (event: PointerEvent): void => {
-      if (pending === null || event.pointerId !== pending.pointerId) return;
+      if (pending === null || !isSamePointer(pending, event)) return;
       // No button held: the press ended where the root could not see it (over a live page, or while the
       // window had lost focus); the pointer is only hovering now. A drag that had begun is cancelled, so
       // the listener's begin is always answered by an end or a cancel.
@@ -161,8 +189,14 @@ export class PointerGestureSource implements GestureSource {
         }
         pending.isDragging = true;
         clearLongPress();
-        // Captured only now: capturing on the press would retarget the click a plain press ends in.
-        root.setPointerCapture(pending.pointerId);
+        // Captured only now: capturing on the press would retarget the click a plain press ends in. The
+        // moving event's id, which is the one the browser routes; a device that reports the press under
+        // another id has no active pointer there to capture, which the browser refuses.
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch {
+          // The pages are inert for the gesture, so the root still sees the moves uncaptured.
+        }
         listener.onBegin(pending.binding, point, pending.press);
       }
       event.preventDefault();
@@ -170,7 +204,7 @@ export class PointerGestureSource implements GestureSource {
     };
 
     const onPointerUp = (event: PointerEvent): void => {
-      if (pending === null || event.pointerId !== pending.pointerId) return;
+      if (pending === null || !isSamePointer(pending, event)) return;
       const held = pending;
       const point = pointOf(event);
       finish();
@@ -179,7 +213,7 @@ export class PointerGestureSource implements GestureSource {
     };
 
     const onPointerCancel = (event: PointerEvent): void => {
-      if (pending === null || event.pointerId !== pending.pointerId) return;
+      if (pending === null || !isSamePointer(pending, event)) return;
       const held = pending;
       finish();
       if (held.isDragging) listener.onCancel(held.binding);
@@ -195,7 +229,7 @@ export class PointerGestureSource implements GestureSource {
     };
     let suppressNextClick = false;
     const markDragEnded = (event: PointerEvent): void => {
-      if (pending !== null && pending.isDragging && event.pointerId === pending.pointerId) suppressNextClick = true;
+      if (pending !== null && pending.isDragging && isSamePointer(pending, event)) suppressNextClick = true;
     };
 
     root.addEventListener("pointerdown", onPointerDown);
