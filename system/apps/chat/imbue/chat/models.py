@@ -20,6 +20,7 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 
 
 class AgentCreationError(ValueError):
@@ -745,6 +746,7 @@ class SubagentKey(FrozenModel):
     session_id: str = Field(description="The subagent's own session id")
 
 
+@pure
 def parse_subagent_key(key: str) -> SubagentKey | None:
     """The three parts of a subagent key, or None for a key of any other shape (a chat's own key included)."""
     parts = key.split(SUBAGENT_KEY_SEPARATOR)
