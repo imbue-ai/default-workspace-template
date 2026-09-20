@@ -136,8 +136,8 @@ def chat_agent_oom_score_adj(
     Lower is more protected. Two forces move a chat within its band, starting
     from ``CHAT_AGENT_BASE``. Engagement pulls it down:
 
-    - ``is_open``: the chat has an open tab in the workspace UI.
-    - ``is_visible``: the chat's tab is currently visible (implies open).
+    - ``is_open``: the chat has an open window in the workspace UI.
+    - ``is_visible``: the chat's window is currently visible (implies open).
     - ``recency_rank``: this chat's position when the chats that have been
       messaged are sorted by last-message time, newest first (0 = most recently
       messaged). The bonus decays with rank, so more-recently-messaged chats are
@@ -256,13 +256,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer: the files-app sidecar (a small Python HTTP server for
-    # the instances API) and dufs, the tiny static file server it runs as its
-    # child. Together they hold little memory and supervisord restarts them if
-    # shed, so this is the most expendable built-in service of all.
+    # The file viewer: dufs, the tiny static file server the program runs
+    # directly. It holds little memory and supervisord restarts it if shed, so
+    # this is the most expendable built-in service of all.
     "files": 75,
     "user": USER_SERVICE,
-    # The shell of a workspace terminal tab (and everything run in it), tagged by the
+    # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the
     # tmux server, which sits at the protected default, so without this tag a runaway build
     # in a terminal would outlive every service. It shares the user-service level: a user's
