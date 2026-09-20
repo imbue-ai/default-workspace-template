@@ -1,45 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compositeSquiggleMarkup, monogramMarkup, squiggleMarkup, SQUIGGLE_GLYPHS } from "./squiggles";
-
-describe("compositeSquiggleMarkup", () => {
-  it("draws the five sprites, each in its own transformed group", () => {
-    const markup = compositeSquiggleMarkup(20);
-    const groups = markup.match(/<g transform="/g);
-    expect(groups).toHaveLength(5);
-    expect(markup.match(/<path /g)).toHaveLength(5);
-  });
-
-  it("keeps each sprite's signature color, so the cluster is multicolor", () => {
-    const markup = compositeSquiggleMarkup(20);
-    // The sprite table picks glyphs 0, 3, 5, 7 and 9 -- five different colors.
-    for (const index of [0, 3, 5, 7, 9]) {
-      expect(markup).toContain(`stroke="${SQUIGGLE_GLYPHS[index].color}"`);
-    }
-    expect(markup).not.toContain(SQUIGGLE_GLYPHS[1].color);
-  });
-
-  it("centers the sprite that sits on the spread origin", () => {
-    // Glyph 9 is placed at (52, 51), which is the origin the other four are
-    // spread around, so it lands dead center on the 100-unit canvas whatever
-    // the spread is.
-    expect(compositeSquiggleMarkup(20)).toContain('transform="translate(50 50) rotate(0)');
-  });
-
-  it("pre-divides the stroke so every sprite renders at the same weight", () => {
-    const markup = compositeSquiggleMarkup(20);
-    for (const index of [0, 3, 5, 7, 9]) {
-      const [, , w, h] = SQUIGGLE_GLYPHS[index].box;
-      const scale = (46 * 1.35) / Math.max(w, h);
-      expect(markup).toContain(`stroke-width="${6.5 / scale}"`);
-    }
-  });
-
-  it("sizes the svg while keeping the fixed canvas", () => {
-    const markup = compositeSquiggleMarkup(16);
-    expect(markup).toContain('width="16" height="16"');
-    expect(markup).toContain('viewBox="0 0 100 100"');
-  });
-});
+import { monogramMarkup, squiggleMarkup, SQUIGGLE_GLYPHS } from "./squiggles";
 
 describe("squiggleMarkup", () => {
   it("wraps the glyph index so any integer resolves to a real glyph", () => {
