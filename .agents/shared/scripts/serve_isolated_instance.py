@@ -890,9 +890,8 @@ def up(
                 service_name,
                 inner_port,
                 "forward_port register",
-                # Wrapped, the inner app is plumbing: the user is meant to reach it
-                # through the labeled frame, and its bare origin shows the same page
-                # with nothing marking it as a preview. Unwrapped, it is the surface.
+                # Wrapped, the frame is the surface and the inner origin serves the
+                # same page unmarked; unwrapped, the inner origin is the surface.
                 internal=preview_requested,
             )
             services.append(service_name)
