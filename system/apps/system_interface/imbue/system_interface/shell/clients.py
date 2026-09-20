@@ -28,8 +28,9 @@ from imbue.system_interface.shell.state_files import write_json_atomic
 CLIENTS_FILENAME: Final[str] = "clients.json"
 CLIENTS_FILE_VERSION: Final[int] = 2
 # The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
-# CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION`` and ``_fold_legacy_client`` around late October 2026, once
-# every workspace has written a version-2 clients.json (the first write after this release does).
+# CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, the ``is_legacy`` fold in
+# ``_read_unlocked``, and clients_test's version-one test around late October 2026, once every workspace has
+# written a version-2 clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 
 # A client unseen for this long is dropped, together with every layout it owns.
