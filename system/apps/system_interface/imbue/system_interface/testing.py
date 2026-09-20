@@ -33,6 +33,7 @@ from app_manifest.registry import registry_path
 from flask import Flask
 from pydantic import Field
 
+from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.shell.inventory import AppInventory
@@ -241,10 +242,12 @@ def build_test_state(
         state_directory=state_directory,
         fetcher=template_catalog_fetcher,
     )
-    if static_directory is None:
-        return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
+    resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     return SystemInterfaceState(
-        config=resolved_config, shell=shell, template_catalog=template_catalog, static_directory=static_directory
+        config=resolved_config,
+        shell=shell,
+        template_catalog=template_catalog,
+        static_directory=resolved_static_directory,
     )
 
 
