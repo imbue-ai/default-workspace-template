@@ -194,6 +194,26 @@ describe("saving", () => {
   });
 });
 
+describe("location reports", () => {
+  it("posts a report that differs from the stored record, and a settling window's even when it does not", async () => {
+    const store = await startedStore();
+    const home = store.getState().desktops[0];
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        { ...home, windows: [...home.windows, windowRecord("win-3", "docs", "/new", { is_settling: true })] },
+        store.getState().desktops[1],
+      ]);
+    await store.reportLocation("win-1", "/a", "");
+    await store.reportLocation("win-1", "/a", "Plan");
+    await store.reportLocation("win-3", "/new", "");
+    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([
+      "reportWindowLocation:home:win-1:/a:Plan",
+      "reportWindowLocation:home:win-3:/new:",
+    ]);
+  });
+});
+
 describe("a deleted active desktop", () => {
   it("lands on the first remaining desktop, reports the move, and fetches that layout", async () => {
     const store = await startedStore();
