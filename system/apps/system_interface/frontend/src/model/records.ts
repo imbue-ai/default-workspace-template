@@ -335,6 +335,19 @@ export function isSameCell(first: GridCell, second: GridCell): boolean {
   return first.column === second.column && first.row === second.row;
 }
 
+/** Whether two placements of the same window say the same thing (frame, state, minimized). */
+export function isSamePlacement(first: Placement, second: Placement): boolean {
+  return (
+    first.window_id === second.window_id &&
+    first.frame.x === second.frame.x &&
+    first.frame.y === second.frame.y &&
+    first.frame.width === second.frame.width &&
+    first.frame.height === second.frame.height &&
+    first.state === second.state &&
+    first.is_minimized === second.is_minimized
+  );
+}
+
 /** The key a shortcut is unique under on a desktop, and the spelling of ``data-shortcut``. */
 export function shortcutKey(app: string, launch: string): string {
   return `${app}:${launch}`;
