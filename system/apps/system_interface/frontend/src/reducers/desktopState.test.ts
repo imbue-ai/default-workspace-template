@@ -93,6 +93,24 @@ describe("the window verbs", () => {
     expect(isLayoutDirty(saved)).toBe(true);
   });
 
+  it("a save answered after a newer layout was loaded changes nothing", () => {
+    const gestured = reduceDesktopState(loaded(), { type: "window_minimized", windowId: "win-1" });
+    const reloaded = reduceDesktopState(gestured, {
+      type: "layout_loaded",
+      desktopId: "home",
+      layout: { updated_at: "t3", placements: [placementRecord("win-2")] },
+    });
+    const late = reduceDesktopState(reloaded, {
+      type: "layout_saved",
+      desktopId: "home",
+      version: gestured.layoutVersion,
+      updatedAt: "t2",
+    });
+    expect(late).toBe(reloaded);
+    expect(late.layout.updated_at).toBe("t3");
+    expect(isLayoutDirty(late)).toBe(false);
+  });
+
   it("a save that changed nothing keeps the stamp", () => {
     const state = reduceDesktopState(loaded(), {
       type: "layout_saved",
