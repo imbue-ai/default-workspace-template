@@ -230,8 +230,8 @@ def _running_e2e_server(
 
 def _server_is_up(base_url: str) -> bool:
     try:
-        urllib.request.urlopen(f"{base_url}/api/desktops", timeout=0.5)
-        return True
+        with urllib.request.urlopen(f"{base_url}/api/desktops", timeout=0.5):
+            return True
     except urllib.error.HTTPError:
         return True
     except OSError:
