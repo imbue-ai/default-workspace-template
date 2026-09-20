@@ -160,6 +160,8 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       };
     case "layout_saved": {
       if (event.desktopId !== state.activeDesktopId) return state;
+      // A save answered after a newer layout was loaded says nothing about the layout now held.
+      if (event.version < state.savedLayoutVersion) return state;
       const layout = event.updatedAt === null ? state.layout : { ...state.layout, updated_at: event.updatedAt };
       return { ...state, layout, savedLayoutVersion: event.version };
     }
