@@ -200,6 +200,20 @@ describe("opening", () => {
     expect(isLayoutDirty(store.getState())).toBe(false);
   });
 
+  it("saves a gesture still waiting in the debounce before opening, so the refetch keeps it", async () => {
+    const store = await startedStore();
+    store.minimizeWindow("win-1");
+    const windowId = await store.openWindowAt("docs", "/new", "new", "new");
+    await settle();
+    const stored = api.layoutOf("home", CLIENT).placements;
+    expect(stored.find((placement) => placement.window_id === "win-1")?.is_minimized).toBe(true);
+    expect(last(stored)?.window_id).toBe(windowId);
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")?.is_minimized).toBe(
+      true,
+    );
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
   it("a focus open of a window already at the path raises it instead", async () => {
     const store = await startedStore();
     const windowId = await store.openWindowAt("notes", "/b", null, "focus");
