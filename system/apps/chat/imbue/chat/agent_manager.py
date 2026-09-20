@@ -71,8 +71,8 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_agent_info
-from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import seed_context_message
+from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.harnesses.activity import HarnessActivityTracker
@@ -2850,9 +2850,7 @@ class AgentManager:
         # mean the option the seed's last turn numbered. The provisional record keeps the words
         # themselves, so a retry after a failed create wraps them afresh rather than twice.
         launch_message = (
-            message
-            if seed_record is None
-            else seed_context_message(self._chat_files_root / launched_chat_id, message)
+            message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
         # With a pick the message follows the create rather than riding it: the model has to be
