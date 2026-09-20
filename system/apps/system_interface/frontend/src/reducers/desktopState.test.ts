@@ -16,7 +16,7 @@ import type { DesktopEvent, DesktopState } from "./desktopState";
 
 const MODES = { isCompact: false, isTouch: false };
 const home = desktopRecord("home", {
-  windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")],
+  windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b", { is_pinned: true })],
 });
 const work = desktopRecord("work");
 
@@ -228,10 +228,16 @@ describe("selectors", () => {
     });
     expect(state.modes.isTouch).toBe(true);
     expect(
-      taskbarEntries(state).map((entry) => [entry.window.id, entry.title, entry.isMinimized, entry.isFocused]),
+      taskbarEntries(state).map((entry) => [
+        entry.window.id,
+        entry.title,
+        entry.isMinimized,
+        entry.isFocused,
+        entry.isPinned,
+      ]),
     ).toEqual([
-      ["win-1", "Docs", false, true],
-      ["win-2", "Notes", true, false],
+      ["win-1", "Docs", false, true, false],
+      ["win-2", "Notes", true, false, true],
     ]);
   });
 

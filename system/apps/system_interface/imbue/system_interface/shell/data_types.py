@@ -2,7 +2,9 @@ from typing import Any
 from typing import Final
 
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import LocationScope
 from app_manifest.manifest import OPEN_LAUNCH_PATH_ID
+from app_manifest.manifest import Pin
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
@@ -55,6 +57,18 @@ def default_shortcut_wire_json(shortcut: DefaultShortcut | None) -> dict[str, st
 
 
 @pure
+def pin_wire_json(pin: Pin | None) -> dict[str, str] | None:
+    if pin is None:
+        return None
+    return {
+        "path": str(pin.path),
+        "style": pin.style.value,
+        "scope": pin.scope.value,
+        "default_mode": pin.default_mode.value,
+    }
+
+
+@pure
 def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
     """The ``app`` object of desktop contracts.md section 5.5."""
     row = entry.row
@@ -70,8 +84,16 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "launch_paths": [launch_path_wire_json(launch_path) for launch_path in effective_launch_paths(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
+        "pin": pin_wire_json(row.pin),
         "is_running": entry.is_running,
     }
+
+
+class AppPin(FrozenModel):
+    """A registered app's pin: the app, and the table its manifest declares (pinned-taskbar-entries plan section 3.1)."""
+
+    app: AppName = Field(description="The pinned app")
+    pin: Pin = Field(description="The pin as the registry row carries it")
 
 
 class ClientStateReport(FrozenModel):
@@ -198,6 +220,13 @@ class Window(FrozenModel):
     title: WindowTitle = Field(description="What the page last reported; empty means the app's display name")
     opened_at: AwareDatetime = Field(description="When the window was opened")
     is_settling: bool = Field(description="True from an open at a launch path until the page's first location report")
+    is_pinned: bool = Field(
+        default=False, description="Whether this is the app's pinned window on the desktop: permanent, never closed"
+    )
+    scope: LocationScope = Field(
+        default=LocationScope.LINKED,
+        description="Whether every client follows the shared path and title, or each client keeps its own",
+    )
 
 
 class Desktop(FrozenModel):
@@ -282,6 +311,13 @@ class DesktopChangeOutcome(FrozenModel):
 
     desktop: Desktop = Field(description="The desktop after the edit")
     is_written: bool = Field(description="Whether the edit changed the desktop and was written")
+
+
+class DesktopsChangeOutcome(FrozenModel):
+    """What an edit over every desktop that may change nothing came to: the desktops, and whether they were written."""
+
+    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in creation order")
+    is_written: bool = Field(description="Whether the edit changed a desktop and the file was written")
 
 
 class PlacementsEditOutcome(FrozenModel):

@@ -268,6 +268,8 @@ export interface TaskbarEntry {
   readonly title: string;
   readonly isMinimized: boolean;
   readonly isFocused: boolean;
+  /** The app's pinned window: its entry is always there and offers no Close. */
+  readonly isPinned: boolean;
 }
 
 export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
@@ -283,6 +285,7 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
       title: windowTitle(window, app),
       isMinimized: isWindowMinimized(placements, window.id),
       isFocused: window.id === focused,
+      isPinned: window.is_pinned,
     };
   });
 }

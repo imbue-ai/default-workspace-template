@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from flask import Flask
 
@@ -50,6 +51,8 @@ def registry_row_toml(
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
+    # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
+    pin: tuple[str, str, str, str] | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -68,6 +71,11 @@ def registry_row_toml(
         lines.append(f"launcher_rank = {launcher_rank}")
     if default_shortcut is not None:
         lines.append(f'default_shortcut = {{ launch = "{default_shortcut[0]}", mode = "{default_shortcut[1]}" }}')
+    if pin is not None:
+        path, style, scope, default_mode = pin
+        lines.append(
+            f'pin = {{ path = "{path}", style = "{style}", scope = "{scope}", default_mode = "{default_mode}" }}'
+        )
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')
@@ -155,15 +163,25 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
     return messages
 
 
-def window_record(window_id: WindowId, app: str, path: str, is_settling: bool = False) -> Window:
+def window_record(
+    window_id: WindowId,
+    app: str,
+    path: str,
+    is_settling: bool = False,
+    is_pinned: bool = False,
+    scope: LocationScope = LocationScope.LINKED,
+    title: str = "",
+) -> Window:
     """A window record with a fixed opening time and an empty title."""
     return Window(
         id=window_id,
         app=AppName(app),
         path=WindowPath(path),
-        title=WindowTitle(""),
+        title=WindowTitle(title),
         opened_at=TEST_NOW,
         is_settling=is_settling,
+        is_pinned=is_pinned,
+        scope=scope,
     )
 
 

@@ -1,0 +1,1 @@
+The chat manifest declares a `[pin]` at `/`, so every desktop holds one chat root window that is never closed. Nothing else in the chat app changes: the root page keeps reporting the selected chat as its location.

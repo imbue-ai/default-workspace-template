@@ -88,6 +88,12 @@ _SECOND_APP_NAME = "notes"
 _SECOND_APP_DISPLAY_NAME = "Notes"
 _SECOND_SHORTCUT_KEY = f"{_SECOND_APP_NAME}:{_STUB_LAUNCH_ID}"
 
+# A pinned stub app (pinned-taskbar-entries plan), offered when a test needs a pinned window: its root is the home
+# path, and its pin is what the chat's manifest declares.
+_PINNED_APP_NAME = "buddy"
+_PINNED_APP_DISPLAY_NAME = "Buddy"
+_PINNED_HOME_PATH = "/"
+
 # The metrics of the default theme (frontend/src/theme/default.css), for driving gestures by pixel.
 _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
@@ -118,6 +124,7 @@ class E2EServer(FrozenModel):
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
+    pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
 
 
 def _get_json(url: str) -> Any:
@@ -131,11 +138,14 @@ def _running_e2e_server(
     is_second_app_offered: bool = False,
     is_stub_taking_message: bool = False,
     is_catalog_offered: bool = False,
+    # The pinned stub's ``[pin]`` as ``(style, scope, default_mode)``; None offers no pinned app.
+    pin: tuple[str, str, str] | None = None,
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
     ``is_stub_taking_message`` declares a ``message`` param on the stub's ``new`` launch path, which is what makes
     it the app the launcher's seeded prompts go to. With ``is_catalog_offered`` the shell has a template catalog.
+    With ``pin`` a third stub app is registered with that pin, so every desktop holds its pinned window.
     """
     port = find_free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -143,10 +153,12 @@ def _running_e2e_server(
 
     # The stubs serve first, so the registry can name where their pages are framed from.
     second_serving = serve_app(_stub_app(base_url)) if is_second_app_offered else contextlib.nullcontext()
+    pinned_serving = serve_app(_stub_app(base_url)) if pin is not None else contextlib.nullcontext()
     with (
         pytest.MonkeyPatch.context() as monkeypatch,
         serve_app(_stub_app(base_url)) as stub_served,
         second_serving as second_served,
+        pinned_serving as pinned_served,
     ):
         stub_url = stub_served.http_url
         rows = [
@@ -167,6 +179,15 @@ def _running_e2e_server(
                     default_shortcut=(_STUB_LAUNCH_ID, "focus"),
                     display_name=_SECOND_APP_DISPLAY_NAME,
                     launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
+                )
+            )
+        if pinned_served is not None and pin is not None:
+            rows.append(
+                registry_row_toml(
+                    _PINNED_APP_NAME,
+                    pinned_served.http_url,
+                    display_name=_PINNED_APP_DISPLAY_NAME,
+                    pin=(_PINNED_HOME_PATH, *pin),
                 )
             )
         write_registry(registry_path, *rows)
@@ -197,7 +218,12 @@ def _running_e2e_server(
             # Started only once the apps are serving: the first liveness probe must find them answering.
             state.shell.start()
             try:
-                yield E2EServer(base_url=base_url, state_dir=state_dir, stub_url=stub_url)
+                yield E2EServer(
+                    base_url=base_url,
+                    state_dir=state_dir,
+                    stub_url=stub_url,
+                    pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                )
             finally:
                 state.shell.stop()
         finally:
@@ -1147,6 +1173,101 @@ def test_running_apps_widget_lists_windows_and_launch_paths(e2e_server: E2EServe
     popover.locator(f'[data-popover-window="{first}"]').click()
     expect(_window(page, first)).to_be_visible(timeout=10000)
     expect(_window(page, first)).to_have_attribute("data-focused", "true")
+
+
+# Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
+
+
+def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, Any]:
+    """The pinned stub's window on the desktop, off the API; the desktop holds exactly one."""
+    (pinned,) = [window for window in _windows(base_url, desktop_id) if window["app"] == _PINNED_APP_NAME]
+    assert pinned["is_pinned"] is True
+    return pinned
+
+
+def _pinned_entry(page: Page) -> Locator:
+    return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minimizes_and_never_closes(
+    tmp_path: Path, page: Page
+) -> None:
+    """A pinned app's window is on the home desktop from the first read and on a desktop created later; its
+    taskbar entry is there with nothing open, a click restores the window at the cascade frame, another
+    minimizes it; the window has no close control, its menus offer no Close, the close chord minimizes it, and an
+    agent's close is refused."""
+    with _running_e2e_server(tmp_path, pin=("plain", "linked", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        assert pinned["path"] == _PINNED_HOME_PATH and pinned["scope"] == "linked"
+        entry = _taskbar_entry(page, pinned["id"])
+        expect(entry).to_be_visible(timeout=15000)
+        expect(entry).to_have_attribute("data-pinned", "true")
+        expect(entry).to_have_attribute("data-minimized", "true")
+        expect(_shown_windows(page)).to_have_count(0)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+        entry.click()
+        window = _window(page, pinned["id"])
+        expect(window).to_be_visible(timeout=15000)
+        expect(window).to_have_attribute("data-pinned", "true")
+        expect(window.locator('[data-window-control="close"]')).to_have_count(0)
+        expect(window.locator('[data-window-control="minimize"]')).to_be_visible()
+        assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}{_PINNED_HOME_PATH}"
+        window.locator('[data-window-control="menu"]').click()
+        expect(page.locator('[data-floating="window-menu"]')).to_be_visible(timeout=5000)
+        expect(page.locator('[data-floating="window-menu"] [data-menu-item="close"]')).to_have_count(0)
+        page.keyboard.press("Escape")
+        entry.click(button="right")
+        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+        expect(page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
+        page.keyboard.press("Escape")
+
+        # The close chord minimizes the pinned window rather than closing it; the entry click brings it back.
+        page.evaluate("() => window.postMessage({ type: 'minds:close-active-tab' }, '*')")
+        expect(entry).to_have_attribute("data-minimized", "true", timeout=15000)
+        _assert_no_further_window(page, server, [pinned["id"]])
+        entry.click()
+        expect(window).to_be_visible(timeout=15000)
+
+        # An agent's close is refused with the fix, and the window stays.
+        client_id = _client_id(page)
+        payload = json.dumps(
+            {"op": "close", "args": {"window": pinned["id"], "client": client_id}, "requester": None}
+        ).encode()
+        request = urllib.request.Request(
+            f"{server.base_url}/api/layout/broadcast",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(request, timeout=5)
+        assert refused.value.code == 400 and "minimize" in refused.value.read().decode()
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+        # A new desktop is born with its own pinned window, and an open at the home path finds it.
+        _open_desktops_menu(page)
+        page.locator('[data-menu-item="new-desktop"]').click()
+        wait_for(
+            lambda: len(_desktops(server.base_url)) == 2,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="no second desktop was created",
+        )
+        (created,) = [desktop for desktop in _desktops(server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
+        born = _pinned_window(server.base_url, created["id"])
+        assert born["id"] != pinned["id"]
+        expect(_taskbar_entry(page, born["id"])).to_have_attribute("data-pinned", "true", timeout=15000)
+        answer = _broadcast_op(
+            server.base_url,
+            "open",
+            {"app": _PINNED_APP_NAME, "path": _PINNED_HOME_PATH, "client": client_id, "desktop": created["id"]},
+        )
+        assert answer["window_id"] == born["id"]
+        _assert_no_further_window(page, server, [pinned["id"]])
+        assert [window["id"] for window in _windows(server.base_url, created["id"])] == [born["id"]]
 
 
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting with the Playwright

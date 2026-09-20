@@ -29,6 +29,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
       {
         type: "button",
         "data-taskbar-entry": entry.window.id,
+        "data-pinned": entry.isPinned ? "true" : "false",
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "data-settling": entry.window.is_settling ? "true" : "false",

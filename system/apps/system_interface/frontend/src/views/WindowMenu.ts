@@ -3,7 +3,8 @@
  * itself can do (concepts.md section 2.2). Refresh reloads the page; Share asks the minds chrome
  * to open its share settings for the app (never for a critical app); Stop and Start act on the
  * app's supervised program where the workspace can honestly do so; Close removes the window for
- * everyone. Defined once so both menus render the identical list off the identical rule.
+ * everyone, and is absent for a pinned window, which is never closed (pinned-taskbar-entries plan
+ * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
 import type { AppRecord } from "../model/records";
@@ -16,7 +17,8 @@ export interface WindowMenuActions {
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop or start the app. */
   readonly setAppLifecycle: ((action: "stop" | "start") => void) | null;
-  readonly close: () => void;
+  /** Null for a pinned window, which is never closed. */
+  readonly close: (() => void) | null;
 }
 
 /** The window menu's rows, in display order. */
@@ -35,7 +37,9 @@ export function windowMenuEntries(app: AppRecord | undefined, actions: WindowMen
       run: () => setAppLifecycle(action),
     });
   }
-  entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
+  if (actions.close !== null) {
+    entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
+  }
   return entries;
 }
 
@@ -46,7 +50,8 @@ export interface TaskbarEntryMenuActions {
   readonly minimize: () => void;
   readonly maximize: () => void;
   readonly unmaximize: () => void;
-  readonly close: () => void;
+  /** Null for a pinned window's entry, which offers no Close. */
+  readonly close: (() => void) | null;
 }
 
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore, Close. */
@@ -63,6 +68,8 @@ export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isComp
         : { key: "maximize", label: "Maximize", run: actions.maximize },
     );
   }
-  entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
+  if (actions.close !== null) {
+    entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
+  }
   return entries;
 }

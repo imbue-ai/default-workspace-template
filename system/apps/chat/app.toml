@@ -11,6 +11,13 @@ launcher_rank = 10
 launch = "new"
 mode = "new"
 
+# The chat's pinned taskbar entry (docs/system/blueprint/pinned-taskbar-entries/): one root window on
+# every desktop, never closed.
+[pin]
+path = "/"
+style = "plain"
+scope = "linked"
+
 # The desktop interface opens a window at a launch path; the params ride as query parameters.
 [[launch_paths]]
 id = "new"

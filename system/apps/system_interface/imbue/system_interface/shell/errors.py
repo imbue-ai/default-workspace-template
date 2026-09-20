@@ -62,6 +62,10 @@ class WindowNotFoundError(ShellError, LookupError):
         super().__init__(f"Window '{window}' not found")
 
 
+class PinnedWindowError(ShellError, ValueError):
+    """A pinned window cannot be closed (answered 409); minimizing is how it leaves the screen."""
+
+
 class StalePlacementsSaveError(ShellError, ValueError):
     """A browser's placements save is based on an older layout than the one stored (answered 409)."""
 

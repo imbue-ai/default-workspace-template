@@ -85,6 +85,7 @@ export function Window(): m.Component<WindowAttrs> {
           "data-window-state": state,
           "data-minimized": "false",
           "data-focused": isFocused ? "true" : "false",
+          "data-pinned": window.is_pinned ? "true" : "false",
           class:
             "window absolute flex flex-col overflow-hidden rounded-(--desk-window-radius) border " +
             "shadow-(--desk-window-shadow) " +
@@ -109,6 +110,7 @@ export function Window(): m.Component<WindowAttrs> {
             isFocused,
             isCompact,
             isMenuOpen: attrs.isMenuOpen,
+            isPinned: window.is_pinned,
             onControl: attrs.onControl,
             onDoubleClick: attrs.onToggleMaximize,
           }),

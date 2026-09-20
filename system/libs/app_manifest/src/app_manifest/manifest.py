@@ -45,6 +45,43 @@ class ShortcutMode(LowerCaseStrEnum):
     NEW = auto()
 
 
+class PinStyle(LowerCaseStrEnum):
+    """How a pinned entry may be drawn: the plain icon-and-title entry, or the avatar the shell ships."""
+
+    PLAIN = auto()
+    AVATAR = auto()
+
+
+class LocationScope(LowerCaseStrEnum):
+    """Whether a window's path and title are followed by every client, or kept by each client for itself."""
+
+    LINKED = auto()
+    INDEPENDENT = auto()
+
+
+class EntryMode(LowerCaseStrEnum):
+    """Where one client shows a pinned entry: in the taskbar, or floating above the windows."""
+
+    BAR = auto()
+    FLOATING = auto()
+
+
+class Pin(FrozenModel):
+    """An app's pinned taskbar entry (pinned-taskbar-entries plan section 3.1): one window of the app on every
+    desktop, never closed, drawn in the bar or floating."""
+
+    path: LaunchPathValue = Field(
+        description="The home path: where the pinned window opens, a page safe to open any number of times"
+    )
+    style: PinStyle = Field(default=PinStyle.PLAIN, description="How the entry is drawn by a client that chose nothing")
+    scope: LocationScope = Field(
+        default=LocationScope.LINKED, description="Whether the pinned window keeps a path per client"
+    )
+    default_mode: EntryMode = Field(
+        default=EntryMode.BAR, description="Where a client that chose nothing shows the entry"
+    )
+
+
 class LaunchParam(FrozenModel):
     """One documented query parameter of a launch path."""
 
@@ -120,6 +157,7 @@ class AppManifest(FrozenModel):
         description="The app's place among the launcher's leading tiles (lower first); "
         "an app without one follows every ranked app",
     )
+    pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when it declares one")
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
     )

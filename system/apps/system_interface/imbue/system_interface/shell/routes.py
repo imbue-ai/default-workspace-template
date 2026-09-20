@@ -27,6 +27,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoTargetClientError
+from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
@@ -65,7 +66,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | WallpaperNotFoundError()
         ):
             return detail_response(str(error), HTTP_NOT_FOUND)
-        case DesktopConflictError() | LastDesktopError() | StalePlacementsSaveError():
+        case DesktopConflictError() | LastDesktopError() | StalePlacementsSaveError() | PinnedWindowError():
             return detail_response(str(error), HTTP_CONFLICT)
         case InvalidShellValueError() | AppLifecycleRefusedError() | LayoutOpError() | DesktopValueError():
             return detail_response(str(error), HTTP_BAD_REQUEST)

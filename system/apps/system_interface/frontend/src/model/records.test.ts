@@ -38,6 +38,21 @@ describe("parseDesktop", () => {
     expect(desktop.windows[0].path).toBe("/?doc=1");
   });
 
+  it("reads a V1 window record with the pin fields defaulted, and a pinned window's own", () => {
+    const desktop = parseDesktop(DESKTOP_WIRE);
+    expect(desktop.windows[0].is_pinned).toBe(false);
+    expect(desktop.windows[0].scope).toBe("linked");
+    const pinned = parseDesktop({
+      ...DESKTOP_WIRE,
+      windows: [{ ...DESKTOP_WIRE.windows[0], is_pinned: true, scope: "independent" }],
+    });
+    expect(pinned.windows[0].is_pinned).toBe(true);
+    expect(pinned.windows[0].scope).toBe("independent");
+    expect(() =>
+      parseDesktop({ ...DESKTOP_WIRE, windows: [{ ...DESKTOP_WIRE.windows[0], scope: "personal" }] }),
+    ).toThrow(WireShapeError);
+  });
+
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
     expect(parseDesktop({ ...DESKTOP_WIRE, wallpaper: null }).wallpaper).toBeNull();
     expect(() => parseDesktop({ ...DESKTOP_WIRE, windows: "none" })).toThrow(WireShapeError);
@@ -96,6 +111,19 @@ describe("parseAppRecord", () => {
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
+    expect(app.pin).toBeNull();
+  });
+
+  it("reads an app's pin and refuses one outside the vocabularies", () => {
+    const wire = { name: "docs", url: "http://127.0.0.1:1" };
+    const pinned = parseAppRecord({
+      ...wire,
+      pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+    });
+    expect(pinned.pin).toEqual({ path: "/", style: "avatar", scope: "independent", default_mode: "floating" });
+    expect(() =>
+      parseAppRecord({ ...wire, pin: { path: "/", style: "dot", scope: "linked", default_mode: "bar" } }),
+    ).toThrow(WireShapeError);
   });
 
   it("reads a focus shortcut and a null rank", () => {

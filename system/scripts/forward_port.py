@@ -22,8 +22,9 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
-``default_shortcut`` (launch and mode), and ``launch_paths`` (id, label, path,
-and the names of the params); the icon is read from the file the
+``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
+and the names of the params), and ``pin`` (path, and style, scope, and
+default_mode when given); the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -141,8 +142,8 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``) are handled on their
-# own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``) are handled
+# on their own. ``program`` defaults to the name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "priority", "program")
 _MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
@@ -168,7 +169,12 @@ _MANIFEST_OWNED_KEYS = (
     "default_shortcut",
     "actions",
     "launch_paths",
+    "pin",
 )
+
+# The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
+# required. The row carries only what the manifest wrote, and the reader fills the defaults.
+_PIN_OPTIONAL_STRING_KEYS = ("style", "scope", "default_mode")
 
 # The TOML basic-string escapes for the characters that have a short form;
 # every other control character is written as ``\uXXXX``.
@@ -517,6 +523,13 @@ def _read_manifest(
             return {}, None, shortcut_error
         fields["default_shortcut"] = copied_shortcut
 
+    pin = raw.get("pin")
+    if pin is not None:
+        copied_pin, pin_error = _copied_pin(pin, path)
+        if copied_pin is None:
+            return {}, None, pin_error
+        fields["pin"] = copied_pin
+
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
@@ -567,6 +580,21 @@ def _copied_default_shortcut(
             f"manifest {str(path)!r}: default_shortcut must be a table with string 'launch' and 'mode'",
         )
     return {"launch": shortcut["launch"], "mode": shortcut["mode"]}, None
+
+
+def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | None]:
+    """The manifest's ``[pin]`` table as the registry row carries it: ``path``, and each of ``style``,
+    ``scope``, and ``default_mode`` the manifest wrote. Returns ``(copied, None)``, or ``(None, error)``
+    when the value is not shaped as the manifest requires."""
+    if not (isinstance(pin, dict) and isinstance(pin.get("path"), str)):
+        return None, f"manifest {str(path)!r}: pin must be a table with a string 'path'"
+    copied: dict[str, object] = {"path": pin["path"]}
+    for key in _PIN_OPTIONAL_STRING_KEYS:
+        if key in pin:
+            if not isinstance(pin[key], str):
+                return None, f"manifest {str(path)!r}: pin.{key} must be a string"
+            copied[key] = pin[key]
+    return copied, None
 
 
 def _copied_launch_path(
@@ -740,7 +768,7 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths) are copied onto the row on every call."
+            "launch_paths, pin) are copied onto the row on every call."
         ),
     )
     parser.add_argument(

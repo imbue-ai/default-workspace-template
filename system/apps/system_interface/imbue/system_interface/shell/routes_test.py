@@ -285,6 +285,89 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
 
 
+# Pinned windows (pinned-taskbar-entries plan sections 3.2 and 4.5)
+
+
+def _pinned_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, *extra_rows: str) -> Flask:
+    """The shell over the two-app registry plus a pinned ``buddy`` app at ``/`` and ``extra_rows``."""
+    registry_path = write_two_app_registry(
+        tmp_path,
+        registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar")),
+        *extra_rows,
+    )
+    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+
+
+def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_is_born_with_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    # A connected window that has read nothing yet: the route's read below is the first, and reconciles.
+    client_queue = _shell(app).broadcaster.register()
+    _shell(app).broadcaster.set_client_info(client_queue, "c1", "home")
+
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    (pinned,) = home["windows"]
+    assert (pinned["app"], pinned["path"], pinned["is_pinned"], pinned["scope"]) == ("buddy", "/", True, "linked")
+    assert pinned["title"] == "" and pinned["is_settling"] is False
+    # The reconcile that created it was announced once, after the read; a second read announces nothing.
+    assert [message["type"] for message in drain_messages(client_queue)] == ["desktops_updated"]
+    assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == [pinned]
+    assert drain_messages(client_queue) == []
+    # The inventory's app carries the pin.
+    by_name = {entry["name"]: entry for entry in client.get("/api/inventory").get_json()["apps"]}
+    assert by_name["buddy"]["pin"] == {"path": "/", "style": "plain", "scope": "linked", "default_mode": "bar"}
+    assert by_name["files"]["pin"] is None
+
+    created = client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4}).get_json()
+    (born,) = created["windows"]
+    assert born["app"] == "buddy" and born["is_pinned"] is True and born["id"] != pinned["id"]
+    # An open at the home path with the default focus behaviour finds the pinned window.
+    focused = _open_window(client, "buddy", "/")
+    assert focused.status_code == 200 and focused.get_json() == {"window": pinned, "is_new": False}
+
+
+def test_a_pinned_window_is_refused_a_close_by_the_route_and_by_the_op(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+
+    refused = client.post(f"/api/desktops/home/windows/{pinned['id']}/close")
+    assert refused.status_code == 409 and "minimize" in refused.get_json()["detail"]
+    op_refused = _op(client, "close", {"window": pinned["id"]}, _TERMINAL_REQUESTER)
+    assert op_refused.status_code == 400 and "minimize" in op_refused.get_json()["detail"]
+    assert [window["id"] for window in _desktop_windows(client)] == [pinned["id"]]
+    # Minimizing is what the op offers instead, and an ordinary window still closes.
+    minimized = _op(client, "minimize", {"window": pinned["id"]}, _TERMINAL_REQUESTER)
+    assert minimized.get_json()["layout"]["placements"][-1]["is_minimized"] is True
+    ordinary = _open_window(client, "buddy", "/?doc=2", if_present="new").get_json()["window"]
+    assert client.post(f"/api/desktops/home/windows/{ordinary['id']}/close").status_code == 204
+
+
+def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_pin_frees_its_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+    assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == []
+
+    write_two_app_registry(tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar")))
+    inventory.reload_registry()
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert pinned["app"] == "buddy" and pinned["is_pinned"] is True
+
+    write_two_app_registry(tmp_path, registry_row_toml("buddy", "http://localhost:7002"))
+    inventory.reload_registry()
+    (freed,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert freed["id"] == pinned["id"] and freed["is_pinned"] is False
+    assert client.post(f"/api/desktops/home/windows/{freed['id']}/close").status_code == 204
+
+
 # The desktop routes (desktop contracts.md section 5)
 
 

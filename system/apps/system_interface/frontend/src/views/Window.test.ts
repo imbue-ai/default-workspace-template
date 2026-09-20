@@ -46,6 +46,15 @@ describe("Window", () => {
     expect(element.querySelector("[data-window-content]")).not.toBeNull();
     expect(element.querySelectorAll("[data-resize-edge]")).toHaveLength(8);
     expect(element.querySelector(".window-title")?.textContent).toBe("Plan");
+    expect(element.getAttribute("data-pinned")).toBe("false");
+    expect(element.querySelector('[data-window-control="close"]')).not.toBeNull();
+  });
+
+  it("a pinned window is marked and has no close control", () => {
+    const element = render({ window: windowRecord("win-1", "docs", "/", { is_pinned: true }) });
+    expect(element.getAttribute("data-pinned")).toBe("true");
+    expect(element.querySelector('[data-window-control="close"]')).toBeNull();
+    expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 
   it("lays a shield over the content when asked, whose press raises an unfocused window and not a focused one", () => {

@@ -11,11 +11,13 @@ written once here and once in TypeScript against the same constants and the shar
 import math
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime
 from typing import Final
 from typing import assert_never
 from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 
+from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
@@ -24,7 +26,9 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import Desktop
+from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
@@ -39,6 +43,7 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.primitives import mint_window_id
 
 # The cascade rule (fixed, in fractions): window ``n`` of a client's desktop steps from the origin, cycling.
 CASCADE_ORIGIN_X: Final[float] = 0.05
@@ -355,6 +360,92 @@ def with_window_location(desktop: Desktop, window_id: WindowId, path: WindowPath
         to_update(
             desktop.field_ref().windows,
             tuple(updated if candidate.id == window_id else candidate for candidate in desktop.windows),
+        )
+    )
+
+
+# Desktops: pinned windows (pinned-taskbar-entries plan section 3.2)
+
+
+@pure
+def pinned_apps(rows: Sequence[RegistryRow]) -> tuple[AppPin, ...]:
+    """The pinned apps: every registered, non-internal app whose row carries a pin, in registry order."""
+    return tuple(AppPin(app=row.name, pin=row.pin) for row in rows if row.pin is not None and not row.internal)
+
+
+def pinned_window(app_pin: AppPin, now: datetime) -> Window:
+    """The record an ensure creates: the pin's home path, an empty title, settled, pinned, with the pin's scope."""
+    return Window(
+        id=mint_window_id(),
+        app=app_pin.app,
+        path=WindowPath(str(app_pin.pin.path)),
+        title=WindowTitle(""),
+        opened_at=now,
+        is_settling=False,
+        is_pinned=True,
+        scope=app_pin.pin.scope,
+    )
+
+
+@pure
+def _as_pinned(window: Window, app_pin: AppPin) -> Window:
+    """The window adopted as the app's pinned window: marked, given the pin's scope, and, when independent, its
+    shared title cleared (each client keeps its own from then on)."""
+    scope = app_pin.pin.scope
+    title = WindowTitle("") if scope is LocationScope.INDEPENDENT else window.title
+    if window.is_pinned and window.scope is scope and window.title == title:
+        return window
+    return window.model_copy_update(
+        to_update(window.field_ref().is_pinned, True),
+        to_update(window.field_ref().scope, scope),
+        to_update(window.field_ref().title, title),
+    )
+
+
+@pure
+def _with_pinned_window_ensured(desktop: Desktop, app_pin: AppPin, now: datetime) -> Desktop:
+    """The desktop holding the app's pinned window: the one already marked, else the earliest-opened window of the
+    app at the home path adopted, else a new one."""
+    home_path = WindowPath(str(app_pin.pin.path))
+    marked = next((window for window in desktop.windows if window.app == app_pin.app and window.is_pinned), None)
+    adoptable = marked if marked is not None else find_window_at(desktop, app_pin.app, home_path)
+    if adoptable is None:
+        return with_window_opened(desktop, pinned_window(app_pin, now))
+    adopted = _as_pinned(adoptable, app_pin)
+    if adopted is adoptable:
+        return desktop
+    return desktop.model_copy_update(
+        to_update(
+            desktop.field_ref().windows,
+            tuple(adopted if candidate.id == adoptable.id else candidate for candidate in desktop.windows),
+        )
+    )
+
+
+def with_pinned_windows_ensured(desktop: Desktop, pins: Sequence[AppPin], now: datetime) -> DesktopChangeOutcome:
+    """The desktop holding exactly one pinned window per pinned app, adopting or creating as needed, and whether that
+    changed it. Not pure: a window the desktop lacks is minted here."""
+    ensured = desktop
+    for app_pin in pins:
+        ensured = _with_pinned_window_ensured(ensured, app_pin, now)
+    return DesktopChangeOutcome(desktop=ensured, is_written=ensured is not desktop)
+
+
+@pure
+def without_pin_marks(desktop: Desktop, pinned_app_names: AbstractSet[AppName]) -> Desktop:
+    """The desktop with every pinned window of an app no longer pinned turned back into an ordinary window; the same
+    object when none is."""
+    if not any(window.is_pinned and window.app not in pinned_app_names for window in desktop.windows):
+        return desktop
+    return desktop.model_copy_update(
+        to_update(
+            desktop.field_ref().windows,
+            tuple(
+                window.model_copy_update(to_update(window.field_ref().is_pinned, False))
+                if window.is_pinned and window.app not in pinned_app_names
+                else window
+                for window in desktop.windows
+            ),
         )
     )
 

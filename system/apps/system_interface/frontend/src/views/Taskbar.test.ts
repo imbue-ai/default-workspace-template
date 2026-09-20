@@ -19,14 +19,23 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         title: "Plan",
         isMinimized: false,
         isFocused: true,
+        isPinned: false,
       },
-      { window: windowRecord("win-2", "docs", "/b"), app: docs, title: "Docs", isMinimized: true, isFocused: false },
+      {
+        window: windowRecord("win-2", "docs", "/b"),
+        app: docs,
+        title: "Docs",
+        isMinimized: true,
+        isFocused: false,
+        isPinned: false,
+      },
       {
         window: windowRecord("win-3", "docs", "/new", { is_settling: true }),
         app: docs,
         title: "Docs",
         isMinimized: true,
         isFocused: false,
+        isPinned: true,
       },
     ],
     isCompact: false,
@@ -60,6 +69,7 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-focused"))).toEqual(["true", "false", "false"]);
     expect(entries.map((entry) => entry.getAttribute("data-settling"))).toEqual(["false", "false", "true"]);
+    expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
     expect(entries[0].querySelector(".taskbar-entry-title")?.textContent).toBe("Plan");
     (entries[1] as HTMLElement).click();
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
