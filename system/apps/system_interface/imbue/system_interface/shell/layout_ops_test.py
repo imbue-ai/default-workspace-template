@@ -25,6 +25,6 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
     with pytest.raises(LayoutOpError, match="marker"):
         parse_op_requester({"app": "files", "marker": 7})
     # The address spelling of the tabbed shell is refused like any other string.
-    for malformed in (7, [], {"marker": "agent-1"}, {"app": 3}, "app:files?instance=agent-1"):
+    for malformed in (7, [], {"marker": "agent-1"}, {"app": 3}, {"app": "Bad Name"}, "app:files?instance=agent-1"):
         with pytest.raises(LayoutOpError, match="requester"):
             parse_op_requester(malformed)
