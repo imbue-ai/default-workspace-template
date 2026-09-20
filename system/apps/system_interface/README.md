@@ -95,9 +95,11 @@ reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
   window whose path carries the marker. The document verbs (`open`, `focus`,
   `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`, the
   shortcut and wallpaper edits) are applied to the files and announced as
-  `desktops_updated` and `placements_updated`; `context`, `desktops`, and
-  `list` answer from the inventory document; only `refresh` and
-  `reload_system_interface` reach the browser as `layout_op` messages.
+  `desktops_updated` and `placements_updated`; `context` answers every
+  client's recent activity, folded from the client-activity log and the live
+  socket registrations, and `desktops` and `list` answer the desktops; only
+  `refresh` and `reload_system_interface` reach the browser as `layout_op`
+  messages.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, client activity, layout
