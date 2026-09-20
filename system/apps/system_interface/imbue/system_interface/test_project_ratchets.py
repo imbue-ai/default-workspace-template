@@ -193,12 +193,12 @@ _PIXEL_METRIC_RULE = RatchetRuleInfo(
     ),
 )
 
-# A pixel length inside a string literal on a code line: a Tailwind utility (``h-[36px]``), an inline
-# style, a class. Comment lines do not count, and neither do the container-query breakpoints
-# (``@max-[620px]``), which are breakpoints rather than metrics and, like the compact breakpoint,
-# live in the code by design.
+# A pixel length inside a balanced string literal on a code line: a Tailwind utility (``h-[36px]``),
+# an inline style, a class. Comment lines and trailing comments do not count, and neither do the
+# container-query breakpoints (``@max-[620px]``), which are breakpoints rather than metrics and,
+# like the compact breakpoint, live in the code by design.
 _PIXEL_METRIC_PATTERN = RegexPattern(
-    r"""^(?![ \t]*(?://|\*|/\*)).*["'`][^"'`\n]*(?<!@max-\[)(?<!@min-\[)\b\d+(?:\.\d+)?px\b""",
+    r"""^(?![ \t]*(?://|\*|/\*)).*?(["'`])(?:(?!\1)[^\n])*?(?<!@max-\[)(?<!@min-\[)\b\d+(?:\.\d+)?px\b(?:(?!\1)[^\n])*\1""",
     multiline=True,
 )
 
@@ -225,6 +225,9 @@ def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
         (" * 24px would not be visible", False),
         ('style: { left: `${rect.x}px` },', False),
         ('class: "h-(--desk-title-bar-height)",', False),
+        ('const x = "a"; // 36px tall', False),
+        ('m("div", { class: "h-9" }), // pad 12px', False),
+        ('class: "it\'s 36px wide",', True),
     ],
 )
 def test_the_pixel_metric_pattern_catches_a_literal_and_not_a_breakpoint_or_a_comment(line: str, is_metric: bool) -> None:
