@@ -69,8 +69,11 @@ _BLOCKED_COMMANDS = [
     "export $(cat data/.secrets/svc.env | xargs) && svc",
     "svc --env-file data/.secrets/svc.env",
     "cat /home/user/workspace/data/.secrets/svc.env",
-    # The wrapper in front does not launder a read chained after it.
+    # The wrapper in front does not launder a read chained after it, nor one it
+    # is asked to run.
     f"{_WRAPPER} && cat data/.secrets/svc.env",
+    "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- cat data/.secrets/svc.env",
+    "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- bash -c 'cat data/.secrets/svc.env'",
     # A shell string is judged by the same rule as a top-level command.
     'bash -c "cat data/.secrets/svc.env"',
     "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c 'cat data/.secrets/svc.env'",

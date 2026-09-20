@@ -15,7 +15,10 @@ reach a process only through ``with_secrets.py``.
   words mention ``data/.secrets`` passes only when its program is the wrapper or
   the request script (directly, or through ``python3`` / ``uv run``), or is
   ``ls`` or ``rm``. A ``bash -c "..."`` string is unwrapped and judged by the
-  same rule, which is how a supervisord program command passes.
+  same rule, which is how a supervisord program command passes, and so is the
+  command the wrapper itself runs after its ``--``: the wrapper puts the
+  variables in that command's environment, it does not license it to open the
+  file.
 * A **file** tool (claude's Read / Grep / Glob / Edit / Write, pi's read / edit /
   write / grep / find, codex's ``apply_patch``) is refused when its path, or the
   patch's file lines, point under ``data/.secrets/``. The directory's README is
@@ -52,6 +55,8 @@ _README_NAME = "README.md"
 WRAPPER_SCRIPT = "with_secrets.py"
 REQUEST_SCRIPT = "request_secret.py"
 _ALLOWED_SCRIPTS = frozenset({WRAPPER_SCRIPT, REQUEST_SCRIPT})
+# What separates the wrapper's env file from the command it runs.
+_WRAPPER_ARGUMENT_SEPARATOR = "--"
 _ALLOWED_PROGRAMS = frozenset({"ls", "rm"})
 _PYTHON_PROGRAMS = frozenset({"python", "python3"})
 # Python's own flags that keep the next argument a script rather than code.
@@ -121,8 +126,8 @@ def _strip_leading_assignments(words: Sequence[str]) -> tuple[str, ...]:
     return tuple(remaining)
 
 
-def _runs_allowed_script(words: Sequence[str]) -> bool:
-    """Whether ``words`` invoke the wrapper or the request script as their program.
+def _allowed_script(words: Sequence[str]) -> str | None:
+    """The wrapper or request script ``words`` invoke as their program, or None.
 
     Accepts the script run directly, through ``python3`` (with python's own
     passthrough flags, never ``-c`` or ``-m``), or through ``uv run [python3]``.
@@ -134,7 +139,17 @@ def _runs_allowed_script(words: Sequence[str]) -> bool:
         remaining = remaining[1:]
         while remaining and remaining[0] in _PYTHON_PASSTHROUGH_FLAGS:
             remaining = remaining[1:]
-    return bool(remaining) and _basename(remaining[0]) in _ALLOWED_SCRIPTS
+    if not remaining:
+        return None
+    script = _basename(remaining[0])
+    return script if script in _ALLOWED_SCRIPTS else None
+
+
+def _wrapped_command(words: Sequence[str]) -> tuple[str, ...]:
+    """The command a wrapper invocation runs: everything after its first ``--``."""
+    if _WRAPPER_ARGUMENT_SEPARATOR not in words:
+        return ()
+    return tuple(words[list(words).index(_WRAPPER_ARGUMENT_SEPARATOR) + 1 :])
 
 
 def _segment_violation(words: Sequence[str]) -> str | None:
@@ -169,9 +184,15 @@ def _segment_violation(words: Sequence[str]) -> str | None:
         return _SHELL_REASON
     if _basename(program_words[0]) in _ALLOWED_PROGRAMS:
         return None
-    if _runs_allowed_script(program_words):
-        return None
-    return _SHELL_REASON
+    script = _allowed_script(program_words)
+    if script is None:
+        return _SHELL_REASON
+    if script == WRAPPER_SCRIPT:
+        # The wrapper hands its variables to the command after `--` and execs it;
+        # that command is a command of its own, judged by the same rule, so the
+        # wrapper does not launder a `cat` of the file.
+        return _segment_violation(_wrapped_command(program_words))
+    return None
 
 
 def classify_command(command: str) -> str | None:
