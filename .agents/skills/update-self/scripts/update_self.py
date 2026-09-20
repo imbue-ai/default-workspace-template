@@ -360,7 +360,7 @@ def wait_and_open_chat_tab(
 ) -> bool:
     """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
 
-    Stops on the first success: a tab is surfaced once, and re-opening it later
+    Stops on the first success: a window is surfaced once, and re-opening it later
     would yank a user who has since moved on back to it.
     """
     started_at = monotonic()
