@@ -30,7 +30,7 @@ Crystallize creates one of:
 The type drives two things: which **gates** the worker emits (skill →
 `outline-approval` then `final-creation`; app → none, since the user
 confirmed the live site already) and the **go-live** step after merge (skill →
-post-crystallize migration; app → refresh the tab). The worker reads the
+post-crystallize migration; app → refresh the window). The worker reads the
 type from the task file and loads `type-<TYPE>.md`; you proxy
 whatever gates it emits.
 
@@ -217,7 +217,7 @@ Flow-specific substitutions:
 - Milestones: any name, non-blocking → provisional merge per `lead-proxy.md`'s
   "Milestone reports: provisional merge". Provisional go-live is the minimum
   that makes the creation usable: **skill** → it is on disk at
-  `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
+  `.agents/skills/$NAME/` and invocable; **app** → refresh the window. Step 6
   still runs only on `done`.
 - Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
   then Step 6); `stuck` (failure flow per

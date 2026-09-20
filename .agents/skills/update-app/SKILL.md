@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
 metadata:
   author: imbue
 ---
@@ -9,18 +9,18 @@ metadata:
 
 Both apps and background services run as a `[program:<name>]` under
 supervisord (one program per file under `system/supervisord.conf.d/`). They differ only in whether
-there's a tab to refresh:
+there's a window to refresh:
 
-- **App** -- the user opens it as a tab rendering at the service's own
+- **App** -- the user opens it as a window rendering at the service's own
   origin, `http://<name>.<workspace-host>/` (scaffolded via
   `build-app`). Lives under `system/apps/<package>/`.
-- **Background service** -- a supervisord program with no tab (`host-backup`,
+- **Background service** -- a supervisord program with no window (`host-backup`,
   `share-gateway`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
 
 Two things are easy to forget when editing either, and both leave the user
 looking at stale state: a code change doesn't take effect until the process
-is reloaded, and an open app tab keeps showing the old page until it's
+is reloaded, and an open app window keeps showing the old page until it's
 refreshed. The live change loop below handles both.
 
 If you're doing something *other* than editing an existing app or service:
@@ -50,7 +50,7 @@ the request is -- it changes what you do *before* touching code:
   to a usable state. Never build heavy against an unconfirmed shape.
 
   When a hand mock won't convince -- a redesign, or a data-touching change --
-  boot the *actually changed* service as a labeled preview tab beside the
+  boot the *actually changed* service as a labeled preview window beside the
   live one via the shared `serve_isolated_instance.py` script (invocation
   under "Protect the user's data while you verify"; it's the same preview
   mechanism the system-interface flow uses). Keep the lighter hand mock for
@@ -200,7 +200,7 @@ For any other window manipulation, see `manage-desktop`. Background daemons
 have no window -- skip the refresh, but not the rest of this step.
 
 If you restarted the whole services agent rather than a single program, one
-tab refresh is not enough -- the workspace shell itself was bounced. Rebuild
+window refresh is not enough -- the workspace shell itself was bounced. Rebuild
 the user's whole view instead:
 
 ```bash
@@ -222,7 +222,7 @@ would (not just "the process is up"):
   `http://127.0.0.1:<port>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
-  the symptom-indexed gotchas (connection refused, a tab stuck on the
+  the symptom-indexed gotchas (connection refused, a window stuck on the
   loading page, broken WebSockets) are in that skill's
   `cross-flow-gotchas.md`.
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
@@ -343,7 +343,7 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   work you did by hand** -> invoke `update-creation` with
   `type=app`. It opens a tracking ticket, dispatches the generic
   harden worker to verify/test the change on its own branch, proxies the
-  gates, merges, and refreshes the tab on go-live.
+  gates, merges, and refreshes the window on go-live.
 - **The service errored or produced a wrong result and you worked around
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.

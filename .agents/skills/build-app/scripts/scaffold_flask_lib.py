@@ -291,7 +291,7 @@ app = Flask("{package}", static_folder=None)
 def index() -> Response:
     # The location beacon: post the path being viewed one hop up (to the
     # workspace shell embedding this page) on each page load, so the shell can
-    # reopen this app's tab at the same place. Keep the line on every page you
+    # reopen this app's window at the same place. Keep the line on every page you
     # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
         "<!doctype html><html><body>"
@@ -634,7 +634,7 @@ def main() -> None:
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
-        f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
+        f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."

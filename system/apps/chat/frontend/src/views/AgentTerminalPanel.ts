@@ -1,5 +1,5 @@
 /**
- * Terminal tab bound to a specific agent.
+ * The terminal face bound to a specific agent.
  *
  * Opening an agent terminal attaches to that agent's tmux session, which does
  * not exist while the agent is STOPPED -- the ttyd dispatch's `tmux attach`

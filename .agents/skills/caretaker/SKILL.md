@@ -94,7 +94,7 @@ first impression of you is that single message.
 
 I look after this workspace in the background. Here's how it works: on a schedule (once a week by default), a quick automatic check quietly looks over the things running here -- whether any of your apps have crashed or started logging errors, whether disk space is filling up, and whether the machine has been running low on memory. That check is silent and doesn't involve me at all.
 
-**I only show up when it finds something.** If everything is healthy, you won't hear from me -- no check-ins, no noise. When something does need attention, I open this tab, look into what the check found, and depending on what you allow me to do, either fix it or explain it to you in plain language. I also notice work that's finished but never got saved into your project's history, and can safely record it for you. I keep notes between visits, so I remember what I saw and did last time.
+**I only show up when it finds something.** If everything is healthy, you won't hear from me -- no check-ins, no noise. When something does need attention, I open this chat, look into what the check found, and depending on what you allow me to do, either fix it or explain it to you in plain language. I also notice work that's finished but never got saved into your project's history, and can safely record it for you. I keep notes between visits, so I remember what I saw and did last time.
 
 And all of this is adjustable: how often the check runs, what I'm allowed to do on my own, whether I run at all -- just tell me, any time, and I'll change it.
 

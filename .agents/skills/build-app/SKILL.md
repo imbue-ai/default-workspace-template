@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -8,7 +8,7 @@ metadata:
 
 # How to build an app
 
-An "app" here is something the user can click on as a tab in
+An "app" here is something the user can open as a window in
 the desktop client and see render at its own browser origin --
 locally `http://<name>.<workspace-host>/` (e.g.
 `http://news.host-ab12.localhost:8421/`). The forwarder routes that
@@ -62,7 +62,7 @@ Map of the flow:
   service, put a mock UI in front of the user, loop to explicit confirmation of
   the look-and-feel. Hard gate.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
-  *after* confirmation): implement real routes, verify, surface the tab.
+  *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
   confirms the *working* site looks right, hand thorough testing + the review
   gates to a background worker. The main agent never runs those itself.
@@ -117,12 +117,12 @@ behavior. Use the escape hatch instead.
 
 Do not extend `system/apps/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new apps go in their own scaffolded lib
-under `system/apps/<your-package>/` so they get an isolated tab and origin.
+under `system/apps/<your-package>/` so they get an isolated window and origin.
 
 ## Pre-flight (both paths)
 
 - **Pick a kebab-case app name.** Becomes the service's hostname
-  label: the tab renders at `http://<name>.<workspace-host>/`, so the
+  label: the window renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
   prefixes are reserved for workspace hostname coordinates), and it must not
@@ -289,7 +289,7 @@ Scaffolding the service is fine before confirmation -- it is cheap and reversibl
 **Building the real data layer or state architecture before the user confirms the
 look-and-feel is the tripwire: do not.** Instead, serve a *throwaway mock* of the
 proposed UI as a route inside the scaffolded service, so the user sees it as a
-real tab and reacts to the actual look-and-feel.
+real window and reacts to the actual look-and-feel.
 
 This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
@@ -328,7 +328,7 @@ Everything from here runs **only after** the user has confirmed the mock. The
 goal of the foreground work is a *usable* site the user can actually try -- not a
 fully hardened one. Implement the real routes (replacing the mock), wire in the
 data/state architecture you recorded in Step 0, run the Step 3 smoke verify, and
-surface the tab (Step 4). Then **stop and hand the running site to the user** --
+surface the window (Step 4). Then **stop and hand the running site to the user** --
 the thorough testing and review gates happen in the background (Step 5), not here.
 
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
@@ -415,7 +415,7 @@ registered backend URL `http://127.0.0.1:<port>/` then a Playwright
 assertion on a unique-to-your-app marker.
 
 If verification surfaces something unexpected (connection refused,
-a tab stuck on the loading page, broken WebSockets), see
+a window stuck on the loading page, broken WebSockets), see
 [references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
 -- it's symptom-indexed.
 
@@ -493,7 +493,7 @@ Reading the confirmation signal:
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
 task file (set `type: app`), launching the generic worker,
-polling, merging on `done`, and refreshing the tab after merge. Give it only:
+polling, merging on `done`, and refreshing the window after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker
 loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
@@ -604,7 +604,7 @@ Flags:
   `--internal` and `--no-icon` are for registrations with no app directory
   (previews, isolated test servers) and cannot be combined with it.
 - `--name`: app name. It becomes the service's hostname label (the
-  tab renders at `http://<name>.<workspace-host>/`), so it is
+  window renders at `http://<name>.<workspace-host>/`), so it is
   validated: lowercase letters/digits/underscores with single hyphens,
   and it must not be `localhost` or start with `host-` or `agent-`
   (reserved for workspace hostname coordinates). Registration fails
@@ -639,7 +639,7 @@ Flags:
   user explicitly asks for a colored icon.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
-  declines an icon, or for short-lived preview tabs.
+  declines an icon, or for short-lived preview windows.
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what

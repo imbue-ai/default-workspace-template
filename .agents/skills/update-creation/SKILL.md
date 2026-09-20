@@ -48,7 +48,7 @@ exploratory work is NOT an update candidate.
 `type` is `skill`, `app`, `service`, or `system-interface`. It drives where the
 worker looks (`type-<TYPE>.md`) and the **go-live** strategy (Step 4):
 skill → cross-reference sweep is part of the edit, nothing else; app →
-refresh the tab (a background service has no tab -- restart it instead);
+refresh the window (a background service has no window -- restart it instead);
 system-interface → the `update-system-interface` wrapper owns a
 preview-before-merge and a go-live through the atomic update apply, and calls
 into this flow for the orchestration core only (see that skill).
