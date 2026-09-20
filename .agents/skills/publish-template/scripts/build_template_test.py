@@ -108,6 +108,22 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     return source, base_ref
 
 
+def _declare_secret(source: Path) -> None:
+    """Give the demo app a `[[secrets]]` declaration, and the live workspace the file it names.
+
+    The env file stays untracked: it is what the writer checks the declaration
+    against, never something the snapshot may contain.
+    """
+    (source / "system/apps/demo/app.toml").write_text(
+        'name = "demo"\ndisplay_name = "Demo"\nicon = "icon.svg"\n\n'
+        '[[secrets]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\nnote = "a Demo API token"\n'
+    )
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Declare the demo app's secret", cwd=source)
+    (source / "data/.secrets").mkdir(parents=True)
+    (source / "data/.secrets/demo.env").write_text("DEMO_TOKEN='x'\n")
+
+
 def _update_self(source: Path, base_ref: str) -> None:
     """Build a second app, then land an update-self merge of a new template release.
 
@@ -190,9 +206,10 @@ def built_snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A template assembled by the real script, in a real linked worktree."""
     root = tmp_path_factory.mktemp("publish")
     source, base_ref = _make_source_repo(root)
+    _declare_secret(source)
     worktree = _linked_worktree(source, root)
 
-    completed = _assemble(worktree, base_ref)
+    completed = _assemble(worktree, base_ref, live_workspace=source)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return worktree
@@ -223,6 +240,26 @@ def test_an_included_mcp_config_ships_renamed_so_nothing_activates_before_its_se
 ) -> None:
     assert not (built_snapshot / ".mcp.json").exists()
     assert '"demo-mcp"' in (built_snapshot / ".mcp.template.json").read_text()
+
+
+@_needs_scanners
+def test_a_declared_secret_lands_in_both_halves_of_the_manifest(
+    built_snapshot: Path,
+) -> None:
+    """The TOML entry is generated from the app's declaration, and template.md gets
+    the matching requires_secret: line, which the validator counts against it."""
+    toml_text = (built_snapshot / "template.toml").read_text()
+    assert (
+        '[[requirements.secret]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\n'
+        'note = "a Demo API token"\n'
+    ) in toml_text
+    markdown = (built_snapshot / "template.md").read_text()
+    assert (
+        "- requires_secret: data/.secrets/demo.env with DEMO_TOKEN (a Demo API token)"
+        in markdown
+    )
+    assert "DEMO_TOKEN='x'" not in markdown
+    assert not (built_snapshot / "data/.secrets/demo.env").exists()
 
 
 @_needs_scanners

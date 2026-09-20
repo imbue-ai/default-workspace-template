@@ -452,7 +452,6 @@ fi
 yaml_scalar() {
     python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
-requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES" 2>/dev/null || true)"
 title_yaml="$(yaml_scalar "$TITLE")"
 description_yaml="$(yaml_scalar "$manifest_description")"
 thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
@@ -496,6 +495,10 @@ if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${
     echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
+
+# Read after the writer has run: the file holds the requires_secret: lines that
+# match the [[requirements.secret]] entries it just generated.
+requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES" 2>/dev/null || true)"
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
