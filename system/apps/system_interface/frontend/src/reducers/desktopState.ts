@@ -79,6 +79,7 @@ export type DesktopEvent =
       readonly isNew: boolean;
     }
   | { readonly type: "window_closed_here"; readonly desktopId: string; readonly windowId: string }
+  | { readonly type: "window_location_reported"; readonly desktopId: string; readonly window: WindowRecord }
   | { readonly type: "render_modes_changed"; readonly modes: RenderModes };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
@@ -144,6 +145,18 @@ function withWindowClosedHere(state: DesktopState, desktopId: string, windowId: 
   return { ...state, desktops, layout };
 }
 
+/** The window's record as the location route answered it, in place; nothing for a window since gone. */
+function withWindowLocationReported(state: DesktopState, desktopId: string, window: WindowRecord): DesktopState {
+  const desktop = state.desktops.find((candidate) => candidate.id === desktopId);
+  if (desktop === undefined || !desktop.windows.some((candidate) => candidate.id === window.id)) return state;
+  const desktops = state.desktops.map((candidate) =>
+    candidate.id === desktopId
+      ? { ...candidate, windows: candidate.windows.map((current) => (current.id === window.id ? window : current)) }
+      : candidate,
+  );
+  return { ...state, desktops };
+}
+
 export function reduceDesktopState(state: DesktopState, event: DesktopEvent): DesktopState {
   switch (event.type) {
     case "apps_updated":
@@ -182,6 +195,8 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return withWindowOpenedHere(state, event.desktopId, event.window, event.isNew);
     case "window_closed_here":
       return withWindowClosedHere(state, event.desktopId, event.windowId);
+    case "window_location_reported":
+      return withWindowLocationReported(state, event.desktopId, event.window);
     case "render_modes_changed":
       return { ...state, modes: event.modes };
   }

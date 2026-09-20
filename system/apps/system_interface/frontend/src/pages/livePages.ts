@@ -66,6 +66,9 @@ interface LivePage {
   readonly frame: HTMLIFrameElement;
   /** The path the page last reported, or was last pointed at. */
   lastReportedPath: string;
+  /** A report of the page's own the shell has not yet shown in a desktops update: the path the page left
+   *  (``fromPath``, a stored record still naming it is stale) and the path it reported. */
+  pendingReport: { readonly fromPath: string; readonly path: string } | null;
   isNavigationCapable: boolean;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
@@ -226,6 +229,12 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       const found = windowsById.get(page.windowId);
       if (found === undefined) continue;
+      // A stored record still naming the path a page reported leaving is a snapshot from before the shell
+      // took the report (a broadcast from another cause meanwhile): it must not send the page back.
+      if (page.pendingReport !== null) {
+        if (found.window.path === page.pendingReport.fromPath) continue;
+        page.pendingReport = null;
+      }
       windows.push(found.window);
       reports.set(page.windowId, {
         lastReportedPath: page.lastReportedPath,
@@ -277,6 +286,7 @@ export class LivePagesLayer implements PageDriver {
       wrapper,
       frame,
       lastReportedPath: window.path,
+      pendingReport: null,
       isNavigationCapable: false,
       greetedDesktopId: null,
       lastSentVisibility: null,
@@ -364,8 +374,15 @@ export class LivePagesLayer implements PageDriver {
     const title = typeof payload.title === "string" ? payload.title.trim().slice(0, MAX_WINDOW_TITLE_LENGTH) : "";
     // Remembered before the post, so this client's own report never navigates the page.
     page.lastReportedPath = path;
+    const stored = findWindow(this.store.getState(), page.windowId);
+    if (stored !== null && stored.window.path !== path) {
+      page.pendingReport = { fromPath: stored.window.path, path };
+    }
     if (title !== "") page.frame.title = title;
-    void this.store.reportLocation(page.windowId, path, title);
+    void this.store.reportLocation(page.windowId, path, title).then((isTaken) => {
+      // A report the shell refused leaves the stored path in force, and the page follows it again.
+      if (!isTaken && page.pendingReport?.path === path) page.pendingReport = null;
+    });
   }
 
   private takeFocused(frame: HTMLIFrameElement): void {

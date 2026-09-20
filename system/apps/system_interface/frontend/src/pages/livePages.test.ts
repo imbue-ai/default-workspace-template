@@ -309,6 +309,55 @@ describe("the contract", () => {
     expect(frameOf("win-1").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
   });
 
+  it("a desktops update from another cause while the report is on its way does not send the page back", async () => {
+    const urls = spyOnSrc("win-1");
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    const before = api.desktops;
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: "" });
+    // Another page's report elsewhere broadcast the desktops as they stood: the old path is still stored.
+    socket.deliver().onDesktopsUpdated(before);
+    layer.reconcile();
+    expect(spy).not.toHaveBeenCalled();
+    await settle();
+    // The route's answer is taken at once, before the broadcast, so a reload meanwhile lands at the new path.
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-1")?.path).toBe("/?doc=2");
+    // A snapshot from before the report still arriving after the answer moves nothing either.
+    socket.deliver().onDesktopsUpdated(before);
+    layer.reconcile();
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(spy).not.toHaveBeenCalled();
+    expect(urls).toEqual([]);
+    // Once the shell shows the reported path, a later move elsewhere is followed again.
+    const [home, work] = api.desktops;
+    socket.deliver().onDesktopsUpdated([
+      {
+        ...home,
+        windows: home.windows.map((window) => (window.id === "win-1" ? { ...window, path: "/?doc=9" } : window)),
+      },
+      work,
+    ]);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
+  });
+
+  it("a report the shell refuses leaves the page to follow the stored path again", async () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    api.refusal = "no such window";
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: "" });
+    await settle();
+    api.refusal = null;
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=1" }]);
+  });
+
   it("cuts a reported title to the shell's limit rather than having the whole report refused", async () => {
     load("win-1");
     messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: ` ${"t".repeat(300)} ` });

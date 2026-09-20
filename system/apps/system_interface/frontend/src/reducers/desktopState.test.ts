@@ -185,6 +185,24 @@ describe("opens and closes this client made", () => {
     expect(activeFocusedWindowId(state)).toBe("win-2");
   });
 
+  it("takes a location route's answer in place, and nothing for a window since gone", () => {
+    const reported = { ...home.windows[0], path: "/?doc=2", title: "Second" };
+    const before = loaded();
+    const state = reduceDesktopState(before, {
+      type: "window_location_reported",
+      desktopId: "home",
+      window: reported,
+    });
+    expect(state.desktops[0].windows[0]).toEqual(reported);
+    expect(state.layout).toBe(before.layout);
+    const gone = reduceDesktopState(state, {
+      type: "window_location_reported",
+      desktopId: "home",
+      window: windowRecord("win-9", "docs", "/x"),
+    });
+    expect(gone).toBe(state);
+  });
+
   it("drops a closed window and its placement", () => {
     const state = reduceDesktopState(loaded(), { type: "window_closed_here", desktopId: "home", windowId: "win-1" });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-2"]);
