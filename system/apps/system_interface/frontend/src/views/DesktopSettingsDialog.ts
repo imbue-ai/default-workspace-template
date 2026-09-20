@@ -169,7 +169,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
         Button,
         {
           variant: "destructive",
-          extra: "destroy-dialog-btn-destroy",
+          extra: "desktop-settings-confirm-delete",
           disabled: isDeleting,
           onclick: () => deleteDesktop(attrs),
         },
@@ -183,7 +183,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       m(
         Button,
         {
-          extra: "destroy-dialog-btn-cancel mr-auto",
+          extra: "desktop-settings-delete mr-auto",
           disabled: isSaving || isDeleting,
           onclick() {
             isConfirmingDelete = true;
