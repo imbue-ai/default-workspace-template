@@ -372,12 +372,15 @@ export function isProviderChooserOpen(): boolean {
   return chooserOpen;
 }
 
-/** A signed-in account the chooser lists but will not pick, with the word shown beside it. */
+/** Why the chooser lists a signed-in account it will not pick: the caller is leaving it because
+ *  it failed, or it is the one the chat already runs on. The word beside the row and whether it
+ *  reads as an error both follow from it. */
+export type UnpickableReason = "failing" | "current";
+
+/** A signed-in account the chooser lists but will not pick, and why. */
 export interface UnpickableAccount {
   accountId: string;
-  note: string;
-  /** The caller is leaving it because it failed, so the note reads as an error. */
-  isFailing: boolean;
+  reason: UnpickableReason;
 }
 
 export interface ProviderChooserIntent {

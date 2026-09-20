@@ -36,7 +36,7 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 const providerState: { accounts: unknown[] } = { accounts: [] };
-const chooserOpens: { unpickable?: { accountId: string; note: string; isFailing: boolean } }[] = [];
+const chooserOpens: { unpickable?: { accountId: string; reason: string } }[] = [];
 const deleted: string[] = [];
 const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
@@ -305,7 +305,7 @@ describe("the card without a hand-cranked redraw", () => {
     // The chooser lists signed-in accounts to pick from, so the one this chat already runs on is
     // refused there: picking it would be a switch to nowhere.
     expect(chooserOpens).toEqual([
-      expect.objectContaining({ unpickable: { accountId: ACCOUNT.id, note: "Current", isFailing: false } }),
+      expect.objectContaining({ unpickable: { accountId: ACCOUNT.id, reason: "current" } }),
     ]);
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();

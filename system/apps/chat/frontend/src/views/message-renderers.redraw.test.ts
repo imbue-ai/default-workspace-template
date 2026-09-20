@@ -106,6 +106,6 @@ describe("the auth-error note without a hand-cranked render", () => {
     switchLink()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(getUnpickableAccount()).toEqual({ accountId: "acct-other", note: "Not working", isFailing: true });
+    expect(getUnpickableAccount()).toEqual({ accountId: "acct-other", reason: "failing" });
   });
 });

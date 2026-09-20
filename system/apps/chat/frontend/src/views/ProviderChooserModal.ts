@@ -38,7 +38,7 @@ import { backdropDismissAttrs } from "@imbue/workspace-ui/src/components/modalBa
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod } from "../models/Providers";
+import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
@@ -67,6 +67,13 @@ type Mode = "chooser" | "menu" | "steps" | "apiKey";
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
 let savedScroll = 0;
+
+/** The word beside an account the chooser refuses, and the style it reads in: only the one the
+ *  caller is leaving because it failed is bad news. */
+const UNPICKABLE_NOTES: Record<UnpickableReason, { text: string; class: string }> = {
+  failing: { text: "Not working", class: css.ACCOUNT_FAILING_NOTE },
+  current: { text: "Current", class: css.ACCOUNT_UNPICKABLE_NOTE },
+};
 
 export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let mode: Mode = "chooser";
@@ -326,7 +333,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
    *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
    *  the row itself also picks it; the account the caller is leaving is listed but not
-   *  pickable, with the caller's note beside it. Re-auth stays reachable because an expired
+   *  pickable, with the word for why beside it. Re-auth stays reachable because an expired
    *  credential is otherwise a dead end: without it the only way back is to delete the account,
    *  which orphans every chat bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
@@ -341,7 +348,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         "div",
         { class: css.ROW_STACK },
         signedIn.map((account) => {
-          const isUnpickable = account.id === unpickable?.accountId;
+          const unpickableNote =
+            unpickable !== null && account.id === unpickable.accountId ? UNPICKABLE_NOTES[unpickable.reason] : null;
           const identity = [
             m(
               "span",
@@ -357,19 +365,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   {
                     type: "button",
                     class: css.ACCOUNT_PICK,
-                    disabled: isUnpickable,
+                    disabled: unpickableNote !== null,
                     "data-e2e": `pick-account-${account.id}`,
                     onclick: () => pickAccount(account.id),
                   },
                   identity,
                 )
               : identity,
-            picking && isUnpickable
-              ? m(
-                  "span",
-                  { class: unpickable.isFailing ? css.ACCOUNT_FAILING_NOTE : css.ACCOUNT_UNPICKABLE_NOTE },
-                  unpickable.note,
-                )
+            picking && unpickableNote !== null
+              ? m("span", { class: unpickableNote.class }, unpickableNote.text)
               : null,
             m(
               Button,

@@ -665,7 +665,7 @@ describe("the auth-error note's switch link", () => {
 
     expect(isProviderChooserOpen()).toBe(true);
     expect(isPickingAccount()).toBe(true);
-    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, note: "Not working", isFailing: true });
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
 
     pickAccount(ANTHROPIC_ID);
 

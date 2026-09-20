@@ -465,7 +465,7 @@ function renderReauthAction(chatId: string): m.Children {
               onclick: () =>
                 openProviderChooser({
                   onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
-                  ...(accountId ? { unpickable: { accountId, note: "Not working", isFailing: true } } : {}),
+                  ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
                 }),
             },
             "switch to another provider",
