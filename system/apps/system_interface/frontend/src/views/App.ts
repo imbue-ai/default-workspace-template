@@ -584,6 +584,9 @@ export function App(): m.Component<AppAttrs> {
                       protocol: vnode.attrs.protocol,
                     });
                     pages.start();
+                    // The render that made the host is over (the window chrome is in the DOM), and when every
+                    // load had already landed no further redraw follows it: the pages are placed now.
+                    pages.reconcile();
                   },
                 }),
             isLauncherOpen
