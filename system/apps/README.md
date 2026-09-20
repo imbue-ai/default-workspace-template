@@ -1,6 +1,6 @@
 # system/apps/
 
-Apps: everything you can open as a tab in the workspace. Each app is a folder
+Apps: everything you can open as a window on the workspace's desktop. Each app is a folder
 here -- the built-in ones ship with the template, and apps your mind builds for
 you land here too (see the build-app skill). The top-level `apps` symlink
 points at this folder.

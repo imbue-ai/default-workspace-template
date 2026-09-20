@@ -42,7 +42,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptLoader
 class PlaceholderSessionWatcher(AgentSessionWatcher, TranscriptLoader):
     """A watcher that watches nothing and reports an empty transcript.
 
-    Every read returns the empty answer for its shape, so the chat tab renders as a
+    Every read returns the empty answer for its shape, so the chat page renders as a
     blank conversation rather than erroring. ``on_events`` is retained but never
     called -- there is no source to call it from. As a loader (an archived segment of a
     chat) it is the same empty transcript.

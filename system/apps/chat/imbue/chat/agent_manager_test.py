@@ -1714,7 +1714,7 @@ def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
-    """The services agent's name belongs to the minds app, not to a chat tab."""
+    """The services agent's name belongs to the minds app, not to a chat."""
     manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
     try:
         with manager._lock:

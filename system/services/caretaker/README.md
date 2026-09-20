@@ -1,7 +1,7 @@
 # caretaker
 
 The weekly **Caretaker**: a background maintenance agent that checks the
-workspace about once a week and opens a chat tab only when there is something
+workspace about once a week and opens a chat only when there is something
 to say. It is **off by default** -- nothing runs until the `enable-caretaker`
 skill writes its cron entry (`data/.state/cron.d/minds-caretaker`, installed
 live into `/etc/cron.d/`); the `disable-caretaker` skill removes it again.

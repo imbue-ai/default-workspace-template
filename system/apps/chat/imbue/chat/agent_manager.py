@@ -843,10 +843,10 @@ class AgentManager:
     _oom_prioritizer: ChatOomPrioritizer
     # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
-    # Surfaces the tab of a chat created from outside with an auto-open label (the Mind
+    # Surfaces the window of a chat created from outside with an auto-open label (the Mind
     # app's update and help chats): fed the agents that appear and go, seeded once with the
     # agents found at startup. Delivers through the shell, so ``main`` installs one that can
-    # reach it; the default reaches nobody, so a manager a test builds opens no tabs.
+    # reach it; the default reaches nobody, so a manager a test builds opens no windows.
     _auto_open: AutoOpenReactor
     # Whether the agent list has been read from mngr at least once (the initial discovery
     # or the observe stream's first full snapshot). Before that the list is empty because
@@ -2405,9 +2405,9 @@ class AgentManager:
             return
 
         # The services agent runs the workspace itself; its name is the minds
-        # app's to manage (alongside the host's), not a chat tab's.
+        # app's to manage (alongside the host's), not a chat's.
         if agent_state.labels.get("is_primary") == "true":
-            raise AgentRenameError("The workspace's services agent cannot be renamed from a chat tab")
+            raise AgentRenameError("The workspace's services agent cannot be renamed from a chat")
 
         new_canonical_name = canonical_agent_name(display_name)
         is_display_only = new_canonical_name == agent_state.name
@@ -2592,7 +2592,7 @@ class AgentManager:
         chat is listed as a provisional chat awaiting the user's first message, with the
         transcript on its page and a composer under it. That first send picks the account (the
         chooser opens then) and launches the chat's first agent through ``create_chat``. The
-        seed survives a restart of this app because the record does; the tab is opened through
+        seed survives a restart of this app because the record does; the window is opened through
         the shell like a labeled chat's, held until a client is connected.
 
         ``title`` is the chat's display name, checked like a launch's requested name: one with
@@ -2703,7 +2703,7 @@ class AgentManager:
 
         ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
         failed): it is launched under that id and keeps the name and project it was minted
-        with, so the tab the shell docked for it becomes the chat. Any other id is refused,
+        with, so the window the shell opened for it becomes the chat. Any other id is refused,
         and so is a ``requested_name`` or ``project_id`` beside it, which the reservation
         would otherwise silently override.
 

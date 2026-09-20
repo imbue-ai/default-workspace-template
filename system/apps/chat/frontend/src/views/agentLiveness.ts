@@ -1,6 +1,6 @@
 /**
  * Maps an agent's mngr lifecycle state to the liveness category shown by the
- * per-agent dot on its chat tab. The dot is a glanceable summary of the three
+ * per-agent dot on its chat row. The dot is a glanceable summary of the three
  * things a user cares about at a glance, each with its own color:
  *
  *   - "active"  -> the claude process is up and working      (green)

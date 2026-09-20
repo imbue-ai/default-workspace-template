@@ -55,8 +55,8 @@ export interface ChatShellOptions {
 
 /**
  * Connect the page for `chatId`: adopt the client identity the shell hands over, follow the
- * tab's visibility for the panel and (when this page reports it) for presence, and forward
- * focus so the shell activates the tab.
+ * window's visibility for the panel and (when this page reports it) for presence, and forward
+ * focus so the shell raises the window.
  */
 export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;

@@ -197,7 +197,7 @@ built.
 
 - **Scheduled tasks.** Recurring jobs run through cron drop-ins with a
   catch-up-and-retry runner (`system/scripts/run_job.sh`), and a **schedule agent**
-  can run any skill on a cadence in its own chat tab. See the
+  can run any skill on a cadence in its own chat. See the
   `manage-scheduled-tasks` skill. If the old workspace faked a schedule with a
   long-running loop in a supervisord program, this is where it should go instead.
 - **The Caretaker.** A weekly maintenance agent, **off by default**, woken only

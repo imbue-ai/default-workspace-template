@@ -618,7 +618,7 @@
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
     const rect = stage.getBoundingClientRect();
-    // Skip ONLY a collapsed pane (a display:none dockview tab reads a 0x0 box): reporting that
+    // Skip ONLY a collapsed pane (a hidden window's frame reads a 0x0 box): reporting that
     // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
     // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
     // resize is never dropped and the browser reliably grows to fill the pane.
@@ -642,7 +642,7 @@
   // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
   // time so multi-device clocks don't matter) and pauses everyone else.
   // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility) AND this pane
-  // isn't a non-active dockview tab (display:none -> the canvas box is 0x0, read reliably).
+  // isn't a hidden window's frame (display:none -> the canvas box is 0x0, read reliably).
   function paneVisible() {
     if (document.hidden) return false;
     const r = stage.getBoundingClientRect();
