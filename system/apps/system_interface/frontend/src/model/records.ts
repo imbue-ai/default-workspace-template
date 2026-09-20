@@ -93,8 +93,8 @@ export interface LaunchPath {
 }
 
 export interface DefaultShortcut {
-  /** The launch path id the shortcut runs; null on a manifest written for the tabbed shell alone. */
-  readonly launch: string | null;
+  /** The launch path id the shortcut runs. */
+  readonly launch: string;
   readonly mode: ShortcutMode;
 }
 
@@ -274,7 +274,7 @@ function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
   if (raw === null || raw === undefined) return null;
   const record = asObject(raw, "default_shortcut");
   return {
-    launch: asOptionalString(record.launch, "default_shortcut.launch"),
+    launch: asString(record.launch, "default_shortcut.launch"),
     mode: asOneOf(record.mode, ["focus", "new"], "default_shortcut.mode"),
   };
 }

@@ -98,14 +98,14 @@ describe("parseAppRecord", () => {
     expect(app.critical).toBe(false);
   });
 
-  it("reads a default shortcut with no launch and a null rank", () => {
+  it("reads a focus shortcut and a null rank", () => {
     const app = parseAppRecord({
       name: "files",
       url: "http://127.0.0.1:2",
-      default_shortcut: { action: "open", launch: null, mode: "focus" },
+      default_shortcut: { launch: "new", mode: "focus" },
       launcher_rank: null,
     });
-    expect(app.default_shortcut).toEqual({ launch: null, mode: "focus" });
+    expect(app.default_shortcut).toEqual({ launch: "new", mode: "focus" });
     expect(app.launcher_rank).toBeNull();
     expect(app.launch_paths).toEqual([]);
   });
