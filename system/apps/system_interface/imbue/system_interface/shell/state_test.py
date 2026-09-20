@@ -28,7 +28,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
     stale_at = TEST_NOW - CLIENT_RETENTION - timedelta(days=1)
     (home,) = shell.list_desktops()
     window_id = WindowId("win-0000000000000001")
-    shell.clients.record_report(ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at)
+    shell.clients.record_report(
+        ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at
+    )
     shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
     shell.start()
     try:

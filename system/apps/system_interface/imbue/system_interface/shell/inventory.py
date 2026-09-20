@@ -182,9 +182,7 @@ class AppInventory(MutableModel):
         watch_dir = self.registry_path.parent
         watch_dir.mkdir(parents=True, exist_ok=True)
         observer = _Observer()
-        observer.schedule(
-            _make_registry_file_handler(self.registry_path.name, self.reload_registry), str(watch_dir)
-        )
+        observer.schedule(_make_registry_file_handler(self.registry_path.name, self.reload_registry), str(watch_dir))
         observer.daemon = True
         try:
             observer.start()

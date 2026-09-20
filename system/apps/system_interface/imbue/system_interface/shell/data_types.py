@@ -89,7 +89,9 @@ class ClientActivityReport(FrozenModel):
     desktop_id: DesktopId = Field(description="The desktop the client was on")
     kind: ClientActivityKind = Field(description="A message sent to an app's page")
     app: str = Field(description="The app the message went to")
-    key: str = Field(description="The marker of the page the message went to (a chat id); empty for a page without one")
+    key: str = Field(
+        description="The marker of the page the message went to (a chat id); empty for a page without one"
+    )
     text: str = Field(default="", description="The message text, truncated at write time")
 
 
@@ -97,7 +99,9 @@ class ClientReportOutcome(FrozenModel):
     """What recording a ``client_state`` report came to: the record, and whether its active desktop moved."""
 
     record: ClientRecord = Field(description="The client record as written")
-    is_active_desktop_changed: bool = Field(description="Whether the stored active desktop differs from before the report")
+    is_active_desktop_changed: bool = Field(
+        description="Whether the stored active desktop differs from before the report"
+    )
 
 
 # The desktop model (desktop-interface contracts.md sections 4 and 5)
