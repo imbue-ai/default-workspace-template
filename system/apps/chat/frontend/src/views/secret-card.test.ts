@@ -6,12 +6,10 @@ import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
+  SecretStatusCache,
   isFiledSecretRequest,
-  knownSecretResolution,
-  noteSecretResolution,
   parseSecretRequest,
   renderSecretCard,
-  resetSecretStatusCacheForTesting,
 } from "./secret-card";
 
 function makeToolCall(display?: "secret_request" | "permission_request"): ToolCall {
@@ -75,12 +73,11 @@ function renderToDom(
 }
 
 afterEach(() => {
-  resetSecretStatusCacheForTesting();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
-/** Let the fire-and-forget fetch chain inside knownSecretResolution settle. */
+/** Let the fire-and-forget fetch chain inside SecretStatusCache.known settle. */
 async function flushFetches(): Promise<void> {
   for (let hop = 0; hop < 6; hop += 1) {
     await Promise.resolve();
@@ -202,9 +199,10 @@ describe("status hydration", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "stored" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
-    expect(knownSecretResolution("secret-1")).toBeNull();
-    await vi.waitFor(() => expect(knownSecretResolution("secret-1")).toBe("stored"));
-    knownSecretResolution("secret-1");
+    const cache = new SecretStatusCache();
+    expect(cache.known("secret-1")).toBeNull();
+    await vi.waitFor(() => expect(cache.known("secret-1")).toBe("stored"));
+    cache.known("secret-1");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [requestedUrl] = fetchMock.mock.calls[0] as unknown[];
     expect(String(requestedUrl)).toContain("/api/secret-requests/secret-1");
@@ -213,8 +211,9 @@ describe("status hydration", () => {
   it("takes a verdict this page produced itself without a fetch", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    noteSecretResolution("secret-2", "declined");
-    expect(knownSecretResolution("secret-2")).toBe("declined");
+    const cache = new SecretStatusCache();
+    cache.note("secret-2", "declined");
+    expect(cache.known("secret-2")).toBe("declined");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -228,16 +227,17 @@ describe("status hydration", () => {
       .mockResolvedValue(new Response(JSON.stringify({ status: "stored" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    const cache = new SecretStatusCache();
 
-    expect(knownSecretResolution("secret-3")).toBeNull();
+    expect(cache.known("secret-3")).toBeNull();
     await flushFetches();
-    expect(knownSecretResolution("secret-3")).toBeNull();
+    expect(cache.known("secret-3")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(SECRET_STATUS_RETRY_DELAY_MS);
-    expect(knownSecretResolution("secret-3")).toBeNull();
+    expect(cache.known("secret-3")).toBeNull();
     await flushFetches();
-    expect(knownSecretResolution("secret-3")).toBe("stored");
+    expect(cache.known("secret-3")).toBe("stored");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

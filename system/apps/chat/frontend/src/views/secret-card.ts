@@ -94,18 +94,6 @@ type StatusEntry =
 
 export const SECRET_STATUS_RETRY_DELAY_MS = 15_000;
 
-const statusCache = new Map<string, StatusEntry>();
-
-export function knownSecretResolution(requestId: string): SecretResolution | null {
-  const cached = statusCache.get(requestId);
-  if (cached === undefined || (cached.state === "failed" && Date.now() >= cached.retryAtMs)) {
-    statusCache.set(requestId, { state: "loading" });
-    void hydrateStatus(requestId);
-    return null;
-  }
-  return cached.state === "ready" ? cached.resolution : null;
-}
-
 function resolutionFromStatus(status: unknown): SecretResolution | null {
   return status === "stored" || status === "declined" || status === "superseded" ? status : null;
 }
@@ -126,27 +114,43 @@ async function fetchStatusEntry(requestId: string): Promise<StatusEntry> {
   return { state: "failed", retryAtMs: Date.now() + SECRET_STATUS_RETRY_DELAY_MS };
 }
 
-async function hydrateStatus(requestId: string): Promise<void> {
-  const entry = await fetchStatusEntry(requestId);
-  statusCache.set(requestId, entry);
-  if (entry.state === "failed") {
-    // An idle page may not render again on its own; wake one render at the
-    // retry time so the refetch actually happens.
-    setTimeout(() => m.redraw(), SECRET_STATUS_RETRY_DELAY_MS);
+/** What a page knows of each request's status: the backend's answer, a verdict the
+ *  page produced itself, and the lookups in flight or waiting to retry. */
+export class SecretStatusCache {
+  private readonly entries = new Map<string, StatusEntry>();
+
+  /** The request's verdict as far as this page knows, or null while it is pending
+   *  or not yet known; an unknown request is looked up in the background. */
+  known(requestId: string): SecretResolution | null {
+    const cached = this.entries.get(requestId);
+    if (cached === undefined || (cached.state === "failed" && Date.now() >= cached.retryAtMs)) {
+      this.entries.set(requestId, { state: "loading" });
+      void this.hydrate(requestId);
+      return null;
+    }
+    return cached.state === "ready" ? cached.resolution : null;
   }
-  m.redraw();
+
+  /** Record a verdict this page produced itself (a submit or decline), so the card
+   *  flips before the notice's transcript round trip. */
+  note(requestId: string, resolution: SecretResolution): void {
+    this.entries.set(requestId, { state: "ready", resolution });
+  }
+
+  private async hydrate(requestId: string): Promise<void> {
+    const entry = await fetchStatusEntry(requestId);
+    this.entries.set(requestId, entry);
+    if (entry.state === "failed") {
+      // An idle page may not render again on its own; wake one render at the
+      // retry time so the refetch actually happens.
+      setTimeout(() => m.redraw(), SECRET_STATUS_RETRY_DELAY_MS);
+    }
+    m.redraw();
+  }
 }
 
-/** Record a verdict this page produced itself (a submit or decline), so the card
- *  flips before the notice's transcript round trip. */
-export function noteSecretResolution(requestId: string, resolution: SecretResolution): void {
-  statusCache.set(requestId, { state: "ready", resolution });
-}
-
-/** Drop the cache so the next test starts from a quiet page. */
-export function resetSecretStatusCacheForTesting(): void {
-  statusCache.clear();
-}
+/** The live cards' cache: one per page. */
+export const secretStatusCache = new SecretStatusCache();
 
 // Submit and decline
 
@@ -402,7 +406,7 @@ export function SecretCard(): m.Component<{
     if (outcome.ok) {
       // The values are done with: drop them the moment the backend has them.
       state.valueByVariable = {};
-      noteSecretResolution(requestId, verdict);
+      secretStatusCache.note(requestId, verdict);
     } else {
       state.error = outcome.detail;
     }
@@ -413,7 +417,7 @@ export function SecretCard(): m.Component<{
     view(vnode) {
       const { toolCall, toolResult, resolution, note } = vnode.attrs;
       const details = parseSecretRequest(toolCall, toolResult);
-      const effectiveResolution = resolution ?? (details ? knownSecretResolution(details.requestId) : null);
+      const effectiveResolution = resolution ?? (details ? secretStatusCache.known(details.requestId) : null);
       const handlers: SecretCardHandlers = {
         onValueInput: (variable, value) => {
           state.valueByVariable[variable] = value;
