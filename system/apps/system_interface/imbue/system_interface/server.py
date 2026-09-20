@@ -37,7 +37,7 @@ from imbue.system_interface.template_catalog import catalog_wire_json
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
 
-# The browser-side contract module (contracts.md section 10): built as its own library
+# The browser-side contract module (desktop contracts.md section 7): built as its own library
 # entry into ``static/_static/`` and served with a permissive CORS header, since every
 # app page that speaks the contract loads it from the shell's origin.
 APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
@@ -435,7 +435,7 @@ def _templates_catalog_endpoint() -> Response:
 
 
 def _serve_app_contract() -> Response:
-    """Serve the browser-side contract module (contracts.md section 10) for any origin's app page."""
+    """Serve the browser-side contract module (desktop contracts.md section 7) for any origin's app page."""
     contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
     if not contract_path.is_file():
         return Response(status=404)
@@ -465,7 +465,7 @@ def _serve_asset(filename: str) -> Response:
 
 
 def _ws_endpoint(websocket: Any) -> None:
-    """The one WebSocket per window (contracts.md section 8)."""
+    """The one WebSocket per window (desktop contracts.md section 6)."""
     _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
 
 

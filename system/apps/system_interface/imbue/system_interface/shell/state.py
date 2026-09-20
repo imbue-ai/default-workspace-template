@@ -55,7 +55,7 @@ from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRE
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 CLIENT_ACTIVITY_EVENTS_PATH: Final[str] = "events/client_activity/events.jsonl"
-# How often the client prune of contracts.md section 7 re-runs after the one at start.
+# How often the client prune of desktop contracts.md section 4.3 re-runs after the one at start.
 CLIENT_PRUNE_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60.0
 
 

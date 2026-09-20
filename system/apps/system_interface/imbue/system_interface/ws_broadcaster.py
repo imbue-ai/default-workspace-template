@@ -142,8 +142,7 @@ class WebSocketBroadcaster(MutableModel):
 
         Drains the queue and pushes the shutdown sentinel so the handler thread,
         blocked on ``client_queue.get(...)``, wakes, sees ``None``, and exits its
-        loop (closing its socket). This is the thread-based replacement for the
-        old asyncio task cancellation.
+        loop (closing its socket).
         """
         self._consecutive_queue_full_by_id.pop(id(dead_queue), None)
         self._client_info_by_queue_id.pop(id(dead_queue), None)

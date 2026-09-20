@@ -47,8 +47,9 @@ def _isolate_system_interface_tests(
     """Keep every shell test away from the live workspace's registry and shell.
 
     The shell's inventory reads the app registry from the working directory otherwise, which
-    in a workspace is the live one; and a test app's own posts (a tab rebind, a nudge) would
-    reach the workspace's real shell. A port nothing listens on refuses them at once; the
+    in a workspace is the live one; and the scripts a test drives (``layout.py``,
+    ``refresh_workspace_view.py``) post to the shell ``MINDS_WORKSPACE_SERVER_URL`` names, which
+    would be the workspace's real one. A port nothing listens on refuses them at once; the
     pipeline and e2e tests serve a shell of their own and point at it.
     """
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
