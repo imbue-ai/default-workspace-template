@@ -2734,17 +2734,17 @@ class AgentManager:
 
             seed_record: ChatRecord | None = None
             if chat_id:
-                reserved = self._provisional_chats.get(ChatId(chat_id))
-                if reserved is None or reserved.phase is ProvisionalChatPhase.CREATING:
+                provisional = self._provisional_chats.get(ChatId(chat_id))
+                if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                     raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
-                if reserved.is_seeded:
+                if provisional.is_seeded:
                     # A seeded chat's agent joins the seed on the record rather than taking the
                     # chat's id, whether this is its first send (the message is the launch's to
                     # bring) or a retry after a failed one (the message is the send it kept).
-                    seed_record = self._chat_record_by_id.get(reserved.chat_id)
+                    seed_record = self._chat_record_by_id.get(provisional.chat_id)
                     if seed_record is None or not seed_record.is_seed_only:
                         raise AgentCreationError(f"Chat {chat_id} has no seed to continue from")
-                    if reserved.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                    if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
                         if not message:
                             raise AgentCreationError(
                                 f"Chat {chat_id} is launched by its first message; none was given"
@@ -2754,16 +2754,16 @@ class AgentManager:
                             f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
                         )
                     else:
-                        message = reserved.message
+                        message = provisional.message
                 elif message:
                     raise AgentCreationError(
                         f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
                     )
                 else:
-                    message = reserved.message
-                launched_chat_id = reserved.chat_id
-                display_name = reserved.name
-                project_id = reserved.project_id
+                    message = provisional.message
+                launched_chat_id = provisional.chat_id
+                display_name = provisional.name
+                project_id = provisional.project_id
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)

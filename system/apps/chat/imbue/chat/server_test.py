@@ -2277,17 +2277,17 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     )
 
 
-def test_create_chat_refuses_an_id_that_was_never_reserved(
+def test_create_chat_refuses_an_id_it_never_minted(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
 
-    response = client.post("/api/chats/create", json={"chat_id": "never-reserved"})
+    response = client.post("/api/chats/create", json={"chat_id": "never-minted"})
 
     assert response.status_code == 400
-    assert "never-reserved" in response.get_json()["detail"]
+    assert "never-minted" in response.get_json()["detail"]
 
 
 def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
