@@ -1,7 +1,7 @@
 # System Interface frontend style guide
 
 Project-specific style guide for the workspace frontends: `system/apps/system_interface/frontend` (the web
-workspace UI: TypeScript + Vite + Tailwind v4 + mithril/dockview). Read it
+workspace UI: TypeScript + Vite + Tailwind v4 + mithril). Read it
 alongside the base `docs/system/style_guide.md` (which covers Python/backend
 conventions and does not cover the frontend). This file governs the CSS and the
 **design system** — the single most important convention for UI work here.
@@ -89,8 +89,7 @@ safelist it with `@source inline("...")`.
 - **Tokens**: the `--c-*` value table, the `@theme` blocks, and the `type-*`
   `@utility` roles (in the library's `base.css`; the rest below in the owning
   app's `src/style.css`).
-- **Vendor DOM you don't render**: the dockview theme overrides (`.dv-*`),
-  xterm, scrollbars.
+- **Vendor DOM you don't render**: xterm, scrollbars.
 - **Rendered content you don't render per-element**: markdown output
   (`.markdown-content …`), where classes can't be attached per element.
 - **Pseudo-element/keyframe machines**: `@keyframes`, the `.spinner` — where
