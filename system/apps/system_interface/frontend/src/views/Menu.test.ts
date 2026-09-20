@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Menu, placeMenu } from "./Menu";
@@ -27,24 +28,14 @@ describe("placeMenu", () => {
   });
 });
 
-let root: HTMLElement | null = null;
-
 afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
+  unmountViews();
   document.body.innerHTML = "";
 });
 
 function mountMenu(entries: MenuEntry[], onClose: () => void, isInsideTrigger?: (target: Node) => boolean): void {
-  root = document.createElement("div");
-  document.body.appendChild(root);
   const anchor = { left: 10, right: 20, top: 10, bottom: 20, width: 10 };
-  m.mount(root, {
-    view: () => m(Menu, { anchor, placement: "below", marker: "test-menu", entries, onClose, isInsideTrigger }),
-  });
+  mountView(() => m(Menu, { anchor, placement: "below", marker: "test-menu", entries, onClose, isInsideTrigger }));
 }
 
 describe("Menu", () => {

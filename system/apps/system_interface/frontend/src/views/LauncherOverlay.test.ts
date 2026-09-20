@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowTitle } from "../reducers/desktopState";
@@ -62,19 +63,9 @@ describe("the launcher's pure helpers", () => {
   });
 });
 
-let root: HTMLElement | null = null;
-
-afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
-});
+afterEach(unmountViews);
 
 function render(overrides: Partial<LauncherOverlayAttrs> = {}): HTMLElement {
-  root = document.createElement("div");
-  document.body.appendChild(root);
   const attrs: LauncherOverlayAttrs = {
     query: "",
     apps: [docs, notes, appRecord("hidden", { internal: true })],
@@ -86,7 +77,7 @@ function render(overrides: Partial<LauncherOverlayAttrs> = {}): HTMLElement {
     onPickWindow: vi.fn(),
     ...overrides,
   };
-  m.mount(root, { view: () => m(LauncherOverlay, attrs) });
+  const root = mountView(() => m(LauncherOverlay, attrs));
   return root.querySelector("[data-launcher-overlay]") as HTMLElement;
 }
 

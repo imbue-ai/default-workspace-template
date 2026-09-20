@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopShortcut } from "../model/records";
@@ -22,19 +23,9 @@ describe("shortcutLabel", () => {
   });
 });
 
-let root: HTMLElement | null = null;
-
-afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
-});
+afterEach(unmountViews);
 
 function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
-  root = document.createElement("div");
-  document.body.appendChild(root);
   const attrs: ShortcutIconAttrs = {
     shortcut,
     cell: { column: 1, row: 2 },
@@ -48,7 +39,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     onContextMenu: vi.fn(),
     ...overrides,
   };
-  m.mount(root, { view: () => m(ShortcutIcon, attrs) });
+  const root = mountView(() => m(ShortcutIcon, attrs));
   return root.querySelector("[data-shortcut]") as HTMLElement;
 }
 
@@ -91,7 +82,7 @@ describe("ShortcutIcon", () => {
 
   it("marks selection and fades while lifted", () => {
     expect(render({ isSelected: true }).getAttribute("aria-pressed")).toBe("true");
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     expect(render({ isLifted: true }).className).toContain("opacity-40");
   });
 });
