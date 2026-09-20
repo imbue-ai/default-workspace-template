@@ -87,9 +87,10 @@ def _manifest_path_constant(module_file: Path) -> str | None:
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
-    A Python app runs its tool's console script and registers from inside it (the terminal calls
-    the sidecar launcher with its manifest), so the manifest path is a constant the script's
-    module exports as ``MANIFEST_PATH`` rather than a flag on the command line.
+    A Python app runs its tool's console script and registers from inside it (the terminal's
+    entry point calls ``app_manifest.registry.register_app`` with its manifest), so the manifest
+    path is a constant the script's module exports as ``MANIFEST_PATH`` rather than a flag on the
+    command line.
     """
     script_name = command.split()[-1]
     manifest_paths: list[str] = []

@@ -207,7 +207,7 @@ def _pull_in_pane(browser_name: str) -> None:
 
 
 def _stopped_hint(browser_name: str) -> str:
-    """How to bring a stopped browser back (the daemon sends the same in its ``hint``)."""
+    """How to bring a stopped browser back, for an action the daemon answered with no ``hint`` of its own."""
     return f"start it from its window's Start button, or with `curl -X POST {_daemon_url()}/browsers/{browser_name}/start`"
 
 

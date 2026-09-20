@@ -72,9 +72,8 @@ session recreated for it starts in the default.
   finds by id or by name, and leaves alone a terminal the user stopped
   (`is_stopped` in the store).
 - The source also carries the terminal's own verbs, which no route offers yet:
-  delete kills the session (by id when known, else `tmux kill-session -t
-  =<name>`), forgets the record, and drops the id file, refusing an `mngr-`
-  session; rename changes only the title (the name and the tmux session name
+  delete kills the live session by its id, forgets the record, and drops the
+  id file, refusing an `mngr-` session; rename changes only the title (the name and the tmux session name
   stay; a title that canonicalizes to nothing under
   `app_manifest.primitives.canonical_name_from_title` is refused, and one whose
   canonical form collides with another terminal's title, case-insensitively, is
