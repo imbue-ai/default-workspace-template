@@ -269,7 +269,7 @@ function handleEvent(event: WsEvent): void {
       break;
     }
     case "provisional_chat_created": {
-      // Also how a chat moves between phases (a reserved chat launched, a failed one retried):
+      // Also how a chat moves between phases (a seeded chat launched, a failed one retried):
       // the backend pushes the whole record again. A reconnect replays every provisional chat
       // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
@@ -442,12 +442,12 @@ export function createChat(
 }
 
 /**
- * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
- * on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
+ * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
+ * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
  */
 export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
-  // A seeded chat's launch brings the user's first message; a reserved chat keeps the one it
-  // was minted with, and a launch that names one for it is refused, so none is sent then.
+  // A seeded chat's launch brings the user's first message; a failed create's retry has none
+  // to bring, so the field is left out then.
   return postCreateChat(
     message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
   );
