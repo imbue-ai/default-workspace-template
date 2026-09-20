@@ -84,19 +84,23 @@ describe("bootstrap", () => {
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
-  it("a deep link's desktop wins, and its open and launch run once the layout is up", async () => {
+  it("a deep link's desktop wins, and its open and launch wait for the apps to arrive over the socket", async () => {
     api.clients = [{ id: CLIENT, active_desktop: "work" }];
     const store = makeStore();
-    await store.start({
+    const started = store.start({
       desktopId: "home",
       open: { app: "docs", path: "/a" },
       launch: { app: "notes", launch: "new" },
     });
-    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
-    // The apps arrive over the socket after the desktops; the link waits for neither here, so the
-    // open of a registered app is what the fake saw.
+    await settle();
     expect(store.getState().activeDesktopId).toBe("home");
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
+    await started;
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
+      "openWindow:home:docs:/a:focus:-",
+      "openWindow:home:notes:/new:new:new",
+    ]);
   });
 
   it("re-reports the client state when the socket reconnects", async () => {
