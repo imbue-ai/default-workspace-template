@@ -10,7 +10,7 @@ import m from "mithril";
 import { wallpaperImageUrl } from "../model/api";
 import { cellRect, placeShortcuts } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
-import type { Desktop, DesktopShortcut, Placement, WindowRecord } from "../model/records";
+import type { Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -98,15 +98,14 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           m(
             "div",
             { class: "windows absolute inset-0 pointer-events-none [&>*]:pointer-events-auto" },
-            // Filtered before the map: a keyed list tolerates no holes.
-            placements
-              .map((placement, index) => ({ placement, index, window: windowsById.get(placement.window_id) }))
-              .filter(({ placement, window }) => !placement.is_minimized && window !== undefined)
-              .map(({ placement, index, window: found }) => {
-                const window = found as WindowRecord;
-                const app = appByName(state, window.app);
-                const gestureRect = store.gestureRectFor(window.id);
-                return m(Window, {
+            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing.
+            placements.flatMap((placement, index) => {
+              const window = windowsById.get(placement.window_id);
+              if (placement.is_minimized || window === undefined) return [];
+              const app = appByName(state, window.app);
+              const gestureRect = store.gestureRectFor(window.id);
+              return [
+                m(Window, {
                   key: window.id,
                   window,
                   app,
@@ -126,8 +125,9 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   onRaise: () => store.raiseWindow(window.id),
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),
-                });
-              }),
+                }),
+              ];
+            }),
           ),
           snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
