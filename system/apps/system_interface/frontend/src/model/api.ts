@@ -46,7 +46,7 @@ function desktopUrl(desktopId: string, suffix: string = ""): string {
 
 export async function fetchDesktops(): Promise<Desktop[]> {
   const data = (await getJson(apiUrl("/api/desktops"))) as { desktops?: unknown };
-  return parseDesktops(data.desktops ?? []);
+  return parseDesktops(data.desktops);
 }
 
 export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
