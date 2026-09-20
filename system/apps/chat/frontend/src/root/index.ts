@@ -8,7 +8,8 @@
  * title as its location, handles ``shell:navigate`` by changing the selection, and drives its
  * inner pages directly (they share an origin) with the shell's handshake and its shown and
  * hidden states, so each page's presence reports key on the chat it shows. The inner pages'
- * own ``minds:``, ``shell:focused``, and ``shell:open`` messages go up through ``relay.ts``.
+ * own ``minds:``, ``shell:focused``, and sub-agent ``shell:open`` messages go up through
+ * ``relay.ts``; a page asking for a sibling chat is answered here, by selecting it.
  */
 
 import m from "mithril";
@@ -231,7 +232,10 @@ function bootstrap(): void {
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
   connectRootToShell();
-  startInnerFrameRelay((source) => pool?.isInnerWindow(source) ?? false);
+  startInnerFrameRelay(
+    (source) => pool?.isInnerWindow(source) ?? false,
+    (chatId) => select(chatId),
+  );
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   const isNew = isNewChatPath(window.location.pathname, getBasePath());
