@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.client_activity import find_client_id_for_instance
+from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import NoTargetClientError
@@ -86,7 +86,7 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         return client_id
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
-        attributed = find_client_id_for_instance(shell.activity.read_events(), str(requester.app), requester.marker)
+        attributed = find_client_id_for_page(shell.activity.read_events(), str(requester.app), requester.marker)
         if attributed is not None and is_known_client(shell, attributed):
             return ClientId(attributed)
     connected = shell.broadcaster.connected_client_ids()

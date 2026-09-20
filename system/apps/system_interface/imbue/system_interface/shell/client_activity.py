@@ -48,7 +48,9 @@ class ClientMessageEvent(EventEnvelope):
     client_id: str = Field(description="The sending client")
     desktop_id: str = Field(description="The desktop the client was on")
     app: str = Field(description="The app the message went to")
-    key: str = Field(description="The marker of the page the message went to (a chat id); empty for a page without one")
+    key: str = Field(
+        description="The marker of the page the message went to (a chat id); empty for a page without one"
+    )
     text: str = Field(description="The message text, truncated at write time")
     is_text_truncated: bool = Field(description="Whether the text was cut to the limit")
 
@@ -203,12 +205,12 @@ def summarize_client_activity(
 
 
 @pure
-def find_client_id_for_instance(events: Sequence[dict[str, Any]], app: str, key: str) -> str | None:
+def find_client_id_for_page(events: Sequence[dict[str, Any]], app: str, marker: str) -> str | None:
     """The client that most recently messaged one page (by app and marker), or None: how an agent-initiated op finds its requester."""
-    if not key:
+    if not marker:
         return None
     for event in reversed(events):
-        if event.get("type") == MESSAGE_EVENT_TYPE and event.get("app") == app and event.get("key") == key:
+        if event.get("type") == MESSAGE_EVENT_TYPE and event.get("app") == app and event.get("key") == marker:
             client_id = str(event.get("client_id", ""))
             return client_id or None
     return None
