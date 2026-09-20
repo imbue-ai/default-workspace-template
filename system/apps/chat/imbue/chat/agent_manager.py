@@ -893,7 +893,7 @@ class AgentManager:
         agent-creation commands. ``message_stamps`` remembers when each chat was
         last messaged; the default keeps that in memory only, so a real server
         passes one backed by the chat app's state directory. ``auto_open``
-        surfaces labeled chats' tabs; the default remembers nothing and reaches
+        surfaces labeled chats' windows; the default remembers nothing and reaches
         no shell, so a real server passes one backed by the ledger and the shell.
         ``chat_record_store`` holds the records of the chats that have run on several
         agents; the default holds them in memory only, so a real server passes one backed
@@ -944,7 +944,7 @@ class AgentManager:
             if auto_open is not None
             else AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=DisconnectedShell())
         )
-        # A restored seeded chat is still owed its tab when no client saw it before this app
+        # A restored seeded chat is still owed its window when no client saw it before this app
         # restarted; the ledger tells the reactor which, so a delivered one stays as it was.
         for restored_chat_id in manager._provisional_chats:
             manager._auto_open.request_open(restored_chat_id)

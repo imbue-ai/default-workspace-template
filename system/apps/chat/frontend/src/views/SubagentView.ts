@@ -53,7 +53,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   // The same scroll engine as the main chat, with an empty virtual layer: the
   // whole subagent transcript is loaded, so the custom scrollbar is 100%
   // physical (pixel-space) and the fill planner has nothing to fetch. No
-  // persistence key: a subagent tab always opens at the live tail.
+  // persistence key: a subagent view always opens at the live tail.
   const engine = createTranscriptScrollEngine({
     isVisible: () => true,
     dataSource: {

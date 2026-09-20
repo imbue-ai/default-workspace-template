@@ -1,6 +1,6 @@
 """The chat app's own primitives: the chat id, and the shape every agent id shares with it.
 
-A chat is the user-facing conversation (one tab, one instance key, one transcript); an agent is
+A chat is the user-facing conversation (one window, one transcript); an agent is
 one mngr agent running one harness on one account. A chat's id is the id of its first agent, so
 the two strings keep the same ``agent-<hex>`` shape, but they are distinct types in code so the
 type checker finds every crossing between the two, and a successor agent's chat id is not its own

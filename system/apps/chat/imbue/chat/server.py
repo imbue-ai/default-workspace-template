@@ -1242,12 +1242,11 @@ def _run_create_chat() -> CreatedChat | Response:
     carries the resulting name pair (canonical ``name`` + human-readable
     ``display_name``) beside the chat's id.
 
-    A chat created inside a project carries that project's id in the agent's
-    ``project`` label, which records where it was started (mngr propagates the
-    label to the agent's own children); membership itself is the project's tab
-    list, which the shell writes when it docks the chat. ``project_id`` rides
-    beside the request model rather than inside it for that reason: it is a
-    label on the created agent, not part of the chat's identity.
+    A chat created with a ``project_id`` carries it in the agent's ``project``
+    label, which records where it was started (mngr propagates the label to the
+    agent's own children). ``project_id`` rides beside the request model rather
+    than inside it for that reason: it is a label on the created agent, not part
+    of the chat's identity.
     """
     agent_manager: AgentManager = get_state().agent_manager
     body = parse_json_object_body()

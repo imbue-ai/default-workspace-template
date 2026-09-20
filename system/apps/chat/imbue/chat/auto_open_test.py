@@ -26,7 +26,7 @@ def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> Aut
     return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
 
 
-def test_only_the_two_auto_open_labels_ask_for_a_tab() -> None:
+def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
     assert is_auto_open_labeled({"assist": "true"})
     assert is_auto_open_labeled({"auto_open": "true", "user_created": "true"})
     assert not is_auto_open_labeled({"assist": "false"})
@@ -86,7 +86,7 @@ def test_a_refused_open_keeps_the_chat_pending() -> None:
 
 
 def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
-    """The update run restarts this app; the tab it already surfaced must not pop again."""
+    """The update run restarts this app; the window it already surfaced must not pop again."""
     path = tmp_path / "ledger.json"
     first = _reactor(RecordingShell(client_ids=["c1"]), AutoOpenLedger(path=path))
     first.note_appeared(ChatId("chat-1"), _LABELED)
@@ -101,7 +101,7 @@ def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
 
 
 def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name() -> None:
-    """A labeled chat nobody was shown is still owed its tab after a restart, however long it has
+    """A labeled chat nobody was shown is still owed its window after a restart, however long it has
     waited; one the ledger names is left as the saved layout has it and never pops later."""
     ledger = AutoOpenLedger(path=None)
     ledger.mark_delivered(ChatId("delivered"))
@@ -119,11 +119,11 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     assert shell.opens == [("waiting", "c1")]
 
 
-def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_tab(
+def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_window(
     tmp_path: Path,
 ) -> None:
     """The first boot that keeps a ledger meets every chat the app ever labeled here, going back to
-    the workspace's first day, and cannot tell the one owed a tab from the rest -- so it opens none
+    the workspace's first day, and cannot tell the one owed a window from the rest -- so it opens none
     of them, and leaves the ledger the next boot reads for real."""
     path = tmp_path / "ledger.json"
     shell = RecordingShell(client_ids=["c1"])
@@ -173,7 +173,7 @@ def test_a_removed_chat_is_forgotten_everywhere() -> None:
 def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     tmp_path: Path, loguru_records: list[str]
 ) -> None:
-    """Reading it as an empty history rather than a lost one re-pops every tab it named."""
+    """Reading it as an empty history rather than a lost one re-pops every window it named."""
     path = tmp_path / "ledger.json"
     path.write_text(json.dumps(["chat-1"]))
 
@@ -239,7 +239,7 @@ def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_th
     body: Any, expected: list[str]
 ) -> None:
     """The flush thread's own catch does not cover a KeyError or TypeError from reading this, so an
-    answer the shell should never give would end the thread and silently stop surfacing every tab."""
+    answer the shell should never give would end the thread and silently stop surfacing every window."""
     application = Flask("stub-shell")
     application.add_url_rule("/api/clients", view_func=lambda: jsonify(body), endpoint="clients")
     with serve_app(application) as served:

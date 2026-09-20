@@ -67,15 +67,14 @@ const llmApi: LlmApi = {
   },
 
   openTab(options: OpenTabOptions): void {
-    // The page's own chat: a subagent tab is opened beside the chat whose transcript ran it.
+    // The page's own chat: a subagent view is opened beside the chat whose transcript ran it.
     const chatId = getChatId();
     if (!chatId) return;
 
     if (options.type === "subagent" && options.subagentSessionId) {
       openSubagentTab(chatId, options.subagentSessionId);
     } else if (options.type === "iframe" && options.url) {
-      // A chat page can only ask the shell for instances of its own app, and an ad-hoc URL
-      // is not one.
+      // A chat page can only ask the shell for pages of its own app, and an ad-hoc URL is not one.
       console.warn(`[chat] $llm.openTab cannot open an ad-hoc URL pane from a chat page: ${options.url}`);
     }
   },
