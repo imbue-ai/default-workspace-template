@@ -54,7 +54,7 @@ import m from "mithril";
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
 import { ProviderChooserModal } from "./ProviderChooserModal";
-import { ACCOUNT_FAILING_NOTE, ACCOUNT_UNPICKABLE_NOTE } from "./providerSignInStyles";
+import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
  *
@@ -304,7 +304,7 @@ describe("picking a signed-in account", () => {
     }
 
     expect(noteClassFor("failing", "Not working")).toBe(ACCOUNT_FAILING_NOTE);
-    expect(noteClassFor("current", "Current")).toBe(ACCOUNT_UNPICKABLE_NOTE);
+    expect(noteClassFor("current", "Current")).toBe(ACCOUNT_NEUTRAL_NOTE);
   });
 
   it("re-authenticates rather than picks when Sign in again is pressed on a pickable row", () => {
