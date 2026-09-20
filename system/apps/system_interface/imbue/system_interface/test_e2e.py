@@ -142,7 +142,11 @@ def _running_e2e_server(
 
     # The stubs serve first, so the registry can name where their pages are framed from.
     second_serving = serve_app(_stub_app(base_url)) if is_second_app_offered else contextlib.nullcontext()
-    with pytest.MonkeyPatch.context() as monkeypatch, serve_app(_stub_app(base_url)) as stub_served, second_serving as second_served:
+    with (
+        pytest.MonkeyPatch.context() as monkeypatch,
+        serve_app(_stub_app(base_url)) as stub_served,
+        second_serving as second_served,
+    ):
         stub_url = stub_served.http_url
         rows = [
             registry_row_toml(
@@ -177,29 +181,28 @@ def _running_e2e_server(
             config=config, shell_state_directory=state_dir, template_catalog_fetcher=catalog_fetcher
         )
         app = create_application(state)
-        if True:
-            # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
-            # first (a stub whose port is taken never leaves a bound shell socket behind).
-            server = make_threaded_server("127.0.0.1", port, app)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
+        # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
+        # first (a stub whose port is taken never leaves a bound shell socket behind).
+        server = make_threaded_server("127.0.0.1", port, app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            wait_for(
+                lambda: _server_is_up(base_url),
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message=f"workspace server did not come up at {base_url}",
+            )
+            # Started only once the apps are serving: the first liveness probe must find them answering.
+            state.shell.start()
             try:
-                wait_for(
-                    lambda: _server_is_up(base_url),
-                    timeout=10.0,
-                    poll_interval=0.1,
-                    error_message=f"workspace server did not come up at {base_url}",
-                )
-                # Started only once the apps are serving: the first liveness probe must find them answering.
-                state.shell.start()
-                try:
-                    yield E2EServer(base_url=base_url, state_dir=state_dir, stub_url=stub_url)
-                finally:
-                    state.shell.stop()
+                yield E2EServer(base_url=base_url, state_dir=state_dir, stub_url=stub_url)
             finally:
-                server.shutdown()
-                thread.join(timeout=5.0)
-                server.server_close()
+                state.shell.stop()
+        finally:
+            server.shutdown()
+            thread.join(timeout=5.0)
+            server.server_close()
 
 
 def _free_port() -> int:
