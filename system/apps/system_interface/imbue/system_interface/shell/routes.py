@@ -15,8 +15,8 @@ from imbue.system_interface.shell.client_activity import summarize_client_activi
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
-from imbue.system_interface.shell.desktop_routes import desktop_inventory_fields
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
+from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
@@ -172,12 +172,7 @@ def list_clients() -> ResponseReturnValue:
 
 
 def inventory_document() -> ResponseReturnValue:
-    """The one document of desktop contracts.md section 5.5: every desktop, every app, and every known client."""
-    shell = _shell()
-    clients = shell.clients.list_clients()
-    connected = shell.broadcaster.connected_client_ids()
-    wire_clients = [client_wire_json(client, str(client.id) in connected) for client in clients]
-    return jsonify({**desktop_inventory_fields(shell, clients, wire_clients), "apps": shell.inventory.serialized()})
+    return jsonify(inventory_document_json(_shell()))
 
 
 # Section 8: the agent-facing op route

@@ -1,8 +1,8 @@
 """The op tables and arguments of the agent-facing op route (desktop contracts.md section 8).
 
 ``system/scripts/layout.py`` posts ``{op, args, requester}`` to ``POST /api/layout/broadcast``
-(``routes.py``): ``context`` is answered from the client-activity log, the inventory ops from the
-desktops, and every other op is applied by the shell to the desktop and the target client's
+(``routes.py``): ``context`` is answered from the client-activity log, the inventory ops with the
+inventory document, and every other op is applied by the shell to the desktop and the target client's
 placements (``desktop_routes.py``), the two transient ops reaching the client's windows instead.
 """
 
@@ -24,7 +24,7 @@ from imbue.system_interface.shell.primitives import IfPresent
 CONTEXT_OP: Final[str] = "context"
 LOAD_OP: Final[str] = "load"
 RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
-# Read-only: answered with the desktops.
+# Read-only: answered with the inventory document (desktop contracts.md section 5.5).
 INVENTORY_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
 WINDOW_OPS: Final[frozenset[str]] = frozenset(
     {"focus", "minimize", "restore", "maximize", "place", "close", "navigate"}

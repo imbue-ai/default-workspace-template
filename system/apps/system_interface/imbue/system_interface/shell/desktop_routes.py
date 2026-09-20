@@ -2,7 +2,6 @@
 and the verbs of the op route."""
 
 from collections.abc import Mapping
-from collections.abc import Sequence
 from typing import Any
 from typing import Final
 from urllib.parse import urlencode
@@ -23,7 +22,7 @@ from pydantic import ValidationError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.data_types import ClientRecord
+from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
@@ -293,28 +292,32 @@ def _shown_window_ids(desktop: Desktop, layout: DesktopLayout) -> list[str]:
     ]
 
 
-def desktop_inventory_fields(
-    shell: ShellState, records: Sequence[ClientRecord], clients: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
-    """The inventory document's desktop fields (desktop contracts.md section 5.5): every desktop, and each client
-    with ``shown``, the windows of its active desktop that its layout does not minimize; ``records`` are the
-    client records the wire ``clients`` were built from."""
+def inventory_document_json(shell: ShellState) -> dict[str, Any]:
+    """The one document of desktop contracts.md section 5.5: every desktop, every app, and every known client with
+    ``shown``, the windows of its active desktop that its layout does not minimize."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
-    live_ids_by_desktop_id = {desktop.id: {window.id for window in desktop.windows} for desktop in desktops}
-    record_by_id = {str(record.id): record for record in records}
-    clients_with_shown: list[dict[str, Any]] = []
-    for client in clients:
-        client_id = str(client["id"])
-        active = resolve_active_desktop(record_by_id.get(client_id), desktops)
+    connected = shell.broadcaster.connected_client_ids()
+    clients: list[dict[str, Any]] = []
+    for record in shell.clients.list_clients():
+        active = resolve_active_desktop(record, desktops)
         shown: list[str] = []
         if active is not None:
-            layout = shell.placements.read_layout(active, client_id, live_ids_by_desktop_id[active])
-            shown = _shown_window_ids(desktops_by_id[active], layout)
-        clients_with_shown.append(
-            {**client, "active_desktop": str(active) if active is not None else None, "shown": shown}
+            desktop = desktops_by_id[active]
+            layout = shell.placements.read_layout(active, str(record.id), {window.id for window in desktop.windows})
+            shown = _shown_window_ids(desktop, layout)
+        clients.append(
+            {
+                **client_wire_json(record, str(record.id) in connected),
+                "active_desktop": str(active) if active is not None else None,
+                "shown": shown,
+            }
         )
-    return {"desktops": [desktop_wire_json(desktop) for desktop in desktops], "clients": clients_with_shown}
+    return {
+        "desktops": [desktop_wire_json(desktop) for desktop in desktops],
+        "apps": shell.inventory.serialized(),
+        "clients": clients,
+    }
 
 
 def register_desktop_routes(application: Flask) -> None:
@@ -641,13 +644,13 @@ def _op_window(
 def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
-    """Apply one verb of the op route (desktop contracts.md section 8): the inventory ops answer the desktops, a
-    whole-app ``refresh`` and the interface reload reach every client; the rest resolve their client and desktop,
-    edit the files, and answer the resulting state."""
+    """Apply one verb of the op route (desktop contracts.md section 8): the inventory ops answer the inventory
+    document, a whole-app ``refresh`` and the interface reload reach every client; the rest resolve their client and
+    desktop, edit the files, and answer the resulting state."""
     if op in INVENTORY_OPS:
-        desktops = [desktop_wire_json(desktop) for desktop in shell.list_desktops()]
-        logger.info("layout op={} requester={} desktops={}", op, requester, len(desktops))
-        return jsonify({"ok": True, "desktops": desktops})
+        document = inventory_document_json(shell)
+        logger.info("layout op={} requester={} desktops={}", op, requester, len(document["desktops"]))
+        return jsonify({"ok": True, **document})
     arguments = _parse_desktop_arguments(args_raw)
     # The rules an op's own arguments settle come before any client is looked for, so a caller is told what to
     # fix rather than which client to name.
