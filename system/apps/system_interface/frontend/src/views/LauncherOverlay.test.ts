@@ -106,10 +106,20 @@ describe("LauncherOverlay", () => {
   it("swaps the sections for results while searching, windows across every desktop included", () => {
     const overlay = render({ query: "budget" });
     expect(overlay.querySelectorAll(".launcher-tile")).toHaveLength(0);
+    expect(overlay.querySelector('[data-section="open-new"]')).toBeNull();
     expect(
       [...overlay.querySelectorAll("[data-launcher-window]")].map((row) => row.getAttribute("data-launcher-window")),
     ).toEqual(["win-3"]);
     expect(overlay.querySelector('[data-launcher-window="win-3"]')?.textContent).toContain("Work");
+  });
+
+  it("files a matching launch path under Open new, apart from the windows it also finds", () => {
+    const overlay = render({ query: "docs" });
+    const openNew = overlay.querySelector('[data-section="open-new"]');
+    expect(openNew?.querySelector('[data-launch="docs:new"]')).not.toBeNull();
+    expect(openNew?.querySelector("[data-launcher-window]")).toBeNull();
+    expect(overlay.querySelector('[data-section="windows"] [data-launch]')).toBeNull();
+    expect(overlay.querySelector('[data-section="windows"] [data-launcher-window]')).not.toBeNull();
   });
 
   it("says when nothing matches", () => {
