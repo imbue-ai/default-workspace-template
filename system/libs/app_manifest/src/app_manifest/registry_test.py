@@ -1,15 +1,24 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from loguru import logger
 
+from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppUrl
 from app_manifest.registry import DEFAULT_APPS_FILE
 from app_manifest.registry import ENV_APPS_FILE
 from app_manifest.registry import read_origin_label
 from app_manifest.registry import read_registry
+from app_manifest.registry import register_app
 from app_manifest.registry import registry_path
+from app_manifest.testing import APP_ICON_MARKUP
+
+# system/libs/app_manifest/src/app_manifest/registry_test.py -> the repository root, the cwd the
+# registration script is resolved against.
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -166,3 +175,50 @@ def test_read_origin_label_of_an_unreadable_registry_is_empty_and_warns(tmp_path
     assert label == ""
     assert len(captured) == 1
     assert "web" in captured[0] and "not valid TOML" in captured[0]
+
+
+def _registration_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """cwd at the repo root (the registration script is cwd-relative) and a scratch registry; returns the registry."""
+    monkeypatch.chdir(_REPO_ROOT)
+    registry = tmp_path / "apps.toml"
+    monkeypatch.setenv(ENV_APPS_FILE, str(registry))
+    return registry
+
+
+def test_register_app_writes_the_manifests_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = _registration_environment(tmp_path, monkeypatch)
+    app_name = f"registered-{uuid4().hex[:8]}"
+    (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text(
+        f'name = "{app_name}"\ndisplay_name = "Registered"\nicon = "icon.svg"\n'
+        '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\n'
+    )
+
+    register_app(manifest_path, AppUrl("http://localhost:8300"))
+
+    rows = read_registry(registry)
+    assert [row.name for row in rows] == [app_name]
+    assert rows[0].url == "http://localhost:8300"
+    assert rows[0].display_name == "Registered"
+    assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
+
+
+def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _registration_environment(tmp_path, monkeypatch)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text('name = "Not A Name"\n')
+
+    with pytest.raises(AppRegistrationError, match="invalid app name"):
+        register_app(manifest_path, AppUrl("http://localhost:8300"))
+
+
+def test_register_app_needs_the_registration_script_under_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AppRegistrationError, match="not found"):
+        register_app(tmp_path / "app.toml", AppUrl("http://localhost:8300"))

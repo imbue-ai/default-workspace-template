@@ -19,10 +19,8 @@ from app_instances.primitives import (
     InstanceKeyPrefix,
     InstanceTitle,
     LocationTarget,
-    canonical_name_from_title,
-    is_name_conflict,
 )
-from app_manifest.primitives import ActionId
+from app_manifest.primitives import ActionId, canonical_name_from_title, is_name_conflict
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from loguru import logger
