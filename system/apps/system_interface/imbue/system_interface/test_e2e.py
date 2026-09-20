@@ -41,6 +41,7 @@ from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
@@ -461,14 +462,15 @@ def _open_via_shortcut(
     """Run a shortcut (by double click unless ``run`` says otherwise) and wait for the one new window it opens;
     answers the window id."""
     before = {window["id"] for window in _windows(server.base_url)}
+
+    def _opened() -> set[str]:
+        return {window["id"] for window in _windows(server.base_url)} - before
+
     run(page.locator(f'[data-shortcut="{key}"]'))
-    wait_for(
-        lambda: len(set(window["id"] for window in _windows(server.base_url)) - before) == 1,
-        timeout=15.0,
-        poll_interval=0.1,
-        error_message="the shortcut opened no window",
+    assert poll_until(lambda: len(_opened()) == 1, timeout=15.0, poll_interval=0.1), (
+        f"the shortcut opened {len(_opened())} windows, not one"
     )
-    (window_id,) = set(window["id"] for window in _windows(server.base_url)) - before
+    (window_id,) = _opened()
     expect(_window(page, window_id)).to_be_visible(timeout=15000)
     return window_id
 
