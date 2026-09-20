@@ -113,6 +113,8 @@ export class PointerGestureSource implements GestureSource {
     };
 
     const onPointerDown = (event: PointerEvent): void => {
+      // A new press: the last drag's click has fired by now or never will.
+      suppressNextClick = false;
       if (event.button !== PRIMARY_BUTTON || pending !== null) return;
       if (!(event.target instanceof Element)) return;
       const binding = bindingForTarget(event.target);
