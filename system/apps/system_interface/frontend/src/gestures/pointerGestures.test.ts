@@ -42,6 +42,8 @@ function pointer(type: string, target: Element, x: number, y: number, extra: Poi
       clientY: y,
       pointerId: 1,
       button: 0,
+      // The primary button is held until the release.
+      buttons: type === "pointerup" ? 0 : 1,
       pointerType: "mouse",
       ...extra,
     }),
@@ -123,6 +125,54 @@ describe("PointerGestureSource", () => {
     pointer("pointerdown", title, 110, 70);
     pointer("pointerup", title, 111, 70);
     expect(events).toEqual([]);
+  });
+
+  it("a press released over a live page (no pointerup reaches the root) does not become a drag on the next hover", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70);
+    // The release landed in the focused window's iframe; the pointer hovers back over the shell.
+    pointer("pointermove", title, 150, 70, { buttons: 0 });
+    pointer("pointermove", title, 190, 70, { buttons: 0 });
+    expect(events).toEqual([]);
+    // The next press is a fresh gesture rather than being ignored for a pending one.
+    pointer("pointerdown", title, 200, 70);
+    pointer("pointermove", title, 240, 70);
+    pointer("pointerup", title, 240, 70);
+    expect(events).toEqual([
+      "begin:move(win-1):230,50",
+      "move:move(win-1):230,50:40,0",
+      "end:move(win-1):230,50:40,0",
+    ]);
+  });
+
+  it("a touch press released over a live page does not block the next finger's press", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70, { pointerId: 7, pointerType: "touch" });
+    pointer("pointerdown", title, 110, 70, { pointerId: 8, pointerType: "touch" });
+    pointer("pointermove", title, 150, 70, { pointerId: 8, pointerType: "touch" });
+    pointer("pointerup", title, 150, 70, { pointerId: 8, pointerType: "touch" });
+    expect(events).toEqual([
+      "begin:move(win-1):140,50",
+      "move:move(win-1):140,50:40,0",
+      "end:move(win-1):140,50:40,0",
+    ]);
+  });
+
+  it("a second pointer during a drag is ignored", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70, { pointerId: 7, pointerType: "touch" });
+    pointer("pointermove", title, 150, 70, { pointerId: 7, pointerType: "touch" });
+    pointer("pointerdown", title, 300, 70, { pointerId: 8, pointerType: "touch" });
+    pointer("pointermove", title, 340, 70, { pointerId: 8, pointerType: "touch" });
+    pointer("pointerup", title, 160, 70, { pointerId: 7, pointerType: "touch" });
+    expect(events).toEqual([
+      "begin:move(win-1):140,50",
+      "move:move(win-1):140,50:40,0",
+      "end:move(win-1):150,50:50,0",
+    ]);
   });
 
   it("does not begin when the listener says the binding is not draggable", () => {
