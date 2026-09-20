@@ -34,7 +34,9 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   the queue actions, presence, destroy, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
+  `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
+  the transcript's secret card submits, declines, and re-reads it).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
