@@ -143,13 +143,13 @@ _SHELL_NAMES_THE_CHAT_RULE = RatchetRuleInfo(
     rule_name="the shell naming the chat app",
     rule_description=(
         "The shell knows no app by name: the chat is an app like the terminal or the files app, found "
-        "through the registry and addressed as app:<name>?instance=<key>. A literal 'chat' in the shell "
-        "package or its frontend is the shell special-casing one app; carry the address instead (a layout "
-        "op's requester, a page's own address)."
+        "through the registry and known only as the app name a window or a requester carries. A literal "
+        "'chat' in the shell package or its frontend is the shell special-casing one app; carry the name "
+        "the request came with instead (a layout op's requester, a window's app)."
     ),
 )
 
-# The bare app name as a string literal, and the name as the app of an address literal
+# The bare app name as a string literal, and the name as the app of a retired address literal
 # (``"app:chat"``, ``"app:chat?instance=..."``, a template literal's ``app:chat?``). Class names
 # such as "chat-panel" and prose (``chat`` in a docstring) do not match: the bare form takes a
 # string quote on both sides, and the address form is closed by a quote or its ``?`` at once.

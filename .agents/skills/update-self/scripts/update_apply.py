@@ -91,10 +91,10 @@ from update_probes import (
     has_chat_program,
     preflight,
     preflight_chat,
-    read_critical_instance_apps,
+    read_critical_apps,
     refresh_workspace_view,
+    wait_app_healthy,
     wait_healthy,
-    wait_instances_healthy,
 )
 from update_runtime import (
     ApplyFailed,
@@ -637,15 +637,15 @@ def _recover_running_state(
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
-        # Every critical app with an instances API is probed beside the shell as
-        # the forward apply does, read off the restored tree: a tree whose
-        # manifests declare none is confirmed by the shell alone.
+        # Every critical app is probed beside the shell as the forward apply does,
+        # read off the restored tree: a tree whose manifests declare none is
+        # confirmed by the shell alone.
         if healthy:
-            for app in read_critical_instance_apps(repo_root):
-                app_failure = wait_instances_healthy(
+            for app_name in read_critical_apps(repo_root):
+                app_failure = wait_app_healthy(
                     http,
                     repo_root,
-                    app,
+                    app_name,
                     HEALTH_ATTEMPTS,
                     HEALTH_INTERVAL_SECONDS,
                     sleeper,
@@ -653,7 +653,7 @@ def _recover_running_state(
                 if app_failure is not None:
                     healthy = False
                     sys.stderr.write(
-                        f"recovery: the {app.name} app did not become healthy after the "
+                        f"recovery: the {app_name} app did not become healthy after the "
                         f"restart ({app_failure})\n"
                     )
                     break
@@ -1091,20 +1091,19 @@ def apply_update(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
-        # Every critical app that serves instances restarts with the shell (all are
-        # the services agent's programs), so each one's instances API answering is
-        # the update's health too: the chat is the process that imports mngr, and
-        # the terminal is what the not-built placeholder hands over. Which apps
-        # those are comes from the merged tree's manifests; where each is reached
-        # follows the registry as the app re-registers, and the failure names what
-        # the last poll found.
-        for app in read_critical_instance_apps(repo_root):
-            app_failure = wait_instances_healthy(
-                http, repo_root, app, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
+        # Every critical app restarts with the shell (all are the services agent's
+        # programs), so each one's health route answering is the update's health
+        # too: the chat is the process that imports mngr, and the terminal is what
+        # the not-built placeholder hands over. Which apps those are comes from the
+        # merged tree's manifests; where each is reached follows the registry as
+        # the app re-registers, and the failure names what the last poll found.
+        for app_name in read_critical_apps(repo_root):
+            app_failure = wait_app_healthy(
+                http, repo_root, app_name, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
             )
             if app_failure is not None:
                 raise ApplyFailed(
-                    f"the {app.name} app did not become healthy after restart ({app_failure})",
+                    f"the {app_name} app did not become healthy after restart ({app_failure})",
                     live_service_restarted=True,
                 )
 

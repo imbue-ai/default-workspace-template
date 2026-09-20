@@ -26,7 +26,7 @@
  * is served, so the shell always runs at ``<shell-label>.<coordinate>``.
  * Deriving relative to ``window.location.host`` verbatim would therefore nest
  * every app under the shell's label (``foo.<shell-label>.host-<hex>...``),
- * which routes back to the shell -- a dockview inside a dockview. Stripping to
+ * which routes back to the shell -- a desktop inside a desktop. Stripping to
  * the coordinate first keeps every app origin a single label deep.
  *
  * Nothing about an origin is ever persisted: saved layouts carry the app's

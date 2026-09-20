@@ -16,8 +16,8 @@ Provisioning and utility scripts:
 - Claude Code features with no counterpart on the other harnesses
   (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
   `.claude/settings.json`.
-- Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `message_chat.py` (send a message to a chat by its id through
+- Utility scripts: `forward_port.py` (port registry), `layout.py` (the
+  desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`), `seed_welcome_chat.py` (open the
   workspace's first chat on the conversation the Mind app had before the
