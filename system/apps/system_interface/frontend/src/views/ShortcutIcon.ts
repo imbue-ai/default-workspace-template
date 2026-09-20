@@ -101,7 +101,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             {
               class:
                 "shortcut-label line-clamp-2 w-full rounded px-1 text-(length:--font-size-helper) leading-tight " +
-                "text-on-accent [text-shadow:0_1px_2px_rgb(0_0_0/0.6)]",
+                "text-on-accent [text-shadow:var(--desk-shortcut-label-shadow)]",
             },
             label,
           ),
