@@ -95,6 +95,7 @@ from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
@@ -326,69 +327,52 @@ def test_create_codex_chat_broadcasts_provisional_chat_created_with_its_account(
     assert proto_msg["account_id"] == codex_account_id
 
 
-def test_reserve_chat_mints_a_chat_awaiting_an_account(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A reservation is a provisional chat in the awaiting-account phase, pushed like a launch."""
-    q = broadcaster.register()
-
-    reserved = agent_manager.reserve_chat()
-
-    proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert proto is not None
-    assert proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
-    assert proto.name == reserved.display_name == "Chat 1"
-    raw = q.get_nowait()
-    assert raw is not None
-    assert json.loads(raw) == {"type": "provisional_chat_created", **proto.model_dump(mode="json")}
-
-
-def test_create_chat_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
-    reserved = agent_manager.reserve_chat()
+def test_create_chat_launches_a_failed_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     _tracked_chat(agent_manager, "agent-2", "Chat-2", display_name="Chat 2")
 
-    created = agent_manager.create_chat("", chat_id=reserved.chat_id)
+    created = agent_manager.create_chat("", chat_id=failed.chat_id)
     agent_manager.stop()
 
-    assert created.chat_id == reserved.chat_id
-    assert created.display_name == reserved.display_name
+    assert created.chat_id == failed.chat_id
+    assert created.display_name == failed.name
 
 
-def test_create_chat_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_launching_an_id_it_did_not_mint(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
             chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
     with pytest.raises(AgentCreationError):
-        agent_manager.create_chat("", chat_id="never-reserved")
+        agent_manager.create_chat("", chat_id="never-minted")
     with pytest.raises(AgentCreationError):
         agent_manager.create_chat("", chat_id="proto-1")
     agent_manager.stop()
 
 
-def test_create_chat_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_a_name_or_project_beside_a_minted_id(agent_manager: AgentManager) -> None:
     """A chat minted earlier keeps the name and project it was minted with: a launch that names either
     is refused rather than answered with a different name than it asked for."""
-    reserved = agent_manager.reserve_chat()
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     with pytest.raises(AgentCreationError, match="keeps the name and project"):
-        agent_manager.create_chat("Renamed", chat_id=reserved.chat_id)
+        agent_manager.create_chat("Renamed", chat_id=failed.chat_id)
     with pytest.raises(AgentCreationError, match="keeps the name and project"):
-        agent_manager.create_chat("", project_id="project-1", chat_id=reserved.chat_id)
-    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None
-    assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+        agent_manager.create_chat("", project_id="project-1", chat_id=failed.chat_id)
+    failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
+    assert failed_proto is not None
+    assert failed_proto.phase is ProvisionalChatPhase.FAILED
     agent_manager.stop()
 
 
-def test_create_chat_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
-    """A reserved chat keeps the first message it was minted with; a launch cannot reseed it."""
-    reserved = agent_manager.reserve_chat(message="/welcome-tour")
+def test_create_chat_refuses_a_message_beside_a_minted_id(agent_manager: AgentManager) -> None:
+    """A chat minted earlier keeps the first message it was minted with; a launch cannot reseed it."""
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="/welcome-tour")
     with pytest.raises(AgentCreationError, match="first message"):
-        agent_manager.create_chat("", chat_id=reserved.chat_id, message="something else")
-    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None
-    assert reserved_proto.message == "/welcome-tour"
-    assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+        agent_manager.create_chat("", chat_id=failed.chat_id, message="something else")
+    failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
+    assert failed_proto is not None
+    assert failed_proto.message == "/welcome-tour"
+    assert failed_proto.phase is ProvisionalChatPhase.FAILED
     agent_manager.stop()
 
 
@@ -862,21 +846,6 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
         third.stop()
 
 
-def _seed_failed_chat(
-    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1"
-) -> ProvisionalChat:
-    proto = ProvisionalChat(
-        chat_id=chat_id,
-        name=name,
-        account_id=account_id,
-        phase=ProvisionalChatPhase.FAILED,
-        error="mngr create exited with code 3",
-    )
-    with agent_manager._lock:
-        agent_manager._provisional_chats[chat_id] = proto
-    return proto
-
-
 def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
@@ -886,7 +855,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     ``mngr`` of this fixture fails at once, which would settle it again)."""
     # The account the conftest signed in: what the failed record binds to and the retry names.
     (signed_in,) = read_index().accounts
-    failed = _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
     q = broadcaster.register()
 
     created = agent_manager.create_chat("", chat_id="failed-1", account_id=failed.account_id)
@@ -913,7 +882,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
 def test_discard_provisional_chat_drops_a_failed_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
+    seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     q = broadcaster.register()
 
     assert agent_manager.discard_provisional_chat("failed-1") is True
@@ -929,29 +898,20 @@ def test_discard_provisional_chat_drops_a_failed_chat(
     }
 
 
-def test_discard_provisional_chat_drops_a_reserved_chat_but_not_a_create_in_flight(
+def test_discard_provisional_chat_leaves_a_create_in_flight_and_an_unknown_id_alone(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    reserved = agent_manager.reserve_chat()
     with agent_manager._lock:
         agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
             chat_id=ChatId("proto-1"), name="Chat 9", phase=ProvisionalChatPhase.CREATING
         )
     q = broadcaster.register()
 
-    assert agent_manager.discard_provisional_chat(reserved.chat_id) is True
     assert agent_manager.discard_provisional_chat("proto-1") is False
     assert agent_manager.discard_provisional_chat("never-minted") is False
 
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["proto-1"]
-    raw = q.get_nowait()
-    assert raw is not None
-    assert json.loads(raw) == {
-        "type": "provisional_chat_completed",
-        "chat_id": reserved.chat_id,
-        "success": False,
-        "error": None,
-    }
+    assert q.empty()
 
 
 def test_stop_without_start(agent_manager: AgentManager) -> None:
@@ -3578,7 +3538,7 @@ def test_destroying_or_discarding_a_chat_with_no_record_removes_its_folder(
         manager.destroy_chat(ChatId("agent-plain"))
         assert not (chats_root / "agent-plain").exists()
 
-        _seed_failed_chat(manager, ChatId("failed-1"), "Chat 2")
+        seed_failed_chat(manager, ChatId("failed-1"), "Chat 2")
         manager.set_fast_mode_state(ChatId("failed-1"), ChatFastModeState(mode=FastModeMode.ON))
         assert manager.discard_provisional_chat("failed-1") is True
         assert not (chats_root / "failed-1").exists()

@@ -116,7 +116,7 @@ export interface QueuedMessage {
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
-export type ProvisionalChatPhase = "awaiting_account" | "awaiting_first_send" | "creating" | "failed";
+export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
 export interface ProvisionalChat {
@@ -286,7 +286,7 @@ function handleEvent(event: WsEvent): void {
         // The chat itself arrives on the chats_updated push, which is what settles waiters.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
       } else if (event.error === null) {
-        // Discarded (its tab was closed before it launched): gone, with nothing to show.
+        // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
         settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
       } else {

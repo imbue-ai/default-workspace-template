@@ -83,14 +83,14 @@ def test_broadcast_provisional_chat_created() -> None:
     q = broadcaster.register()
 
     broadcaster.broadcast_provisional_chat_created(
-        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
+        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.CREATING)
     )
 
     msg = json.loads(_get_message(q))
     assert msg["type"] == "provisional_chat_created"
     assert msg["chat_id"] == "a1"
     assert msg["name"] == "test"
-    assert msg["phase"] == "awaiting_account"
+    assert msg["phase"] == "creating"
     assert msg["error"] is None
 
 

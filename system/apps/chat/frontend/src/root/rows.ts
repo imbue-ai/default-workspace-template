@@ -24,10 +24,8 @@ export interface ChatRow {
   isProvisional: boolean;
 }
 
-// What a chat that is not an agent yet is doing, in the contract's terms (the backend's
-// ``_STATUS_BY_PROVISIONAL_PHASE``).
+// What a chat that is not an agent yet is doing, as a chat status.
 const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>> = {
-  awaiting_account: "attention",
   awaiting_first_send: "idle",
   creating: "working",
   failed: "error",

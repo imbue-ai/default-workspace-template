@@ -12,11 +12,7 @@ const mocks = vi.hoisted(() => {
     // The chat the list names, once its agent exists; undefined while it is provisional.
     chat: undefined as unknown,
     chatsUpdatedListener: null as (() => void) | null,
-    accountsLoaded: true,
-    selectedAccount: null as { id: string } | null,
     launchChat: vi.fn(async (_chatId: string, _accountId: string) => ({})),
-    openProviderChooser: vi.fn(),
-    closeProviderChooser: vi.fn(),
     fetchEvents: vi.fn(async (_chatId: string) => undefined),
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
@@ -34,12 +30,6 @@ vi.mock("../models/Chats", () => ({
   removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
-}));
-vi.mock("../models/Providers", () => ({
-  areAccountsLoaded: () => mocks.accountsLoaded,
-  getSelectedAccount: () => mocks.selectedAccount,
-  openProviderChooser: mocks.openProviderChooser,
-  closeProviderChooser: mocks.closeProviderChooser,
 }));
 vi.mock("../models/Response", () => ({
   addMessageSentListener: () => undefined,
@@ -137,17 +127,6 @@ function mountPanel(): () => unknown {
   return () => panel.view({ attrs: { chatId: AGENT_ID } } as m.Vnode<{ chatId: string }>);
 }
 
-function awaiting(): void {
-  mocks.proto = {
-    chat_id: AGENT_ID,
-    name: "Chat 1",
-    account_id: "",
-    phase: "awaiting_account",
-    error: null,
-    is_seeded: false,
-  };
-}
-
 /** A seeded chat (the Mind app's onboarding conversation) in `phase`, its create having failed
  *  with `error` in the failed phase. */
 function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: string | null = null): void {
@@ -161,89 +140,50 @@ function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: str
   };
 }
 
+/** A chat whose create failed on `accountId`, with `error` as the reason. */
+function failed(accountId: string, error: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: accountId,
+    phase: "failed",
+    error,
+    is_seeded: false,
+  };
+}
+
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
-    mocks.openProviderChooser.mockReset();
-    mocks.closeProviderChooser.mockReset();
-    mocks.accountsLoaded = true;
-    mocks.selectedAccount = null;
     mocks.chat = undefined;
-    awaiting();
   });
 
-  it("decides nothing before the account list has loaded", () => {
-    mocks.accountsLoaded = false;
+  it("shows a failed create's reason and retries it on the record's account", () => {
+    failed("acct-1", "mngr create exited with code 1");
     const render = mountPanel();
 
     const tree = render();
 
-    expect(renderedText(tree)).toContain("Checking which providers are signed in");
-    expect(mocks.launchChat).not.toHaveBeenCalled();
-    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
-  });
-
-  it("offers the chooser once with nothing signed in, and keeps a button to reopen it", () => {
-    const render = mountPanel();
-
-    const tree = render();
-    render();
-
-    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
-    expect(renderedText(tree)).toContain("Sign in to a provider to start this chat");
-    expect(mocks.launchChat).not.toHaveBeenCalled();
-    // The chooser's sign-in launches this chat.
-    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
-    intent.onSignedIn("acct-2");
-    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-2");
-    expect(findByClass(render(), "message-list-creating")).toBeTruthy();
-  });
-
-  it("launches at once on the selected account, closing the chooser, and only once", () => {
-    mocks.selectedAccount = { id: "acct-1" };
-    const render = mountPanel();
-
-    const tree = render();
-    render();
-
-    expect(mocks.launchChat).toHaveBeenCalledTimes(1);
+    expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
+    expect(renderedText(tree)).toContain("mngr create exited with code 1");
+    click(findButton(tree, "message-list-create-retry"));
     expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
-    expect(mocks.closeProviderChooser).toHaveBeenCalled();
-    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
-    expect(findByClass(tree, "message-list-creating")).toBeTruthy();
   });
 
-  it("shows a refused launch's reason with a retry on the same account", async () => {
-    mocks.selectedAccount = { id: "acct-1" };
+  it("shows a refused relaunch's reason beside the create's, and forgets it once the chat is being created", async () => {
+    failed("acct-1", "mngr create exited with code 1");
     mocks.launchChat.mockImplementationOnce(async () => {
       throw new Error("account acct-1 is on a lane this build does not have");
     });
     const render = mountPanel();
-    render();
+    click(findButton(render(), "message-list-create-retry"));
     await flushAsync();
 
-    const tree = render();
+    const refused = render();
 
-    expect(renderedText(tree)).toContain("account acct-1 is on a lane this build does not have");
-    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
-    click(findButton(tree, "message-list-launch-retry"));
-    expect(mocks.launchChat).toHaveBeenCalledTimes(2);
-    expect(mocks.launchChat).toHaveBeenLastCalledWith(AGENT_ID, "acct-1");
-    expect(findByClass(render(), "message-list-creating")).toBeTruthy();
-  });
-
-  it("forgets a refusal once the chat is being created, so a later failure shows its own reason", async () => {
-    // Two pages of one waiting chat both launch on the selected account; the backend
-    // takes one and refuses the other, and the push then moves both to creating.
-    mocks.selectedAccount = { id: "acct-1" };
-    mocks.launchChat.mockImplementationOnce(async () => {
-      throw new Error("Chat agent-1 is not waiting to be launched");
-    });
-    const render = mountPanel();
-    render();
-    await flushAsync();
-    expect(renderedText(render())).toContain("is not waiting to be launched");
+    expect(renderedText(refused)).toContain("mngr create exited with code 1");
+    expect(renderedText(refused)).toContain("account acct-1 is on a lane this build does not have");
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -254,37 +194,11 @@ describe("ChatPanel over a provisional chat", () => {
       is_seeded: false,
     };
     render();
-    mocks.proto = {
-      chat_id: AGENT_ID,
-      name: "Chat 1",
-      account_id: "acct-1",
-      phase: "failed",
-      error: "mngr create exited with code 1",
-      is_seeded: false,
-    };
+    failed("acct-1", "mngr create exited with code 2");
     const tree = render();
 
-    expect(renderedText(tree)).toContain("mngr create exited with code 1");
-    expect(renderedText(tree)).not.toContain("is not waiting to be launched");
-  });
-
-  it("shows a failed create's reason and retries it on the record's account", () => {
-    mocks.proto = {
-      chat_id: AGENT_ID,
-      name: "Chat 1",
-      account_id: "acct-1",
-      phase: "failed",
-      error: "mngr create exited with code 1",
-      is_seeded: false,
-    };
-    const render = mountPanel();
-
-    const tree = render();
-
-    expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
-    expect(renderedText(tree)).toContain("mngr create exited with code 1");
-    click(findButton(tree, "message-list-create-retry"));
-    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
+    expect(renderedText(tree)).toContain("mngr create exited with code 2");
+    expect(renderedText(tree)).not.toContain("is on a lane this build does not have");
   });
 });
 

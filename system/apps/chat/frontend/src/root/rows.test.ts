@@ -13,12 +13,12 @@ describe("rowsFromSnapshots", () => {
   it("lists every chat, then the provisional chats the list does not name yet", () => {
     const rows = rowsFromSnapshots(
       [chatSnapshotFixture("agent-a", { title: "Plan", last_messaged_at: 1_700_000_000 })],
-      [provisional("agent-a", "creating"), provisional("agent-b", "awaiting_account")],
+      [provisional("agent-a", "creating"), provisional("agent-b", "failed")],
     );
 
     expect(rows.map((row) => [row.chatId, row.title, row.status, row.lastActiveMs, row.isProvisional])).toEqual([
       ["agent-a", "Plan", "idle", 1_700_000_000_000, false],
-      ["agent-b", "New chat", "attention", null, true],
+      ["agent-b", "New chat", "error", null, true],
     ]);
   });
 });
