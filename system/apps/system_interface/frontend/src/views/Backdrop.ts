@@ -62,15 +62,17 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             "backdrop relative isolate h-full w-full overflow-hidden bg-(--desk-backdrop) bg-cover bg-center " +
             "bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
-          onpointerdown: (event: PointerEvent) => {
-            // A press on the bare backdrop clears the shortcut selection.
-            if (event.target === event.currentTarget) attrs.onSelectShortcut(null);
-          },
         },
         [
           m(
             "div",
-            { class: "shortcut-grid absolute inset-0" },
+            {
+              class: "shortcut-grid absolute inset-0",
+              onpointerdown: (event: PointerEvent) => {
+                // A press on the bare backdrop (the grid covers all of it) clears the shortcut selection.
+                if (event.target === event.currentTarget) attrs.onSelectShortcut(null);
+              },
+            },
             placed.map(({ shortcut, cell }) => {
               const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
               return m(ShortcutIcon, {
