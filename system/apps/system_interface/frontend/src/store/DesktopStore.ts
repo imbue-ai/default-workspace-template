@@ -358,7 +358,8 @@ export class DesktopStore {
   async createDesktop(name: string, color: string, glyph: number): Promise<void> {
     try {
       const created = await this.deps.api.createDesktop(name, color, glyph);
-      this.dispatch({ type: "desktops_updated", desktops: [...this.state.desktops, created] });
+      // The broadcast may have landed first: upsert rather than append.
+      this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
       this.deps.notify(`Could not create the desktop: ${(error as Error).message}`);

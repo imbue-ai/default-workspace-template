@@ -10,7 +10,7 @@ import m from "mithril";
 import { wallpaperImageUrl } from "../model/api";
 import { cellRect, placeShortcuts } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
-import type { Desktop, DesktopShortcut, Placement } from "../model/records";
+import type { Desktop, DesktopShortcut, Placement, WindowRecord } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -81,7 +81,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 app: appByName(state, shortcut.target.app),
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,
-                onSelect: () => attrs.onSelectShortcut(key),
+                // A finger has no double tap worth asking for: on touch a tap runs the shortcut.
+                onSelect: () => (state.modes.isTouch ? attrs.onRunShortcut(shortcut) : attrs.onSelectShortcut(key)),
                 onRun: () => attrs.onRunShortcut(shortcut),
                 onContextMenu: (x, y) => attrs.onShortcutContextMenu(shortcut, { x, y }),
               });
@@ -97,34 +98,36 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           m(
             "div",
             { class: "windows absolute inset-0 pointer-events-none [&>*]:pointer-events-auto" },
-            placements.map((placement, index) => {
-              if (placement.is_minimized) return null;
-              const window = windowsById.get(placement.window_id);
-              if (window === undefined) return null;
-              const app = appByName(state, window.app);
-              const gestureRect = store.gestureRectFor(window.id);
-              return m(Window, {
-                key: window.id,
-                window,
-                app,
-                title: windowTitle(window, app),
-                rect: gestureRect ?? store.renderedRect(placement),
-                state: renderedState(placement, state.modes),
-                stackIndex: index,
-                isFocused: window.id === focusedWindowId,
-                isCompact: state.modes.isCompact,
-                isTouch: state.modes.isTouch,
-                isMenuOpen: attrs.openMenuWindowId === window.id,
-                hasPage: attrs.hasPage(window.id),
-                onStartApp:
-                  app !== undefined && !app.is_running && store.canStopApp(app)
-                    ? () => void store.setAppLifecycle(app.name, "start")
-                    : null,
-                onRaise: () => store.raiseWindow(window.id),
-                onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
-                onToggleMaximize: () => store.toggleMaximized(window.id),
-              });
-            }),
+            // Filtered before the map: a keyed list tolerates no holes.
+            placements
+              .map((placement, index) => ({ placement, index, window: windowsById.get(placement.window_id) }))
+              .filter(({ placement, window }) => !placement.is_minimized && window !== undefined)
+              .map(({ placement, index, window: found }) => {
+                const window = found as WindowRecord;
+                const app = appByName(state, window.app);
+                const gestureRect = store.gestureRectFor(window.id);
+                return m(Window, {
+                  key: window.id,
+                  window,
+                  app,
+                  title: windowTitle(window, app),
+                  rect: gestureRect ?? store.renderedRect(placement),
+                  state: renderedState(placement, state.modes),
+                  stackIndex: index,
+                  isFocused: window.id === focusedWindowId,
+                  isCompact: state.modes.isCompact,
+                  isTouch: state.modes.isTouch,
+                  isMenuOpen: attrs.openMenuWindowId === window.id,
+                  hasPage: attrs.hasPage(window.id),
+                  onStartApp:
+                    app !== undefined && !app.is_running && store.canStopApp(app)
+                      ? () => void store.setAppLifecycle(app.name, "start")
+                      : null,
+                  onRaise: () => store.raiseWindow(window.id),
+                  onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
+                  onToggleMaximize: () => store.toggleMaximized(window.id),
+                });
+              }),
           ),
           snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
