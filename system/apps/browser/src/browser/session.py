@@ -60,26 +60,17 @@ from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
 
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.nudge import SilentNudger
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
-from browser.cdp_client import CdpClient, CdpError
+from browser.cdp_client import CdpClient
 from browser.cdp_proxy import BrowserProxy, ProxyServer
-from browser.data_types import BrowserController, BrowserLifecycle, BrowserSnapshot
-from browser.errors import (
-    BrowserHeldByAgentError,
-    BrowserNotDrivableError,
-    NavigationFailedError,
-    UnknownBrowserError,
-)
+from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import BrowserName
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
@@ -619,7 +610,6 @@ class LiveBrowser(MutableModel):
     # and the lifecycle, so every ownership write and every lifecycle flip reports). Installed
     # by the manager at registration; the default reports to nobody, which is what a
     # LiveBrowser built on its own (tests) wants.
-    _nudger: InstanceNudgerInterface = PrivateAttr(default_factory=SilentNudger)
 
     @property
     def _crashed(self) -> bool:
@@ -635,7 +625,6 @@ class LiveBrowser(MutableModel):
         if value:
             if self._lifecycle != "crashed":
                 self._lifecycle = "crashed"
-                self._nudger.nudge()
         elif self._lifecycle == "crashed":
             self._lifecycle = "init"
 
@@ -758,7 +747,6 @@ class LiveBrowser(MutableModel):
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         self._lifecycle = "running"
         self._broadcast(self._control_message())
-        self._nudger.nudge()
         logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
 
     # --- the proxy's callbacks into ownership --------------------------------
@@ -1082,7 +1070,6 @@ class LiveBrowser(MutableModel):
             self._input_gate.clear()
             self._lease_touched_at = time.monotonic()  # start the sticky-lease idle clock
         self._broadcast(self._control_message())
-        self._nudger.nudge()
 
     def _waiting_names(self) -> list[str]:
         """Display names of every agent queued for this browser: the resume queue
@@ -1564,52 +1551,6 @@ class LiveBrowser(MutableModel):
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
-    async def navigate_active_tab(self, url: str) -> None:
-        """Point the tab the pane shows at ``url``.
-
-        Refused while an agent holds the browser (agents are never preempted) and while
-        Chromium is not up. Runs under ``_lock`` like every
-        other direct browser action; the CDP calls are bounded so a stalled renderer cannot
-        wedge the loop.
-        """
-        if self._crashed:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} crashed and is gone")
-        if self._lifecycle == "stopped":
-            raise BrowserNotDrivableError(f"browser {self.browser_id} is stopped; start it first")
-        if not self._is_running:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} is still starting")
-        async with self._control_lock:
-            if self.controller == "agent":
-                holder = self.owner_agent_name or self.owner_agent_id or "an agent"
-                raise BrowserHeldByAgentError(f"browser {self.browser_id} is held by {holder}")
-        async with self._lock:
-            target_id = await self._target_to_navigate()
-            try:
-                await asyncio.wait_for(self._cdp_or_raise().navigate(target_id, url), timeout=_RESTORE_NAV_TIMEOUT)
-            except (CdpError, TimeoutError) as e:
-                raise NavigationFailedError(f"could not navigate browser {self.browser_id} to {url}: {e}") from e
-            self._active_target_id = target_id
-        # A navigation can swap in a fresh renderer, which self-writes its oom_score_adj.
-        notify_chromium_processes_expected()
-
-    def _cdp_or_raise(self) -> CdpClient:
-        if self._cdp is None:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} has no Chromium connection")
-        return self._cdp
-
-    async def _target_to_navigate(self) -> str:
-        """The active tab, else the first real page (a restored browser may not have foregrounded one yet)."""
-        active = self._active_target()
-        if active is not None:
-            return active
-        try:
-            targets = await self._cdp_or_raise().page_targets()
-        except CdpError as e:
-            raise NavigationFailedError(f"could not list the tabs of browser {self.browser_id}: {e}") from e
-        if not targets:
-            raise NavigationFailedError(f"browser {self.browser_id} has no tab to navigate")
-        return targets[0]["targetId"]
-
     # --- socket bookkeeping ---------------------------------------------------
 
     async def register_cast_queue(self) -> "queue.Queue[str | None]":
@@ -1847,15 +1788,6 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
-def _snapshot_of(browser: LiveBrowser) -> BrowserSnapshot:
-    """The instances adapter's view of one browser. Read ON the loop thread, where every field is written."""
-    return BrowserSnapshot(
-        name=BrowserName(browser.browser_id),
-        lifecycle=BrowserLifecycle(browser._lifecycle),
-        controller=BrowserController(browser.controller),
-    )
-
-
 class BrowserSessionManager(MutableModel):
     """Owns the whole fleet (all live browsers).
 
@@ -1916,20 +1848,6 @@ class BrowserSessionManager(MutableModel):
     # retry (1013) forever, stuck on "Starting browser...". Consulting this closes it 1008
     # (terminal) instead. Re-creating the name clears it (see _register_init_locked).
     _closed_names: "deque[str]" = PrivateAttr(default_factory=lambda: deque(maxlen=_FAILED_LAUNCH_MEMORY))
-    # Tells the shell the instance list changed (a registration, a close, a launch that
-    # failed) and is handed to every browser for its own status changes. The runner installs
-    # the real one at startup; until then, and in tests, nobody is told.
-    _nudger: InstanceNudgerInterface = PrivateAttr(default_factory=SilentNudger)
-
-    def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
-        """Install the nudger every fleet event reaches the shell through, on the manager and every registered browser."""
-        self._nudger = nudger
-        for browser in self._browsers.values():
-            browser._nudger = nudger
-
-    def nudge(self) -> None:
-        self._nudger.nudge()
-
     def _register_init_locked(self, name: str) -> LiveBrowser:
         """Construct a LiveBrowser in ``init`` and add it to the registry. Caller must
         hold ``self._lock``, so the cap check + name resolution + insert are atomic (no
@@ -1937,9 +1855,7 @@ class BrowserSessionManager(MutableModel):
         kicks :meth:`_launch` off as a background task after releasing the lock."""
         session = LiveBrowser(browser_id=name)
         session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
-        session._nudger = self._nudger
         self._browsers[name] = session
-        self._nudger.nudge()
         # A fresh registration supersedes any earlier launch-failure OR close for this name
         # (the user re-created it, or restore is retrying it), so it's no longer terminal for
         # a viewer -- drop it from both terminal rings so the cast handler stops 1008-ing it.
@@ -2017,7 +1933,6 @@ class BrowserSessionManager(MutableModel):
                     return
                 logger.warning("browser {} failed to launch ({}); removing it", session.browser_id, e)
                 self._browsers.pop(session.browser_id, None)
-                self._nudger.nudge()
                 # Remember the name as launch-failed (finding [7]) so a late/retrying
                 # optimistic viewer -- one still in 1013 reconnect-backoff when this failed,
                 # which never registered a cast queue and so missed the launch_failed
@@ -2166,7 +2081,6 @@ class BrowserSessionManager(MutableModel):
         session = self._browsers.pop(browser_id, None)
         if session is None:
             return
-        self._nudger.nudge()
         # Remember it as terminally gone so a still-open viewer tab is closed 1008 rather
         # than looping on 1013 "Starting browser..." (cleared if the name is re-created).
         self._closed_names.append(browser_id)
@@ -2223,7 +2137,6 @@ class BrowserSessionManager(MutableModel):
     def _broadcast_starting(self, session: LiveBrowser) -> None:
         """Tell the browser's viewers it is launching again, so a stopped overlay gives way to the starting one."""
         session._broadcast(session._control_message())
-        session._nudger.nudge()
 
     def _launched_count(self) -> int:
         """How many browsers hold (or are about to hold) a Chromium: the ones the cap counts."""
@@ -2248,24 +2161,6 @@ class BrowserSessionManager(MutableModel):
             logger.warning("manifest save during close of browser {} failed ({})", browser_id, e)
         # rmtree of a fat profile blocks; keep it off the loop.
         await asyncio.to_thread(self.forget_profile_dir, browser_id)
-
-    async def snapshot_browsers(self) -> list[BrowserSnapshot]:
-        """Every browser's name, lifecycle, and controller, by name; ON the loop so the read is race-free."""
-        return [_snapshot_of(browser) for _, browser in sorted(self._browsers.items())]
-
-    async def create_snapshot(self, start_url: str | None = None) -> BrowserSnapshot:
-        """:meth:`create` with a daemon-minted name, snapshotted ON the loop before the launch can flip anything."""
-        return _snapshot_of(await self.create(None, start_url))
-
-    async def navigate_browser(self, browser_id: str, url: str) -> None:
-        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then
-        checkpoint the manifest so the new tab URL is what a restart restores.
-        UnknownBrowserError for a name no browser has."""
-        browser = self._browsers.get(browser_id)
-        if browser is None:
-            raise UnknownBrowserError(f"no browser named {browser_id!r}")
-        await browser.navigate_active_tab(url)
-        self._spawn_save()
 
     # --- persistence: profiles (Tier A) + manifest (Tier B) -------------------
 

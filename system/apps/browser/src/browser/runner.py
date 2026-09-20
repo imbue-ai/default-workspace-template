@@ -22,12 +22,9 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 * ``POST /browsers/{name}/stop`` / ``.../start`` -- end a browser's Chromium while keeping the
   browser, its profile, and its tabs; relaunch it on them (the viewer's Start button).
 
-The workspace shell reads the same fleet through the instances API of the workspace app
-model (``/_instances``; see ``browser.instances``), mounted on this app because the
-daemon serves its own origin: one instance per browser, ``working`` while an agent holds
-it, ``idle`` otherwise, ``error`` once crashed; ``new`` creates, delete closes, location
-navigates the active tab. Every fleet event nudges the shell through the nudger the manager
-in ``browser.session`` holds.
+The workspace shell opens a browser as a window at ``GET /new[?url=]``, the manifest's
+``new`` launch path (system/apps/browser/app.toml): the same create as ``POST /browsers``,
+answered as a redirect to the new browser's viewer page ``/?session=<name>``.
 
 The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
 gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
@@ -53,10 +50,6 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from app_instances.blueprint import HTTP_FOUND, build_instances_blueprint
-from app_instances.errors import InvalidInstanceValueError
-from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
-from app_instances.primitives import AbsoluteHttpUrl
 from app_manifest.registry import SHELL_APP_NAME, read_origin_label, registry_path
 from flask import Flask, Response, jsonify, redirect, request
 from flask_sock import Sock
@@ -64,14 +57,16 @@ from loguru import logger
 from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
-from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
-from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.instances import START_URL_PARAM, FleetInstanceSource
+from browser.errors import (
+    BrowserNotDrivableError,
+    InvalidStartUrlError,
+    UnknownBrowserError,
+)
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import APP_NAME, BrowserName, instance_url_for_browser
+from browser.primitives import AbsoluteHttpUrl, BrowserName, browser_page_path
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -94,7 +89,10 @@ _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 # shell's origin label from to import the app contract module (desktop-interface contracts.md
 # section 7).
 NEW_PATH = "/new"
+# The launch path's one parameter (the manifest's ``params``): the start page.
+START_URL_PARAM = "url"
 SHELL_LABEL_META_NAME = "workspace-shell-label"
+HTTP_FOUND = 302
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -265,7 +263,7 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Resp
     if raw_url:
         try:
             start_url = str(AbsoluteHttpUrl(raw_url))
-        except InvalidInstanceValueError as e:
+        except InvalidStartUrlError as e:
             return _error({"error": f"url: {e}"}, 400)
     try:
         # Returns fast: registers init + spawns the serialized launch on the loop.
@@ -288,7 +286,7 @@ def new_browser() -> Response:
     started = _start_browser(None, request.args.get(START_URL_PARAM))
     if isinstance(started, Response):
         return started
-    return redirect(str(instance_url_for_browser(BrowserName(started.browser_id))), code=HTTP_FOUND)
+    return redirect(browser_page_path(BrowserName(started.browser_id)), code=HTTP_FOUND)
 
 
 def health() -> Response:
@@ -831,16 +829,6 @@ def _register_routes() -> None:
     sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
     # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
     application.before_request(mediastream.strip_websocket_compression)
-    # The instances API of the workspace app model (``/_instances``), which the shell reads at
-    # the app URL (the manifest names no instances_url): an adapter over the fleet, reaching
-    # it through the bridge like every route above. Its nudges and the fleet's own go
-    # through whatever nudger the manager has installed (``main`` installs the real one).
-    fleet = BridgedFleet(
-        bridge=bridge, manager=manager, ready_gate=_init_done, route_timeout_seconds=_ROUTE_TIMEOUT
-    )
-    application.register_blueprint(
-        build_instances_blueprint(FleetInstanceSource(fleet=fleet), ManagerNudger(manager=manager))
-    )
 
 
 _register_routes()
@@ -909,10 +897,6 @@ def main() -> None:
     Replaces ``uvicorn.run``. The service is reached at its own workspace origin;
     the viewer uses relative URLs, so no prefix or root-path awareness is needed.
     """
-    # Fleet events fire on the loop thread, so the shell is told from a daemon thread; a slow
-    # shell never stalls a browser. Installed here, not in create_app, for the same reason
-    # as the OOM sweep below: tests that build the app must not post to the workspace shell.
-    manager.set_nudger(ThreadedNudger(inner=ShellNudger(app_name=APP_NAME, shell_url=shell_base_url())))
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;
     # session.py reports every event that can spawn Chromium processes and this

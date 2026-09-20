@@ -27,42 +27,22 @@ background agent, which is its own chat -- or the human).
   always wins and pins the browser to the human. For direct control ownership is a
   sticky lease (acquired on the first command, re-checked before every command, and
   auto-released when idle); for `task` it is bound to the live request connection.
-- **Instances** (`instances.py`, `bridged_fleet.py`): the daemon also serves the
-  instances API of the workspace app model (`/_instances`, mounted on the same
-  Flask app because the daemon serves its own origin; the manifest names no
-  separate `instances_url`). One instance per browser: key = the name, URL
-  `/?session=<name>`, title `Browser N` for a numbered name and a legacy name
-  verbatim, status `working` while an agent holds control, `idle` otherwise (a
-  browser still launching included), `error` once it crashed; `explicit`
-  lifetime, not renameable. `new` creates through the same path as `POST
-  /browsers` (409 with the reason while the fleet is full or Chromium is not
-  installed); `GET /new[?url=]`, the manifest's `new` launch path, is that same
-  create answered as a redirect to the new browser's page `/?session=<name>`
-  (an empty `url` opens the home page, like no `url` at all). Delete is the
-  same close as `DELETE /browsers/<name>`, and a
-  location report with an absolute `http(s)` URL navigates the live browser's
-  active tab (409 while an agent holds it, while it is launching, stopped, or
-  crashed, or when Chromium refuses the navigation; a rooted path is 400) and checkpoints
-  the manifest so a restart restores the new page. Reads, delete, and location
-  answer 503 until the restore finishes,
-  like the daemon's own state-changing routes; create does not wait, like `POST
-  /browsers`. A failure of the daemon itself underneath a verb (its loop not
-  answering in time, a startup error) is a 500 with a detail body. Every fleet
-  event that changes the list or a status (a registration, a launch reaching
-  `running` or failing, a close, a crash, every ownership write) nudges the shell
-  (`POST <shell>/api/apps/browser/changed`) from a daemon thread, so a slow shell
-  never stalls the event loop. The `/browsers` routes serve the CLI; the shell
-  reaches the daemon only through the instances API. Every browser is
-  `stoppable`: `POST /_instances/<name>/stop` ends its Chromium (refreshing its
-  tab list first)
-  but keeps the browser, its profile, and its tabs, and lists it as `stopped`;
-  `.../start` relaunches it on those tabs from the same profile (409 while it
-  is still launching, or when the fleet is full). A stopped browser does not
-  count toward the fleet cap, is restored as stopped after a daemon restart
-  (the manifest entry's `stopped` flag), refuses the fleet CLI's verbs with
-  status `stopped` and a hint naming `layout.py start`, and shows a "stopped"
-  overlay with a Start button in the viewer (which calls the daemon's own
-  `POST /browsers/<name>/start`; `.../stop` is its counterpart).
+- **Launch path** (`GET /new[?url=]`, the manifest's `new` launch path): the same
+  create as `POST /browsers` with no name, answered as a redirect to the new
+  browser's page `/?session=<name>` (an empty `url` opens the home page, like no
+  `url` at all; a `url` that is not an absolute `http(s)` URL is 400; 409 with the
+  reason while the fleet is full, 503 while Chromium is not installed). The shell
+  opens a browser window there (`layout.py open browser --launch new --param
+  url=<url>`); everything else about a browser it learns from the page itself through
+  the app contract. The `/browsers` routes serve the CLI and the viewer. Every browser
+  can be stopped: `POST /browsers/<name>/stop` ends its Chromium (refreshing its tab
+  list first) but keeps the browser, its profile, and its tabs; `.../start` relaunches
+  it on those tabs from the same profile (409 while it is still launching, or when
+  the fleet is full). A stopped browser does not count toward the fleet cap, is
+  restored as stopped after a daemon restart (the manifest entry's `stopped` flag),
+  refuses the fleet CLI's verbs with status `stopped` and a hint on bringing it back, and
+  shows a "stopped" overlay with a Start button in the viewer (which
+  calls `POST /browsers/<name>/start`; `.../stop` is its counterpart).
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
@@ -85,7 +65,7 @@ background agent, which is its own chat -- or the human).
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
   does this itself, we just point `user_data_dir` at a durable dir. A tiny manifest
-  (`data/.apps/browser/instances.json`, the app's instance records) records which
+  (`data/.apps/browser/instances.json`, the app's stored data) records which
   browsers existed and their tab URLs. It is checkpointed every ten seconds and
   once more when the daemon is stopped: supervisord signals the daemon alone
   (`stopasgroup=false`), so that
