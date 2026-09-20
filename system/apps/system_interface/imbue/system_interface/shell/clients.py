@@ -89,13 +89,17 @@ class ClientStore(MutableModel):
         raw = read_json_object(self._path())
         if raw is None:
             return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
-        if raw.get("version") == _LEGACY_CLIENTS_FILE_VERSION and isinstance(raw.get("clients"), dict):
-            raw = {
+        is_legacy = raw.get("version") == _LEGACY_CLIENTS_FILE_VERSION and isinstance(raw.get("clients"), dict)
+        document_raw = (
+            {
                 "version": CLIENTS_FILE_VERSION,
                 "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
             }
+            if is_legacy
+            else raw
+        )
         try:
-            document = ClientsDocument.model_validate(raw)
+            document = ClientsDocument.model_validate(document_raw)
         except ValidationError as e:
             logger.warning("Ignored an unreadable clients file at {}: {}", self._path(), e.errors()[0]["msg"])
             return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
