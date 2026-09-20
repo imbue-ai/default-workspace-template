@@ -17,6 +17,7 @@ from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
@@ -80,6 +81,7 @@ class RegistryRow(FrozenModel):
     launcher_rank: int | None = Field(
         default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
     )
+    pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
 
 
 def registry_path() -> Path:

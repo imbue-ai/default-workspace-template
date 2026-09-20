@@ -19,6 +19,7 @@ from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
@@ -32,7 +33,10 @@ from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
+from imbue.system_interface.shell.desktop_document import pinned_apps
+from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
@@ -40,6 +44,7 @@ from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
+from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
@@ -119,13 +124,31 @@ class ShellState(MutableModel):
 
     def list_desktops(self) -> list[Desktop]:
         """Every desktop, the default one created on the first read after the inventory has read the registry once,
-        so its shortcuts are seeded from the apps that are actually registered (desktop plan section 3.2)."""
+        so its shortcuts are seeded from the apps that are actually registered (desktop plan section 3.2), and every
+        desktop holding one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile
+        that wrote is announced once, after the read, so nothing here recurses into itself."""
         if not self.inventory.is_registry_read:
             return self.desktops.list_desktops()
-        return self.desktops.ensure_default(self.seed_shortcuts)
+        self.desktops.ensure_default(self.seed_shortcuts)
+        outcome = self.desktops.ensure_pinned_windows(self.pinned_apps(), datetime.now(timezone.utc))
+        if outcome.is_written:
+            self.broadcaster.broadcast_desktops_updated([desktop_wire_json(desktop) for desktop in outcome.desktops])
+        return list(outcome.desktops)
 
     def seed_shortcuts(self) -> tuple[DesktopShortcut, ...]:
         return seed_desktop_shortcuts([entry.row for entry in self.inventory.entries()])
+
+    def pinned_apps(self) -> tuple[AppPin, ...]:
+        return pinned_apps([entry.row for entry in self.inventory.entries()])
+
+    def create_desktop(self, name: str, color: str, glyph: int) -> Desktop:
+        """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, and tell everyone."""
+        now = datetime.now(timezone.utc)
+        desktop = self.desktops.create_desktop(
+            name, color, glyph, self.seed_shortcuts(), [pinned_window(app_pin, now) for app_pin in self.pinned_apps()]
+        )
+        self.broadcast_desktops_updated()
+        return desktop
 
     def require_app_entry(self, app: str) -> AppInventoryEntry:
         """The inventory entry of a registered app; raises DesktopValueError (a 400) for any other name."""
@@ -235,7 +258,11 @@ class ShellState(MutableModel):
 
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
         """Close a window for everyone: off the desktop and out of every client's layout of it; False when the
-        desktop did not hold it (idempotent)."""
+        desktop did not hold it (idempotent). Raises PinnedWindowError (a 409) for a pinned window, which is never
+        closed."""
+        window = find_window(self.get_desktop(desktop_id), window_id)
+        if window is not None and window.is_pinned:
+            raise PinnedWindowError(f"Window {window_id} is pinned and cannot be closed; minimize it instead")
         outcome = self.desktops.close_window(desktop_id, window_id)
         if not outcome.is_written:
             return False

@@ -2,10 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+from app_manifest.manifest import Pin
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.primitives import LaunchPathValue
 
+from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import GridCell
@@ -53,6 +56,27 @@ def test_the_default_desktop_is_created_once_on_the_first_read_that_may_seed(tmp
     assert json.loads((tmp_path / "desktops.json").read_text())["version"] == 1
 
 
+def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_a_change(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: ())
+    store.create_desktop("Alpha", "#111111", 1, (), ())
+    pin = AppPin(app=AppName("chat"), pin=Pin(path=LaunchPathValue("/")))
+    ensured = store.ensure_pinned_windows([pin], TEST_NOW)
+    assert ensured.is_written is True
+    assert [[str(window.app) for window in desktop.windows] for desktop in ensured.desktops] == [["chat"], ["chat"]]
+    assert all(desktop.windows[0].is_pinned for desktop in ensured.desktops)
+    stamp = (tmp_path / "desktops.json").stat().st_mtime_ns
+    again = store.ensure_pinned_windows([pin], TEST_NOW)
+    assert again.is_written is False and again.desktops == ensured.desktops
+    assert (tmp_path / "desktops.json").stat().st_mtime_ns == stamp
+    withdrawn = store.ensure_pinned_windows([], TEST_NOW)
+    assert withdrawn.is_written is True
+    assert all(desktop.windows[0].is_pinned is False for desktop in withdrawn.desktops)
+    # A pinned window is born with a new desktop when the caller hands it over.
+    born = store.create_desktop("Beta", "#222222", 2, (), (ensured.desktops[0].windows[0],))
+    assert born.windows == (ensured.desktops[0].windows[0],)
+
+
 def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     (tmp_path / "desktops.json").write_text(json.dumps({"version": 7, "desktops": []}))
@@ -65,14 +89,14 @@ def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path)
 def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     home = store.ensure_default(lambda: ())[0]
-    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED)
+    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, ())
     assert research.id == "research" and research.shortcuts == _SEED and research.sharing is SharingMode.SHARED
     with pytest.raises(DesktopConflictError):
-        store.create_desktop("research", "#12B5A5", 4, ())
+        store.create_desktop("research", "#12B5A5", 4, (), ())
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "red", 4, ())
+        store.create_desktop("Bad", "red", 4, (), ())
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "#12B5A5", 12, ())
+        store.create_desktop("Bad", "#12B5A5", 12, (), ())
     with pytest.raises(DesktopValueError):
         slugify_desktop_name("!!!")
     settled = store.update_settings("research", "Research 2", "#222222", 2, SharingMode.PERSONAL)
@@ -136,7 +160,7 @@ def test_shortcuts_are_set_moved_and_removed(tmp_path: Path) -> None:
 
 def test_a_clients_active_desktop_falls_back_from_its_desktop_to_the_first(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
-    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, ())
+    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, (), ())
     desktops = [home, alpha]
     assert resolve_active_desktop(None, desktops) == home.id
     assert resolve_active_desktop(None, []) is None

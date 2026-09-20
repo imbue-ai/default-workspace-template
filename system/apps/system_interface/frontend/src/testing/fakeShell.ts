@@ -173,6 +173,8 @@ export class FakeDesktopApi implements DesktopApi {
       title: "",
       opened_at: this.stamp(),
       is_settling: request.launch !== null,
+      is_pinned: false,
+      scope: "linked",
     };
     this.replace({ ...desktop, windows: [...desktop.windows, window] });
     this.writeLayout(

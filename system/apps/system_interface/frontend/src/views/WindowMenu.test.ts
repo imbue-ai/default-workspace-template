@@ -41,6 +41,14 @@ describe("windowMenuEntries", () => {
     ).toEqual(["refresh", "|", "close"]);
   });
 
+  it("offers no Close for a pinned window", () => {
+    expect(
+      keysOf(
+        windowMenuEntries(appRecord("docs"), { refresh: vi.fn(), share: null, setAppLifecycle: null, close: null }),
+      ),
+    ).toEqual(["refresh"]);
+  });
+
   it("offers only Refresh and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
@@ -72,6 +80,12 @@ describe("taskbarEntryMenuEntries", () => {
       "|",
       "close",
     ]);
+  });
+
+  it("offers no Close for a pinned window's entry", () => {
+    expect(
+      keysOf(taskbarEntryMenuEntries({ ...actions, close: null, isMinimized: true, isMaximized: false }, false)),
+    ).toEqual(["restore", "maximize"]);
   });
 
   it("drops the maximize verbs in compact mode, where every window is maximized", () => {

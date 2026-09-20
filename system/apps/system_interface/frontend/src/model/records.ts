@@ -18,6 +18,15 @@ export type IfPresent = "focus" | "new";
 
 export type WallpaperKind = "bundled" | "file";
 
+/** Whether a window's path and title are followed by every client, or kept by each client for itself. */
+export type LocationScope = "linked" | "independent";
+
+/** How a pinned entry is drawn: the plain icon-and-title entry, or the avatar the shell ships. */
+export type PinStyle = "plain" | "avatar";
+
+/** Where one client shows a pinned entry: in the taskbar, or floating above the windows. */
+export type EntryMode = "bar" | "floating";
+
 /** A window's rectangle in fractions of the backdrop, wholly inside the unit square. */
 export interface Frame {
   readonly x: number;
@@ -56,6 +65,9 @@ export interface WindowRecord {
   readonly title: string;
   readonly opened_at: string;
   readonly is_settling: boolean;
+  /** The app's pinned window on this desktop: permanent, never closed. */
+  readonly is_pinned: boolean;
+  readonly scope: LocationScope;
 }
 
 export interface Desktop {
@@ -98,6 +110,15 @@ export interface DefaultShortcut {
   readonly mode: ShortcutMode;
 }
 
+/** An app's pinned taskbar entry, as its manifest declares it (pinned-taskbar-entries plan section 3.1). */
+export interface AppPin {
+  /** The home path: where the pinned window opens. */
+  readonly path: string;
+  readonly style: PinStyle;
+  readonly scope: LocationScope;
+  readonly default_mode: EntryMode;
+}
+
 /** One registered app as the shell lists it (contracts.md section 5.5). */
 export interface AppRecord {
   readonly name: string;
@@ -114,6 +135,7 @@ export interface AppRecord {
   readonly launch_paths: readonly LaunchPath[];
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
+  readonly pin: AppPin | null;
   readonly is_running: boolean;
 }
 
@@ -221,6 +243,9 @@ export function parseWindow(raw: unknown): WindowRecord {
     title: asString(record.title, "window.title"),
     opened_at: asString(record.opened_at, "window.opened_at"),
     is_settling: asBoolean(record.is_settling, "window.is_settling"),
+    // Both additive with defaults, so a V1 record reads unchanged.
+    is_pinned: record.is_pinned === undefined ? false : asBoolean(record.is_pinned, "window.is_pinned"),
+    scope: record.scope === undefined ? "linked" : asOneOf(record.scope, ["linked", "independent"], "window.scope"),
   };
 }
 
@@ -279,6 +304,17 @@ function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
   };
 }
 
+function parsePin(raw: unknown): AppPin | null {
+  if (raw === null || raw === undefined) return null;
+  const record = asObject(raw, "pin");
+  return {
+    path: asString(record.path, "pin.path"),
+    style: asOneOf(record.style, ["plain", "avatar"], "pin.style"),
+    scope: asOneOf(record.scope, ["linked", "independent"], "pin.scope"),
+    default_mode: asOneOf(record.default_mode, ["bar", "floating"], "pin.default_mode"),
+  };
+}
+
 export function parseAppRecord(raw: unknown): AppRecord {
   const record = asObject(raw, "app");
   const name = asString(record.name, "app.name");
@@ -295,6 +331,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
     default_shortcut: parseDefaultShortcut(record.default_shortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
+    pin: parsePin(record.pin),
     is_running: record.is_running === true,
   };
 }

@@ -3,7 +3,8 @@
  * window menu (three dots, right after the title), then at the right edge minimize,
  * maximize (restore when maximized), and close. It is the drag handle (``data-drag-handle``);
  * a double click toggles maximize. The maximize and restore controls are hidden in compact mode,
- * where every window renders maximized.
+ * where every window renders maximized, and the close control is absent from a pinned window,
+ * which is never closed.
  */
 
 import m from "mithril";
@@ -25,6 +26,7 @@ export interface TitleBarAttrs {
   readonly isFocused: boolean;
   readonly isCompact: boolean;
   readonly isMenuOpen: boolean;
+  readonly isPinned: boolean;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onDoubleClick: () => void;
 }
@@ -61,7 +63,7 @@ function control(
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isCompact, isMenuOpen, onControl, onDoubleClick } = vnode.attrs;
+      const { title, app, state, isFocused, isCompact, isMenuOpen, isPinned, onControl, onDoubleClick } = vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       return m(
         "div",
@@ -87,7 +89,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             : isMaximized
               ? control("restore", "Restore", glyph("restore", CONTROL_GLYPH_SIZE), false, onControl)
               : control("maximize", "Maximize", glyph("maximize", CONTROL_GLYPH_SIZE), false, onControl),
-          control("close", "Close", icon("close", { size: CONTROL_GLYPH_SIZE }), false, onControl),
+          isPinned ? null : control("close", "Close", icon("close", { size: CONTROL_GLYPH_SIZE }), false, onControl),
         ],
       );
     },

@@ -621,6 +621,12 @@ params = [{name = "path", label = "Path", required = false}]
 id = "recent"
 label = "Recent files"
 path = "/recent"
+
+[pin]
+path = "/"
+style = "avatar"
+scope = "independent"
+default_mode = "floating"
 """
 
 
@@ -657,6 +663,19 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
     ]
+    assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
+
+
+def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path, 'name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\n\n[pin]\npath = "/inbox"\n'
+    )
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["pin"] == {"path": "/inbox"}
 
 
 @pytest.mark.parametrize(
@@ -681,6 +700,16 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
             "default_shortcut must be a table with string 'launch' and 'mode'",
             id="default-shortcut-launch-not-a-string",
+        ),
+        pytest.param(
+            '[pin]\nstyle = "avatar"\n',
+            "pin must be a table with a string 'path'",
+            id="pin-without-a-path",
+        ),
+        pytest.param(
+            '[pin]\npath = "/"\nscope = 7\n',
+            "pin.scope must be a string",
+            id="pin-scope-not-a-string",
         ),
     ],
 )
@@ -733,6 +762,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "actions",
         "launch_paths",
         "launcher_rank",
+        "pin",
     ):
         assert stale_key not in row, stale_key
     assert "priority" not in row

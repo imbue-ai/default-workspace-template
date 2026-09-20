@@ -41,6 +41,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.default_shortcut is None
     assert row.launch_paths == ()
     assert row.launcher_rank is None
+    assert row.pin is None
 
 
 def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
@@ -58,6 +59,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'default_shortcut = {launch = "new", mode = "focus"}\n'
         'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
+        'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
     )
 
     rows = read_registry(registry)
@@ -77,6 +79,23 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("recent", "Recent", "/recent", ()),
     ]
     assert row.launcher_rank == 20
+    assert row.pin is not None
+    assert (row.pin.path, row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == (
+        "/",
+        "avatar",
+        "independent",
+        "floating",
+    )
+
+
+def test_a_pin_on_a_row_reads_its_defaults_for_the_keys_the_manifest_left_out(tmp_path: Path) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:5000"\npin = {path = "/"}\n')
+
+    (row,) = read_registry(registry)
+
+    assert row.pin is not None
+    assert (row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == ("plain", "linked", "bar")
 
 
 def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> None:

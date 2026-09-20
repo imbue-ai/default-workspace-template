@@ -7,6 +7,9 @@ from pydantic import ValidationError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import (
     AppManifest,
+    EntryMode,
+    LocationScope,
+    PinStyle,
     ShortcutMode,
     load_manifest,
     manifest_icon_path,
@@ -35,6 +38,7 @@ def _full_manifest_data() -> dict[str, object]:
             }
         ],
         "launcher_rank": 20,
+        "pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"},
     }
 
 
@@ -52,6 +56,42 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
     assert manifest.launcher_rank == 20
+    assert manifest.pin is not None
+    assert manifest.pin.path == "/"
+    assert manifest.pin.style is PinStyle.AVATAR
+    assert manifest.pin.scope is LocationScope.INDEPENDENT
+    assert manifest.pin.default_mode is EntryMode.FLOATING
+
+
+def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> None:
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {"path": "/inbox"}}
+    )
+    assert manifest.pin is not None
+    assert (manifest.pin.path, manifest.pin.style, manifest.pin.scope, manifest.pin.default_mode) == (
+        "/inbox",
+        PinStyle.PLAIN,
+        LocationScope.LINKED,
+        EntryMode.BAR,
+    )
+    with pytest.raises(ValidationError, match="path"):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}})
+
+
+@pytest.mark.parametrize(
+    ("pin", "field"),
+    [
+        ({"path": "/?chat=1"}, "path"),
+        ({"path": "inbox"}, "path"),
+        ({"path": "/", "style": "dot"}, "style"),
+        ({"path": "/", "scope": "personal"}, "scope"),
+        ({"path": "/", "default_mode": "hidden"}, "default_mode"),
+        ({"path": "/", "position": {"x": 0.5, "y": 0.5}}, "position"),
+    ],
+)
+def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:
@@ -201,6 +241,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.default_shortcut is None
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
+    assert manifest.pin is None
     assert manifest.handles == {}
 
 

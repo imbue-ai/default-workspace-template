@@ -177,9 +177,7 @@ def list_desktops() -> ResponseReturnValue:
 
 def create_desktop() -> ResponseReturnValue:
     body = parse_request_body(DesktopMetadataRequest)
-    shell = _shell()
-    desktop = shell.desktops.create_desktop(body.name, body.color, body.glyph, shell.seed_shortcuts())
-    shell.broadcast_desktops_updated()
+    desktop = _shell().create_desktop(body.name, body.color, body.glyph)
     return jsonify(desktop_wire_json(desktop)), HTTP_CREATED
 
 
@@ -641,6 +639,8 @@ def _op_window(
             else:
                 raise LayoutOpError("place needs a zone (left, right, maximized) or a frame (x,y,width,height)")
         case "close":
+            if window.is_pinned:
+                raise LayoutOpError(f"window {window.id} is pinned and cannot be closed; minimize it instead")
             shell.close_window(desktop.id, window.id)
         case "navigate":
             if not arguments.path:

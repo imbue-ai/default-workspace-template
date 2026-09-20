@@ -357,6 +357,25 @@ describe("windows", () => {
     expect(isLayoutDirty(store.getState())).toBe(false);
   });
 
+  it("the close chord minimizes a pinned window instead of closing it", async () => {
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/", { is_pinned: true })] }),
+      desktopRecord("work"),
+    ];
+    const store = await startedStore();
+    const requested: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      requestClose: (id) => void requested.push(id),
+    });
+    await store.closeFocusedWindow();
+    expect(requested).toEqual([]);
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+    expect(activeFocusedWindowId(store.getState())).toBeNull();
+    expect(store.getState().desktops[0].windows.map((window) => window.id)).toEqual(["win-1"]);
+  });
+
   it("the close chord tells the focused page first", async () => {
     const store = await startedStore();
     const requested: string[] = [];

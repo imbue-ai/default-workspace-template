@@ -585,10 +585,15 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The minds close chord: the focused window is told, then closed for everyone. */
+  /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
+   *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     const focused = activeFocusedWindowId(this.state);
     if (focused === null) return;
+    if (findWindow(this.state, focused)?.window.is_pinned === true) {
+      this.minimizeWindow(focused);
+      return;
+    }
     this.pageDriver?.requestClose(focused);
     await this.closeWindow(focused);
   }

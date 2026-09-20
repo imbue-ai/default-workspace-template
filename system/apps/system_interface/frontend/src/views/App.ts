@@ -232,7 +232,7 @@ export function App(): m.Component<AppAttrs> {
         app !== undefined && current.canStopApp(app)
           ? (action) => void current.setAppLifecycle(app.name, action)
           : null,
-      close: () => void current.closeWindow(windowId),
+      close: window.is_pinned ? null : () => void current.closeWindow(windowId),
     });
     return m(Menu, {
       anchor,
@@ -251,7 +251,8 @@ export function App(): m.Component<AppAttrs> {
 
   function entryMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
     const state = current.getState();
-    if (!activeDesktop(state)?.windows.some((candidate) => candidate.id === windowId)) return null;
+    const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
+    if (window === undefined) return null;
     const placement = placementOf(state.layout, windowId);
     const entries = taskbarEntryMenuEntries(
       {
@@ -261,7 +262,7 @@ export function App(): m.Component<AppAttrs> {
         minimize: () => current.minimizeWindow(windowId),
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
         unmaximize: () => current.toggleMaximized(windowId),
-        close: () => void current.closeWindow(windowId),
+        close: window.is_pinned ? null : () => void current.closeWindow(windowId),
       },
       state.modes.isCompact,
     );

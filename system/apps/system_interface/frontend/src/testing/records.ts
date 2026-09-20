@@ -32,6 +32,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     launch_paths: [launchPathRecord({ label: `New ${name}` })],
     default_shortcut: { launch: "new", mode: "focus" },
     launcher_rank: null,
+    pin: null,
     is_running: true,
     ...overrides,
   };
@@ -44,7 +45,17 @@ export function windowRecord(
   path: string,
   overrides: Partial<WindowRecord> = {},
 ): WindowRecord {
-  return { id, app, path, title: "", opened_at: "2026-09-19T00:00:00Z", is_settling: false, ...overrides };
+  return {
+    id,
+    app,
+    path,
+    title: "",
+    opened_at: "2026-09-19T00:00:00Z",
+    is_settling: false,
+    is_pinned: false,
+    scope: "linked",
+    ...overrides,
+  };
 }
 
 /** A shared desktop named after its id, with no wallpaper, shortcuts, or windows. */
