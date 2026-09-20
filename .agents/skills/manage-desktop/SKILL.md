@@ -164,7 +164,7 @@ location report) and shortcuts, and every client with its `active_desktop`,
 `is_connected`, and `shown` (the windows of its active desktop it has not
 minimized). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
-output YAML by default; pass `--json` for programmatic consumption.
+print JSON.
 
 When the user names a window by its title, find its id with `desktops` (the
 row whose `title` matches) rather than guessing.
