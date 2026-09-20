@@ -65,10 +65,13 @@ describe("Taskbar", () => {
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
   });
 
-  it("shows icons only in compact mode", () => {
+  it("shows icons only in compact mode, the title as each entry's accessible name", () => {
     const taskbar = render({ isCompact: true });
     expect(taskbar.querySelectorAll(".taskbar-entry-title")).toHaveLength(0);
-    expect(taskbar.querySelectorAll("[data-taskbar-entry]")).toHaveLength(3);
+    const entries = taskbar.querySelectorAll("[data-taskbar-entry]");
+    expect(entries).toHaveLength(3);
+    expect([...entries].map((entry) => entry.getAttribute("aria-label"))).toEqual(["Plan", "Docs", "Docs"]);
+    expect(render().querySelector("[data-taskbar-entry]")?.getAttribute("aria-label")).toBeNull();
   });
 
   it("asks for an entry's menu on a right click", () => {
