@@ -215,7 +215,7 @@ Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
 
-Single click or tap selects; double click, Enter, or Space runs; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove).
+Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove).
 Adding a shortcut: the launcher's tiles and the Running apps popover offer "Add to desktop" for each launch path, placed at the first free cell in reading order.
 
 ### 4.10 The taskbar
