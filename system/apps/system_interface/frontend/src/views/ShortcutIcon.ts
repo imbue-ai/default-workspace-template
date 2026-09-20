@@ -1,9 +1,9 @@
 /**
  * One shortcut on the backdrop: the app's icon over its label in the cell the grid gave it
- * (``data-shortcut="<app>:<launch>"``, ``data-cell="<column>,<row>"``). A single click or tap
- * selects, a double click, Enter, or Space runs, a right click or long press asks for the menu;
- * the drag is the gesture layer's, bound by the ``data-shortcut`` attribute, so nothing here
- * listens to pointer movement.
+ * (``data-shortcut="<app>:<launch>"``, ``data-cell="<column>,<row>"``). A single click selects
+ * and a double click, Enter, or Space runs; on touch a tap runs (there is no selection step); a
+ * right click or long press asks for the menu. The drag is the gesture layer's, bound by the
+ * ``data-shortcut`` attribute, so nothing here listens to pointer movement.
  */
 
 import m from "mithril";
