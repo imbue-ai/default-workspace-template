@@ -43,9 +43,9 @@ _TEST_FILE_PATTERNS: Final[tuple[str, ...]] = ("*_test.py", "test_*.py", "testin
 _MNGR_SUBPROCESS_RULE = RatchetRuleInfo(
     rule_name="the shell running the mngr binary",
     rule_description=(
-        "The shell never runs ``mngr``: agents are the chat app's instances, and every verb on them "
-        "(create, rename, destroy, stop, start, message) goes through the chat app's instances API or "
-        "its own routes. A subprocess call whose argv starts with 'mngr' belongs in the chat package."
+        "The shell never runs ``mngr``: agents belong to the chat app, and every verb on them "
+        "(create, rename, destroy, stop, start, message) goes through the chat app's own routes. "
+        "A subprocess call whose argv starts with 'mngr' belongs in the chat package."
     ),
 )
 
