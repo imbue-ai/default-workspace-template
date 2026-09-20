@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import load_manifest
 from browser import runner
-from browser.primitives import APP_NAME
 from browser import session as bsession
+from browser.primitives import APP_NAME
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
