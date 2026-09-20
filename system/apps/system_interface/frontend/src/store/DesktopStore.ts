@@ -243,8 +243,8 @@ export class DesktopStore {
 
   setThemeMetrics(metrics: ThemeMetrics, modes: RenderModes): void {
     this.metrics = metrics;
+    // The modes event always yields a new state, so the dispatch notifies and redraws.
     this.dispatch({ type: "render_modes_changed", modes });
-    this.notifyListeners();
   }
 
   /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
