@@ -545,7 +545,6 @@ export function App(): m.Component<AppAttrs> {
                   focusedWindowId: focused,
                   selectedShortcutKey,
                   openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
-                  hasPage: (windowId: string) => pages?.hasPage(windowId) === true,
                   onSelectShortcut: (key) => {
                     selectedShortcutKey = key;
                   },

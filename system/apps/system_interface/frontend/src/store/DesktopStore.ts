@@ -152,7 +152,6 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
-  private readonly openedHere = new Set<string>();
   private readonly pendingRestores = new Set<string>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private saveInFlight: Promise<void> | null = null;
@@ -190,9 +189,11 @@ export class DesktopStore {
     return this.isLauncherOpenNow;
   }
 
-  /** Whether this client asked for the window's open (so its page loads while the window settles). */
-  isOpenedHere(windowId: string): boolean {
-    return this.openedHere.has(windowId);
+  /** Whether this client's layout holds a placement for the window. While a window settles, only the
+   *  client that opened it has one (the shell places the requesting client's layout at open, and every
+   *  other client defers its gestures on the window), so this tells the opener from the rest. */
+  isPlacedHere(windowId: string): boolean {
+    return this.state.layout.placements.some((placement) => placement.window_id === windowId);
   }
 
   gridDimensions(): GridDimensions {
@@ -490,7 +491,6 @@ export class DesktopStore {
       this.deps.notify(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
-    if (outcome.isNew) this.openedHere.add(outcome.window.id);
     this.dispatch({ type: "window_opened_here", desktopId, window: outcome.window, isNew: outcome.isNew });
     void this.refetchLayout();
     return outcome.window.id;
@@ -513,7 +513,6 @@ export class DesktopStore {
       this.deps.notify(`Could not close the window: ${(error as Error).message}`);
       return;
     }
-    this.openedHere.delete(windowId);
     this.pendingRestores.delete(windowId);
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
@@ -537,7 +536,7 @@ export class DesktopStore {
   /** Restore a minimized window; a window still settling on another client's open waits for its path. */
   restoreWindow(windowId: string): void {
     const found = findWindow(this.state, windowId);
-    if (found !== null && found.window.is_settling && !this.openedHere.has(windowId)) {
+    if (found !== null && found.window.is_settling && !this.isPlacedHere(windowId)) {
       this.pendingRestores.add(windowId);
       return;
     }

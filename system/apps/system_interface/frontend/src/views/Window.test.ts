@@ -21,7 +21,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isCompact: false,
     isTouch: false,
     isMenuOpen: false,
-    hasPage: true,
+    isPlacedHere: true,
     onStartApp: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
@@ -97,13 +97,17 @@ describe("Window", () => {
   });
 
   it("says a window settling on another client's open is starting elsewhere", () => {
-    const element = render({ window: windowRecord("win-1", "docs", "/new", { is_settling: true }), hasPage: false });
+    const element = render({
+      window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
+      isPlacedHere: false,
+    });
     expect(element.querySelector("[data-settling]")).not.toBeNull();
     unmountViews();
     expect(
-      render({ window: windowRecord("win-1", "docs", "/new", { is_settling: true }), hasPage: true }).querySelector(
-        "[data-settling]",
-      ),
+      render({
+        window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
+        isPlacedHere: true,
+      }).querySelector("[data-settling]"),
     ).toBeNull();
   });
 
