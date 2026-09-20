@@ -46,6 +46,7 @@ import json
 import re
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 APP_MANIFEST_NAME = "app.toml"
@@ -87,16 +88,14 @@ class SecretDeclarationError(WriteTemplateManifestError, ValueError):
     declared variable is missing from the publishing workspace's own file."""
 
 
+@dataclass
 class SecretDeclaration:
     """One `data/.secrets/<file>.env` a template needs, merged across everything that declares it."""
 
-    def __init__(
-        self, file: str, variables: list[str], note: str, sources: list[str]
-    ) -> None:
-        self.file = file
-        self.variables = variables
-        self.note = note
-        self.sources = sources
+    file: str
+    variables: list[str]
+    note: str
+    sources: list[str]
 
 
 def _toml_string(value: str) -> str:
