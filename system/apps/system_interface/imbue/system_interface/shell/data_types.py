@@ -355,16 +355,14 @@ class ClientStateReport(FrozenModel):
 
 
 class ClientActivityReport(FrozenModel):
-    """The body of ``POST /api/client-activity`` (contracts.md section 5)."""
+    """The body of ``POST /api/client-activity`` (desktop contracts.md section 6): a message a client sent."""
 
     client_id: ClientId = Field(description="The client the activity belongs to")
-    device_kind: DeviceKind = Field(description="Desktop or mobile")
-    view_id: ViewId = Field(description="The view the client was on")
-    kind: ClientActivityKind = Field(description="A message sent to an instance, or a view switch")
-    app: str = Field(default="", description="The app a message went to")
-    key: str = Field(default="", description="The instance key a message went to")
+    desktop_id: DesktopId = Field(description="The desktop the client was on")
+    kind: ClientActivityKind = Field(description="A message sent to an app's page")
+    app: str = Field(description="The app the message went to")
+    key: str = Field(description="The marker of the page the message went to (a chat id); empty for a page without one")
     text: str = Field(default="", description="The message text, truncated at write time")
-    from_view_id: str = Field(default="", description="For a view switch, the view left")
 
 
 class TabInstanceReport(FrozenModel):

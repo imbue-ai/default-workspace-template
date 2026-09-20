@@ -112,9 +112,9 @@ from imbue.chat.models import SetModelChoiceRequest
 from imbue.chat.models import ShoulderTapAtomicResponse
 from imbue.chat.models import StartAgentResponse
 from imbue.chat.models import StopAgentResponse
-from imbue.chat.models import parse_subagent_key
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
+from imbue.chat.models import parse_subagent_key
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import CHAT_APP_NAME
@@ -123,10 +123,10 @@ from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
+from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.request_helpers import parse_request_body
 from imbue.chat.shell_client import post_to_shell
 from imbue.chat.shell_client import shell_base_url
-from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
@@ -546,12 +546,8 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 @pure
 def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
-    """Whether a send names the client, its device kind, and the view the shell's activity log keys on (a legacy or unframed caller names none)."""
-    return (
-        send_message_request.client_id != ""
-        and send_message_request.device_kind != ""
-        and send_message_request.active_layout != ""
-    )
+    """Whether a send names the client and the desktop the shell's activity log keys on (a legacy or unframed caller names neither)."""
+    return send_message_request.client_id != "" and send_message_request.desktop_id != ""
 
 
 @pure
@@ -562,11 +558,10 @@ def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigi
 
 @pure
 def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> dict[str, str]:
-    """The body of the shell's ``POST /api/client-activity`` for one send (contracts.md section 5), keyed by chat."""
+    """The body of the shell's ``POST /api/client-activity`` for one send (desktop contracts.md section 6), keyed by chat."""
     return {
         "client_id": send_message_request.client_id,
-        "device_kind": send_message_request.device_kind,
-        "view_id": send_message_request.active_layout,
+        "desktop_id": send_message_request.desktop_id,
         "kind": "message",
         "app": str(CHAT_APP_NAME),
         "key": chat_id,
@@ -575,8 +570,8 @@ def client_activity_report(chat_id: ChatId, send_message_request: SendMessageReq
 
 
 def _record_client_message_activity(chat_id: ChatId, send_message_request: SendMessageRequest) -> None:
-    """Tell the shell which client (and view) a message came from, so agents can attribute requests through
-    ``layout.py context``. Callers naming no client or no view are not recorded. Posted on its own thread:
+    """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
+    ``layout.py context``. Callers naming no client or no desktop are not recorded. Posted on its own thread:
     the shell is a separate app, and a send must not wait on it."""
     if not is_client_activity_reportable(send_message_request):
         return

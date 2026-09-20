@@ -125,20 +125,15 @@ def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
 
 
 
-def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None:
+def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> None:
     chat_id = ChatId("agent-1")
-    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
     assert is_client_activity_reportable(framed)
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
-    assert not is_client_activity_reportable(SendMessageRequest(message="hello", active_layout="alpha"))
-    # The shell's report needs the device kind too; without it the post would only be refused.
-    assert not is_client_activity_reportable(
-        SendMessageRequest(message="hello", client_id="c1", active_layout="alpha")
-    )
+    assert not is_client_activity_reportable(SendMessageRequest(message="hello", desktop_id="home"))
     assert client_activity_report(chat_id, framed) == {
         "client_id": "c1",
-        "device_kind": "desktop",
-        "view_id": "alpha",
+        "desktop_id": "home",
         "kind": "message",
         "app": "chat",
         "key": "agent-1",
@@ -148,7 +143,7 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None
 
 def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch: pytest.MonkeyPatch) -> None:
     chat_id = ChatId("agent-1")
-    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
     shell = RecordingClientActivityShell()
     with serve_app(shell.application) as served:
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)

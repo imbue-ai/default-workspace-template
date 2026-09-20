@@ -343,10 +343,6 @@ export class LivePagesLayer implements PageDriver {
       windowId: page.windowId,
       desktopId,
       path,
-      // CLEANUP: drop ``viewId`` once the chat app's client-activity report names ``desktop_id``
-      // instead of ``view_id`` (desktop-interface plan, phase 6): until then the chat page sends the
-      // handshake's view id with every message, and the shell's report route requires one.
-      viewId: desktopId,
     });
     page.greetedDesktopId = desktopId;
   }

@@ -27,10 +27,9 @@ import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
   clientId: "client-1",
-  deviceKind: "desktop",
-  viewId: "everything",
-  address: "app:chat?instance=agent-1",
-  tabId: "chat-agent-1",
+  windowId: "win-1",
+  desktopId: "home",
+  path: "/agent-1",
 };
 
 let connection: ShellConnection | null = null;
@@ -165,10 +164,6 @@ describe("the embed API", () => {
       windowId: "",
       desktopId: "",
       path: "",
-      deviceKind: "",
-      viewId: "",
-      address: "",
-      tabId: "",
     });
     embed.shown();
     embed.hidden();
@@ -206,7 +201,7 @@ describe("startChatOnAccount", () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
-    deliver({ ...HANDSHAKE, viewId: "home", desktopId: "home", windowId: "win-1", path: "/agent-1" }, parent);
+    deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");

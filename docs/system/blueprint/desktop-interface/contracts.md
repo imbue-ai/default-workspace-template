@@ -206,7 +206,7 @@ Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavig
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes. Until phase 6 of the plan the shell also sends the desktop id as `viewId`, which the chat's client-activity report still requires |
+| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
 | shell to page | `shell:close-request` | `{}` |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |

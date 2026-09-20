@@ -5,7 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
@@ -1010,8 +1010,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
       message: trimmed,
       message_id: id,
       client_id: getClientId(),
-      active_layout: getActiveProjectId(),
-      device_kind: getDeviceKind(),
+      desktop_id: getActiveDesktopId(),
     },
   });
   return id;

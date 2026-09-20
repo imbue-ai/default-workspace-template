@@ -15,9 +15,9 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.primitives import AGENT_ID_PATTERN
-from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -84,10 +84,9 @@ class SendMessageRequest(FrozenModel):
         ),
     )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
-    active_layout: str = Field(
-        default="", description="The id of the view the sender was on at send time ('' for legacy callers)"
+    desktop_id: str = Field(
+        default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
-    device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
 
 
 class SendMessageResponse(FrozenModel):
