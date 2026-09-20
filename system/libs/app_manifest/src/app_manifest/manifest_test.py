@@ -289,7 +289,7 @@ def test_default_shortcut_mode_must_be_focus_or_new() -> None:
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
-                "default_shortcut": {"action": "open", "mode": "always"},
+                "default_shortcut": {"launch": "open", "mode": "always"},
             }
         )
 
