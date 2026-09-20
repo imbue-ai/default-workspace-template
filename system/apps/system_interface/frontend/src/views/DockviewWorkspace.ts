@@ -81,6 +81,7 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   FOCUS_CHAT,
   OPEN_SHARE_SETTINGS,
+  announceReadyToEmbedder,
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
@@ -2156,19 +2157,19 @@ export function viewIdForChatFocus(
   return holder === undefined ? mountedViewId : holder.id;
 }
 
-/** ``minds:focus-chat`` from the embedder: show the chat that agent is, switching views if
- *  another one holds it. The chat is whichever listed instance is keyed by the agent id; the
+/** ``minds:focus-chat`` from the embedder: show the chat that id names, switching views if
+ *  another one holds it. The chat is whichever listed instance is keyed by the chat id; the
  *  shell does not know which app that is. */
 function focusChatFromEmbedder(message: Record<string, unknown>): void {
-  const agentId = message.agentId;
-  if (typeof agentId !== "string" || agentId === "") return;
-  void focusChat(agentId);
+  const chatId = message.chatId;
+  if (typeof chatId !== "string" || chatId === "") return;
+  void focusChat(chatId);
 }
 
-async function focusChat(agentId: string): Promise<void> {
-  const address = await whenInventoryLists(() => addressOfInstanceKeyed(agentId), AWAIT_ADDRESS_TIMEOUT_MS);
+async function focusChat(chatId: string): Promise<void> {
+  const address = await whenInventoryLists(() => addressOfInstanceKeyed(chatId), AWAIT_ADDRESS_TIMEOUT_MS);
   if (address === null) {
-    console.warn(`[si] focus-chat ignored: nothing lists an instance keyed ${agentId}`);
+    console.warn(`[si] focus-chat ignored: nothing lists an instance keyed ${chatId}`);
     return;
   }
   const targetViewId = viewIdForChatFocus(mountedViewId, availableProjects, address);
@@ -2288,6 +2289,8 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
   setEmbedderMessageHandler(FOCUS_CHAT, focusChatFromEmbedder);
+  // Handlers are up: anything the embedder held for this page can come now.
+  announceReadyToEmbedder();
 
   // The shell side of the app contract (contracts.md section 10).
   setChildFrameMessageHandler(SHELL_FOCUSED, activatePanelForChildFrame);

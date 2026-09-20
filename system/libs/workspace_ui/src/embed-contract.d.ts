@@ -21,6 +21,8 @@ declare module "@minds/embed-contract" {
   export const OPEN_SHARE_SETTINGS: "minds:open-share-settings";
   // The focus-chat message (contract v4). Probed like PERMISSION_RESOLUTIONS.
   export const FOCUS_CHAT: "minds:focus-chat";
+  // The readiness announcement (contract v5). Probed like the two above.
+  export const WORKSPACE_READY: "minds:workspace-ready";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;
