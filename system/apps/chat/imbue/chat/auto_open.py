@@ -1,4 +1,4 @@
-"""Surfacing the tab of a chat created from outside the workspace, once, where the user is.
+"""Surfacing the window of a chat created from outside the workspace, once, where the user is.
 
 A chat the Mind app starts -- the update run behind "Update now", the help chat behind "Ask
 an agent" -- carries a label asking for its window to be opened when it appears. The app cannot
@@ -191,7 +191,7 @@ class ShellLayoutClient(FrozenModel):
     def connected_client_ids(self) -> list[str]:
         # An answer of the wrong shape reads as no clients, rather than subscripting blind: an
         # exception here escapes the flush thread's own catch and ends it for the life of the
-        # process, and a reactor with no thread surfaces no tab and says nothing about it.
+        # process, and a reactor with no thread surfaces no window and says nothing about it.
         try:
             response = httpx.get(f"{self.shell_url}/api/clients", timeout=SHELL_POST_TIMEOUT_SECONDS)
             response.raise_for_status()
@@ -268,18 +268,18 @@ class AutoOpenReactor(MutableModel):
     def note_appeared(self, chat_id: ChatId, labels: Mapping[str, str]) -> None:
         """A chat whose labeled agent the observe stream just added is owed its open unless it already had it.
 
-        A successor agent of an existing chat never carries the label, so a handoff never re-pops a tab.
+        A successor agent of an existing chat never carries the label, so a handoff never re-pops a window.
         """
         if not is_auto_open_labeled(labels):
             return
         self.request_open(chat_id)
 
     def request_open(self, chat_id: ChatId) -> None:
-        """A chat this app opened on its own (a seeded chat) is owed its tab like a labeled one.
+        """A chat this app opened on its own (a seeded chat) is owed its window like a labeled one.
 
         Held and retried the same way, so a chat seeded while nobody was connected (the Mind
         app seeds the workspace's first chat before its window shows the workspace) gets its
-        tab when the first client connects.
+        window when the first client connects.
         """
         if self.ledger.is_delivered(chat_id):
             return
@@ -292,14 +292,14 @@ class AutoOpenReactor(MutableModel):
     def seed_at_startup(self, labels_by_chat_id: Mapping[ChatId, Mapping[str, str]]) -> None:
         """Decide what each labeled chat found at startup is owed: its open, or nothing.
 
-        A restart normally restores the saved layout rather than reopening tabs, so a chat the
+        A restart normally restores the saved layout rather than reopening windows, so a chat the
         ledger already names stays as the user left it. One it does not name is still owed its
         open -- an update run started while no client was connected, whose apply then restarted
         this app before anyone looked -- and holds it for as long as the chat exists.
 
         Except on a boot with no ledger to read, where a chat the ledger does not name means
         nothing: every labeled chat the workspace has is adopted as shown, since the ledger is
-        the only thing that could tell the one chat owed a tab from a year of delivered ones.
+        the only thing that could tell the one chat owed a window from a year of delivered ones.
         """
         if not self.ledger.is_history_known:
             adopted = [chat_id for chat_id, labels in labels_by_chat_id.items() if is_auto_open_labeled(labels)]
