@@ -35,6 +35,7 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -57,10 +58,6 @@ _DELIVERED_KEY: Final = "delivered"
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
-
-
-# The chat app's registered name: the one app that may name itself to the shell.
-CHAT_APP_NAME: Final[str] = "chat"
 
 
 def chat_root_path(chat_id: ChatId) -> str:
