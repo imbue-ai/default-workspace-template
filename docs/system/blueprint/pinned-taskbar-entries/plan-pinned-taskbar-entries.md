@@ -420,15 +420,18 @@ End to end, in `test_e2e.py` with a stub app declaring a pin:
 - A phone viewport shows the entry in the bar.
 - The chooser lists the designs, selecting one changes every open window, and the image URL carries the mood a fixture status file produces.
 
-## 11. Phases
+## 11. Delivery
 
-Each phase leaves the repository green.
+This is one pull request.
+The work is small: a manifest table copied onto the registry row, two defaulted fields on the window record, one ensure function on the read path, a refused close, one per-client file with a branch in the location route, a three-field presentation map on the client record, a floating layer with one gesture binding and a few menu rows, and the avatar package, most of which is ported from the prototype.
 
-1. **The pin and the pinned window.** The manifest table, the registry copy, `is_pinned` and `scope` on the window, the ensure on read, close refused everywhere, the title bar and menus without Close. The chat manifest declares its pin with `style = "plain"` so the entry is visible in the bar.
-2. **Independent scope.** The per-client window-paths file, the location route branch, the layout answer's `window_paths`, the following rule, `navigate`.
-3. **Presentation.** The client's entries, the route and message, the floating layer and its drag, the bar and floating renderers for `plain`, the menu verbs, compact behaviour.
-4. **The avatar.** The designs, the selection, the image routes, the status reader and its message, the `avatar` style in both modes, the chooser and "Design your own...". The chat manifest switches to `style = "avatar"`, `default_mode = "floating"`.
-5. **Documents.** The amendments of section 9 and the end-to-end suite.
+A suggested commit order inside that pull request, each commit leaving the repository green:
+
+1. The pin, the pinned window, and the refused close, with the chat manifest declaring `style = "plain"` so the entry is visible at once.
+2. The independent location scope, on its own because it touches the following rule and the live pages, and with its two-client test.
+3. The per-client presentation, the floating layer, and the menu rows.
+4. The avatar package, the status reader, the chooser, and the chat manifest's switch to `style = "avatar"`, `default_mode = "floating"`.
+5. The document amendments of section 9 and the end-to-end scenarios of section 10.
 
 ## 12. Deferred
 
