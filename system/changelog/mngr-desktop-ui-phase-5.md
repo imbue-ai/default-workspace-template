@@ -4,4 +4,6 @@ Phase 5 of the desktop interface (`docs/system/blueprint/desktop-interface/plan-
 
 - `contracts.md` gains the `--desk-shortcut-label-shadow` theme token, the text shadow the backdrop's shortcut labels wear over a wallpaper.
 
+- The shared `postJson` helper (`system/libs/workspace_ui/src/models/http.ts`) throws an `HttpError` carrying the response status alongside the server's detail, so a caller can tell one refusal from another (the desktop's placements save reads a 409 as a stale save through it).
+
 - `dockview-core` leaves the npm workspace lockfile along with the tabbed frontend that used it.

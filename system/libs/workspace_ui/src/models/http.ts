@@ -19,7 +19,18 @@ export async function errorDetailFromResponse(response: Response): Promise<strin
   return `HTTP ${response.status}`;
 }
 
-/** POST a JSON body and answer the parsed JSON reply, throwing with the server's detail on a refusal. */
+/** A refusal from a REST route: the server's detail as the message, and the status for a caller
+ *  that tells one refusal from another (a stale save's 409, say). */
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+/** POST a JSON body and answer the parsed JSON reply, throwing an ``HttpError`` with the server's detail on a refusal. */
 export async function postJson<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
@@ -27,7 +38,7 @@ export async function postJson<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(await errorDetailFromResponse(response));
+    throw new HttpError(response.status, await errorDetailFromResponse(response));
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
