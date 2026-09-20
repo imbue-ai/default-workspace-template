@@ -6,7 +6,7 @@
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
+import { HttpError, errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
   parseClientRecords,
   parseDesktop,
@@ -149,19 +149,19 @@ export interface PlacementsSaveRequest {
 
 /** Save this client's layout of a desktop; answers the stamp written, or null when nothing changed. */
 export async function savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null> {
-  const response = await fetch(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  let data: { updated_at: string | null };
+  try {
+    data = await postJson<{ updated_at: string | null }>(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}`), {
       client_id: request.clientId,
       save_id: request.saveId,
       base_updated_at: request.baseUpdatedAt,
       placements: request.placements,
-    }),
-  });
-  if (response.status === HTTP_CONFLICT) throw new StalePlacementsSaveError(await errorDetailFromResponse(response));
-  if (!response.ok) throw new Error(await errorDetailFromResponse(response));
-  const data = (await response.json()) as { updated_at: string | null };
+    });
+  } catch (error) {
+    if (error instanceof HttpError && error.status === HTTP_CONFLICT)
+      throw new StalePlacementsSaveError(error.message);
+    throw error;
+  }
   return data.updated_at ?? null;
 }
 
