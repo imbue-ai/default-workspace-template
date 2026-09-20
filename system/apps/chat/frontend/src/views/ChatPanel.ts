@@ -43,7 +43,6 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
-import { areAccountsLoaded, closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { maybeApplyFastModeLimit } from "./fast-mode-limit";
 import { FastModeNotice } from "./FastModeNotice";
@@ -101,16 +100,6 @@ function getChatTerminalUrl(chatId: string): string {
 function provisionalRecord(chatId: string): ProvisionalChat | null {
   const provisional = getProvisionalChat(chatId);
   return provisional !== undefined && getChatById(chatId) === undefined ? provisional : null;
-}
-
-/** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
- *  message typed now is held until it lands), one whose create failed (the held message is
- *  returned to the composer with the reason, and a send there is refused with it), or a seeded
- *  chat awaiting its first send (which is what launches it). Only a chat still waiting for an
- *  account has nothing to type into. */
-function hasComposer(chatId: string): boolean {
-  const provisional = provisionalRecord(chatId);
-  return provisional === null || provisional.phase !== "awaiting_account";
 }
 
 /** Whether a provisional chat's page is its transcript rather than a provisional screen: a seeded
@@ -259,16 +248,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   // unbounded request loop rather than the one-shot capture the view wants.
   let screenAttemptedChatId: string | null = null;
 
-  // A launch of this provisional chat (the chooser's sign-in, or Try again) in flight, and
-  // how the last one was refused.
+  // A launch of this provisional chat (the page's Try again) in flight, and how the last one
+  // was refused.
   let launchInFlight = false;
   let launchError: string | null = null;
-  // The chat the chooser was opened for on its own, so a chooser the user dismissed is not
-  // reopened on every redraw.
-  let chooserOfferedFor: string | null = null;
-  // The chat this page last launched (through the chooser, a retry, or on its own): a launch
-  // the page starts on its own initiative is never repeated for it.
-  let launchedFor: string | null = null;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -296,7 +279,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
   function launch(chatId: string, accountId: string): void {
     if (launchInFlight) return;
-    launchedFor = chatId;
     launchInFlight = true;
     launchError = null;
     launchChat(chatId, accountId)
@@ -307,10 +289,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         launchInFlight = false;
         m.redraw();
       });
-  }
-
-  function offerProviderChooser(chatId: string): void {
-    openProviderChooser({ onSignedIn: (accountId) => launch(chatId, accountId) });
   }
 
   /** The page of a chat whose create is running: an empty transcript with the composer's held
@@ -336,72 +314,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       // under a later failure's own reason.
       launchError = null;
       return renderStarting(chatId);
-    }
-    if (provisional.phase === "awaiting_account") {
-      // The account list decides between launching and offering the chooser, so neither
-      // happens before it has loaded: a record replayed ahead of the accounts response would
-      // otherwise open the chooser only to close it a redraw later.
-      if (!areAccountsLoaded()) {
-        return m(
-          "div",
-          { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full p-8" },
-          m("p", { class: "text-secondary" }, "Checking which providers are signed in..."),
-        );
-      }
-      // Minted with nothing signed in. An account that exists by the time this page looks (a
-      // sign-in finished in another tab, a reload after one) launches the chat at once, as
-      // ``new`` would have with one signed in, rather than making the user pick it out of the
-      // chooser.
-      const account = getSelectedAccount();
-      // A launch this page started (on the selected account, or through the chooser) that is
-      // in flight or waiting for the push that moves the record to the creating phase: the
-      // page is starting the chat, not asking for a sign-in.
-      const isLaunching = launchInFlight || (launchedFor === chatId && launchError === null);
-      if (account !== null && !isLaunching && launchError === null) {
-        closeProviderChooser();
-        launch(chatId, account.id);
-        return renderStarting(chatId);
-      }
-      if (isLaunching) {
-        return renderStarting(chatId);
-      }
-      if (account === null && chooserOfferedFor !== chatId) {
-        // Offered once per chat, on the page's first render of this phase: the user may
-        // dismiss it and come back through the button. With an account signed in the page
-        // launched on it instead, and a refusal is shown here with a retry on that account
-        // rather than a chooser over it.
-        chooserOfferedFor = chatId;
-        offerProviderChooser(chatId);
-      }
-      return m(
-        "div",
-        { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full gap-4 p-8" },
-        [
-          m("p", { class: "type-heading text-primary" }, "Sign in to a provider to start this chat"),
-          launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
-          m("div", { class: "flex gap-2" }, [
-            account !== null && launchError !== null
-              ? m(
-                  Button,
-                  {
-                    variant: "primary",
-                    extra: "message-list-launch-retry",
-                    onclick: () => launch(chatId, account.id),
-                  },
-                  "Try again",
-                )
-              : null,
-            m(
-              Button,
-              {
-                variant: account !== null && launchError !== null ? "secondary" : "primary",
-                onclick: () => offerProviderChooser(chatId),
-              },
-              "Choose a provider",
-            ),
-          ]),
-        ],
-      );
     }
     return m(
       "div",
@@ -753,7 +665,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
       const content = isSlotClaimed("conversation-content") ? null : renderMessages(chatId);
 
-      const acceptsFileDrops = hasComposer(chatId) && !isConversationNotFound(chatId);
+      const acceptsFileDrops = !isConversationNotFound(chatId);
 
       // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
       // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
@@ -840,27 +752,25 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                     )
                   : null,
               ]),
-              // Present while there is an agent to reach, a create in flight included: a message
-              // typed while the chat is being created is held and delivered when it lands.
-              !hasComposer(chatId)
-                ? null
-                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
-                    m(EmptySlot, { name: "conversation-before-input" }),
-                    // The switch dialog a provider choice opens (spec 5.1), and why a switch
-                    // failed, with a retry on any account (spec 5.10).
-                    m(SwitchDialog, { chatId }),
-                    m(HandoffFailedNotice, { chatId }),
-                    isConversationNotFound(chatId)
-                      ? null
-                      : m(ActivityIndicator, {
-                          chatId,
-                          events: getEventsForChat(chatId),
-                        }),
-                    m(MessageInput, { chatId }),
-                    // The under-bar is a sibling of the whole flip card, not part of this face: on
-                    // a face it would rotate away with the face its own switch turns, and the flip
-                    // would be one-way.
-                  ]),
+              // Present for every chat, a create in flight included: a message typed while the
+              // chat is being created is held and delivered when it lands.
+              m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+                m(EmptySlot, { name: "conversation-before-input" }),
+                // The switch dialog a provider choice opens (spec 5.1), and why a switch
+                // failed, with a retry on any account (spec 5.10).
+                m(SwitchDialog, { chatId }),
+                m(HandoffFailedNotice, { chatId }),
+                isConversationNotFound(chatId)
+                  ? null
+                  : m(ActivityIndicator, {
+                      chatId,
+                      events: getEventsForChat(chatId),
+                    }),
+                m(MessageInput, { chatId }),
+                // The under-bar is a sibling of the whole flip card, not part of this face: on
+                // a face it would rotate away with the face its own switch turns, and the flip
+                // would be one-way.
+              ]),
             ],
           }),
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
@@ -868,49 +778,47 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
           // either rendering of it, which is the same reason it belongs to neither face.
           // Carries the bottom gutter the footer used to supply, so the 24px sits under the
           // under-bar rather than between the composer and it.
-          !hasComposer(chatId)
-            ? null
-            : m(
-                "div",
-                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
-                m(
-                  "div",
-                  {
-                    // Same max-width as the composer card above it; relative as
-                    // the containing block for centered overlays.
-                    class:
-                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
-                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
-                  },
-                  [
-                    m(ModelBar, { chatId }),
-                    m(FastModeNotice, { chatId }),
-                    // The terminal back face attaches to the agent's own tmux session, which
-                    // a chat still being created does not have: without a name the terminal
-                    // dispatch attaches to whatever session it finds, so the flip waits for
-                    // the agent to register.
-                    getChatById(chatId) === undefined
-                      ? null
-                      : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
-                          m(TerminalViewToggle, {
-                            on: isFlipped,
-                            onToggle: (event: Event) => {
-                              isFlipped = !isFlipped;
-                              // Turning the card over is the user navigating TO the terminal,
-                              // so the host grants it focus -- the embedded ttyd client never
-                              // takes focus on its own (see terminalFocus.ts). Redraw first so
-                              // a first flip has mounted the back face before the ask.
-                              if (isFlipped) {
-                                const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
-                                m.redraw.sync();
-                                requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
-                              }
-                            },
-                          }),
-                        ]),
-                  ],
-                ),
-              ),
+          m(
+            "div",
+            { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
+            m(
+              "div",
+              {
+                // Same max-width as the composer card above it; relative as
+                // the containing block for centered overlays.
+                class:
+                  "composer-under-bar relative mx-auto mt-1 flex w-full " +
+                  "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+              },
+              [
+                m(ModelBar, { chatId }),
+                m(FastModeNotice, { chatId }),
+                // The terminal back face attaches to the agent's own tmux session, which
+                // a chat still being created does not have: without a name the terminal
+                // dispatch attaches to whatever session it finds, so the flip waits for
+                // the agent to register.
+                getChatById(chatId) === undefined
+                  ? null
+                  : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
+                      m(TerminalViewToggle, {
+                        on: isFlipped,
+                        onToggle: (event: Event) => {
+                          isFlipped = !isFlipped;
+                          // Turning the card over is the user navigating TO the terminal,
+                          // so the host grants it focus -- the embedded ttyd client never
+                          // takes focus on its own (see terminalFocus.ts). Redraw first so
+                          // a first flip has mounted the back face before the ask.
+                          if (isFlipped) {
+                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                            m.redraw.sync();
+                            requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          }
+                        },
+                      }),
+                    ]),
+              ],
+            ),
+          ),
         ],
       );
     },

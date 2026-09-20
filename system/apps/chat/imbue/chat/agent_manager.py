@@ -1154,7 +1154,7 @@ class AgentManager:
         return listed
 
     def get_chat_snapshots(self) -> list[ChatSnapshot]:
-        """Every chat as the pages and the instances API see it: one per chat, from its active agent.
+        """Every chat as the pages see it: one per chat, from its active agent.
 
         The agent snapshot is copied out under ``_lock``, but ``shoulder_tap_available``
         is computed AFTER releasing it: that call descends into the harness session's
@@ -2353,8 +2353,8 @@ class AgentManager:
     def rename_chat(self, chat_ref: str, display_name: str) -> None:
         """Give a chat the name the user just typed, keeping its active agent's name pair matched.
 
-        ``chat_ref`` is a chat id (what the chat app's rename route and the instance key
-        carry) or an agent name, so both are resolved here. The display name's canonical form becomes the
+        ``chat_ref`` is a chat id (what the chat app's rename route carries) or an agent name,
+        so both are resolved here. The display name's canonical form becomes the
         agent's true name and the typed form its ``display_name`` label, the same
         pairing ``mngr create`` establishes. When the canonical form is already
         the agent's name (a display-only change, e.g. "chat 2" -> "Chat 2"),
@@ -2560,30 +2560,6 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def reserve_chat(self, project_id: str = "", message: str = "") -> CreatedChat:
-        """Mint a chat with nothing to launch it on yet.
-
-        The instance exists from this moment (the shell docks its page under the chat's id,
-        which mngr will give its first agent), in the awaiting-account phase: the page shows
-        the provider chooser, and a sign-in launches it through ``create_chat`` with this id.
-        The name is the first free "Chat N", counted like a launch's, so the reservation holds
-        it. ``message`` is kept on the reservation and sent by that launch, so a chat seeded
-        with a prompt still opens on it after the sign-in it had to wait for.
-        """
-        chat_id = ChatId(str(AgentId()))
-        with self._lock:
-            display_name = self._mint_display_name_locked("")
-            provisional = ProvisionalChat(
-                chat_id=chat_id,
-                name=display_name,
-                project_id=project_id,
-                message=message,
-                phase=ProvisionalChatPhase.AWAITING_ACCOUNT,
-            )
-            self._provisional_chats[chat_id] = provisional
-        self._broadcaster.broadcast_provisional_chat_created(provisional)
-        return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
-
     def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
@@ -2701,11 +2677,11 @@ class AgentManager:
         registers the in-flight create -- so two simultaneous creates cannot both mint
         "Chat 1".
 
-        ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
-        failed): it is launched under that id and keeps the name and project it was minted
-        with, so the window the shell opened for it becomes the chat. Any other id is refused,
-        and so is a ``requested_name`` or ``project_id`` beside it, which the reservation
-        would otherwise silently override.
+        ``chat_id`` names a chat minted earlier (one whose create failed, or a seeded chat
+        awaiting its first send): it is launched under that id and keeps the name and project
+        it was minted with, so the window the shell opened for it becomes the chat. Any other
+        id is refused, and so is a ``requested_name`` or ``project_id`` beside it, which the
+        launch would otherwise silently override.
 
         The harness comes from the account, not from the caller: it is the name of the
         create template stacked on top, and the `chat` role template supplies everything
@@ -2719,14 +2695,14 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one. With no accounts at all the create is refused (the instances API reserves
-        the chat instead, see ``reserve_chat``).
+        used one. With no accounts at all the create is refused (the chat root offers the
+        provider chooser before it creates).
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
         create --message`` after the harness signals readiness. A chat that starts with no
-        message gets ``/welcome`` instead, through the ``welcome`` template. A reserved chat
-        keeps the message it was minted with, so a launch that names one beside ``chat_id`` is
-        refused like a name; the exception is a seeded chat awaiting its first send, whose
+        message gets ``/welcome`` instead, through the ``welcome`` template. A chat minted
+        earlier keeps the message it was minted with, so a launch that names one beside
+        ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
         message is exactly what the launch brings.
 
         ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so

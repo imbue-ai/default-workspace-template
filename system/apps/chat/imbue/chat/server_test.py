@@ -68,6 +68,7 @@ from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -2130,44 +2131,23 @@ def test_create_chat_mints_a_numbered_display_name_server_side(
     assert body["chat_id"]
 
 
-def test_create_chat_launches_a_reserved_chat_under_its_id(
+def test_create_chat_refuses_a_message_beside_a_minted_id(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A chat minted while nothing was signed in is launched by naming its id: the tab the
-    shell docked for it keeps its id and name, and only the phase changes."""
+    """A chat minted earlier is launched with the first message it was minted with; a launch that
+    names another is refused (400) rather than sent with a message the window never asked for."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat()
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Mind")
 
-    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id})
-
-    assert response.status_code == 201
-    assert response.get_json() == {
-        "chat_id": reserved.chat_id,
-        "name": reserved.name,
-        "display_name": reserved.display_name,
-    }
-
-
-def test_create_chat_refuses_a_message_beside_a_reserved_id(
-    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A reserved chat is launched with the first message it was minted with; a launch that
-    names another is refused (400) rather than sent with a message the tab never asked for."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    _register_agent(app, "agent-123", "primary", "RUNNING")
-    agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat(message="Teach me about Mind")
-
-    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id, "message": "other"})
+    response = client.post("/api/chats/create", json={"chat_id": failed.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
-    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None and reserved_proto.message == "Teach me about Mind"
+    failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
+    assert failed_proto is not None and failed_proto.message == "Teach me about Mind"
 
 
 def _seed_body() -> dict[str, Any]:
@@ -2273,11 +2253,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    failed = agent_manager.reserve_chat()
-    with agent_manager._lock:
-        agent_manager._mark_creation_failed_locked(failed.chat_id, "mngr create exited with code 1")
-    failed_record = agent_manager.get_provisional_chat(failed.chat_id)
-    assert failed_record is not None and failed_record.phase is ProvisionalChatPhase.FAILED
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     pushes = agent_manager.broadcaster.register()
 
     response = client.post("/api/chats/create", json={"chat_id": failed.chat_id})
@@ -2285,7 +2261,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     assert response.status_code == 201
     body = response.get_json()
     assert body["chat_id"] == failed.chat_id
-    assert body["display_name"] == failed.display_name
+    assert body["display_name"] == failed.name
     # The relaunch is pushed to every page before the creation thread can settle it, so the
     # push is what says the record went back to the creating phase.
     pushed = []
@@ -2833,7 +2809,7 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
-    reserved = state_of(app).agent_manager.reserve_chat()
+    failed = seed_failed_chat(state_of(app).agent_manager, ChatId("failed-1"), "Chat 1")
 
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
@@ -2844,8 +2820,8 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
             close_ws(ws)
 
     assert first["type"] == "provisional_chat_created"
-    assert first["chat_id"] == reserved.chat_id
-    assert first["phase"] == ProvisionalChatPhase.AWAITING_ACCOUNT.value
+    assert first["chat_id"] == failed.chat_id
+    assert first["phase"] == ProvisionalChatPhase.FAILED.value
     assert second["type"] == "chats_updated"
 
 

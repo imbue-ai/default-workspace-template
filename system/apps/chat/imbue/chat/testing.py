@@ -69,6 +69,8 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -686,6 +688,24 @@ class RunningWorkspace(FrozenModel):
     )
 
 
+def seed_failed_chat(
+    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1", message: str = ""
+) -> ProvisionalChat:
+    """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
+    what the page's "Try again" relaunches under its id."""
+    proto = ProvisionalChat(
+        chat_id=chat_id,
+        name=name,
+        account_id=account_id,
+        message=message,
+        phase=ProvisionalChatPhase.FAILED,
+        error="mngr create exited with code 3",
+    )
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = proto
+    return proto
+
+
 def _is_serving_api(base_url: str) -> bool:
     try:
         urllib.request.urlopen(f"{base_url}/api/health", timeout=0.5)
@@ -733,8 +753,8 @@ def running_workspace(
     a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
     runs; the shell reads a registry holding the chat row at the chat's own URL. With
     ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
-    is bound to, so a create starts at once; without one a create mints a chat that waits for
-    an account, and its page offers the provider chooser. ``additional_accounts`` sign further
+    is bound to, so a create starts at once; without one a create is refused, and the chat
+    root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
     messenger the manager sends through.
     """

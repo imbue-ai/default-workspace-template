@@ -556,8 +556,6 @@ class CreateChatRequest(FrozenModel):
 class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
-    # Minted with nothing signed in: the page shows the provider chooser, and the launch waits.
-    AWAITING_ACCOUNT = auto()
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
     # user's first send is what picks the account (the chooser opens then) and launches it.
     AWAITING_FIRST_SEND = auto()
