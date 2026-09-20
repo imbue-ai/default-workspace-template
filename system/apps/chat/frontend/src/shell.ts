@@ -153,7 +153,7 @@ export async function startChatOnAccount(
  * view's key names the chat, the agent whose harness session it is (the chat's active agent,
  * else the chat's own id), and the session.
  */
-export function openSubagentTab(chatId: string, sessionId: string): void {
+export function openSubagentView(chatId: string, sessionId: string): void {
   const key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
   connection?.openPath(subagentViewPath(key), "focus");
 }

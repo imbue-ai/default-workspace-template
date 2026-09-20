@@ -56,7 +56,7 @@ vi.mock("../models/Providers", () => ({
   },
 }));
 
-vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTab: vi.fn() }));
+vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentView: vi.fn() }));
 const begun: string[] = [];
 vi.mock("./SwitchDialog", () => ({
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),

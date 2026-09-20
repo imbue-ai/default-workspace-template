@@ -9,7 +9,7 @@ import type { SlotRenderCallback } from "./slots";
 import type { RouteRenderCallback, PluginRouteHandler } from "./plugin-routes";
 import { registerPluginRoute } from "./plugin-routes";
 import { getChatId } from "./document-meta";
-import { openSubagentTab } from "./shell";
+import { openSubagentView } from "./shell";
 
 interface OpenTabOptions {
   type: "iframe" | "subagent";
@@ -72,7 +72,7 @@ const llmApi: LlmApi = {
     if (!chatId) return;
 
     if (options.type === "subagent" && options.subagentSessionId) {
-      openSubagentTab(chatId, options.subagentSessionId);
+      openSubagentView(chatId, options.subagentSessionId);
     } else if (options.type === "iframe" && options.url) {
       // A chat page can only ask the shell for pages of its own app, and an ad-hoc URL is not one.
       console.warn(`[chat] $llm.openTab cannot open an ad-hoc URL pane from a chat page: ${options.url}`);

@@ -13,8 +13,8 @@ import { setBlockExpanded } from "./expansion-state";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
-// needs openSubagentTab, and the card path never calls MarkdownContent.
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+// needs openSubagentView, and the card path never calls MarkdownContent.
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
