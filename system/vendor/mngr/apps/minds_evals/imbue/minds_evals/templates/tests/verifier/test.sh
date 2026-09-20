@@ -9,6 +9,14 @@
 # no reward file in the latter case so harbor errors the trial instead of scoring it 0.
 set -euo pipefail
 
+# On the way out, whatever happened above, copy the derived judge inputs under /logs/verifier, which
+# harbor collects into the trial and /logs/agent here is not. A copy that fails never changes the
+# grade: the trap's own status is discarded and the script exits with the status it was going to.
+keep_derived_outputs() {
+  python3 /tests/keep_derived_outputs.py || true
+}
+trap keep_derived_outputs EXIT
+
 # Rebuild the judged transcript from the ATIF trajectory at grade time (so
 # `harbor trial regrade` re-scores captured trials under the current rendering):
 # one block per agent step with a message, which the judge scores conciseness

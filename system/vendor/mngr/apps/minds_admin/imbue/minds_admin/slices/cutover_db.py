@@ -199,6 +199,23 @@ def fetch_pool_row(conn: Any, row_id: str) -> CutoverPoolRow | None:
     return _pool_row_from_tuple(row) if row is not None else None
 
 
+class TransitionFailure(FrozenModel):
+    """The connector's record of a row's failed transitions: how many in a row, and the last error."""
+
+    count: int = Field(description="pool_hosts.transition_failure_count (consecutive failed drives)")
+    error: str | None = Field(description="pool_hosts.transition_error (the last failure's message)")
+
+
+def fetch_transition_failure(conn: Any, row_id: str) -> TransitionFailure:
+    """The row's failure record; a vanished row reads as no failures."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT transition_failure_count, transition_error FROM pool_hosts WHERE id = %s", (row_id,))
+        row = cur.fetchone()
+    if row is None:
+        return TransitionFailure(count=0, error=None)
+    return TransitionFailure(count=int(row[0] or 0), error=row[1])
+
+
 def fetch_gen1_pool_rows_for_user(conn: Any, user_id_prefix: str) -> list[CutoverPoolRow]:
     """Every gen-1 pool row leased to one user (any status), oldest first."""
     with conn.cursor() as cur:

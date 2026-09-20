@@ -651,10 +651,23 @@ shows afterwards is what the machine holds -- and a change the machine will
 not take is reported where the user clicked, immediately, rather than as a
 notification about a click they have long since forgotten.
 
-The provider set is loaded once, lazily, and kept for the life of the app;
-loading it imports every installed provider plugin, so it is started on a
-background thread at startup and the first Permissions tab open normally finds
-it done.
+The provider set is loaded lazily and kept across operations; loading it
+imports every installed provider plugin, so it is started on a background
+thread at startup and the first Permissions tab open normally finds it done.
+What is kept is dropped and reloaded whenever mngr's settings change on disk,
+because the app writes them itself: signing an account in registers a provider
+instance for it, and a set loaded before that would know the provider only as a
+name, leaving every machine operation on that account's workspaces failing
+until the app restarted.
+
+Those settings are the whole `mngr` CLI's, but the plugins are only the ones
+this app ships, so a `[providers.<name>]` block naming a backend it has no
+plugin for is skipped with a warning rather than failing the load. Every
+workspace on a provider the app does ship keeps its machine; only a workspace
+on the skipped provider reports its machine unreachable, and it says which
+backend is missing. A malformed value inside a block whose backend *is*
+installed is still fatal, because that block is one the app would otherwise
+use.
 
 The desktop keeps each remote machine's credentials in that host's *machine
 store* (`~/.minds/latchkey/mngr_latchkey/hosts/<host_id>/`), a

@@ -203,6 +203,12 @@ class StepResult(FrozenModel):
     title: str = Field(default="", description="The page's title after the action")
     snapshot: str = Field(default="", description="The page's ARIA tree after the action")
     screenshot_path: str = Field(default="", description="The frame written, empty when the capture failed")
+    # Read back from the file the capture wrote, so a frame that exists but is empty or is not an
+    # image is distinguishable from a good one without opening it.
+    screenshot_byte_count: int = Field(default=0, description="The written frame's size; 0 when none was written")
+    is_screenshot_png: bool = Field(
+        default=False, description="Whether the written frame starts with the PNG signature"
+    )
     reaction: StepReaction = Field(
         default=StepReaction.UNOBSERVED, description="What the DOM did after the action, where the step watched"
     )

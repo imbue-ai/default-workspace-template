@@ -28,10 +28,19 @@ def _minds_forward_flags() -> set[str]:
     Read from the source rather than imported: apps/minds pulls in Electron-adjacent machinery this
     project has no reason to depend on, and the argv is a literal list this can read exactly.
     """
+    assert _MINDS_FORWARD_CLI.is_file(), "expected minds' forward CLI at {}".format(_MINDS_FORWARD_CLI)
     tree = ast.parse(_MINDS_FORWARD_CLI.read_text())
     builder = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_build_forward_command"
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_build_forward_command"
+        ),
+        None,
     )
+    # Named rather than raising a bare StopIteration: this reads another project's source, so a
+    # rename there has to read as the rename it is instead of as this suite breaking.
+    assert builder is not None, "no _build_forward_command function in {}".format(_MINDS_FORWARD_CLI)
     return {
         node.value
         for node in ast.walk(builder)
@@ -115,7 +124,7 @@ def test_stopping_the_instance_cannot_catch_the_backends_own() -> None:
     assert not re.search("mngr forward .*[-]-port 8431", stop)
 
 
-# --- the forwarded origin ---
+# the forwarded origin
 
 
 def _forward_subdomain_pattern() -> re.Pattern[str]:
@@ -128,14 +137,22 @@ def _forward_subdomain_pattern() -> re.Pattern[str]:
     Compiled without the plugin's IGNORECASE, which has no bearing on the lowercase ids and labels
     an origin is ever minted from.
     """
+    assert _MNGR_FORWARD_PRIMITIVES.is_file(), "expected the forward plugin's primitives at {}".format(
+        _MNGR_FORWARD_PRIMITIVES
+    )
     tree = ast.parse(_MNGR_FORWARD_PRIMITIVES.read_text())
     assignment = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.target.id == "FORWARD_SUBDOMAIN_PATTERN"
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "FORWARD_SUBDOMAIN_PATTERN"
+        ),
+        None,
     )
+    # Named for the same reason the argv builder's lookup is: the plugin is another project's source.
+    assert assignment is not None, "no FORWARD_SUBDOMAIN_PATTERN assignment in {}".format(_MNGR_FORWARD_PRIMITIVES)
     compile_call = assignment.value
     assert isinstance(compile_call, ast.Call), "FORWARD_SUBDOMAIN_PATTERN is no longer a re.compile call"
     source = compile_call.args[0]
@@ -219,7 +236,7 @@ def test_the_readiness_probe_carries_the_session_cookie_and_the_origin_by_header
     assert " -k " in probe
 
 
-# --- the instance's own account of itself ---
+# the instance's own account of itself
 
 
 def test_forward_events_keep_readiness_and_backend_failures() -> None:

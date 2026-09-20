@@ -1,8 +1,9 @@
-"""Shared test helpers for wiring canned apt archives into the mapping fetcher."""
+"""Shared test helpers: canned apt archives for the mapping fetcher, and fake default-workspace-template checkouts."""
 
 import hashlib
 import lzma
 from collections.abc import Mapping
+from pathlib import Path
 
 from imbue.apt_mirror.data_types import ArchiveSource
 from imbue.apt_mirror.data_types import DEFAULT_SNAPSHOT_BASE
@@ -52,3 +53,16 @@ def wire_canned_suite(
     fetcher.responses_by_url[f"{dists}/Release.gpg"] = b"sig"
     for arch, data in packages_xz_by_arch.items():
         fetcher.responses_by_url[f"{dists}/{component}/binary-{arch}/Packages.xz"] = data
+
+
+def write_template_checkout(root: Path, dockerfile_text: str | None, apt_snapshot_timestamp_text: str | None) -> Path:
+    """Lay out the two files ``read_template_checkout_pins`` reads under ``root``; None leaves that file absent."""
+    if dockerfile_text is not None:
+        dockerfile_path = root / "system" / "Dockerfile"
+        dockerfile_path.parent.mkdir(parents=True, exist_ok=True)
+        dockerfile_path.write_text(dockerfile_text)
+    if apt_snapshot_timestamp_text is not None:
+        timestamp_path = root / ".mngr" / "apt-snapshot-timestamp"
+        timestamp_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp_path.write_text(apt_snapshot_timestamp_text)
+    return root

@@ -45,6 +45,10 @@ from imbue.imbue_common.pure import pure
 from imbue.minds_evals import flow_browser
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import model_calls
+from imbue.minds_evals.data_types import FlowStartPath
+from imbue.minds_evals.data_types import ScriptedFlowAction
+from imbue.minds_evals.data_types import ScriptedFlowActionKind
+from imbue.minds_evals.errors import ScriptedFlowActionError
 from imbue.minds_evals.forward_instance import SESSION_COOKIE_NAME
 from imbue.minds_evals.resources import flow_step_protocol
 from imbue.minds_evals.resources.flow_step_protocol import REF_PATTERN
@@ -529,6 +533,17 @@ class VerifierCall(FrozenModel):
     tool_input: dict[str, Any] | None = Field(description="The tool payload, or None when the call yielded none")
     input_token_count: int = Field(description="Input tokens the call consumed")
     output_token_count: int = Field(description="Output tokens the call consumed")
+    # A scripted decision's payload is the script's own action, which parses as a usable one, so a
+    # decision the page could not resolve carries its explanation here instead.
+    unusable_reason: str = Field(
+        default="", description="Why a decision that produced no action produced none, when its payload cannot say"
+    )
+
+
+@pure
+def describe_unusable_decision(call: VerifierCall) -> str:
+    """Why a decision produced no action: the explanation it carries, or else what its payload lacked."""
+    return call.unusable_reason if call.unusable_reason else describe_unusable_action(call.tool_input)
 
 
 def _call_tool(
@@ -610,6 +625,261 @@ class AnthropicVerificationAgent(VerificationAgent):
         if not observation:
             return None, call
         return FlowReading(observation=observation), call
+
+
+@pure
+def flow_start_url(app_origin: str, start_path: FlowStartPath) -> str:
+    """The URL a start path names: that path on the app's origin. The origin ends in `/`, which
+    stands in for the path's own leading one."""
+    assert app_origin.endswith("/"), "an app origin ends in '/': {!r}".format(app_origin)
+    return app_origin + start_path.removeprefix("/")
+
+
+# What every scripted decision gives as its reasoning, and what a scripted flow records as its
+# closing reading: nothing reasoned about either, so the record says so rather than inventing prose.
+SCRIPTED_ACTION_REASONING: Final[str] = "scripted"
+SCRIPTED_FLOW_READING: Final[str] = "scripted flow; no reading"
+
+
+@pure
+def _flow_action_kind(kind: ScriptedFlowActionKind) -> FlowActionKind:
+    match kind:
+        case ScriptedFlowActionKind.CLICK:
+            return FlowActionKind.CLICK
+        case ScriptedFlowActionKind.INPUT:
+            return FlowActionKind.INPUT
+        case ScriptedFlowActionKind.KEYS:
+            return FlowActionKind.KEYS
+        case ScriptedFlowActionKind.SCROLL:
+            return FlowActionKind.SCROLL
+        case ScriptedFlowActionKind.OPEN:
+            return FlowActionKind.OPEN
+        case ScriptedFlowActionKind.RELOAD:
+            return FlowActionKind.RELOAD
+        case ScriptedFlowActionKind.WAIT:
+            return FlowActionKind.WAIT
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def _scripted_flow_action(entry: ScriptedFlowAction, text: str, ref: str) -> FlowAction:
+    """A script action as the executor performs it: by name, or for a located element by the ref it
+    resolved to."""
+    return FlowAction(
+        kind=_flow_action_kind(entry.kind),
+        role=entry.role,
+        target=entry.target,
+        ref=ref,
+        text=text,
+        amount=entry.amount,
+        reasoning=SCRIPTED_ACTION_REASONING,
+        expected="",
+    )
+
+
+@pure
+def _describe_located_target(entry: ScriptedFlowAction) -> str:
+    return "{} that has no accessible name beside {!r}".format(entry.role, entry.beside)
+
+
+@pure
+def describe_scripted_flow_action(entry: ScriptedFlowAction) -> str:
+    """A script action in the flow log's words. A located element is named by what it sits beside,
+    because its ref is only read off the page once the step is decided."""
+    if not entry.beside:
+        return describe_action(_scripted_flow_action(entry, entry.text, ""))
+    match entry.kind:
+        case ScriptedFlowActionKind.CLICK:
+            return "click the {}".format(_describe_located_target(entry))
+        case ScriptedFlowActionKind.INPUT:
+            return "type {!r} into the {}".format(entry.text, _describe_located_target(entry))
+        case (
+            ScriptedFlowActionKind.KEYS
+            | ScriptedFlowActionKind.SCROLL
+            | ScriptedFlowActionKind.OPEN
+            | ScriptedFlowActionKind.RELOAD
+            | ScriptedFlowActionKind.WAIT
+        ):
+            raise ScriptedFlowActionError(
+                "{!r} addresses no element, so it has nothing to locate".format(entry.kind.value)
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def describe_flow_script(script: Sequence[ScriptedFlowAction]) -> str:
+    """A script as the prose a flow's `actions` carry, one numbered sentence per action.
+
+    The numbers are the step indices the flow log gives those actions, and an `open` names the start
+    path as written, since the origin it joins is only known at trial time.
+    """
+    return " ".join(
+        "Step {}: {}.".format(step_index, describe_scripted_flow_action(entry))
+        for step_index, entry in enumerate(script, start=1)
+    )
+
+
+# One line of a page state's ARIA tree that gives its element no name: the role, then only bracketed
+# attributes, and a colon when the element holds children.
+_NAMELESS_ELEMENT_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^ *- (?P<role>[a-z]+)(?: \[[^\]]*\])*:?$")
+_REF_ATTRIBUTE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[ref=(?P<ref>e\d+)\]")
+
+
+class NamelessElementLookup(FrozenModel):
+    """Where a script's locator lands on one page state: the one ref it picks out, or why it picks out none."""
+
+    ref: str = Field(description="The located element's snapshot ref; empty when the locator picks out none")
+    problem: str = Field(description="Why the locator picks out no single element; empty when it picks out one")
+
+
+@pure
+def _tree_line_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+@pure
+def _parent_element_line_idxs(tree_lines: Sequence[str], line_idx: int) -> range:
+    """The lines of the element holding line `line_idx`: that element's own line and everything it holds,
+    or the whole tree for a top-level line."""
+    indent = _tree_line_indent(tree_lines[line_idx])
+    parent_idx = next(
+        (
+            candidate_idx
+            for candidate_idx in range(line_idx - 1, -1, -1)
+            if _tree_line_indent(tree_lines[candidate_idx]) < indent
+        ),
+        None,
+    )
+    if parent_idx is None:
+        return range(len(tree_lines))
+    parent_indent = _tree_line_indent(tree_lines[parent_idx])
+    end_idx = next(
+        (
+            candidate_idx
+            for candidate_idx in range(parent_idx + 1, len(tree_lines))
+            if _tree_line_indent(tree_lines[candidate_idx]) <= parent_indent
+        ),
+        len(tree_lines),
+    )
+    return range(parent_idx, end_idx)
+
+
+@pure
+def locate_nameless_element(state_text: str, role: str, beside: str) -> NamelessElementLookup:
+    """The element of `role` the page gives no accessible name whose parent element also holds a line
+    containing `beside`, looked up in a recorded page state (`page <url> (<title>)` over its ARIA tree).
+
+    An element's own line never counts as beside it, and the text is looked for with the recorder's
+    per-line suffixes dropped, so it cannot match a ref. Anything but exactly one element is refused
+    with the reason: acting on a guess would put an action the script never meant into the record.
+    """
+    tree_lines = [line for line in state_text.splitlines() if line.lstrip(" ").startswith("- ")]
+    located_refs: list[str] = []
+    for line_idx, line in enumerate(tree_lines):
+        line_match = _NAMELESS_ELEMENT_LINE_PATTERN.match(line)
+        ref_match = _REF_ATTRIBUTE_PATTERN.search(line)
+        if line_match is None or ref_match is None or line_match.group("role") != role:
+            continue
+        is_beside = any(
+            beside in comparable_line(tree_lines[neighbour_idx])
+            for neighbour_idx in _parent_element_line_idxs(tree_lines, line_idx)
+            if neighbour_idx != line_idx
+        )
+        if is_beside:
+            located_refs.append(ref_match.group("ref"))
+    if len(located_refs) == 1:
+        return NamelessElementLookup(ref=located_refs[0], problem="")
+    elif not located_refs:
+        return NamelessElementLookup(
+            ref="", problem="no {} without an accessible name sits beside a line holding {!r}".format(role, beside)
+        )
+    else:
+        return NamelessElementLookup(
+            ref="",
+            problem="{} of role {} without an accessible name sit beside a line holding {!r} ({}), so it picks out "
+            "none of them".format(len(located_refs), role, beside, ", ".join(located_refs)),
+        )
+
+
+class ScriptedDecision(FrozenModel):
+    """A script action resolved on the page state its step is decided on."""
+
+    action: FlowAction | None = Field(description="The action to perform; None when it cannot be resolved here")
+    unusable_reason: str = Field(description="Why the action cannot be resolved on this page; empty when it can")
+
+
+@pure
+def resolve_scripted_flow_action(entry: ScriptedFlowAction, app_origin: str, state_text: str) -> ScriptedDecision:
+    """A script action as its step performs it: an `open` joins its start path onto the app's origin,
+    and an action on a located element takes the ref its locator picks out of `state_text`."""
+    text = (
+        flow_start_url(app_origin, FlowStartPath(entry.text))
+        if entry.kind is ScriptedFlowActionKind.OPEN
+        else entry.text
+    )
+    if not entry.beside:
+        return ScriptedDecision(action=_scripted_flow_action(entry, text, ""), unusable_reason="")
+    lookup = locate_nameless_element(state_text, entry.role, entry.beside)
+    if lookup.problem:
+        return ScriptedDecision(
+            action=None,
+            unusable_reason="the script asks to {}, but {}".format(
+                describe_scripted_flow_action(entry), lookup.problem
+            ),
+        )
+    return ScriptedDecision(action=_scripted_flow_action(entry, text, lookup.ref), unusable_reason="")
+
+
+class ScriptVerificationAgent(VerificationAgent):
+    """A scripted flow's decisions: its script's actions in order, then `done`, then a fixed reading.
+
+    Makes no model call, so a scripted flow's record is a function of the executor alone. Each call
+    it records carries the decision it handed out as its payload and no tokens, so the spend account
+    neither reads it as a failed call nor bills it. An action whose locator picks out no single
+    element on the page is a decision that cannot be acted on, and its call says why. Such a miss
+    always ends the flow as an eval error (`verifier_agent_failed`), never as the app's failure: no
+    per-action setting makes a script count it against the app.
+    """
+
+    script: tuple[ScriptedFlowAction, ...] = Field(frozen=True, description="The actions to hand out, in order")
+    app_origin: str = Field(frozen=True, description="The origin the flow's app is served at, ending in '/'")
+    decision_count: int = Field(default=0, description="How many decisions have been handed out")
+
+    def _record(self, tool_input: dict[str, Any], unusable_reason: str) -> VerifierCall:
+        call = VerifierCall(
+            tool_input=tool_input, input_token_count=0, output_token_count=0, unusable_reason=unusable_reason
+        )
+        self.calls.append(call)
+        return call
+
+    def decide_next_action(
+        self, flow_actions: str, history: tuple[str, ...], state_text: str
+    ) -> tuple[FlowAction | None, VerifierCall]:
+        self.decision_count += 1
+        if self.decision_count > len(self.script):
+            done = FlowAction(
+                kind=FlowActionKind.DONE,
+                role="",
+                target="",
+                ref="",
+                text="",
+                amount=0,
+                reasoning=SCRIPTED_ACTION_REASONING,
+                expected="",
+            )
+            return done, self._record(done.model_dump(mode="json"), "")
+        entry = self.script[self.decision_count - 1]
+        decision = resolve_scripted_flow_action(entry, self.app_origin, state_text)
+        if decision.action is None:
+            return None, self._record(entry.model_dump(mode="json"), decision.unusable_reason)
+        return decision.action, self._record(decision.action.model_dump(mode="json"), "")
+
+    def read_final_state(
+        self, flow_actions: str, history: tuple[str, ...], state_text: str
+    ) -> tuple[FlowReading | None, VerifierCall]:
+        return FlowReading(observation=SCRIPTED_FLOW_READING), self._record({"observation": SCRIPTED_FLOW_READING}, "")
 
 
 @pure
@@ -752,6 +1022,8 @@ class StepOutcome(FrozenModel):
     detail: str = Field(description="Bounded error text from the executor")
     state_text: str = Field(description="The page after the action: URL, title and its ARIA tree")
     screenshot_name: str = Field(description="The frame captured after the action, empty when none was")
+    screenshot_byte_count: int = Field(description="The frame's size as the executor read it back; 0 without one")
+    is_screenshot_png: bool = Field(description="Whether the frame starts with the PNG signature")
     reaction: StepReaction = Field(description="What the page's DOM did after the action, where the step watched")
 
 
@@ -789,6 +1061,8 @@ def parse_step_result(stdout: str) -> StepOutcome:
         detail=result.detail,
         state_text=render_page_state(result.url, result.title, result.snapshot),
         screenshot_name=result.screenshot_path.rsplit("/", 1)[-1],
+        screenshot_byte_count=result.screenshot_byte_count,
+        is_screenshot_png=result.is_screenshot_png,
         reaction=result.reaction,
     )
 
@@ -802,6 +1076,8 @@ def _bridge_failure(stdout: str) -> StepOutcome:
         detail=stdout[:MAX_STEP_DETAIL_CHARS],
         state_text="",
         screenshot_name="",
+        screenshot_byte_count=0,
+        is_screenshot_png=False,
         reaction=StepReaction.UNOBSERVED,
     )
 
@@ -1086,7 +1362,16 @@ def _bounded_line(line: str) -> str:
 
 
 @pure
-def flow_init_record(goal: str, expect: str, url: str, state_text: str, screenshot_name: str, timestamp: str) -> str:
+def flow_init_record(
+    goal: str,
+    expect: str,
+    url: str,
+    state_text: str,
+    screenshot_name: str,
+    screenshot_byte_count: int,
+    is_screenshot_png: bool,
+    timestamp: str,
+) -> str:
     """The first line of a flow's log: what the flow was asked to do, and the page it opened onto.
 
     The opening navigation is already made and already screenshotted before any action is decided,
@@ -1108,6 +1393,8 @@ def flow_init_record(goal: str, expect: str, url: str, state_text: str, screensh
             "url": url,
             "state": state_text,
             "screenshot": screenshot_name,
+            "screenshot_byte_count": screenshot_byte_count,
+            "is_screenshot_png": is_screenshot_png,
             "error": "",
         }
     )
@@ -1149,6 +1436,8 @@ def flow_step_record(
     reaction: StepReaction,
     state_text: str,
     screenshot_name: str,
+    screenshot_byte_count: int,
+    is_screenshot_png: bool,
     error: str,
     timestamp: str,
 ) -> str:
@@ -1189,6 +1478,8 @@ def flow_step_record(
             "reaction": reaction.value,
             "state": state_text,
             "screenshot": screenshot_name,
+            "screenshot_byte_count": screenshot_byte_count,
+            "is_screenshot_png": is_screenshot_png,
             "error": error,
         }
     )

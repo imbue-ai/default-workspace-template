@@ -82,6 +82,10 @@ STOP_KIND_OWNER: Final[str] = "owner"
 STOP_KIND_MAINTENANCE: Final[str] = "maintenance"
 STOP_KIND_IDLE: Final[str] = "idle"
 STOP_KIND_SUSPENSION: Final[str] = "suspension"
+# A workspace that can never run again (its version cannot run on the gen-2
+# fleet; its data is archived for its owner to download): nobody starts it,
+# not even an operator, short of re-kinding it first.
+STOP_KIND_RETIRED: Final[str] = "retired"
 # NULL is a stop recorded before the column existed, which reads as ``owner``.
 OWNER_STARTABLE_STOP_KINDS: Final[frozenset[str | None]] = frozenset((None, STOP_KIND_OWNER, STOP_KIND_IDLE))
 
@@ -92,6 +96,7 @@ class OperatorStopKind(str, Enum):
     MAINTENANCE = STOP_KIND_MAINTENANCE
     IDLE = STOP_KIND_IDLE
     SUSPENSION = STOP_KIND_SUSPENSION
+    RETIRED = STOP_KIND_RETIRED
 
 
 # The stop CAS, shared by the owner route, the operator route, and the account
@@ -121,16 +126,20 @@ _RESTAMP_USER_STOP_KIND_SQL: Final[str] = (
     "AND status IN ('stopping', 'stopped')"
 )
 
-# The start CAS: only a stopped row starts, and the start clears the stop's
-# kind. Parameters: (transition_id, host_db_id). The admin start runs it as is
-# (it is how a held row comes back); the owner start adds the hold predicate,
-# so a re-stamp that lands between the route's read and its CAS (the migrate
-# taking an owner-stopped row) is refused by the CAS itself rather than
-# overwritten with NULL.
+# The start CAS both routes build on: only a stopped row starts, and the start
+# clears the stop's kind. Parameters: (transition_id, host_db_id). The admin
+# start adds the retired guard (a retired row is nobody's to start; every
+# other kind is how a held row comes back) and the owner start the hold
+# predicate, so a re-stamp that lands between the route's read and its CAS
+# (the migrate taking an owner-stopped row, a retire under an operator start)
+# is refused by the CAS itself rather than overwritten with NULL.
 _ADMIN_START_STOPPED_WORKSPACE_SQL: Final[str] = (
     "UPDATE pool_hosts SET status = 'starting', transition_error = NULL, "
     "transition_failure_count = 0, transition_id = %s, transition_heartbeat_at = NOW(), stop_kind = NULL "
     "WHERE id = %s AND status = 'stopped'"
+)
+_ADMIN_START_RETIRE_GUARDED_SQL: Final[str] = (
+    f"{_ADMIN_START_STOPPED_WORKSPACE_SQL} AND (stop_kind IS NULL OR stop_kind <> '{STOP_KIND_RETIRED}')"
 )
 _OWNER_STARTABLE_STOP_KINDS_SQL_LIST: Final[str] = ", ".join(
     f"'{kind}'" for kind in sorted(kind for kind in OWNER_STARTABLE_STOP_KINDS if kind is not None)
@@ -142,6 +151,11 @@ _OWNER_START_STOPPED_WORKSPACE_SQL: Final[str] = (
 
 WORKSPACE_UNDER_MAINTENANCE_CODE: Final[str] = "workspace_under_maintenance"
 WORKSPACE_UNDER_MAINTENANCE_MESSAGE: Final[str] = "This machine is undergoing maintenance and will be back shortly."
+WORKSPACE_RETIRED_CODE: Final[str] = "workspace_retired"
+WORKSPACE_RETIRED_MESSAGE: Final[str] = (
+    "This machine has been retired and cannot be started again. "
+    "Download its data from its backups, or contact support if it has none."
+)
 
 
 def _raise_workspace_under_maintenance() -> NoReturn:
@@ -151,14 +165,32 @@ def _raise_workspace_under_maintenance() -> NoReturn:
     )
 
 
+def _raise_workspace_retired() -> NoReturn:
+    raise HTTPException(
+        status_code=409,
+        detail={"code": WORKSPACE_RETIRED_CODE, "message": WORKSPACE_RETIRED_MESSAGE},
+    )
+
+
+def _raise_if_workspace_retired(current_db_status: str, stop_kind: str | None) -> None:
+    """Refuse (409 ``workspace_retired``) any start of a retired row, the owner's and the operator's alike.
+
+    The kind describes a stop, so only a stopping or stopped row can be
+    retired; a ``crashed`` row that kept its kind gets the crashed refusal.
+    """
+    if current_db_status in ("stopping", "stopped") and stop_kind == STOP_KIND_RETIRED:
+        _raise_workspace_retired()
+
+
 def _raise_if_workspace_held(current_db_status: str, stop_kind: str | None) -> None:
-    """Refuse (409 ``workspace_under_maintenance``) an owner start of a row an operator holds.
+    """Refuse (409) an owner start of a row an operator holds: ``workspace_retired`` for a retired row, else ``workspace_under_maintenance``.
 
     Runs before the status precondition so a held row that is still
     ``stopping`` answers the hold rather than "wait and retry". The kind
     describes a stop, so only a stopping or stopped row can be held: a
     ``crashed`` row that kept its kind gets the crashed refusal instead.
     """
+    _raise_if_workspace_retired(current_db_status, stop_kind)
     if current_db_status in ("stopping", "stopped") and stop_kind not in OWNER_STARTABLE_STOP_KINDS:
         _raise_workspace_under_maintenance()
 
@@ -330,12 +362,17 @@ def _read_owned_workspace(conn: Any, host_db_id: UUID, user_id_prefix: str) -> t
 
 def _read_workspace_status(conn: Any, host_db_id: UUID) -> str:
     """Read one workspace row's DB status regardless of owner (404 unknown); the operator routes' prologue."""
+    return _read_workspace_status_and_stop_kind(conn, host_db_id)[0]
+
+
+def _read_workspace_status_and_stop_kind(conn: Any, host_db_id: UUID) -> tuple[str, str | None]:
+    """Read one workspace row's DB status and stop kind regardless of owner (404 unknown); the operator routes' prologue."""
     with conn.cursor() as cur:
-        cur.execute("SELECT status FROM pool_hosts WHERE id = %s", (str(host_db_id),))
+        cur.execute("SELECT status, stop_kind FROM pool_hosts WHERE id = %s", (str(host_db_id),))
         status_row = cur.fetchone()
     if status_row is None:
         raise HTTPException(status_code=404, detail="No such workspace")
-    return str(status_row[0])
+    return str(status_row[0]), status_row[1]
 
 
 @router.get("/workspaces/{host_db_id}")
@@ -522,23 +559,27 @@ def admin_start_workspace(request: Request, host_db_id: UUID) -> dict[str, objec
     the drain can harvest them live). Same preconditions otherwise: only a
     ``stopped`` row starts, a parked gen-1 row is refused as under
     maintenance, and a row already ``leased``/``starting`` reports its
-    status. The operator start ignores the row's ``stop_kind`` (it is how a
-    held row comes back) and clears it.
+    status. The operator start ignores a ``maintenance`` / ``suspension``
+    ``stop_kind`` (it is how a held row comes back) and clears it; a
+    ``retired`` row is refused like the owner's start (409
+    ``workspace_retired``) -- ``set-stop-kind idle`` first is the deliberate
+    way to start one anyway.
     """
     with handle_endpoint_errors():
         require_admin_key(request)
         storage.read_storage_config()
         transition_id = str(uuid4())
         with db.pooled_db_connection() as conn:
-            current_db_status = _read_workspace_status(conn, host_db_id)
+            current_db_status, stop_kind = _read_workspace_status_and_stop_kind(conn, host_db_id)
             if current_db_status in ("leased", "starting"):
                 return TransitionResponse(
                     host_db_id=host_db_id, status=_WIRE_STATUS_BY_DB_STATUS[current_db_status]
                 ).model_dump(mode="json")
+            _raise_if_workspace_retired(current_db_status, stop_kind)
             _raise_if_start_precondition_unmet(current_db_status)
             _raise_if_workspace_is_migrating(conn, host_db_id, current_db_status)
             with conn.cursor() as cur:
-                cur.execute(_ADMIN_START_STOPPED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
+                cur.execute(_ADMIN_START_RETIRE_GUARDED_SQL, (transition_id, str(host_db_id)))
                 updated = cur.rowcount
             conn.commit()
         if updated == 0:

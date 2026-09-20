@@ -29,11 +29,15 @@ account token exactly as the connector does (access key = token id, secret =
 SHA-256 of the token value).
 """
 
+from collections.abc import Callable
+from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from loguru import logger
@@ -50,6 +54,8 @@ from imbue.mngr_imbue_cloud.r2_objects import wait_for_s3_credentials as _shared
 
 _CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 _HTTP_TIMEOUT_SECONDS = 60.0
+# How many users one SuperTokens listing page carries (the core caps a page at 500).
+_USER_PAGE_LIMIT = 500
 # Buckets younger than this are left alone: an in-flight CI run's workspace
 # has a live account, but the app-list read could race its creation.
 _MIN_BUCKET_AGE_HOURS = 2
@@ -154,25 +160,40 @@ def _supertokens_get(credentials: SuperTokensCoreCredentials, path: str) -> dict
     return body
 
 
-def collect_live_owner_prefixes(credentials: SuperTokensCoreCredentials) -> frozenset[str]:
-    """Return the bucket-owner prefix of every user in every app on the core.
+class CoreUser(FrozenModel):
+    """One account as the SuperTokens core lists it."""
 
-    These are the accounts that still exist, so their buckets are never
-    sweepable. Raises :class:`R2CleanupError` rather than returning a partial
-    set: an under-reported protected set would authorize deleting a live
-    user's backups.
+    user_id: str = Field(description="The SuperTokens user id")
+    email: str | None = Field(description="The account's (first) email, when the core lists one")
+
+
+def _core_user_email_or_none(user: Mapping[str, Any]) -> str | None:
+    """The first email a listed user carries: the CDI 5 ``emails`` list, else a legacy top-level ``email``."""
+    emails = user.get("emails")
+    if isinstance(emails, list):
+        for email in emails:
+            if isinstance(email, str) and email:
+                return email
+    legacy_email = user.get("email")
+    return legacy_email if isinstance(legacy_email, str) and legacy_email else None
+
+
+def iter_app_users(fetch_page: Callable[[str], dict[str, Any]], app_id: str) -> Iterator[CoreUser]:
+    """Every user of one app, following the core's ``nextPaginationToken`` until the listing is exhausted.
+
+    ``fetch_page`` GETs a core path (relative to the connection URI) and
+    returns its JSON body.
     """
-    apps_body = _supertokens_get(credentials, "/recipe/multitenancy/app/list")
-    raw_apps = apps_body.get("apps")
-    if not isinstance(raw_apps, list) or not raw_apps:
-        raise R2CleanupError("SuperTokens reported no apps; refusing to treat every bucket as ownerless")
-    prefixes: set[str] = set()
-    for entry in raw_apps:
-        app_id = str(entry.get("appId", "")) if isinstance(entry, dict) else ""
-        if not app_id:
-            raise R2CleanupError(f"SuperTokens app list entry has no appId: {entry}")
-        base = "" if app_id == "public" else f"/appid-{app_id}"
-        users_body = _supertokens_get(credentials, f"{base}/public/users?limit=500")
+    base = "" if app_id == "public" else f"/appid-{app_id}"
+    # None before the first page and once the core signals the last one.
+    pagination_token: str | None = None
+    has_unfetched_pages = True
+    while has_unfetched_pages:
+        query: dict[str, str] = {"limit": str(_USER_PAGE_LIMIT)}
+        if pagination_token is not None:
+            # The token is base64, so it can carry "+", "/" and "=".
+            query["paginationToken"] = pagination_token
+        users_body = fetch_page(f"{base}/public/users?{urlencode(query)}")
         raw_users = users_body.get("users")
         if not isinstance(raw_users, list):
             raise R2CleanupError(f"SuperTokens user list for app {app_id!r} had an unexpected shape")
@@ -181,8 +202,48 @@ def collect_live_owner_prefixes(credentials: SuperTokensCoreCredentials) -> froz
             user_id = str(user.get("id", "")) if isinstance(user, dict) else ""
             if not user_id:
                 raise R2CleanupError(f"SuperTokens user in app {app_id!r} has no id")
-            prefixes.add(bucket_owner_prefix_for_user(user_id))
-    return frozenset(prefixes)
+            yield CoreUser(user_id=user_id, email=_core_user_email_or_none(user))
+        raw_token = users_body.get("nextPaginationToken")
+        pagination_token = raw_token if isinstance(raw_token, str) and raw_token else None
+        has_unfetched_pages = pagination_token is not None
+
+
+def list_core_users(credentials: SuperTokensCoreCredentials) -> tuple[CoreUser, ...]:
+    """Every user in every app on the core.
+
+    Raises :class:`R2CleanupError` rather than returning a partial listing: a
+    caller protecting live users' buckets (or naming owners) must never act
+    on an under-reported set.
+    """
+    apps_body = _supertokens_get(credentials, "/recipe/multitenancy/app/list")
+    raw_apps = apps_body.get("apps")
+    if not isinstance(raw_apps, list) or not raw_apps:
+        raise R2CleanupError("SuperTokens reported no apps; refusing to treat every bucket as ownerless")
+    users: list[CoreUser] = []
+    for entry in raw_apps:
+        app_id = str(entry.get("appId", "")) if isinstance(entry, dict) else ""
+        if not app_id:
+            raise R2CleanupError(f"SuperTokens app list entry has no appId: {entry}")
+        users.extend(iter_app_users(lambda path: _supertokens_get(credentials, path), app_id))
+    return tuple(users)
+
+
+def collect_live_owner_prefixes(credentials: SuperTokensCoreCredentials) -> frozenset[str]:
+    """Return the bucket-owner prefix of every user in every app on the core.
+
+    These are the accounts that still exist, so their buckets are never
+    sweepable.
+    """
+    return frozenset(bucket_owner_prefix_for_user(user.user_id) for user in list_core_users(credentials))
+
+
+def collect_owner_emails_by_prefix(credentials: SuperTokensCoreCredentials) -> dict[str, str]:
+    """The email of every account on the core, keyed by its 16-hex prefix (the key pool rows carry)."""
+    return {
+        bucket_owner_prefix_for_user(user.user_id): user.email
+        for user in list_core_users(credentials)
+        if user.email is not None
+    }
 
 
 def bucket_owner_prefix_for_user(user_id: str) -> str:

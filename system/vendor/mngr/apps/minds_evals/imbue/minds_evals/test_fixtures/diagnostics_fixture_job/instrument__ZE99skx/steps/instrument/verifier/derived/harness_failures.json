@@ -1,0 +1,17 @@
+{
+  "main": {
+    "counts": {},
+    "total": 0,
+    "scored_total": 0
+  },
+  "workers": {
+    "counts": {},
+    "total": 0,
+    "scored_total": 0,
+    "worker_count": 0
+  },
+  "half_marks_at": 4,
+  "uncounted_signatures": [
+    "missing_path"
+  ]
+}

@@ -14,6 +14,8 @@ conversation loop itself.
 
 Persona: $persona_prose
 
+$seed_prose
+
 $files_prose
 
 This step's entries. A literal message is sent verbatim; `DECIDE_FROM_PERSONA`

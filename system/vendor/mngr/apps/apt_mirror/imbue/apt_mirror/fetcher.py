@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import httpx
 from pydantic import ConfigDict
 from pydantic import Field
@@ -55,3 +58,10 @@ class HttpUpstreamFetcher(UpstreamFetcherInterface):
         if response.status_code >= 500 or response.status_code == httpx.codes.TOO_MANY_REQUESTS:
             raise AptMirrorTransientUpstreamError(url, response.status_code)
         return response.is_success
+
+
+@contextmanager
+def open_http_upstream_fetcher(timeout_seconds: float) -> Iterator[HttpUpstreamFetcher]:
+    """An HttpUpstreamFetcher over a client that lives for the block and is closed on exit."""
+    with httpx.Client(timeout=timeout_seconds) as client:
+        yield HttpUpstreamFetcher(client=client)

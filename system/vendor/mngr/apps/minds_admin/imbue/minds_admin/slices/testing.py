@@ -5,6 +5,8 @@ import json
 import shlex
 import stat
 from collections.abc import Mapping
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -14,6 +16,9 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.minds_admin.slices.archive_types import ArchiveStreamSummary
+from imbue.minds_admin.slices.archive_types import WorkspaceArchiveManifest
+from imbue.minds_admin.slices.cutover_db import CutoverPoolRow
 from imbue.minds_admin.slices.cutover_types import CutoverStage
 from imbue.minds_admin.slices.cutover_types import CutoverWorkspaceState
 from imbue.minds_admin.slices.cutover_types import HarvestedFile
@@ -25,6 +30,10 @@ from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_DIR
 from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_SUPERVISOR_CONF_DIR
 from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_TMPFS_DIR
 from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolver
+from imbue.mngr_imbue_cloud.data_types import BareMetalServer
+from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
+from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
+from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 
 
 class RecordingCursor:
@@ -271,3 +280,91 @@ def make_fake_vault_signer(root: Path) -> FakeVaultSigner:
     signer = FakeVaultSigner(binary_dir=binary_dir, sign_count_path=sign_count_path, signed_key_path=signed_key_path)
     signer.install()
     return signer
+
+
+def make_workspace_archive_manifest(
+    host_db_id: str,
+    *,
+    created_at: datetime,
+    owner_email: str | None = "alice@example.com",
+    host_name: str = "my-mind",
+    host_id: str | None = None,
+) -> WorkspaceArchiveManifest:
+    """One archive's manifest, as ``minds-admin archives create`` records it."""
+    resolved_host_id = host_id or f"host-{uuid4().hex}"
+    prefix = f"dev-x/archives/{resolved_host_id}/{created_at.strftime('%Y%m%dT%H%M%SZ')}"
+    return WorkspaceArchiveManifest(
+        env_name="dev-x",
+        host_db_id=host_db_id,
+        host_id=resolved_host_id,
+        agent_id=f"agent-{uuid4().hex}",
+        host_name=host_name,
+        owner_user_id_prefix="0123456789abcdef",
+        owner_email=owner_email,
+        created_at=created_at,
+        workspace_status_before_archive="leased",
+        box_generation=1,
+        version_probe="minds-v0.3.9",
+        baked_version="minds-v0.3.9",
+        home_layout="legacy",
+        volume_subvolume_path="/mngr-btrfs/0123abcd",
+        container_layer_path="/var/lib/docker/overlay2/x/diff",
+        bucket="bucket",
+        zip_key=f"{prefix}/workspace.zip",
+        manifest_key=f"{prefix}/manifest.json",
+        zip_size_bytes=4096,
+        zip_sha256="ab" * 32,
+        excludes=("**/.venv",),
+        summary=ArchiveStreamSummary(entry_count=3, entry_bytes=4000, skipped_count=0, skipped_paths=()),
+    )
+
+
+def make_ready_gen1_server() -> BareMetalServer:
+    """A ready gen-1 box with a public address, as the cutover and the archive find their origin boxes."""
+    now = datetime(2026, 8, 28, tzinfo=timezone.utc)
+    return BareMetalServer(
+        id=BareMetalServerDbId(str(uuid4())),
+        plan_code="24rise02-v1-us",
+        region="vin",
+        public_address="15.204.1.2",
+        cpu_threads=32,
+        ram_gb=128,
+        disk_gb=1000,
+        memory_per_slice_gb=8,
+        cpu_overcommit_ratio=1.5,
+        slot_count=15,
+        status=BareMetalServerStatus(SERVER_STATUS_READY),
+        created_at=now,
+        updated_at=now,
+        uplink_mbps=1000,
+    )
+
+
+def make_gen1_pool_row(**overrides: object) -> CutoverPoolRow:
+    """A parked-shape gen-1 pool row (stopped, no placement, no artifact) unless overridden."""
+    fields: dict[str, object] = dict(
+        id=str(uuid4()),
+        status="stopped",
+        host_id=f"host-{uuid4().hex}",
+        agent_id=None,
+        host_name="slice-x",
+        leased_to_user="0123456789abcdef",
+        vps_address=None,
+        ssh_port=None,
+        container_ssh_port=None,
+        bare_metal_server_id=None,
+        slice_instance_name="mngr-slice-dev-x-" + "a" * 16,
+        slice_disk_name="mngr-slice-dev-x-" + "a" * 16 + "-data",
+        outer_host_public_key=None,
+        container_host_public_key=None,
+        box_generation=1,
+        memory_units=8,
+        disk_gb=44,
+        attributes={},
+        artifact_generation=3,
+        region=None,
+        artifact_manifest=None,
+        wrapped_dek=None,
+    )
+    fields.update(overrides)
+    return CutoverPoolRow.model_validate(fields)

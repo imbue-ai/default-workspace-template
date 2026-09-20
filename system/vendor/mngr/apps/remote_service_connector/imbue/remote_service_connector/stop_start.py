@@ -504,6 +504,13 @@ def _require_box(row: WorkspaceRow) -> BoxRow:
     return box
 
 
+def _require_transition_id(row: WorkspaceRow) -> str:
+    """The fencing token the box-side transfer is launched and probed under; a driven row always has one."""
+    if row.transition_id is None:
+        raise WorkspaceTransitionError(f"workspace {row.host_db_id} is mid-transition but carries no transition token")
+    return row.transition_id
+
+
 def _require_slice_names(row: WorkspaceRow) -> tuple[str, str]:
     if not row.slice_instance_name or not row.slice_disk_name:
         raise WorkspaceTransitionError(f"workspace {row.host_db_id} has no slice instance/disk names recorded")
@@ -628,7 +635,9 @@ def _poll_transfer(row: WorkspaceRow, box: BoxRow, instance_name: str, expected_
         finished = _read_finished_transfer_status(box, instance_name)
         if finished is not None:
             return finished
-        alive_status, _out, _err = _run_box_command(box, build_is_transfer_alive_command(instance_name))
+        alive_status, _out, _err = _run_box_command(
+            box, build_is_transfer_alive_command(instance_name, _require_transition_id(row))
+        )
         if alive_status != 0:
             # The transfer may have finished between the two checks (the final
             # status lands atomically just before the script exits): re-read
@@ -722,14 +731,16 @@ def _drive_stop_inner(config: StorageConfig, row: WorkspaceRow) -> None:
     _write_box_file(box, instance_name, _UPLOAD_SCRIPT_FILENAME, upload_script)
     status_now, stdout_now, _stderr_now = _run_box_command(box, build_read_status_command(instance_name))
     parsed_now = parse_status_text(stdout_now) if status_now == 0 else {}
-    alive_now, _o, _e = _run_box_command(box, build_is_transfer_alive_command(instance_name))
+    alive_now, _o, _e = _run_box_command(
+        box, build_is_transfer_alive_command(instance_name, _require_transition_id(row))
+    )
     # Only a status this upload wrote to completion counts: a stale one (a
     # failed earlier attempt, or a leftover download status from a previous
     # restore onto this box) must trigger a relaunch, which clears it.
     is_upload_complete = parsed_now.get("FINISHED") == "1" and parsed_now.get("STAGE") == "uploaded"
     if not is_upload_complete and alive_now != 0:
         launch_status, _lo, launch_err = _run_box_command(
-            box, build_launch_detached_command(instance_name, _UPLOAD_SCRIPT_FILENAME)
+            box, build_launch_detached_command(instance_name, _UPLOAD_SCRIPT_FILENAME, _require_transition_id(row))
         )
         if launch_status != 0:
             raise WorkspaceTransitionError(f"failed to launch upload: {launch_err.strip()}")
@@ -1435,7 +1446,7 @@ def _restore_from_artifact(
             )
         _write_box_file(box, instance_name, _DOWNLOAD_SCRIPT_FILENAME, download_script)
         launch_status, _lo, launch_err = _run_box_command(
-            box, build_launch_detached_command(instance_name, _DOWNLOAD_SCRIPT_FILENAME)
+            box, build_launch_detached_command(instance_name, _DOWNLOAD_SCRIPT_FILENAME, _require_transition_id(row))
         )
         if launch_status != 0:
             raise WorkspaceTransitionError(f"failed to launch download: {launch_err.strip()}")

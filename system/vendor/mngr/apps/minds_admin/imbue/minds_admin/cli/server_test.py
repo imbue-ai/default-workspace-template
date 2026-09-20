@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 from inline_snapshot import snapshot
 
+from imbue.apt_mirror.testing import write_template_checkout
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.imbue_common.model_update import to_update
 from imbue.minds_admin.cli.server import BakeRowLedger
@@ -32,6 +33,7 @@ from imbue.minds_admin.cli.server import assert_gen2_box_storage_is_encrypted
 from imbue.minds_admin.cli.server import box_script_provisioning_error_or_none
 from imbue.minds_admin.cli.server import build_box_ssh_argv
 from imbue.minds_admin.cli.server import build_box_tier_audit_report
+from imbue.minds_admin.cli.server import build_image_build_create_args
 from imbue.minds_admin.cli.server import build_pool_host_destroy_report
 from imbue.minds_admin.cli.server import build_registered_server
 from imbue.minds_admin.cli.server import choose_storage_passphrase
@@ -42,6 +44,7 @@ from imbue.minds_admin.cli.server import gen2_register_disk_shortfall_or_none
 from imbue.minds_admin.cli.server import plaintext_gen2_box_ids
 from imbue.minds_admin.cli.server import reap_orphan_slices
 from imbue.minds_admin.cli.server import resolve_bake_management_trust_and_key
+from imbue.minds_admin.cli.server import resolve_from_tag_image_build_args
 from imbue.minds_admin.cli.server import resolve_slice_container_runtime
 from imbue.minds_admin.cli.server import run_outcome_workers_in_bounded_threads
 from imbue.minds_admin.cli.server import server
@@ -1190,3 +1193,39 @@ def test_box_script_provisioning_error_is_unwrapped_from_its_concurrency_group()
     assert box_script_provisioning_error_or_none(unrelated) is None
     mixed = ConcurrencyExceptionGroup("box script", [refused, RuntimeError("worker died")])
     assert box_script_provisioning_error_or_none(mixed) is None
+
+
+def test_from_tag_image_build_args_override_a_floating_base_with_its_snapshots_pinned_base(tmp_path: Path) -> None:
+    """A tag through minds-v0.6.2 floats ``FROM python:3.12-slim-trixie`` on the 20260725T000000Z snapshot."""
+    checkout = write_template_checkout(tmp_path, "FROM python:3.12-slim-trixie\nRUN true\n", "20260725T000000Z\n")
+
+    assert resolve_from_tag_image_build_args(checkout) == snapshot(
+        (
+            "--build-context=python:3.12-slim-trixie=docker-image://python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
+        )
+    )
+
+
+def test_from_tag_image_build_args_are_empty_when_the_tag_pins_its_own_base(tmp_path: Path) -> None:
+    checkout = write_template_checkout(
+        tmp_path, "FROM python:3.12-slim-trixie@sha256:" + "a" * 64 + "\nRUN true\n", "20990101T000000Z\n"
+    )
+
+    assert resolve_from_tag_image_build_args(checkout) == ()
+
+
+def test_from_tag_image_build_args_refuse_a_floating_base_with_no_recorded_pin(tmp_path: Path) -> None:
+    checkout = write_template_checkout(tmp_path, "FROM python:3.12-slim-trixie\nRUN true\n", "20990101T000000Z\n")
+
+    with pytest.raises(click.UsageError, match="20990101T000000Z"):
+        resolve_from_tag_image_build_args(checkout)
+
+
+def test_image_build_create_args_forward_each_build_arg_through_a_dash_b() -> None:
+    assert build_image_build_create_args(()) == []
+    assert build_image_build_create_args(("--build-context=a=docker-image://a@sha256:0", "--no-cache")) == [
+        "-b",
+        "--build-context=a=docker-image://a@sha256:0",
+        "-b",
+        "--no-cache",
+    ]
