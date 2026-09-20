@@ -503,124 +503,117 @@ export function App(): m.Component<AppAttrs> {
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
       const isLauncherOpen = current.isLauncherOpen();
-      return m(
-        "div",
-        {
-          class: "app-layout flex h-screen flex-col bg-page",
-          "data-compact": state.modes.isCompact ? "true" : "false",
-        },
-        [
-          m(UpdateStalenessBanner),
-          m(
-            "div",
-            {
-              "data-backdrop-area": "",
-              class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
-              oncreate: (created: m.VnodeDOM) => {
-                backdropArea = created.dom as HTMLElement;
-                const measure = (): void => {
-                  const box = backdropArea?.getBoundingClientRect();
-                  if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
-                };
-                resizeObserver = new ResizeObserver(measure);
-                resizeObserver.observe(backdropArea);
-                measure();
-              },
+      return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+        m(UpdateStalenessBanner),
+        m(
+          "div",
+          {
+            "data-backdrop-area": "",
+            class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
+            oncreate: (created: m.VnodeDOM) => {
+              backdropArea = created.dom as HTMLElement;
+              const measure = (): void => {
+                const box = backdropArea?.getBoundingClientRect();
+                if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
+              };
+              resizeObserver = new ResizeObserver(measure);
+              resizeObserver.observe(backdropArea);
+              measure();
             },
-            [
-              desktop === null
-                ? m(
-                    "div",
-                    { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
-                    state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
-                  )
-                : m(Backdrop, {
-                    store: current,
-                    desktop,
-                    placements,
-                    focusedWindowId: focused,
-                    selectedShortcutKey,
-                    openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
-                    hasPage: (windowId: string) => pages?.hasPage(windowId) === true,
-                    onSelectShortcut: (key) => {
-                      selectedShortcutKey = key;
-                    },
-                    onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
-                    onShortcutContextMenu: (shortcut, point) => {
-                      openMenu = { kind: "shortcut", shortcut, anchor: anchorForPoint(point.x, point.y) };
-                    },
-                    onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
-                    onPagesHostCreated: (host) => {
-                      pages = new LivePagesLayer(host, current, {
-                        host: vnode.attrs.host,
-                        protocol: vnode.attrs.protocol,
-                      });
-                      pages.start();
-                    },
-                  }),
-              isLauncherOpen
-                ? m(LauncherOverlay, {
-                    query: launcherQuery,
-                    apps: openableApps(state),
-                    windows: launcherRows(current),
-                    activeDesktopId: state.activeDesktopId,
-                    catalog: getTemplateCatalogState(),
-                    isCompact: state.modes.isCompact,
-                    onRunLaunch: (app, launchPath, params) => runLaunchFromLauncher(current, app, launchPath, params),
-                    onPickWindow: (row) => pickWindowFromLauncher(current, row),
-                    onClose: closeLauncher,
-                  })
-                : null,
-            ],
-          ),
-          m(Taskbar, {
-            entries: taskbarEntries(state),
+          },
+          [
+            desktop === null
+              ? m(
+                  "div",
+                  { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
+                  state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
+                )
+              : m(Backdrop, {
+                  store: current,
+                  desktop,
+                  placements,
+                  focusedWindowId: focused,
+                  selectedShortcutKey,
+                  openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
+                  hasPage: (windowId: string) => pages?.hasPage(windowId) === true,
+                  onSelectShortcut: (key) => {
+                    selectedShortcutKey = key;
+                  },
+                  onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
+                  onShortcutContextMenu: (shortcut, point) => {
+                    openMenu = { kind: "shortcut", shortcut, anchor: anchorForPoint(point.x, point.y) };
+                  },
+                  onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
+                  onPagesHostCreated: (host) => {
+                    pages = new LivePagesLayer(host, current, {
+                      host: vnode.attrs.host,
+                      protocol: vnode.attrs.protocol,
+                    });
+                    pages.start();
+                  },
+                }),
+            isLauncherOpen
+              ? m(LauncherOverlay, {
+                  query: launcherQuery,
+                  apps: openableApps(state),
+                  windows: launcherRows(current),
+                  activeDesktopId: state.activeDesktopId,
+                  catalog: getTemplateCatalogState(),
+                  isCompact: state.modes.isCompact,
+                  onRunLaunch: (app, launchPath, params) => runLaunchFromLauncher(current, app, launchPath, params),
+                  onPickWindow: (row) => pickWindowFromLauncher(current, row),
+                  onClose: closeLauncher,
+                })
+              : null,
+          ],
+        ),
+        m(Taskbar, {
+          entries: taskbarEntries(state),
+          isCompact: state.modes.isCompact,
+          openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
+          launcher: {
+            query: launcherQuery,
+            isOpen: isLauncherOpen,
             isCompact: state.modes.isCompact,
-            openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-            launcher: {
-              query: launcherQuery,
-              isOpen: isLauncherOpen,
-              isCompact: state.modes.isCompact,
-              onOpen: () => current.openLauncher(),
-              onClose: closeLauncher,
-              onQuery: (query) => {
-                launcherQuery = query;
-              },
+            onOpen: () => current.openLauncher(),
+            onClose: closeLauncher,
+            onQuery: (query) => {
+              launcherQuery = query;
             },
-            tray: {
-              desktops: state.desktops,
-              activeDesktopId: state.activeDesktopId,
-              apps: state.apps,
-              isDesktopsMenuOpen: openMenu?.kind === "desktops",
-              openRunningAppName: openMenu?.kind === "running-app" ? openMenu.appName : null,
-              onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
-              onOpenDesktopsMenu: (event) => {
-                openMenu = openMenu?.kind === "desktops" ? null : { kind: "desktops", anchor: anchorForEvent(event) };
-              },
-              onDesktopContextMenu: (desktopId, x, y) => {
-                openMenu = { kind: "desktop", desktopId, anchor: anchorForPoint(x, y) };
-              },
-              onOpenRunningApp: (app, event) => {
-                openMenu =
-                  openMenu?.kind === "running-app" && openMenu.appName === app.name
-                    ? null
-                    : { kind: "running-app", appName: app.name, anchor: anchorForEvent(event) };
-              },
+          },
+          tray: {
+            desktops: state.desktops,
+            activeDesktopId: state.activeDesktopId,
+            apps: state.apps,
+            isDesktopsMenuOpen: openMenu?.kind === "desktops",
+            openRunningAppName: openMenu?.kind === "running-app" ? openMenu.appName : null,
+            onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
+            onOpenDesktopsMenu: (event) => {
+              openMenu = openMenu?.kind === "desktops" ? null : { kind: "desktops", anchor: anchorForEvent(event) };
             },
-            onEntryClick: (windowId) => current.toggleTaskbarEntry(windowId),
-            onEntryContextMenu: (windowId, x, y) => {
-              openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
+            onDesktopContextMenu: (desktopId, x, y) => {
+              openMenu = { kind: "desktop", desktopId, anchor: anchorForPoint(x, y) };
             },
-          }),
-          openMenu?.kind === "window" ? windowMenu(current, openMenu.windowId, openMenu.anchor) : null,
-          openMenu?.kind === "entry" ? entryMenu(current, openMenu.windowId, openMenu.anchor) : null,
-          openMenu?.kind === "shortcut" ? shortcutMenu(current, openMenu.shortcut, openMenu.anchor) : null,
-          openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
-          openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
-          openMenu?.kind === "running-app" ? runningAppPopover(current, openMenu.appName, openMenu.anchor) : null,
-          settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
-        ],
-      );
+            onOpenRunningApp: (app, event) => {
+              openMenu =
+                openMenu?.kind === "running-app" && openMenu.appName === app.name
+                  ? null
+                  : { kind: "running-app", appName: app.name, anchor: anchorForEvent(event) };
+            },
+          },
+          onEntryClick: (windowId) => current.toggleTaskbarEntry(windowId),
+          onEntryContextMenu: (windowId, x, y) => {
+            openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
+          },
+        }),
+        openMenu?.kind === "window" ? windowMenu(current, openMenu.windowId, openMenu.anchor) : null,
+        openMenu?.kind === "entry" ? entryMenu(current, openMenu.windowId, openMenu.anchor) : null,
+        openMenu?.kind === "shortcut" ? shortcutMenu(current, openMenu.shortcut, openMenu.anchor) : null,
+        openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
+        openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
+        openMenu?.kind === "running-app" ? runningAppPopover(current, openMenu.appName, openMenu.anchor) : null,
+        settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+      ]);
     },
   };
 }
