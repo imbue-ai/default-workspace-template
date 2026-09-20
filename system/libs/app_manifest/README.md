@@ -37,9 +37,12 @@ The models behind a workspace app's two descriptions:
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
   `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
-  what `forward_port.py` calls to write an app's row from its manifest, refusing
-  (with `AppRegistrationError`) a manifest that fails to load or a name another
-  row already holds. `read_origin_label(path, name)` answers
+  the startup registration every app's entry point calls: it runs
+  `system/scripts/forward_port.py --manifest <path> --url <url>` under the
+  current interpreter from the repo root, which upserts the app's row from its
+  manifest (a re-registration updates the row in place), and raises
+  `AppRegistrationError` when the script is missing, fails, or times out.
+  `read_origin_label(path, name)` answers
   one app's origin label, or `""` when no such app is registered or the registry
   cannot be read (logged as a warning), for a page that derives another app's
   origin; `SHELL_APP_NAME` is the shell's registered name, the row such a page
