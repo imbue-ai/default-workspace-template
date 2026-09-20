@@ -40,7 +40,6 @@ Flask+WS pattern in system/apps/system_interface. The service owns its origin, s
 the viewer's relative URLs need no prefix or root-path awareness anywhere.
 """
 
-import html
 import json
 import os
 import queue
@@ -50,8 +49,8 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from app_manifest.registry import SHELL_APP_NAME, read_origin_label, registry_path
-from flask import Flask, Response, jsonify, redirect, request
+from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
+from flask import Flask, Response, jsonify, redirect, request, send_file
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
@@ -85,13 +84,10 @@ _PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
-# The ``new`` launch path (system/apps/browser/app.toml), and the meta tag the viewer reads the
-# shell's origin label from to import the app contract module (desktop-interface contracts.md
-# section 7).
+# The ``new`` launch path (system/apps/browser/app.toml).
 NEW_PATH = "/new"
 # The launch path's one parameter (the manifest's ``params``): the start page.
 START_URL_PARAM = "url"
-SHELL_LABEL_META_NAME = "workspace-shell-label"
 HTTP_FOUND = 302
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
@@ -240,12 +236,23 @@ def _body() -> dict[str, Any]:
 
 
 def index() -> Response:
-    """The viewer page, with the shell's origin label stamped in so it can import the app contract module."""
-    shell_label = read_origin_label(registry_path(), SHELL_APP_NAME)
-    meta_tag = f'<meta name="{SHELL_LABEL_META_NAME}" content="{html.escape(shell_label, quote=True)}">'
-    response = Response(_INDEX_HTML.read_text().replace("</head>", f"{meta_tag}\n</head>", 1), mimetype="text/html")
+    """The viewer page."""
+    response = Response(_INDEX_HTML.read_text(), mimetype="text/html")
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def app_contract() -> Response:
+    """The shell's app contract module (desktop-interface contracts.md section 7), served from this origin.
+
+    The viewer imports it as a module, and a module import is a fetch without cookies, which the
+    desktop client's forwarder and the share gateway refuse across origins; so the one file the
+    shell's frontend build writes is served here too.
+    """
+    if not SHELL_APP_CONTRACT_PATH.is_file():
+        return _error({"error": f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing"}, 404)
+    # Flask resolves a relative path against the package directory, not the repo root the path names.
+    return send_file(SHELL_APP_CONTRACT_PATH.absolute(), mimetype="text/javascript")
 
 
 def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Response":
@@ -801,6 +808,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_ROUTE, view_func=app_contract, methods=["GET"])
     application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["GET"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]

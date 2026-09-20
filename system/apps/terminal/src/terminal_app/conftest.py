@@ -10,9 +10,9 @@ from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     ENV_FAKE_TMUX_DIR,
+    TEST_APP_CONTRACT_SOURCE,
     TEST_PTY_LABEL,
     TEST_SESSION_COMMAND,
-    TEST_SHELL_LABEL,
     FakeTmux,
     build_pages_test_client,
     install_fake_tmux,
@@ -59,8 +59,8 @@ def session_source(
 
 @pytest.fixture
 def pages_client(session_source: TmuxSessionSource, tmp_path: Path) -> FlaskClient:
-    """A test client over the wrapper pages, with both the shell and the pty registered."""
-    registry_path = write_registry_labels(
-        tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL, "terminal-pty": TEST_PTY_LABEL}
-    )
-    return build_pages_test_client(session_source, registry_path)
+    """A test client over the wrapper pages, with the pty registered and a built contract module to serve."""
+    registry_path = write_registry_labels(tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL})
+    contract_path = tmp_path / "app_contract.js"
+    contract_path.write_text(TEST_APP_CONTRACT_SOURCE)
+    return build_pages_test_client(session_source, registry_path, contract_path)

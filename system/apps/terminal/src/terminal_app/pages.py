@@ -3,9 +3,11 @@
 The wrapper (desktop-interface plan section 9.2) is what a window of the terminal shows:
 ``/?session=<name>`` frames ``https://<pty origin>/?arg=...`` for that session, reports its path
 and the session's title to the shell, and re-points the frame when the shell asks it to
-navigate. ``/new`` allocates a terminal and redirects to its page. Both origins are derived in
-the browser from the labels this module reads out of the registry, the way every app page
-derives another app's origin.
+navigate. ``/new`` allocates a terminal and redirects to its page. The pty's origin is derived
+in the browser from the label this module reads out of the registry, the way every app page
+derives another app's origin; the contract module the page speaks to the shell with is served
+from this origin (``/_static/app_contract.js``, the shell's build output), since a module import
+carries no cookie and the forwarder refuses it across origins.
 """
 
 import html
@@ -14,8 +16,8 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.primitives import AppName
-from app_manifest.registry import SHELL_APP_NAME, read_origin_label
-from flask import Blueprint, Response, jsonify, redirect, request
+from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
+from flask import Blueprint, Response, jsonify, redirect, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -51,12 +53,11 @@ HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_INTERNAL_ERROR: Final[int] = 500
 
-# The page derives two origins: the shell's (``SHELL_APP_NAME``), for the contract module it
-# imports, and the pty's, for the frame.
+# The origin the page frames: the pty's.
 PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 
 # The JSON script element the page reads off itself: the session it frames (or none) and the
-# origin labels it derives the two origins from, as ``PageConfig`` dumps them.
+# origin label it derives the pty's origin from, as ``PageConfig`` dumps them.
 _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
@@ -77,8 +78,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <div id="empty" hidden></div>
 <script type="application/json" id="__CONFIG_ID__">__CONFIG__</script>
 <script type="module">
-  // The page is plain HTML served by the terminal app, so the contract module comes from the
-  // shell's origin (contracts.md section 7) and the pty's origin is derived the way
+  // The page is plain HTML served by the terminal app: the contract module comes from this
+  // same origin (contracts.md section 7) and the pty's origin is derived the way
   // system/libs/workspace_ui/src/origin.ts derives every app's: the app's label prefixed onto
   // the workspace coordinate of this page's own host.
   const config = JSON.parse(document.getElementById("__CONFIG_ID__").textContent);
@@ -185,8 +186,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     show(config.page);
   }
 
-  if (window.parent !== window && config.shell_label !== "") {
-    import(`${originFor(config.shell_label)}/_static/app_contract.js`)
+  if (window.parent !== window) {
+    import("__CONTRACT_PATH__")
       .then(({ connectToShell }) => {
         connection = connectToShell({
           capabilities: { navigation: true },
@@ -218,7 +219,6 @@ class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
     session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
-    shell_label: str = Field(description="The shell's origin label, or \"\" when none is registered")
     page: SessionPage | None = Field(description="The session's page, when there is a session")
 
 
@@ -239,6 +239,7 @@ def render_page(config: PageConfig) -> str:
         _PAGE_TEMPLATE.replace("__TITLE__", html.escape(title))
         .replace("__CONFIG_ID__", _CONFIG_ELEMENT_ID)
         .replace("__CONFIG__", encoded)
+        .replace("__CONTRACT_PATH__", APP_CONTRACT_ROUTE)
     )
 
 
@@ -252,8 +253,9 @@ def _workdir(raw: str) -> Workdir | None:
         raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
 
 
-def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path) -> Blueprint:
-    """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, and the health probe."""
+def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path, contract_path: Path) -> Blueprint:
+    """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, the health probe, and
+    the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
@@ -270,11 +272,7 @@ def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path) -> Blu
     def wrapper_page() -> ResponseReturnValue:
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
-        config = PageConfig(
-            session=session,
-            shell_label=read_origin_label(registry_path, SHELL_APP_NAME),
-            page=session_page(session) if session is not None else None,
-        )
+        config = PageConfig(session=session, page=session_page(session) if session is not None else None)
         response = Response(render_page(config), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -291,6 +289,16 @@ def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path) -> Blu
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
         return jsonify({"status": "ok"})
+
+    @blueprint.get(APP_CONTRACT_ROUTE)
+    def app_contract() -> ResponseReturnValue:
+        if not contract_path.is_file():
+            return (
+                jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),
+                HTTP_NOT_FOUND,
+            )
+        # Flask resolves a relative path against the app's own directory, not the cwd the path names.
+        return send_file(contract_path.absolute(), mimetype="text/javascript")
 
     @blueprint.errorhandler(UnknownSessionPageError)
     def answer_unknown_session(error: UnknownSessionPageError) -> ResponseReturnValue:

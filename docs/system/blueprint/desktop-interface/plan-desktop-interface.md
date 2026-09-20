@@ -340,7 +340,7 @@ No metric is a literal in TypeScript, and the compact breakpoint is the one exce
 
 ## 7. The app contract (v2)
 
-The module stays `system/libs/workspace_ui/src/app_contract.ts`, served at `/_static/app_contract.js`, imported by every app page.
+The module stays `system/libs/workspace_ui/src/app_contract.ts`, built into the shell's static output and served by every app at `/_static/app_contract.js` from its own origin (a cross-origin module import carries no cookie, and the forwarder refuses it), imported by every app page.
 Trust: a page accepts only `window.parent`; the shell accepts only frames it created, and from those only messages whose origin is in the workspace origin family or is the origin the shell itself pointed the frame at (an app on its own loopback port, outside the family).
 The messages, exactly, are contracts.md section 7; in brief:
 

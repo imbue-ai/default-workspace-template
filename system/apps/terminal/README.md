@@ -8,7 +8,8 @@ like every Python app with a manifest):
 - `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
-  contract (imported from the shell origin), re-points the frame on `shell:navigate`,
+  contract (the shell's built module, served from this origin at
+  `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
   and passes the shell's `ttyd-focus` grant on to ttyd; `/new[?workdir=]` allocates
   the lowest free `terminal-N`, creates its tmux session, and redirects to its page;
   `/api/sessions/<name>` is what the page refreshes from, and `/api/health` the probe.

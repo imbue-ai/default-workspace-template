@@ -31,9 +31,15 @@ from app_manifest.primitives import PriorityName
 DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
 ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 
-# The workspace shell's registered name: the row whose origin label a plain app page reads
-# (``read_origin_label``) to import the app contract module from the shell's origin.
-SHELL_APP_NAME: Final[AppName] = AppName("system_interface")
+# The browser-side app contract module (desktop-interface contracts.md section 7), where the
+# shell's frontend build writes it, relative to the repo root every supervised program runs
+# from. An app page imports it from its own origin, so every app serves this one file at
+# ``APP_CONTRACT_ROUTE`` itself: a module import is a fetch without cookies, which the desktop
+# client's forwarder and the share gateway refuse across origins.
+SHELL_APP_CONTRACT_PATH: Final[Path] = Path(
+    "system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js"
+)
+APP_CONTRACT_ROUTE: Final[str] = "/_static/app_contract.js"
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")

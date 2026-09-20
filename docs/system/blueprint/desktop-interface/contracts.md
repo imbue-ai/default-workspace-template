@@ -200,7 +200,7 @@ Outbound:
 
 ## 7. The app contract (`app_contract.js`)
 
-Served at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`.
+Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
 Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), disconnect()}`.
 `openPath` sends `shell:open` below.
 `capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
