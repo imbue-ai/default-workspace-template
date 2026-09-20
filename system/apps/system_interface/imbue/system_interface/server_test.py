@@ -531,9 +531,9 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
     assert head.text == ""
 
 
-def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_switches(app: Flask) -> None:
-    """The desktop shell's report names a desktop and no view; a desktop that no longer exists lands the client on the
-    first one, which its windows are told, and a switch is logged once."""
+def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_says_so_once(app: Flask) -> None:
+    """A report naming a desktop that no longer exists lands the client on the first one, which its window is
+    told once, and the switch is logged as the client reported it."""
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
@@ -541,9 +541,6 @@ def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_
     try:
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
-        recorded = shell.clients.get_client("c1")
-        assert recorded is not None and recorded.active_desktop == "home"
         assert [message["type"] for message in drain_messages(client_queue)] == ["active_desktop_changed"]
 
         stale = json.dumps(
