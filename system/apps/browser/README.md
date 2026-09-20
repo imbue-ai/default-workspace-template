@@ -56,10 +56,11 @@ background agent, which is its own chat -- or the human).
 - **Viewer** (`assets/index.html`): a viewer-only page (no in-tab chat). It shows
   the live browser and, when an agent is driving, a grey "Agent has control"
   overlay with a "Take control" button; the agent's trace lives in the agent's
-  output, not the tab. The daemon stamps the workspace shell's origin label into
-  the page (the `workspace-shell-label` meta tag), from which the viewer, when
-  framed, imports the shell's app contract module and reports `/?session=<name>`
-  and `Browser N` as its location; it declares no navigation capability, since a
+  output, not the tab. The daemon serves the shell's app contract module from
+  its own origin (`/_static/app_contract.js`, the shell's build output; a
+  cross-origin module import carries no cookie and the forwarder refuses it),
+  which the viewer, when framed, imports to report `/?session=<name>` and
+  `Browser N` as its location; it declares no navigation capability, since a
   session switch is a whole new stream, so the shell reloads the frame to move it.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`

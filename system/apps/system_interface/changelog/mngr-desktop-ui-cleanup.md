@@ -1,0 +1,1 @@
+- The app contract module (`/_static/app_contract.js`) is now served by every app from its own origin, out of this app's build output; the shell keeps serving its own copy (with the permissive CORS header) for the e2e stub pages. The docstrings and the contract build's comment say so.

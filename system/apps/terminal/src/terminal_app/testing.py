@@ -40,9 +40,10 @@ FAKE_CREATED_EPOCH_BASE: Final[int] = 1_700_000_000
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
 # The command a test source gives a new session (the fake tmux records it, never runs it).
 TEST_SESSION_COMMAND: Final[tuple[str, ...]] = ("python3", "/opt/oom_tag_service.py", "terminal-session", "bash", "-l")
-# The origin labels a test registry gives the shell and the pty, the two rows the wrapper page reads.
-TEST_SHELL_LABEL: Final[str] = "system_interface-a1b2"
+# The origin label a test registry gives the pty, the row the wrapper page reads.
 TEST_PTY_LABEL: Final[str] = "terminal-pty-c3d4"
+# What a test's stand-in for the shell's built contract module says.
+TEST_APP_CONTRACT_SOURCE: Final[str] = "export function connectToShell() {}\n"
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 
@@ -314,10 +315,11 @@ def write_registry_labels(path: Path, label_by_app_name: Mapping[str, str]) -> P
     return path
 
 
-def build_pages_test_client(source: TmuxSessionSource, registry_path: Path) -> FlaskClient:
-    """A test client over the wrapper pages alone, reading origin labels from ``registry_path``."""
+def build_pages_test_client(source: TmuxSessionSource, registry_path: Path, contract_path: Path) -> FlaskClient:
+    """A test client over the wrapper pages alone, reading origin labels from ``registry_path`` and serving the
+    contract module at ``contract_path``."""
     app = Flask(__name__, static_folder=None)
-    app.register_blueprint(build_pages_blueprint(source=source, registry_path=registry_path))
+    app.register_blueprint(build_pages_blueprint(source=source, registry_path=registry_path, contract_path=contract_path))
     return app.test_client()
 
 

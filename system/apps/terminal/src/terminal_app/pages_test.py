@@ -11,8 +11,8 @@ from terminal_app.pages import (
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
+    TEST_APP_CONTRACT_SOURCE,
     TEST_PTY_LABEL,
-    TEST_SHELL_LABEL,
     FakeTmux,
     build_pages_test_client,
     make_terminal_record,
@@ -27,7 +27,7 @@ def _config_of(page_html: str) -> dict[str, object]:
     return json.loads(page_html[start:end])
 
 
-def test_the_wrapper_page_frames_the_session_with_both_origin_labels(
+def test_the_wrapper_page_frames_the_session_with_the_ptys_origin_label(
     pages_client: FlaskClient, fake_tmux: FakeTmux, session_store: JsonTerminalSessionStore
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-2", "$5")])
@@ -40,7 +40,6 @@ def test_the_wrapper_page_frames_the_session_with_both_origin_labels(
     assert "<title>Build</title>" in response.text
     assert _config_of(response.text) == {
         "session": "terminal-2",
-        "shell_label": TEST_SHELL_LABEL,
         "page": {
             "name": "terminal-2",
             "title": "Build",
@@ -63,8 +62,8 @@ def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
 def test_an_unregistered_pty_leaves_the_label_empty(
     session_source: TmuxSessionSource, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    registry_path = write_registry_labels(tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL})
-    client = build_pages_test_client(session_source, registry_path)
+    registry_path = write_registry_labels(tmp_path / "apps.toml", {})
+    client = build_pages_test_client(session_source, registry_path, tmp_path / "app_contract.js")
     fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
 
     page = client.get("/?session=terminal-3")
@@ -72,7 +71,6 @@ def test_an_unregistered_pty_leaves_the_label_empty(
 
     assert page.status_code == 200
     config = _config_of(page.text)
-    assert config["shell_label"] == TEST_SHELL_LABEL
     assert config["page"] == {
         "name": "terminal-3",
         "title": "Terminal 3",
@@ -136,11 +134,32 @@ def test_health_answers(pages_client: FlaskClient) -> None:
     assert pages_client.get("/api/health").json == {"status": "ok"}
 
 
+def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:
+    response = pages_client.get("/_static/app_contract.js")
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/javascript"
+    assert response.text == TEST_APP_CONTRACT_SOURCE
+    # The page imports it by that same-origin path, never from the shell's origin.
+    assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
+
+
+def test_a_missing_app_contract_module_says_the_shell_is_not_built(
+    session_source: TmuxSessionSource, tmp_path: Path
+) -> None:
+    client = build_pages_test_client(session_source, tmp_path / "apps.toml", tmp_path / "missing" / "app_contract.js")
+
+    response = client.get("/_static/app_contract.js")
+
+    assert response.status_code == 404
+    assert "not built" in response.json["detail"]
+
+
 def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
     page = SessionPage(
         name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1", pty_label="</script>"
     )
-    page_html = render_page(PageConfig(session="terminal-1", shell_label="", page=page))
+    page_html = render_page(PageConfig(session="terminal-1", page=page))
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from app_manifest.manifest import load_manifest
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
@@ -20,16 +21,31 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     assert [launch_path.path for launch_path in manifest.launch_paths] == [runner.NEW_PATH]
 
 
-def test_the_viewer_page_carries_the_shells_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-a1b2"\n')
-    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
-
+def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
     response = runner.application.test_client().get("/")
 
     assert response.status_code == 200
-    assert '<meta name="workspace-shell-label" content="system_interface-a1b2">' in response.text
+    assert 'import("/_static/app_contract.js")' in response.text
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_the_app_contract_module_is_the_shells_build_output_served_from_this_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The path is relative to the repo root every supervised program runs from.
+    monkeypatch.chdir(tmp_path)
+    missing = runner.application.test_client().get("/_static/app_contract.js")
+    assert missing.status_code == 404
+    assert "not built" in missing.get_json()["error"]
+
+    built = tmp_path / SHELL_APP_CONTRACT_PATH
+    built.parent.mkdir(parents=True)
+    built.write_text("export function connectToShell() {}\n")
+    served = runner.application.test_client().get("/_static/app_contract.js")
+
+    assert served.status_code == 200
+    assert served.mimetype == "text/javascript"
+    assert served.text == "export function connectToShell() {}\n"
 
 
 def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:

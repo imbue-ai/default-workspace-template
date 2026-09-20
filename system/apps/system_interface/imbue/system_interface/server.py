@@ -435,7 +435,12 @@ def _templates_catalog_endpoint() -> Response:
 
 
 def _serve_app_contract() -> Response:
-    """Serve the browser-side contract module (desktop contracts.md section 7) for any origin's app page."""
+    """Serve the browser-side contract module (desktop contracts.md section 7) from the shell's own origin.
+
+    An app page imports it from its own origin (each app serves the same build output), since a
+    cross-origin module import carries no cookie and the forwarder refuses it; this copy is what
+    the e2e stub pages import.
+    """
     contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
     if not contract_path.is_file():
         return Response(status=404)

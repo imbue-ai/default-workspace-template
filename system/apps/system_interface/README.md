@@ -46,8 +46,10 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
-- `/_static/app_contract.js`: the browser-side contract module every app page
-  imports (source in `system/libs/workspace_ui/src/app_contract.ts`).
+- `/_static/app_contract.js`: the browser-side contract module (source in
+  `system/libs/workspace_ui/src/app_contract.ts`), built into this app's static
+  output; every app serves that same file from its own origin, since a
+  cross-origin module import carries no cookie and the forwarder refuses it.
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),

@@ -5,7 +5,7 @@ from typing import Final
 
 import click
 from app_manifest.primitives import AppName, AppUrl
-from app_manifest.registry import register_app, registry_path
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH, register_app, registry_path
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
@@ -83,7 +83,9 @@ def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) 
 
 def build_pages_app(source: TmuxSessionSource) -> Flask:
     app = Flask(__name__, static_folder=None)
-    app.register_blueprint(build_pages_blueprint(source=source, registry_path=registry_path()))
+    app.register_blueprint(
+        build_pages_blueprint(source=source, registry_path=registry_path(), contract_path=SHELL_APP_CONTRACT_PATH)
+    )
     return app
 
 
