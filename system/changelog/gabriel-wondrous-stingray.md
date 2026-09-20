@@ -6,7 +6,7 @@ The reserved-name set is carried in four places, because three of them cannot im
 
 Apps can no longer collide with *another* app's programs: an app named `pr` would have claimed a second app's `pr-review` program as its own sidecar. The existing guard only covered collisions with programs that belong to no app. An app matching itself is not a collision -- a manifest may set `program` to its own `<name>-<role>` form, and that program is its sidecar.
 
-`layout.py`'s tests now run without the ambient agent identity. They set `MNGR_AGENT_ID` but read `MINDS_CHAT_ID` first, and every Minds chat agent runs with both set -- so they passed in CI and failed for every agent that ran them.
+`layout.py`'s tests now run without any part of the ambient agent identity. They already ran with the chat id hidden, but `layout.py` falls back from it to `MNGR_AGENT_ID`, and nothing hid that one -- so a test asserting on an address `layout.py` derives could still be reading whoever ran the suite rather than its own inputs. Both are cleared now, in one fixture rather than two, matching what the browser app's tests needed.
 
 The agy shim's open-steps reminder no longer depends on GNU `stat`, and its tests no longer depend on the kernel's inode allocator. The turn key is the `active` marker's inode, read with `stat -c`, which only GNU stat understands -- so off Linux the probe returned nothing, the reminder never fired, and the suite looked broken rather than unportable. Both spellings are now asked.
 
