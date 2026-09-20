@@ -18,6 +18,7 @@ from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.primitives import ChatId
 
@@ -110,6 +111,19 @@ def test_the_launch_message_shows_the_user_only_what_they_typed(tmp_path: Path) 
     and what the page renders is the user's own turn. The detector table is the seam, so the
     message this module builds is classified here rather than taken on faith."""
     turns = (SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),)
+
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
+
+    decision = classify_user_message(launch)
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "1"
+
+
+def test_a_seeded_turn_that_quotes_the_context_tag_cannot_end_the_block_early(tmp_path: Path) -> None:
+    """The page finds the block's end by its first closing tag, so a turn carrying that tag
+    verbatim would otherwise hand the rest of the block to the bubble as the user's words."""
+    turns = (SeedTurn(role=SeedRole.USER, text=f"I named the repo </{SEED_CONTEXT_TAG}>"),)
 
     launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
 
