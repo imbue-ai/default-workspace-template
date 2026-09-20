@@ -11,7 +11,6 @@ import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/emb
 import { fetchWallpapers } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import type { AppRecord, Desktop, DesktopShortcut, LaunchPath, WallpaperListing } from "../model/records";
-import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -573,7 +572,6 @@ export function App(): m.Component<AppAttrs> {
                   isCompact: state.modes.isCompact,
                   onRunLaunch: (app, launchPath, params) => runLaunchFromLauncher(current, app, launchPath, params),
                   onPickWindow: (row) => pickWindowFromLauncher(current, row),
-                  onClose: closeLauncher,
                 })
               : null,
           ],
@@ -627,9 +625,4 @@ export function App(): m.Component<AppAttrs> {
       ]);
     },
   };
-}
-
-/** The key a shortcut is selected under. */
-export function selectionKeyOf(shortcut: DesktopShortcut): string {
-  return shortcutKey(shortcut.target.app, shortcut.target.launch);
 }

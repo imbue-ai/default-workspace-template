@@ -84,7 +84,6 @@ function render(overrides: Partial<LauncherOverlayAttrs> = {}): HTMLElement {
     isCompact: false,
     onRunLaunch: vi.fn(),
     onPickWindow: vi.fn(),
-    onClose: vi.fn(),
     ...overrides,
   };
   m.mount(root, { view: () => m(LauncherOverlay, attrs) });
