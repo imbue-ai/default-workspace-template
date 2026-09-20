@@ -7,5 +7,3 @@ Phase 5 of the desktop interface (`docs/system/blueprint/desktop-interface/plan-
 - The shared `postJson` helper (`system/libs/workspace_ui/src/models/http.ts`) throws an `HttpError` carrying the response status alongside the server's detail, so a caller can tell one refusal from another (the desktop's placements save reads a 409 as a stale save through it).
 
 - `dockview-core` leaves the npm workspace lockfile along with the tabbed frontend that used it.
-
-- The library's address and view helpers (`system/libs/workspace_ui/src/addresses.ts`: `addressFor`, `parseAddress`; `src/views.ts`: `EVERYTHING_VIEW_ID`, `isEverythingView`) are removed: with the chat opening pages by path and the tabbed shell's models gone, nothing imported them.
