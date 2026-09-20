@@ -135,10 +135,10 @@ export class ShellSocket implements DesktopSocket {
     if (handlers === null) return;
     switch (event.type) {
       case "apps_updated":
-        handlers.onAppsUpdated(parseAppRecords(event.apps ?? []));
+        handlers.onAppsUpdated(parseAppRecords(event.apps));
         return;
       case "desktops_updated":
-        handlers.onDesktopsUpdated(parseDesktops(event.desktops ?? []));
+        handlers.onDesktopsUpdated(parseDesktops(event.desktops));
         return;
       case "placements_updated":
         handlers.onPlacementsUpdated({
