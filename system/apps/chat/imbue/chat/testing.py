@@ -803,8 +803,8 @@ def running_workspace(
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
     ):
-        # A signed-in account is what a new chat launches on at once; without one the chat's
-        # ``new`` mints a chat that waits for an account (its page shows the provider chooser).
+        # A signed-in account is what a new chat launches on; without one a create is refused and
+        # the chat root offers the provider chooser instead of minting a chat.
         account_ids: list[str] = []
         if is_account_signed_in:
             account_id, _ = mint_account_dir()

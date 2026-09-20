@@ -568,14 +568,16 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
 class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
-    Listed as a referenced instance under its chat id (the id mngr will give its first agent),
-    and pushed to the chat pages verbatim as the ``provisional_chat_created`` message.
+    Keyed by its chat id (the id mngr will give its first agent), listed among the chats, and pushed
+    to the chat pages verbatim as the ``provisional_chat_created`` message.
     """
 
     chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")
     name: str = Field(description="The display name minted for it")
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
-    account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
+    account_id: str = Field(
+        default="", description="The account it launches on; empty for a seeded chat before its first send"
+    )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")

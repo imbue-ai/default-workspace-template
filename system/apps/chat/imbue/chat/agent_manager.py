@@ -2639,9 +2639,9 @@ class AgentManager:
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
-        """Drop a provisional chat that is not being created: one awaiting an account, one awaiting
-        its first send (its seed goes with it), or one whose create failed. Returns whether
-        anything was dropped; a create in flight cannot be taken back and is left alone."""
+        """Drop a provisional chat that is not being created: one awaiting its first send (its seed
+        goes with it), or one whose create failed. Returns whether anything was dropped; a create in
+        flight cannot be taken back and is left alone."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False

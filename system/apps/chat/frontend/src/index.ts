@@ -40,7 +40,7 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
         sessionId === ""
           ? m(ChatPanel, { chatId, isVisible: isFrameRendered() })
           : m(SubagentView, { chatId, agentId, subagentSessionId: sessionId }),
-        // The provider chooser: the page of a chat awaiting an account offers it, and the model
+        // The provider chooser: the chat root offers it when nothing is signed in, and the model
         // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ]);
