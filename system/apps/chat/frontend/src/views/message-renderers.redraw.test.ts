@@ -23,7 +23,7 @@ vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn
 // A mounted tree instantiates its components, so this stand-in has to be a real one
 // (the direct-render tests get away with a bare function).
 vi.mock("../markdown", () => ({ MarkdownContent: { view: () => null } }));
-vi.mock("./SwitchDialog", () => ({ beginSwitchTo: vi.fn(), openSwitchDialog: vi.fn() }));
+vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: vi.fn() }));
 
 import m from "mithril";
 

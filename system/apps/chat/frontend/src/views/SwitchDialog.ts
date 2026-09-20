@@ -22,6 +22,7 @@ import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import { isSwitchTarget, setPendingAccount, setPendingSwitch, switchKind } from "../models/PendingLane";
 import type { PendingPick } from "../models/PendingLane";
+import { accountForAgent } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
@@ -71,6 +72,13 @@ export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
     return;
   }
   openSwitchDialog(chatId, target);
+}
+
+/** Switch ``chatId`` to the account with ``accountId``, when the page knows it: what the provider
+ *  chooser's pick and a finished sign-in hand back. */
+export function beginSwitchToAccountId(chatId: string, accountId: string): void {
+  const account = accountForAgent(accountId);
+  if (account !== null) beginSwitchTo(chatId, account);
 }
 
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {

@@ -8,9 +8,9 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { accountForAgent, openProviderChooser } from "../models/Providers";
+import { openProviderChooser } from "../models/Providers";
 import { openSubagentTab } from "../shell";
-import { beginSwitchTo } from "./SwitchDialog";
+import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -464,10 +464,7 @@ function renderReauthAction(chatId: string): m.Children {
               class: REAUTH_ACTION_CLASS,
               onclick: () =>
                 openProviderChooser({
-                  onSignedIn: (chosen) => {
-                    const account = accountForAgent(chosen);
-                    if (account !== null) beginSwitchTo(chatId, account);
-                  },
+                  onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
                   ...(accountId ? { unpickable: { accountId, note: "Not working", isFailing: true } } : {}),
                 }),
             },
