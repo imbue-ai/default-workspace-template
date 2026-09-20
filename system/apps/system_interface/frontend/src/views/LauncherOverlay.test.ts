@@ -136,6 +136,49 @@ describe("LauncherOverlay", () => {
     });
   });
 
+  it("the template tile scrolls to the templates on hand, and owes the resting page nothing when there are none", () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.getAttribute("data-section") ?? "");
+    };
+    const catalog = {
+      kind: "loaded" as const,
+      isStale: false,
+      catalog: {
+        generated_at: "",
+        templates: [catalogTemplateRecord("inbox-digest", { title: "Inbox digest template" })],
+        shelves: [{ key: "all", title: "All", slugs: ["inbox-digest"] }],
+      },
+    };
+    let query = "start from a";
+    const root = mountView(() =>
+      m(LauncherOverlay, {
+        query,
+        apps: [docs, notes],
+        windows: [],
+        activeDesktopId: "home",
+        catalog,
+        isCompact: false,
+        onRunLaunch: vi.fn(),
+        onPickWindow: vi.fn(),
+      }),
+    );
+    // These results hold the tile and no template: the pick has nowhere to scroll, now or later.
+    expect(root.querySelector('[data-section="templates"]')).toBeNull();
+    (root.querySelector('[data-start="template"]') as HTMLElement).click();
+    m.redraw.sync();
+    query = "";
+    m.redraw.sync();
+    expect(root.querySelector('[data-section="templates"]')).not.toBeNull();
+    expect(scrolled).toEqual([]);
+    // These results hold both: the tile scrolls the results' own templates section.
+    query = "template";
+    m.redraw.sync();
+    (root.querySelector('[data-start="template"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(scrolled).toEqual(["templates"]);
+  });
+
   it("stands the intents down when no launch path takes a message", () => {
     const onRunLaunch = vi.fn();
     const overlay = render({ apps: [notes], onRunLaunch });
