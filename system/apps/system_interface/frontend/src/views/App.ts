@@ -246,6 +246,7 @@ export function App(): m.Component<AppAttrs> {
 
   function entryMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
     const state = current.getState();
+    if (!activeDesktop(state)?.windows.some((candidate) => candidate.id === windowId)) return null;
     const placement = placementOf(state.layout, windowId);
     const entries = taskbarEntryMenuEntries(
       {
@@ -262,13 +263,17 @@ export function App(): m.Component<AppAttrs> {
     return m(Menu, { anchor, placement: "below", marker: "entry-menu", entries, onClose: closeMenu });
   }
 
-  function shortcutMenu(current: DesktopStore, shortcut: DesktopShortcut, anchor: MenuAnchor): m.Children {
+  function shortcutMenu(current: DesktopStore, opened: DesktopShortcut, anchor: MenuAnchor): m.Children {
     const state = current.getState();
     const desktop = activeDesktop(state);
+    // The record as it is now (its mode may have flipped elsewhere), and nothing once it is removed.
+    const shortcut = desktop?.shortcuts.find(
+      (candidate) => candidate.target.app === opened.target.app && candidate.target.launch === opened.target.launch,
+    );
+    if (desktop === null || shortcut === undefined) return null;
     const app = appByName(state, shortcut.target.app);
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
-    const recent =
-      desktop === null || app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
+    const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     const otherMode = shortcut.mode === "focus" ? "new" : "focus";
     const entries: MenuEntry[] = [{ key: "open", label: "Open", run: () => void current.runShortcut(shortcut) }];
     if (shortcut.mode === "focus" && launchPath !== null) {
@@ -291,9 +296,7 @@ export function App(): m.Component<AppAttrs> {
       {
         key: "change-mode",
         label: `Change shortcut to "${shortcutLabel({ ...shortcut, mode: otherMode }, app)}"`,
-        run: () => {
-          if (desktop !== null) void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode });
-        },
+        run: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       "divider",
       {
