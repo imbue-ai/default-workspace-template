@@ -34,9 +34,15 @@ export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
 // Embedder -> workspace: the user opened a chat's notification in the minds
-// shell; show that chat. Payload: { agentId } (the chat agent's id).
+// shell; show that chat. Payload: { chatId } (the chat's id, which is its
+// first agent's id).
 export const FOCUS_CHAT: "minds:focus-chat" =
   "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
+// Workspace -> embedder: this page's endpoint is listening. Payload: {}. The
+// embedder holds a focus-chat ask until it arrives, rather than guessing when
+// a freshly-mounted frame's page is live.
+export const WORKSPACE_READY: "minds:workspace-ready" =
+  "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -79,6 +85,12 @@ export function sendToEmbedder(type: string, payload?: Record<string, unknown>):
 export function setEmbedderMessageHandler(type: string, handler: EmbedderMessageHandler): void {
   getEndpoint();
   handlerByType[type] = handler;
+}
+
+/** Tell the embedder this page is listening, so it can send what it held.
+ * Called once per load, after the handlers that the held messages need. */
+export function announceReadyToEmbedder(): void {
+  sendToEmbedder(WORKSPACE_READY);
 }
 
 /** Clear the handler for one embedder->workspace type. */
