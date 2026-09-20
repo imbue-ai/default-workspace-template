@@ -173,7 +173,7 @@ export const ACCOUNT_PICK =
   "after:absolute after:inset-0 after:rounded-lg after:content-[''] disabled:cursor-default";
 /** Raises an action above the pick target's stretched box. */
 export const ACCOUNT_ACTION = "relative";
-export const ACCOUNT_UNPICKABLE_NOTE = "shrink-0 type-helper text-secondary";
+export const ACCOUNT_NEUTRAL_NOTE = "shrink-0 type-helper text-secondary";
 export const ACCOUNT_FAILING_NOTE = "shrink-0 type-helper text-danger";
 
 // The API-key screen's provider dropdown.

@@ -72,7 +72,7 @@ let savedScroll = 0;
  *  caller is leaving because it failed is bad news. */
 const UNPICKABLE_NOTES: Record<UnpickableReason, { text: string; class: string }> = {
   failing: { text: "Not working", class: css.ACCOUNT_FAILING_NOTE },
-  current: { text: "Current", class: css.ACCOUNT_UNPICKABLE_NOTE },
+  current: { text: "Current", class: css.ACCOUNT_NEUTRAL_NOTE },
 };
 
 export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
