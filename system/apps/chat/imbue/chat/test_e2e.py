@@ -161,8 +161,8 @@ def _wait_for_chat_window_path(
     """Wait until the one chat window's stored path satisfies ``is_reported``.
 
     A window opened at the ``new`` launch path stays at ``/new`` until the chat root reports its location
-    (the chat it created, or the bare root while it waits for an account), and a reload before that report
-    would run the launch again.
+    (the chat it created, or the bare root when nothing is signed in and it offers the chooser), and a
+    reload before that report would run the launch again.
     """
 
     def _has_reported() -> bool:

@@ -323,8 +323,8 @@ export function clearFlow(): void {
  *
  * The account the user pinned as the default wins; otherwise the one just signed in to;
  * otherwise the most recently used, which the server bumps on every launch -- so "start
- * another one like the last" needs no click. Null means there is nothing to launch on yet: a
- * new chat then waits for an account, and its page offers the chooser. The server's
+ * another one like the last" needs no click. Null means there is nothing to launch on yet: the
+ * chat root then offers the chooser before it creates anything. The server's
  * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
  * the server land on the same account.
  */

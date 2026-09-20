@@ -309,9 +309,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   /** The page of a chat that is not an agent yet, by its phase. */
   function renderProvisional(chatId: string, provisional: ProvisionalChat): m.Vnode {
     if (provisional.phase === "creating") {
-      // The create is running, whoever started it: a refusal this page recorded while the
-      // chat waited (another page's launch won the race) is over, and must not be shown
-      // under a later failure's own reason.
+      // The create is running, whoever started it: a refusal this page recorded from an earlier
+      // attempt (another page's Try again won the race) is over, and must not be shown under a
+      // later failure's own reason.
       launchError = null;
       return renderStarting(chatId);
     }
