@@ -126,8 +126,11 @@ function withWindowOpenedHere(
   const withWindow: DesktopState = { ...state, desktops };
   if (desktopId !== state.activeDesktopId) return withWindow;
   // The shell already wrote this placement; the local copy is what the broadcast will confirm, so
-  // it is not counted as a gesture to save.
-  const layout = isNew ? withWindowPlacedOnOpen(state.layout, window.id) : withWindowRaised(state.layout, window.id);
+  // it is not counted as a gesture to save. When the broadcast's refetch landed before the answer,
+  // the layout already holds the stored placement, which is kept rather than cascaded again.
+  const isPlaced = state.layout.placements.some((placement) => placement.window_id === window.id);
+  const layout =
+    isNew && !isPlaced ? withWindowPlacedOnOpen(state.layout, window.id) : withWindowRaised(state.layout, window.id);
   return { ...withWindow, layout };
 }
 
