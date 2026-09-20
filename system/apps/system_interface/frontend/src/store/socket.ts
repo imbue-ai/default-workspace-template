@@ -48,8 +48,8 @@ export interface SocketHandlers {
 /** What the store asks of its socket, so a test can stand one in. */
 export interface DesktopSocket {
   connect(handlers: SocketHandlers): void;
-  /** Report this client's identity and active desktop; ``previousDesktop`` is "" on connect. */
-  reportClientState(clientId: string, activeDesktop: string, previousDesktop: string): void;
+  /** Report this client's active desktop; ``previousDesktop`` is "" on connect. */
+  reportClientState(activeDesktop: string, previousDesktop: string): void;
 }
 
 interface RawSocketEvent {
@@ -80,12 +80,12 @@ export class ShellSocket implements DesktopSocket {
     this.open();
   }
 
-  reportClientState(clientId: string, activeDesktop: string, previousDesktop: string): void {
+  reportClientState(activeDesktop: string, previousDesktop: string): void {
     if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(
       JSON.stringify({
         type: "client_state",
-        client_id: clientId,
+        client_id: this.clientId,
         active_desktop: activeDesktop,
         previous_desktop: previousDesktop,
       }),

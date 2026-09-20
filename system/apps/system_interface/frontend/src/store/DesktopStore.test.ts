@@ -80,7 +80,7 @@ describe("bootstrap", () => {
     ];
     const store = await startedStore();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(socket.reports).toEqual([{ clientId: CLIENT, activeDesktop: "work", previousDesktop: "" }]);
+    expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
@@ -181,7 +181,7 @@ describe("saving", () => {
     store.minimizeWindow("win-1");
     await store.switchDesktop("work");
     expect(api.layoutOf("home", CLIENT).placements[0].is_minimized).toBe(true);
-    expect(last(socket.reports)).toEqual({ clientId: CLIENT, activeDesktop: "work", previousDesktop: "home" });
+    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "home" });
     expect(store.getState().activeDesktopId).toBe("work");
   });
 });
@@ -325,7 +325,7 @@ describe("windows", () => {
     socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(last(socket.reports)).toEqual({ clientId: CLIENT, activeDesktop: "work", previousDesktop: "" });
+    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
     socket.deliver().onActiveDesktopChanged({ clientId: "other", desktopId: "home" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
