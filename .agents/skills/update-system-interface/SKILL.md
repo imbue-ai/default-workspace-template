@@ -192,8 +192,8 @@ default. If a real conversation motivated the change:
   it still looks wrong, the fix missed the real DOM: re-brief the worker rather
   than merging.
 - Tell the user how to see the real case themselves (the preview opens on the
-  worker's empty agent; they switch via the `+` dropdown to the motivating
-  agent).
+  worker's empty agent; they reach the motivating agent by typing its chat's
+  title into the taskbar's launcher field, or with the same `?open=` deep link).
 
 Then confirm with the user: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
