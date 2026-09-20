@@ -59,7 +59,8 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
 
   async function save(attrs: DesktopSettingsDialogAttrs): Promise<void> {
     const chosen = name.trim();
-    if (!chosen || isSaving || isDeleting) return;
+    // Not while the delete confirmation is up: the name field is still there (and focused) under it.
+    if (!chosen || isSaving || isDeleting || isConfirmingDelete) return;
     isSaving = true;
     error = null;
     m.redraw();
