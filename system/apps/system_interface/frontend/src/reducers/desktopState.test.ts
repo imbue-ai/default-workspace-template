@@ -156,6 +156,24 @@ describe("opens and closes this client made", () => {
     expect(isLayoutDirty(state)).toBe(false);
   });
 
+  it("keeps the stored placement when the shell's layout landed before the open's answer", () => {
+    const opened = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const stored = placementRecord("win-3", { frame: cascadeFrame(1) });
+    const before = reduceDesktopState(loaded(), {
+      type: "layout_loaded",
+      desktopId: "home",
+      layout: { updated_at: "t2", placements: [placementRecord("win-1"), stored] },
+    });
+    const state = reduceDesktopState(before, {
+      type: "window_opened_here",
+      desktopId: "home",
+      window: opened,
+      isNew: true,
+    });
+    expect(state.layout).toBe(before.layout);
+    expect(isLayoutDirty(state)).toBe(false);
+  });
+
   it("raises an existing window when the open was answered with one", () => {
     const state = reduceDesktopState(loaded(), {
       type: "window_opened_here",
