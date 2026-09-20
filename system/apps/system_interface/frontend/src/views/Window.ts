@@ -132,7 +132,6 @@ export function Window(): m.Component<WindowAttrs> {
           ...(isResizable
             ? RESIZE_EDGES.map((edge) =>
                 m("div", {
-                  key: edge,
                   "data-resize-edge": edge,
                   class: `resize-edge absolute touch-none ${EDGE_CLASS[edge]}`,
                 }),
