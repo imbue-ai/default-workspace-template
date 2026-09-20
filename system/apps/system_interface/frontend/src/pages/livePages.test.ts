@@ -262,6 +262,15 @@ describe("the contract", () => {
     ]);
   });
 
+  it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {
+    load("win-1");
+    await store.switchDesktop("work");
+    layer.reconcile();
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-1", desktopId: "home" });
+  });
+
   it("posts a page's location to the shell, remembering it first so the update never bounces back", async () => {
     const spy = spyOnFrame("win-1");
     load("win-1");

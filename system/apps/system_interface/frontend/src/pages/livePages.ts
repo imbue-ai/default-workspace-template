@@ -30,7 +30,13 @@ import { windowPageUrl } from "../model/pageUrl";
 import type { Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
-import { activeDesktop, activeFocusedWindowId, activePlacements, appByName } from "../reducers/desktopState";
+import {
+  activeDesktop,
+  activeFocusedWindowId,
+  activePlacements,
+  appByName,
+  findWindow,
+} from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 
@@ -176,7 +182,7 @@ export class LivePagesLayer implements PageDriver {
         return;
       }
       this.show(page, box, index, !this.isGestureActive && window.id === focused);
-      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page, desktop.id);
+      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
     });
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
@@ -257,8 +263,7 @@ export class LivePagesLayer implements PageDriver {
     frame.addEventListener("load", () => {
       page.isNavigationCapable = false;
       page.lastSentVisibility = null;
-      const desktopId = this.store.getState().activeDesktopId;
-      this.greet(page, desktopId ?? "");
+      this.greet(page);
       this.syncVisibility(page, page.wrapper.style.display !== "none");
     });
     this.pages.set(window.id, page);
@@ -291,10 +296,13 @@ export class LivePagesLayer implements PageDriver {
     this.syncVisibility(page, false);
   }
 
-  private greet(page: LivePage, desktopId: string): void {
+  /** The handshake names the desktop the page's window is on (a hidden page can reload while another desktop
+   *  is active), falling back to the active one only for a window gone from every desktop. */
+  private greet(page: LivePage): void {
     const state = this.store.getState();
-    const path =
-      state.desktops.flatMap((desktop) => desktop.windows).find((window) => window.id === page.windowId)?.path ?? "";
+    const found = findWindow(state, page.windowId);
+    const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
+    const path = found?.window.path ?? "";
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
