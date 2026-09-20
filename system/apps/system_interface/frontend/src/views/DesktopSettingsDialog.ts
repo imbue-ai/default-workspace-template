@@ -41,7 +41,7 @@ function normalizedGlyphIndex(glyph: number): number {
   return ((Math.trunc(glyph) % count) + count) % count;
 }
 
-function isSameWallpaper(first: Wallpaper | null, second: Wallpaper | null): boolean {
+export function isSameWallpaper(first: Wallpaper | null, second: Wallpaper | null): boolean {
   if (first === null || second === null) return first === second;
   return first.kind === second.kind && first.name === second.name;
 }
