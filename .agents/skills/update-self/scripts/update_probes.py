@@ -49,8 +49,8 @@ FRONTEND_BUILT_HEADER = "x-frontend-built"
 _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 
 # The probe route the shell and every critical app serve: 200 with a JSON body once
-# the app is usable rather than merely bound (the chat answers it only after its
-# first agent list arrived; the terminal wrapper once it can hand out sessions).
+# the app is bound and answering. The body is what tells the app itself from the
+# shell's SPA catch-all, which a stale registry row would land the probe on.
 HEALTH_PATH = "/api/health"
 
 # The chat app's own probe route, polled by its pre-flight boot: ``--preflight`` runs no
