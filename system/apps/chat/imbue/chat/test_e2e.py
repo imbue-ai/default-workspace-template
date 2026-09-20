@@ -75,7 +75,7 @@ pytestmark = [
 _TRIGGER_TIMEOUT_MS = 20000
 
 # The default desktop every shell starts with, where the chat's seeded shortcut and every window here live.
-HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
+_HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
 _FIXTURE_ROOT_PATH = chat_root_path(ChatId(FIXTURE_AGENT_ID))
 
@@ -144,7 +144,7 @@ def _desktops(server: RunningWorkspace) -> list[dict[str, Any]]:
     return list(_get_json(f"{server.shell_url}/api/desktops")["desktops"])
 
 
-def _chat_windows(server: RunningWorkspace, desktop_id: str = HOME_DESKTOP_ID) -> list[dict[str, Any]]:
+def _chat_windows(server: RunningWorkspace, desktop_id: str = _HOME_DESKTOP_ID) -> list[dict[str, Any]]:
     """The chat app's windows on a desktop, off the shell's API."""
     desktop = next(candidate for candidate in _desktops(server) if candidate["id"] == desktop_id)
     return [window for window in desktop["windows"] if window["app"] == CHAT_APP_NAME]
@@ -201,7 +201,7 @@ def _wait_for_client_on_desktop(server: RunningWorkspace, client_id: str, deskto
 def _land(page: Page, server: RunningWorkspace, query: str = "") -> None:
     """Open the shell and wait for the home desktop's backdrop and the chat's seeded shortcut."""
     page.goto(f"{server.shell_url}/{query}")
-    expect(page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
     expect(page.locator(f'[data-shortcut="{CHAT_APP_NAME}:new"]')).to_be_visible(timeout=15000)
 
 
@@ -622,7 +622,7 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
         page.locator('[data-menu-item="new-desktop"]').click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
-        (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != HOME_DESKTOP_ID]
+        (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
         expect(_taskbar_entry(page, home_window)).to_have_count(0)
 
@@ -634,7 +634,7 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         assert [window["id"] for window in _chat_windows(server)] == [home_window]
 
-        page.locator(f'[data-desktop-switch="{HOME_DESKTOP_ID}"]').click()
+        page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
         expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
