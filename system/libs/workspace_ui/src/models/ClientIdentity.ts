@@ -31,8 +31,9 @@ export function getClientId(): string {
   return minted;
 }
 
-// The active desktop id, while the page lives. Empty string means "not chosen yet" (during
-// startup, before the client record and the desktops have been fetched).
+// The active desktop id, while the page lives. Only the shell's handshake sets it (see
+// adoptClientIdentity); the empty string means no handshake has been adopted yet, either
+// because the shell has not greeted this page or because the page is not framed by it.
 let activeDesktopId = "";
 
 export function getActiveDesktopId(): string {
