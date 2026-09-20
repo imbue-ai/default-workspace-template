@@ -16,13 +16,6 @@ from app_manifest.registry import register_app
 from app_manifest.registry import registry_path
 from app_manifest.testing import APP_ICON_MARKUP
 
-# system/libs/app_manifest/src/app_manifest/registry_test.py -> the repository root, the cwd the
-# registration script is resolved against.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
-
-_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
-
-
 def test_a_missing_registry_is_empty(tmp_path: Path) -> None:
     assert read_registry(tmp_path / "apps.toml") == []
 
@@ -56,7 +49,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'name = "files"\n'
         'url = "http://localhost:8300"\n'
         'label = "files-abcd1234"\n'
-        f'icon = "{_ICON.replace(chr(34), chr(92) + chr(34))}"\n'
+        f'icon = "{APP_ICON_MARKUP.replace(chr(34), chr(92) + chr(34))}"\n'
         'program = "files"\n'
         'display_name = "File Viewer"\n'
         "critical = false\n"
@@ -70,7 +63,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
 
     assert len(rows) == 1
     row = rows[0]
-    assert row.icon == _ICON
+    assert row.icon == APP_ICON_MARKUP
     assert row.display_name == "File Viewer"
     assert row.priority == "files"
     assert row.default_shortcut is not None
@@ -165,16 +158,7 @@ def test_read_origin_label_of_an_unreadable_registry_is_empty_and_warns(tmp_path
     assert "web" in captured[0] and "not valid TOML" in captured[0]
 
 
-def _registration_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """cwd at the repo root (the registration script is cwd-relative) and a scratch registry; returns the registry."""
-    monkeypatch.chdir(_REPO_ROOT)
-    registry = tmp_path / "apps.toml"
-    monkeypatch.setenv(ENV_APPS_FILE, str(registry))
-    return registry
-
-
-def test_register_app_writes_the_manifests_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    registry = _registration_environment(tmp_path, monkeypatch)
+def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_registry: Path) -> None:
     app_name = f"registered-{uuid4().hex[:8]}"
     (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
     manifest_path = tmp_path / "app.toml"
@@ -185,17 +169,14 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, monkeypatch: pyte
 
     register_app(manifest_path, AppUrl("http://localhost:8300"))
 
-    rows = read_registry(registry)
+    rows = read_registry(registration_registry)
     assert [row.name for row in rows] == [app_name]
     assert rows[0].url == "http://localhost:8300"
     assert rows[0].display_name == "Registered"
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _registration_environment(tmp_path, monkeypatch)
+def test_register_app_reports_the_scripts_error_for_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
