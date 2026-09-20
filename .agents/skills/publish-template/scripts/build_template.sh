@@ -498,7 +498,7 @@ fi
 
 # Read after the writer has run: the file holds the requires_secret: lines that
 # match the [[requirements.secret]] entries it just generated.
-requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES" 2>/dev/null || true)"
+requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES")"
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
