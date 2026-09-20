@@ -46,6 +46,8 @@ _SECRET_REQUEST = (
     "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
     "--file svc --var SVC_TOKEN --rationale 'I need your key to call the widget API'"
 )
+# The same filing with its rationale left open, so a test can put more inside the quotes.
+_SECRET_REQUEST_UNCLOSED = _SECRET_REQUEST.removesuffix("'")
 
 # Commands that must be ALLOWED (classify returns None).
 _ALLOWED = [
@@ -54,7 +56,7 @@ _ALLOWED = [
     _SECRET_REQUEST,
     f"uv run {_SECRET_REQUEST.removeprefix('python3 ')}",
     # A rationale that mentions operators, or the script's own name, stays one token.
-    f"{_SECRET_REQUEST.removesuffix("'")} && run request_secret.py again'",
+    f"{_SECRET_REQUEST_UNCLOSED} && run request_secret.py again'",
     "git commit -m 'document request_secret.py usage' && git push",
     _REQUEST.replace("-XPOST", "-X POST"),
     _REQUEST.replace("-XPOST", "--request POST"),
