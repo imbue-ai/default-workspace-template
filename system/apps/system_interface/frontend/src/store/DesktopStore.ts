@@ -258,13 +258,21 @@ export class DesktopStore {
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
-    const [desktops, clients] = await Promise.all([
-      this.deps.api.fetchDesktops(),
-      this.deps.api.fetchClients().catch((error: unknown) => {
-        console.warn("[si] could not read the client records", error);
-        return [];
-      }),
-    ]);
+    let desktops: Desktop[];
+    let clients: Awaited<ReturnType<DesktopApi["fetchClients"]>>;
+    try {
+      [desktops, clients] = await Promise.all([
+        this.deps.api.fetchDesktops(),
+        this.deps.api.fetchClients().catch((error: unknown) => {
+          console.warn("[si] could not read the client records", error);
+          return [];
+        }),
+      ]);
+    } catch (error) {
+      console.warn("[si] could not read the desktops", error);
+      this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
+      return;
+    }
     this.dispatch({ type: "desktops_updated", desktops });
     const recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
