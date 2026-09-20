@@ -429,16 +429,22 @@ def _describe_target(answer: dict[str, Any]) -> str:
 
 
 def _run_desktop_op(
-    op: str, args: dict[str, Any], describe: Callable[[dict[str, Any]], str]
+    op: str,
+    args: dict[str, Any],
+    describe: Callable[[dict[str, Any]], str],
+    emit: Callable[[dict[str, Any]], None] | None = None,
 ) -> int:
     """Post one op the shell applies to the files; it answers with the desktop and the client's placements.
 
-    ``describe`` renders the one-line stderr summary from the answer.
+    ``describe`` renders the one-line stderr summary from the answer; ``emit``, when given, writes what the
+    verb prints on stdout from it.
     """
     status, body = _post_layout(op, args, timeout=_OP_TIMEOUT_SECONDS)
     if status != 200 or not isinstance(body, dict):
         return _report_failure(op, status, body)
     sys.stderr.write(describe(body) + "\n")
+    if emit is not None:
+        emit(body)
     return EXIT_OK
 
 
@@ -621,14 +627,18 @@ def _cmd_open(args: argparse.Namespace) -> int:
     if args.if_present:
         op_args["if_present"] = args.if_present
     op_args.update(_target_args(args.desktop, args.client))
-    status, body = _post_layout("open", op_args, timeout=_OP_TIMEOUT_SECONDS)
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("open", status, body)
-    window_id = body.get("window_id")
+    return _run_desktop_op(
+        "open",
+        op_args,
+        lambda answer: f"opened window {_describe_window(answer, answer.get('window_id'))} on {_describe_target(answer)}",
+        emit=_print_window_id,
+    )
+
+
+def _print_window_id(answer: dict[str, Any]) -> None:
+    window_id = answer.get("window_id")
     if isinstance(window_id, str) and window_id:
         sys.stdout.write(f"{window_id}\n")
-    sys.stderr.write(f"opened window {_describe_window(body, window_id)} on {_describe_target(body)}\n")
-    return EXIT_OK
 
 
 # ---------- The window verbs ----------
@@ -690,26 +700,28 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
 # ---------- Shortcuts and the wallpaper ----------
 
 
-def _shortcuts_of(answer: dict[str, Any]) -> list[Any]:
+def _shortcuts_document(answer: dict[str, Any]) -> dict[str, Any]:
+    """The desktop's shortcuts as the read and write verbs print them: ``{desktop, shortcuts}``."""
     desktop = answer.get("desktop")
-    return list(desktop.get("shortcuts", [])) if isinstance(desktop, dict) else []
+    shortcuts = list(desktop.get("shortcuts", [])) if isinstance(desktop, dict) else []
+    return {"desktop": answer.get("desktop_id"), "shortcuts": shortcuts}
 
 
 def _run_shortcut_write(op: str, op_args: dict[str, Any], done: str) -> int:
-    """Post one shortcut or wallpaper write and print the desktop's shortcuts as they stand after it."""
-    status, body = _post_layout(op, op_args, timeout=_OP_TIMEOUT_SECONDS)
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure(op, status, body)
-    sys.stderr.write(f"{done} on {_describe_target(body)}\n")
-    _emit_structured({"desktop": body.get("desktop_id"), "shortcuts": _shortcuts_of(body)}, False)
-    return EXIT_OK
+    """Post one shortcut write and print the desktop's shortcuts as they stand after it."""
+    return _run_desktop_op(
+        op,
+        op_args,
+        lambda answer: f"{done} on {_describe_target(answer)}",
+        emit=lambda answer: _emit_structured(_shortcuts_document(answer), False),
+    )
 
 
 def _cmd_shortcuts(args: argparse.Namespace) -> int:
     status, body = _post_layout("shortcuts", _target_args(args.desktop, args.client))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("shortcuts", status, body)
-    _emit_structured({"desktop": body.get("desktop_id"), "shortcuts": _shortcuts_of(body)}, args.json)
+    _emit_structured(_shortcuts_document(body), args.json)
     return EXIT_OK
 
 
@@ -748,11 +760,7 @@ def _cmd_wallpaper(args: argparse.Namespace) -> int:
         wallpaper = {"kind": args.kind, "name": args.name}
         done = f"set the wallpaper to {args.kind} {args.name}"
     op_args: dict[str, Any] = {"wallpaper": wallpaper, **_target_args(args.desktop, args.client)}
-    status, body = _post_layout("wallpaper", op_args, timeout=_OP_TIMEOUT_SECONDS)
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("wallpaper", status, body)
-    sys.stderr.write(f"{done} on {_describe_target(body)}\n")
-    return EXIT_OK
+    return _run_desktop_op("wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}")
 
 
 # ---------- The retired verbs ----------
