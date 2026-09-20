@@ -189,7 +189,9 @@ win-... (terminal at /new) on desktop home for client ...`, `placed window ...
 in the left zone ...`); `refresh` prints `(sent refresh to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the id of the window
-`open` made, and the structured output of the read commands.
+`open` made, the structured output of the read commands, and the desktop's
+shortcuts as they stand after a `shortcut set`, `shortcut move`, or
+`shortcut remove`.
 
 ## Exit codes
 
