@@ -439,7 +439,12 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     )
     try:
         created = manager.create_chat("", message="hello")
-        wait_for(lambda: manager.get_provisional_chat(created.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_for(
+            lambda: manager.get_provisional_chat(created.chat_id) is None,
+            timeout=10,
+            poll_interval=0.05,
+            error_message="the condition never held",
+        )
     finally:
         manager.stop()
 
@@ -558,7 +563,12 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
         seeded = manager.seed_chat("Getting started", _seed_turns())
         launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
         # The create runs on a thread; stopping the manager before it lands would kill the fake mngr.
-        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_for(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
+            timeout=10,
+            poll_interval=0.05,
+            error_message="the condition never held",
+        )
     finally:
         manager.stop()
 
@@ -606,7 +616,12 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
         with pytest.raises(AgentCreationError, match="keeps the first message"):
             manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id, message="Something else")
         relaunched = manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id)
-        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_for(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
+            timeout=10,
+            poll_interval=0.05,
+            error_message="the condition never held",
+        )
 
         assert relaunched.chat_id == seeded.chat_id
         record = store.read(chat_id)
@@ -681,7 +696,12 @@ def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_
         assert [segment.agent.harness for segment in segments] == [HarnessType.SEED, HarnessType.CLAUDE]
 
         go_path.touch()
-        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_for(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
+            timeout=10,
+            poll_interval=0.05,
+            error_message="the condition never held",
+        )
         landed = store.read(chat_id)
         assert landed is not None
         assert [entry.agent_id for entry in landed.agents] == [seeded.chat_id, agent.agent_id]
@@ -757,7 +777,9 @@ def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
         assert manager.get_agent_by_id(agent.agent_id) is not None
 
         go_path.touch()
-        wait_for(lambda: len(destroys()) == 1, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_for(
+            lambda: len(destroys()) == 1, timeout=10, poll_interval=0.05, error_message="the condition never held"
+        )
 
         assert destroys() == [f"destroy {agent.agent_id} --force"]
         failed = manager.get_provisional_chat(seeded.chat_id)
@@ -3304,18 +3326,23 @@ def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: Ag
 
 
 def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """The chat row's ``attention`` status: a filed request with no resolution yet."""
+    """The chat row's ``attention`` status: a filed request with no resolution yet, and each flip of it is
+    announced as ``chats_updated`` even though the activity state never moved."""
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
+    listener = broadcaster.register()
     try:
         agent_manager.update_session_events(
             "agent-1",
             [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}],
         )
         assert agent_manager.has_pending_permission(ChatId("agent-1"))
+        filed = _last_chats_updated(_drain(listener))
+        assert filed is not None
+        assert [chat["status"] for chat in filed["chats"]] == ["attention"]
 
         agent_manager.update_session_events(
             "agent-1",
@@ -3329,6 +3356,10 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
             ],
         )
         assert not agent_manager.has_pending_permission(ChatId("agent-1"))
+        # The verdict is a user turn, so the agent is working again rather than idle.
+        settled = _last_chats_updated(_drain(listener))
+        assert settled is not None
+        assert [chat["status"] for chat in settled["chats"]] == ["working"]
     finally:
         agent_manager.stop()
 
