@@ -125,6 +125,10 @@ export class PointerGestureSource implements GestureSource {
       if (!(event.target instanceof Element)) return;
       const binding = bindingForTarget(event.target);
       if (binding === null) return;
+      // A press on a handle owns the pointer: left to its default, a press inside an existing text
+      // selection starts a native text drag on the first move, and the browser answers that with a
+      // pointercancel that kills the gesture. Clicks and double clicks still fire.
+      event.preventDefault();
       const press = pointOf(event);
       const pressClient = { x: event.clientX, y: event.clientY };
       pending = { binding, pointerId: event.pointerId, press, pressClient, isDragging: false, longPressTimer: null };

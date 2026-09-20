@@ -11,3 +11,5 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 - Ratchets: the retired-address ratchet now also refuses `app:` literals in the shell package, its frontend, and the shared library, and a new ratchet refuses the tabbed shell's `dockview` and `dock` vocabulary in the same sources (with a `CLEANUP:` note to relax it once the vocabulary is long gone). The "shell names no app" rule is reworded for a shell with no addresses.
 
 - The README describes the desktop model, the routes and socket the process actually serves, the state files, and the launcher; the tabbed shell's sections are gone.
+
+- Window drags and resizes no longer die when the shell document holds a text selection: a press on a title bar, resize edge, shortcut, or taskbar entry claims the pointer (the browser used to turn such a press into a native text drag and cancel the gesture), and the backdrop is unselectable, so a press that misses a handle no longer highlights the desktop.
