@@ -194,6 +194,18 @@ describe("saving", () => {
   });
 });
 
+describe("a deleted active desktop", () => {
+  it("lands on the first remaining desktop, reports the move, and fetches that layout", async () => {
+    const store = await startedStore();
+    api.writeLayout("work", CLIENT, { updated_at: null, placements: [] });
+    socket.deliver().onDesktopsUpdated([store.getState().desktops[1]]);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
+    expect(store.getState().isLayoutLoaded).toBe(true);
+  });
+});
+
 describe("opening", () => {
   it("opens through the shell, places the window on top at once, and takes the shell's stamp", async () => {
     const store = await startedStore();

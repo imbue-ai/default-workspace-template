@@ -313,7 +313,17 @@ export class DesktopStore {
   }
 
   private takeDesktops(desktops: Desktop[]): void {
+    const previous = this.state.activeDesktopId;
     this.dispatch({ type: "desktops_updated", desktops });
+    if (this.state.activeDesktopId !== previous) {
+      // The active desktop was deleted and the reducer landed on the fallback: this client follows as it
+      // would a push, telling the shell and fetching the layout it now shows.
+      this.cancelGesture();
+      this.pendingRestores.clear();
+      this.reportClientState("");
+      void this.refetchLayout();
+      return;
+    }
     // A restore deferred while its window settled runs once the window has a real path.
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
