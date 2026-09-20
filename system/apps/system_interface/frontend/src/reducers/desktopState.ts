@@ -238,6 +238,11 @@ export function isAppStoppable(state: DesktopState, app: AppRecord): boolean {
   return !state.apps.some((other) => other.critical && other.program === app.program);
 }
 
+/** Whether a window reads as minimized in these placements; one the placements lack reads as minimized. */
+export function isWindowMinimized(placements: readonly Placement[], windowId: string): boolean {
+  return placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true;
+}
+
 /** One entry of the taskbar: a window of the active desktop, in opening order. */
 export interface TaskbarEntry {
   readonly window: WindowRecord;
@@ -252,14 +257,13 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
   if (desktop === null) return [];
   const placements = effectivePlacements(state.layout, desktop);
   const focused = focusedWindowId(placements);
-  const placementById = new Map(placements.map((placement) => [placement.window_id, placement]));
   return desktop.windows.map((window) => {
     const app = appByName(state, window.app);
     return {
       window,
       app,
       title: windowTitle(window, app),
-      isMinimized: placementById.get(window.id)?.is_minimized ?? true,
+      isMinimized: isWindowMinimized(placements, window.id),
       isFocused: window.id === focused,
     };
   });
