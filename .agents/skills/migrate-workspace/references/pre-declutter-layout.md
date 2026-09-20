@@ -207,9 +207,9 @@ built.
 - **Templates.** A publishable, bootable snapshot of what a mind has built, so
   another mind can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.
-- **Layout operations.** `system/scripts/layout.py` inspects and rearranges the
-  dockview tabs -- open, split, move, focus, rename, close, maximize, swap a URL.
-  See `manage-layout`.
+- **Desktop operations.** `system/scripts/layout.py` reads and arranges the
+  desktop's windows -- open, focus, place, minimize, maximize, close, navigate.
+  See `manage-desktop`.
 - **`data/.apps/` and `data/.skills/`.** Per-creation data has a declared home
   instead of sharing one `runtime/` directory, and the visible/hidden split under
   `data/` tells the user which folders are theirs to organize.

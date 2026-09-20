@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 from app_instances.data_types import InstanceLifetime
-from conftest import migrate_workspace_layouts as migrate
-from files_app.main import build_files_source
+from app_instances.json_store import JsonStoreInstanceSource
+from app_instances.primitives import InstanceKeyPrefix, TitleTemplate
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import (
     Direction,
@@ -24,6 +24,8 @@ from imbue.system_interface.shell.layouts import LayoutStore
 from imbue.system_interface.shell.primitives import Address, DeviceKind, mint_tab_id
 from imbue.system_interface.shell.projects import ProjectStore
 from terminal_app.store import JsonTerminalSessionStore
+
+from conftest import migrate_workspace_layouts as migrate
 
 _NOW = "2026-09-05T12:00:00+00:00"
 _TAB_ID = re.compile(r"^tab-[0-9a-f]{16}$")
@@ -455,8 +457,13 @@ def test_run_seeds_the_files_and_terminal_stores_their_apps_read(
 ) -> None:
     _, _, apps_dir = _run(legacy_layout_dir, tmp_path, migration_registry)
 
-    (record,) = build_files_source(
-        apps_dir / "files" / "instances.json"
+    (record,) = JsonStoreInstanceSource(
+        store_path=apps_dir / "files" / "instances.json",
+        key_prefix=InstanceKeyPrefix("files"),
+        title_template=TitleTemplate("File Viewer {n}"),
+        lifetime=InstanceLifetime.REFERENCED,
+        is_renameable=False,
+        is_location_tracked=True,
     ).list_instances()
     assert str(record.key) == "files-2"
     assert str(record.url) == "/data/notes?sort=name"

@@ -32,9 +32,8 @@ CLI hands out. `playwright-cli --help` is the command reference.
 
 The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
-falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
-agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
-set -- a parent passes its chat address to sub-agents -- else the caller's own chat).
+falling back to ``http://127.0.0.1:8081``. A new browser's viewer page is opened as a
+window on the requesting chat's desktop via ``system/scripts/layout.py``.
 """
 
 import argparse
@@ -53,7 +52,6 @@ from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"
-_ENV_ANCHOR = "BROWSER_FLEET_ANCHOR"
 _APPS_FILE = "data/.state/apps.toml"
 
 # Exit codes the orchestrating agent can branch on.
@@ -170,13 +168,13 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-# --- pane pull-in (reuse system/scripts/layout.py) ----------------------------------
+# --- opening the viewer window (reuse system/scripts/layout.py) ---------------------
 
 
 def _layout(*args: str, quiet: bool = False) -> bool:
     """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
     ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
-    message (used by the pane-pull, which has a friendlier failure note)."""
+    message (used by the viewer-window open, which has a friendlier failure note)."""
     root = _repo_root()
     layout = root / "system" / "scripts" / "layout.py"
     if not layout.exists():
@@ -189,87 +187,20 @@ def _layout(*args: str, quiet: bool = False) -> bool:
     return result.returncode == 0
 
 
-def _resolve_active_view() -> tuple[bool, str | None]:
-    """Resolve the view to surface a browser pane into, via ``layout.py context``.
-
-    ``split`` edits the arrangement of the view it is given (``--view``) and keeps the client
-    on it, so the pane-pull names the view the human is actually looking at rather than
-    switching them elsewhere. ``context`` is a read-only query over the client-activity log.
-
-    Returns ``(reachable, view)``:
-    * ``reachable`` is False when the shell can't be reached at all -- an isolated
-      ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
-      silently: there is no screen of ours to surface into.
-    * When reachable, ``view`` is the view to target -- the active view of the connected
-      client that most recently messaged THIS chat (its chat instance is addressed by the
-      chat id, see ``_own_chat_id``), else the most-recently-active connected client's view,
-      else None (reachable but nothing to place it on).
-    """
-    root = _repo_root()
-    script = root / "system" / "scripts" / "layout.py"
-    if not script.exists():
-        return (False, None)
-    result = subprocess.run(
-        [sys.executable, str(script), "context", "--json"], cwd=str(root), capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        return (False, None)  # unreachable (isolated sub-agent / no daemon)
-    try:
-        clients = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError:
-        return (True, None)
-    # ``context`` lists clients most-recently-active first; keep connected ones reporting a view.
-    connected = [
-        client
-        for client in clients
-        if isinstance(client, dict) and client.get("is_connected") and client.get("active_view")
-    ]
-    my_chat_id = _own_chat_id()
-    if my_chat_id:
-        my_address = f"app:chat?instance={my_chat_id}"
-        for client in connected:
-            if any(msg.get("address") == my_address for msg in client.get("recent_messages", [])):
-                return (True, str(client["active_view"]))
-    if connected:
-        return (True, str(connected[0]["active_view"]))
-    return (True, None)
-
-
 def _pull_in_pane(browser_name: str) -> None:
-    """Surface browser ``browser_name`` as its OWN pane beside the requesting agent's chat,
-    optimistically.
+    """Surface browser ``browser_name`` as its own window on the requesting agent's desktop, optimistically.
 
-    Resolves the view the requester's client is looking at via ``layout.py context`` (see
-    ``_resolve_active_view``). If the shell is unreachable -- an isolated ``launch-task``
-    sub-agent in its own container -- we **skip silently**: there is no screen of ours to
-    surface into. Otherwise we split the browser into that view next to the agent's own
-    chat (``--relative-to self``), or the parent's chat when a parent handed a sub-agent
-    its address via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each browser its own
-    pane; splitting an already-open one just focuses it, so this is safe to call repeatedly.
-
-    If the split can't land (no target view, or the human isn't currently viewing it),
-    we fall back to one neutral line offering the manual "+"-menu route -- the browser is
-    up and fully drivable from the CLI either way; the pane is only a live-view convenience.
+    ``layout.py open browser --path /?session=<name>`` lands the window on the client that most recently
+    messaged this chat (else the one connected client), so the human watching the chat sees the browser
+    appear. If the shell is unreachable -- an isolated ``launch-task`` sub-agent in its own container -- or
+    it cannot tell which client to place the window on, we fall back to one neutral line offering the
+    launcher: the browser is up and fully drivable from the CLI either way; the window is only a
+    live-view convenience.
     """
-    reachable, view = _resolve_active_view()
-    if not reachable:
+    if _layout("open", "browser", "--path", f"/?session={browser_name}", quiet=True):
         return
-    address = f"app:browser?instance={browser_name}"
-    if view is not None:
-        # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
-        anchor = os.environ.get(_ENV_ANCHOR)
-        if anchor and _layout(
-            "split", address, "--relative-to", anchor, "--direction", "right", "--new-group", "--view", view, quiet=True
-        ):
-            return
-        if _layout(
-            "split", address, "--relative-to", "self", "--direction", "right", "--new-group", "--view", view, quiet=True
-        ):
-            return
-    # Reachable but couldn't place the pane. Not an error -- offer the manual route
-    # without implying anything broke.
     _out(f"browser {browser_name} is ready. To watch it live, open it from the "
-         '"+" menu (New browser -> ' + f"{browser_name}) in the side panel.")
+         'launcher (Browser -> ' + f"{browser_name}).")
 
 
 # --- commands -----------------------------------------------------------------
@@ -277,7 +208,7 @@ def _pull_in_pane(browser_name: str) -> None:
 
 def _stopped_hint(browser_name: str) -> str:
     """How to bring a stopped browser back (the daemon sends the same in its ``hint``)."""
-    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_name}`"
+    return f"start it from its window's Start button, or with `curl -X POST {_daemon_url()}/browsers/{browser_name}/start`"
 
 
 def _owner_label(browser: dict[str, Any], me: str | None) -> str:
@@ -361,8 +292,8 @@ def cmd_new(args: argparse.Namespace) -> int:
         body["url"] = args.url
     status, payload = _request("POST", "/browsers", body)
     if status == 200:
-        # Surface the new browser's pane right away, so "open a new browser" visibly
-        # opens one (idempotent with the pane-pull the first direct command also does).
+        # Open the new browser's window right away, so "open a new browser" visibly
+        # opens one (idempotent with the open the first direct command also does).
         _pull_in_pane(payload["name"])
         _out(f"started browser {payload['name']}")
         _print_attach(payload["name"])
@@ -544,7 +475,7 @@ def _action(browser_name: str, verb: str, kind: str, body: dict[str, Any] | None
         _err(payload.get("error", f"no browser {browser_name}"))
         return _EXIT_ERROR
     # The first command for a browser (and the first after a human hands it back)
-    # surfaces it as a pane split next to your chat, so the human can watch.
+    # opens its viewer as a window on your desktop, so the human can watch.
     if payload.get("newly_acquired"):
         _pull_in_pane(browser_name)
     return _render_action(payload, browser_name, kind)

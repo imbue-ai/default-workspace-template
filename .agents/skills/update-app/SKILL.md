@@ -30,7 +30,7 @@ If you're doing something *other* than editing an existing app or service:
   desktop: its windows, taskbar, and launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   applies only when known-good).
-- **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
+- **Arranging windows** (open/place/focus/minimize/close) -> `manage-desktop`.
 
 ## Match the flow to the scope of the change
 
@@ -183,21 +183,21 @@ If it doesn't come back `RUNNING`, read
 
 ### 3. Refresh the user's view
 
-If the service has a user-facing tab, the open iframe is still showing the
-pre-change page. Refresh it so the user sees the update without being told
+If the service has a user-facing window, the open page is still showing the
+pre-change content. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh --app <name>
 ```
 
-`refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead with
-`python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
-the view the user is looking at, and `--view <name>` targets one view (it
-fails fast and harmlessly when no client has that view active).
-For any other tab manipulation, see `manage-layout`. Background daemons have
-no tab -- skip the tab refresh, but not the rest of this step.
+`refresh --app` reloads every page of the service on every client. If no
+window is open yet and the change is ready to show, surface it instead with
+`python3 system/scripts/layout.py open <name>`: with no `--desktop` it lands
+on the desktop the user is looking at, and `--desktop <name>` targets one
+desktop (and switches the client to it).
+For any other window manipulation, see `manage-desktop`. Background daemons
+have no window -- skip the refresh, but not the rest of this step.
 
 If you restarted the whole services agent rather than a single program, one
 tab refresh is not enough -- the workspace shell itself was bounced. Rebuild
@@ -273,7 +273,7 @@ where the data dies. Encode these, cheapest first:
   instance -- a redesign, or a risky change where a hand mock won't convince --
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with
+  "preview" window (open it with
   `python3 system/scripts/layout.py open <name>-preview`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.

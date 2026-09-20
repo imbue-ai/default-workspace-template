@@ -114,10 +114,10 @@ You're always in control: everything here is adjustable any time -- the schedule
 
 ---
 
-That is the whole message. Right after sending it, silently surface your tab
-so the user sees it: run
-`python3 system/scripts/layout.py open "app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
-(with no `--view`, the op goes to the view the connected client is looking at.
+That is the whole message. Right after sending it, silently surface your chat
+window so the user sees it: run
+`python3 system/scripts/layout.py open chat --path "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
+(with no `--desktop`, the op goes to the desktop the connected client is looking at.
 Best-effort -- continue if it fails). Then
 create your permissions file at `data/.state/caretaker/permissions.md` with the
 template below -- this is an internal file write, not shown to the user, and the file's
@@ -171,10 +171,10 @@ finds something.
 1. **Say hello first -- as a chat message, before any `tk` step.** Send the hello
    as your opening reply *before* you create or start any step, so it lands in the
    conversation and never as a step title, caption, or ticket. Right after the
-   hello is sent, silently surface your tab with
-   `python3 system/scripts/layout.py open "app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
-   (best-effort, continue on failure; it lands in the view the user is looking
-   at) -- after, not before, so the tab never pops up empty. It is one short,
+   hello is sent, silently surface your chat window with
+   `python3 system/scripts/layout.py open chat --path "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
+   (best-effort, continue on failure; it lands on the desktop the user is looking
+   at) -- after, not before, so the window never pops up empty. It is one short,
    friendly opening message -- who you are and what you're about to do -- shaped by
    whether they've allowed you to check their apps (read it from
    `data/.state/caretaker/permissions.md`):

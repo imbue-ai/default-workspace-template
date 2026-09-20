@@ -237,8 +237,8 @@ sub-workers it split its pass across are already gone with it):
   introduced, restart any caching service, and close the ticket recorded in
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
-- **service**: refresh the tab so the user sees the merged build
-  (`python3 system/scripts/layout.py refresh <service-name>`), then close the ticket.
+- **service**: refresh its window so the user sees the merged build
+  (`python3 system/scripts/layout.py refresh --app <service-name>`), then close the ticket.
 
 ## Guidelines
 

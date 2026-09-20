@@ -168,8 +168,8 @@ up, `preview` refuses rather than hijacking it -- surface that to the user and
 coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
-Open it as a tab and ask the user to explore. With no `--view`, the op goes
-to the view the connected client is looking at:
+Open it as a window and ask the user to explore. With no `--desktop`, the op
+goes to the desktop the connected client is looking at:
 
 ```bash
 python3 system/scripts/layout.py open si-preview
@@ -333,10 +333,10 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 `unpreview` is idempotent, so it is also the way to clean up after a `preview`
 that failed partway.
 
-`unpreview` only handles the *service* side; it does **not** touch the workspace
-layout. The `si-preview` tab you opened earlier with `layout.py open` is a
-separate concern (a layout panel, not a service), so you must close it yourself
--- otherwise the user is left with a stale tab pointing at a now-deregistered
+`unpreview` only handles the *service* side; it does **not** touch the desktop.
+The `si-preview` window you opened earlier with `layout.py open` is a
+separate concern (a window, not a service), so you must close it yourself
+-- otherwise the user is left with a stale window pointing at a now-deregistered
 service:
 
 ```bash
@@ -367,9 +367,9 @@ and can never be skipped -- even across a crash or a hard kill of the apply
 itself -- which is exactly what belongs in a deterministic script rather than
 agent prose.
 
-`system/scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
-reloads a single inner iframe/panel for arranging the workspace, not the
-top-level page, so it does **not** reveal a system-interface code change.
+`system/scripts/layout.py refresh` (the `manage-desktop` skill) is unrelated -- it only
+reloads an app window's inner page, not the top-level page, so it does **not**
+reveal a system-interface code change.
 
 ## Why this shape
 

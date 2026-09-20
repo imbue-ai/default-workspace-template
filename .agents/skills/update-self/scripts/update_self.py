@@ -60,12 +60,12 @@ belong in tested code rather than agent prose:
     the worker's "what's new" report.
 
 ``surface-chat-tab``
-    Open this run's own chat tab in the workspace UI, so a user sent into the
+    Open this run's own chat window in the workspace UI, so a user sent into the
     workspace by the minds app lands on the conversation performing the update.
-    The interface can only place a tab in front of a client that is connected,
+    The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open is a no-op on a tab that is already there.
+    and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -378,7 +378,9 @@ def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
             sys.executable,
             "system/scripts/layout.py",
             "open",
-            f"app:chat?instance={chat_id}",
+            "chat",
+            "--path",
+            f"/?chat={chat_id}",
         ],
         cwd=repo_root,
         capture_output=True,
