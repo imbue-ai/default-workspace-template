@@ -33,6 +33,8 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-focused": entry.isFocused ? "true" : "false",
         "data-settling": entry.window.is_settling ? "true" : "false",
         "aria-pressed": entry.isFocused ? "true" : "false",
+        // Icon only in compact mode, so the title names the button there.
+        "aria-label": isCompact ? entry.title : undefined,
         class:
           "taskbar-entry flex h-9 min-w-(--desk-touch-target) shrink-0 items-center gap-2 rounded-md border px-2 " +
           "text-(length:--font-size-row) select-none touch-pan-x " +
