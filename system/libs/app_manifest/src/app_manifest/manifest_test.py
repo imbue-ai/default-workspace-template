@@ -81,6 +81,207 @@ def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
         )
 
 
+@pytest.mark.parametrize("launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
+def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
+    with pytest.raises(ValidationError, match="invalid launch path id"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": launch_path_id, "label": "New", "path": "/new"}],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "new",
+        "//new",
+        "/new?message=hi",
+        "/new#top",
+        "/new one",
+        "/new\t",
+        "/a%20b",
+        '/a"b',
+        "/café",
+        "/" + "a" * 2048,
+    ],
+)
+def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> None:
+    with pytest.raises(ValidationError, match="invalid launch path"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": path}],
+            }
+        )
+
+
+@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="])
+def test_launch_path_values_that_follow_the_rule_are_accepted(path: str) -> None:
+    manifest = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "launch_paths": [{"id": "new", "label": "New", "path": path}],
+        }
+    )
+    assert manifest.launch_paths[0].path == path
+
+
+def test_default_shortcut_launch_must_name_a_declared_launch_path() -> None:
+    with pytest.raises(ValidationError, match="default_shortcut.launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": "/new"}],
+                "default_shortcut": {"launch": "other", "mode": "new"},
+            }
+        )
+
+
+def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> None:
+    rooted = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "default_shortcut": {"launch": "open", "mode": "focus"},
+        }
+    )
+    assert rooted.default_shortcut is not None
+    assert rooted.default_shortcut.launch == "open"
+
+    with pytest.raises(ValidationError, match="default_shortcut.launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": "/new"}],
+                "default_shortcut": {"launch": "open", "mode": "focus"},
+            }
+        )
+
+
+def test_default_shortcut_requires_a_launch() -> None:
+    with pytest.raises(ValidationError, match="launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "default_shortcut": {"mode": "focus"},
+            }
+        )
+
+
+@pytest.mark.parametrize("rank", [0, -3, "ten", 1.5])
+def test_launcher_rank_must_be_a_positive_integer(rank: object) -> None:
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate({**_full_manifest_data(), "launcher_rank": rank})
+
+
+def test_minimal_manifest_takes_the_documented_defaults() -> None:
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg"}
+    )
+
+    assert manifest.critical is False
+    assert manifest.priority == "user"
+    assert manifest.program == "news"
+    assert manifest.internal is False
+    assert manifest.default_shortcut is None
+    assert manifest.launch_paths == ()
+    assert manifest.launcher_rank is None
+    assert manifest.handles == {}
+
+
+def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "program": "news-server",
+        }
+    )
+
+    assert manifest.program == "news-server"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MyApp",
+        "host-abc",
+        "agent-abc",
+        "-leading",
+        "trailing-",
+        "double--hyphen",
+        "",
+        "dot.name",
+        "localhost",
+        "auth",
+        "a" * 33,
+        "news\n",
+    ],
+)
+def test_invalid_names_are_rejected(name: str) -> None:
+    with pytest.raises(ValidationError, match="invalid app name"):
+        AppManifest.model_validate(
+            {"name": name, "display_name": "X", "icon": "icon.svg"}
+        )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["terminal", "my-app", "app2", "a", "system_interface", "openvscode-server-4"],
+)
+def test_valid_names_are_accepted(name: str) -> None:
+    assert (
+        AppManifest.model_validate(
+            {"name": name, "display_name": "X", "icon": "icon.svg"}
+        ).name
+        == name
+    )
+
+
+@pytest.mark.parametrize("display_name", ["", "   ", "x" * 65])
+def test_display_name_must_be_non_empty_and_at_most_64_characters(
+    display_name: str,
+) -> None:
+    with pytest.raises(ValidationError, match="display_name"):
+        AppManifest.model_validate(
+            {"name": "news", "display_name": display_name, "icon": "icon.svg"}
+        )
+
+
+def test_icon_is_required_unless_internal() -> None:
+    with pytest.raises(ValidationError, match="icon is required"):
+        AppManifest.model_validate({"name": "news", "display_name": "News"})
+
+    internal = AppManifest.model_validate(
+        {"name": "owner-exec", "display_name": "Owner exec", "internal": True}
+    )
+    assert internal.icon is None
+
+
+@pytest.mark.parametrize("icon", ["icon.png", "/abs/icon.svg", "icon"])
+def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
+    with pytest.raises(ValidationError, match="invalid icon"):
+        AppManifest.model_validate(
+            {"name": "news", "display_name": "News", "icon": icon}
+        )
+
+
 def test_default_shortcut_mode_must_be_focus_or_new() -> None:
     with pytest.raises(ValidationError, match="mode"):
         AppManifest.model_validate(
