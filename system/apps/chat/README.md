@@ -175,7 +175,13 @@ first member, and the chat is listed as a provisional chat in the
 it. The user's first message is what launches the chat's first real agent
 (the provider chooser opens then if nothing is signed in), which joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
-handoff's successor carries. The seed survives a restart of this app because
+handoff's successor carries. That agent is launched with the seeded
+conversation ahead of the user's message, as one message: the seed is a segment
+this app renders from a file, not a transcript any harness could read, so an
+agent handed the message alone could not tell what a reply like "1" picked out
+of the options the last seeded turn offered. The page strips that context block
+and shows the user's own words alone (`prompt_with_context` in
+`harnesses/message_display.py`). The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
 Every chat that starts with no message is greeted: the `welcome` create

@@ -11,6 +11,7 @@ from pathlib import Path
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 
@@ -33,6 +34,32 @@ def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped() -> None:
     assert decision.display is DisplayKind.CHIP
     assert decision.display_label == "Browser fleet"
     assert decision.display_body == inner
+
+
+def test_a_seeded_chats_first_send_shows_the_words_and_hides_the_context_it_carries() -> None:
+    """The agent reads the conversation the chat opened on; the page shows what the user typed."""
+    block = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
+    decision = classify_user_message(f"{block}\n1")
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "1"
+
+
+def test_a_seeded_chats_first_send_keeps_the_attachment_block_its_bubble_renders() -> None:
+    """The block the composer appends renders in the bubble (an inline image, a download link),
+    so stripping the context block in front of the message must not take it off the end."""
+    block = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
+    decision = classify_user_message(f"{block}\nhere you go\n\nSee attachment here: ![a](/uploads/1/a.png)")
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "here you go\n\nSee attachment here: ![a](/uploads/1/a.png)"
+
+
+def test_a_context_block_with_nothing_after_it_is_left_to_render_whole() -> None:
+    """Never a bubble with nothing in it: the block is only ever a prefix to the user's words,
+    so one standing alone is not this app's message and is shown as it arrived."""
+    block = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
+    assert classify_user_message(block) is None
 
 
 def test_bare_task_notification_is_a_chip() -> None:

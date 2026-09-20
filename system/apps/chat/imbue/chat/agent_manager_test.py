@@ -65,6 +65,7 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
@@ -579,6 +580,40 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     assert templates == ["chat", "fast"]
     assert f"chat_id={seeded.chat_id}" in argv and "chat_seq=2" in argv
     assert "Let's" in argv_line and "/welcome" not in argv_line
+
+
+def test_a_seeded_chats_launch_carries_the_conversation_the_chat_opened_on(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first agent joins a conversation it cannot see: the seed is a segment this app renders
+    from a file, not a transcript any harness could read. So the launch hands it that conversation
+    ahead of the user's own words -- which is the whole of what a reply like "1" means."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    turns = (
+        SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
+        SeedTurn(role=SeedRole.ASSISTANT, text="Software that works for you."),
+        SeedTurn(
+            role=SeedRole.ASSISTANT,
+            text="## Your workspace is ready\n\n### 1. Take a tour\n\n### 2. Bring a repository over",
+        ),
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", turns)
+        manager.create_chat("", chat_id=seeded.chat_id, message="1")
+        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+    finally:
+        manager.stop()
+
+    # The recorded argv flattens the message's newlines, so the seeded turns are matched by the
+    # lines that carry their sense: the options a reply of "1" can only mean one of.
+    (recorded,) = argv_log.read_text().splitlines()
+    assert "Wait.. what is honest software?" in recorded
+    assert "### 1. Take a tour" in recorded and "### 2. Bring a repository over" in recorded
+    # The user's own words close the message, so the agent answers them and not the context.
+    assert recorded.endswith(f"</{SEED_CONTEXT_TAG}> 1")
 
 
 def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(

@@ -6,6 +6,7 @@ from pathlib import Path
 from loguru import logger
 
 from imbue.chat.chat_seed import SEED_FILENAME
+from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -13,8 +14,11 @@ from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.primitives import ChatId
 
 _CHAT_ID = ChatId("agent-seeded")
@@ -76,6 +80,61 @@ def test_a_damaged_seed_line_is_skipped_with_a_warning(tmp_path: Path) -> None:
 
 def test_a_chat_folder_without_a_seed_file_reads_as_no_events(tmp_path: Path) -> None:
     assert read_seed_events(tmp_path / "nowhere") == []
+
+
+def _seeded_chat_dir(tmp_path: Path, turns: tuple[SeedTurn, ...]) -> Path:
+    chat_dir = tmp_path / "chats" / _CHAT_ID
+    write_seed_file(chat_dir, seed_events(_CHAT_ID, turns, _CREATED_AT))
+    return chat_dir
+
+
+def test_the_launch_message_carries_the_seeded_conversation_ahead_of_the_users_words(tmp_path: Path) -> None:
+    """What the chat's first agent is started with: every seeded turn, in order and whole, then
+    the message the user actually sent -- which on its own ("1") names nothing at all."""
+    turns = (
+        SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
+        SeedTurn(role=SeedRole.ASSISTANT, text="Software that works **for you**."),
+        SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),
+    )
+
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
+
+    for turn in turns:
+        assert turn.text in launch
+    assert launch.index(turns[0].text) < launch.index(turns[2].text)
+    assert launch.endswith("\n1")
+
+
+def test_the_launch_message_shows_the_user_only_what_they_typed(tmp_path: Path) -> None:
+    """The two halves of the fix are one contract: what the agent reads carries the conversation,
+    and what the page renders is the user's own turn. The detector table is the seam, so the
+    message this module builds is classified here rather than taken on faith."""
+    turns = (SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),)
+
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
+
+    decision = classify_user_message(launch)
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "1"
+
+
+def test_a_chat_with_no_readable_seed_is_launched_with_the_users_message_alone(tmp_path: Path) -> None:
+    """A seed file that is absent or damaged past reading leaves the agent where it stood before
+    any of this: started on the user's words, with no half-built context block around them."""
+    assert seed_context_message(tmp_path / "nowhere", "1") == "1"
+
+
+def test_a_seeded_conversation_too_long_to_carry_points_at_the_file_instead(tmp_path: Path) -> None:
+    """The message rides an argv, which is bounded, so past the inline limit the agent is sent to
+    the seed file -- the same choice a handoff makes with an oversized summary."""
+    turns = (SeedTurn(role=SeedRole.ASSISTANT, text="x" * (INLINE_SEED_MAX_BYTES + 1)),)
+
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
+
+    assert turns[0].text not in launch
+    assert str(_seeded_chat_dir(tmp_path, turns) / SEED_FILENAME) in launch
+    assert classify_user_message(launch) is not None
 
 
 def test_the_seed_pseudo_agent_is_the_chat_itself_on_the_seed_harness(tmp_path: Path) -> None:

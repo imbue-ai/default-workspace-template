@@ -72,6 +72,7 @@ from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.harnesses.activity import HarnessActivityTracker
@@ -2843,9 +2844,20 @@ class AgentManager:
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
         role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
 
+        # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
+        # this app renders from a file, which no harness transcript holds. Its launch carries
+        # that conversation ahead of the user's own words, which is what makes a reply like "1"
+        # mean the option the seed's last turn numbered. The provisional record keeps the words
+        # themselves, so a retry after a failed create wraps them afresh rather than twice.
+        launch_message = (
+            message
+            if seed_record is None
+            else seed_context_message(self._chat_files_root / launched_chat_id, message)
+        )
+
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.
-        deferred_message = message if model_pick is not None else ""
+        deferred_message = launch_message if model_pick is not None else ""
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
@@ -2856,7 +2868,7 @@ class AgentManager:
             role_templates,
             project_id,
             account_args,
-            initial_message="" if deferred_message else message,
+            initial_message="" if deferred_message else launch_message,
             extra_labels=membership_labels,
         )
 
