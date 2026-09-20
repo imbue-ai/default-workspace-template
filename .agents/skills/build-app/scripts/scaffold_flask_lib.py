@@ -82,6 +82,9 @@ _FORWARD_PORT_PATH = (
 )
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+# The <name> of data/.secrets/<name>.env, as the chat app's secret card and
+# app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
+SECRET_FILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
 
@@ -122,6 +125,18 @@ def _validate_name(name: str) -> None:
             )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
+
+
+def _validate_secrets_file(name: str) -> None:
+    # The name is spliced into the program's `bash -c` string as
+    # data/.secrets/<name>.env, so anything outside the slug would break the
+    # command or name a file the secret card can never write.
+    if not SECRET_FILE_NAME_RE.match(name):
+        sys.exit(
+            f"error: --secrets-file {name!r} must be lowercase letters, digits and "
+            "hyphens, starting with a letter or digit "
+            "(the <name> of data/.secrets/<name>.env)"
+        )
 
 
 def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
@@ -646,6 +661,8 @@ def main() -> None:
     args = parser.parse_args()
 
     _validate_name(args.name)
+    if args.secrets_file is not None:
+        _validate_secrets_file(args.secrets_file)
     icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
