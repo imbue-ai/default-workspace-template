@@ -16,6 +16,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import xmlrpc.client
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -251,10 +253,21 @@ def build_test_state(
     )
 
 
-def _find_free_port() -> int:
+def find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def is_server_answering(base_url: str) -> bool:
+    """Whether the shell at ``base_url`` answers HTTP at all: any response to ``/api/desktops``, an error included."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/desktops", timeout=0.5):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except OSError:
+        return False
 
 
 def _wait_until_serving(host: str, port: int, timeout: float = 10.0) -> None:
@@ -294,7 +307,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = _find_free_port()
+    port = find_free_port()
     server = make_threaded_server(host, port, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

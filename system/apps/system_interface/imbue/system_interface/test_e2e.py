@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -46,7 +45,9 @@ from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
 from imbue.system_interface.testing import catalog_template_document
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
+from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -136,7 +137,7 @@ def _running_e2e_server(
     ``is_stub_taking_message`` declares a ``message`` param on the stub's ``new`` launch path, which is what makes
     it the app the launcher's seeded prompts go to. With ``is_catalog_offered`` the shell has a template catalog.
     """
-    port = _free_port()
+    port = find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     registry_path = tmp_path / "registry" / "apps.toml"
 
@@ -188,7 +189,7 @@ def _running_e2e_server(
         thread.start()
         try:
             wait_for(
-                lambda: _server_is_up(base_url),
+                lambda: is_server_answering(base_url),
                 timeout=10.0,
                 poll_interval=0.1,
                 error_message=f"workspace server did not come up at {base_url}",
@@ -203,22 +204,6 @@ def _running_e2e_server(
             server.shutdown()
             thread.join(timeout=5.0)
             server.server_close()
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-def _server_is_up(base_url: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/desktops", timeout=0.5):
-            return True
-    except urllib.error.HTTPError:
-        return True
-    except OSError:
-        return False
 
 
 @pytest.fixture
