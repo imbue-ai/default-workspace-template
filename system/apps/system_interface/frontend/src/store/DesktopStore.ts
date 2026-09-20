@@ -157,6 +157,7 @@ export class DesktopStore {
   private saveInFlight: Promise<void> | null = null;
   private layoutFetchSequence = 0;
   private pageDriver: PageDriver | null = null;
+  private hasSocketConnected = false;
   // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
@@ -252,7 +253,7 @@ export class DesktopStore {
    *  honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
-      onConnected: () => this.reportClientState(""),
+      onConnected: () => this.takeConnected(),
       onAppsUpdated: (apps) => this.takeApps(apps),
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
@@ -282,6 +283,15 @@ export class DesktopStore {
     if (deepLink.open === null && deepLink.launch === null) return;
     await this.appsLoaded;
     await this.applyDeepLink(deepLink);
+  }
+
+  /** The socket (re)opened: the shell hears which desktop this client is on, and after a reconnect the
+   *  layout is read again, since the ``placements_updated`` of the time apart are gone with the socket
+   *  (the shell resends the apps and desktops itself). The first connect leaves the fetch to ``start``. */
+  private takeConnected(): void {
+    this.reportClientState("");
+    if (this.hasSocketConnected) void this.refetchLayout();
+    this.hasSocketConnected = true;
   }
 
   private takeApps(apps: AppRecord[]): void {

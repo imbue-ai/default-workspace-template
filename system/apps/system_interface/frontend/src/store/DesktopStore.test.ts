@@ -103,11 +103,18 @@ describe("bootstrap", () => {
     ]);
   });
 
-  it("re-reports the client state when the socket reconnects", async () => {
+  it("re-reports the client state when the socket reconnects, and takes the layout written while it was down", async () => {
     const store = await startedStore();
     socket.deliver().onConnected();
     expect(socket.reports.map((report) => report.activeDesktop)).toEqual(["home", "home"]);
     expect(store.getState().isDesktopsLoaded).toBe(true);
+    // The first connect leaves the fetch to the bootstrap; a reconnect reads the layout again.
+    expect(api.calls.filter((call) => call === "fetchPlacements:home")).toHaveLength(1);
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-2")] });
+    socket.deliver().onConnected();
+    await settle();
+    expect(api.calls.filter((call) => call === "fetchPlacements:home")).toHaveLength(2);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
   it("tells the user when the desktops cannot be read, instead of failing silently", async () => {
