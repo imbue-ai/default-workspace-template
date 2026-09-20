@@ -14,9 +14,9 @@ import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
 
-// The icon draws at the theme's icon size; the glyph markup takes a number, so the token's value
-// is read off the element rather than repeated here.
-const ICON_MARKUP_SIZE = 48;
+/** The intrinsic width and height the glyph markup carries; the drawing is sized by its token-sized box
+ *  (``[&>svg]:size-full``), so the theme's ``--desk-icon-size`` governs, in compact mode too. */
+export const ICON_MARKUP_SIZE = 48;
 
 export interface ShortcutIconAttrs {
   readonly shortcut: DesktopShortcut;
@@ -88,7 +88,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             {
               class:
                 "shortcut-icon flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center rounded-xl " +
-                "bg-surface shadow-raised",
+                "bg-surface shadow-raised [&>svg]:size-full",
             },
             m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
           ),
