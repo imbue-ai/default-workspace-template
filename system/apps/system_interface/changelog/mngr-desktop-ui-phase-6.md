@@ -13,3 +13,5 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 - The README describes the desktop model, the routes and socket the process actually serves, the state files, and the launcher; the tabbed shell's sections are gone.
 
 - Window drags and resizes no longer die when the shell document holds a text selection: a press on a title bar, resize edge, shortcut, or taskbar entry claims the pointer (the browser used to turn such a press into a native text drag and cancel the gesture), and the backdrop is unselectable, so a press that misses a handle no longer highlights the desktop.
+
+- A window drag follows a mouse press whose motion the X server reports as a pen under another pointer id (an absolute-axis virtual mouse under a VM does this), instead of ignoring every move; a mouse and a pen count as the same pointer across one gesture, and only fingers are told apart by id.
