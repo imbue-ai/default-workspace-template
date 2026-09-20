@@ -146,6 +146,16 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
+  it("a drag whose release the root never saw is cancelled on the next hover, not left hanging", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70);
+    pointer("pointermove", title, 150, 70);
+    // The window lost focus mid-drag; the button came up unseen and the pointer hovers back.
+    pointer("pointermove", title, 190, 70, { buttons: 0 });
+    expect(events).toEqual(["begin:move(win-1):140,50", "move:move(win-1):140,50:40,0", "cancel:move(win-1)"]);
+  });
+
   it("a touch press released over a live page does not block the next finger's press", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;

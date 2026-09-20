@@ -142,10 +142,13 @@ export class PointerGestureSource implements GestureSource {
 
     const onPointerMove = (event: PointerEvent): void => {
       if (pending === null || event.pointerId !== pending.pointerId) return;
-      // No button held: the press ended where the root could not see it (over a live page), before it
-      // travelled the threshold; the pointer is only hovering now.
+      // No button held: the press ended where the root could not see it (over a live page, or while the
+      // window had lost focus); the pointer is only hovering now. A drag that had begun is cancelled, so
+      // the listener's begin is always answered by an end or a cancel.
       if (event.buttons === 0) {
+        const held = pending;
         finish();
+        if (held.isDragging) listener.onCancel(held.binding);
         return;
       }
       const point = pointOf(event);
