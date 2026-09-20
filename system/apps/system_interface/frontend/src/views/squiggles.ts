@@ -1,5 +1,5 @@
 /**
- * The hand-drawn "squiggle" glyphs that identify a project.
+ * The hand-drawn "squiggle" glyphs that identify a desktop.
  *
  * Both the glyph paths and their bounding boxes are copied verbatim from the
  * design prototype's bundle -- each path is drawn in its own
@@ -9,13 +9,12 @@
  * 0.085 stroke ratio) are calibrated against the prototype -- changing them
  * makes the glyphs render at a visibly different weight or crop.
  *
- * Two glyphs here are not one of the ten: the composite (five squiggles
- * clustered together, which is Everything's identity, not a project's) and the
- * monogram tile a project falls back to when it has no glyph to draw.
+ * One glyph here is not one of the ten: the monogram tile a desktop falls back
+ * to when it has no glyph to draw.
  *
  * Like `icons.ts`, glyphs are produced as SVG *strings* so they work with both
  * rendering paths in this codebase (`m.trust(...)` in Mithril views, and
- * `element.innerHTML` in the plain-DOM tab bar).
+ * `element.innerHTML` in plain DOM).
  */
 
 const XMLNS = "http://www.w3.org/2000/svg";
@@ -106,7 +105,7 @@ export function squiggleMarkup(glyphIndex: number, color: string | null, size: n
 // The CIE L* at which black ink stops beating white ink on a tile of that
 // lightness. Mirrors the minds chrome's titlebar recipe
 // (`lch(from var(--titlebar-bg) calc((49.44 - l) * infinity) 0 0)` in the
-// shell's static/app.css), so a project's tile and the window chrome around it
+// shell's static/app.css), so a desktop's tile and the window chrome around it
 // flip at exactly the same point.
 const CONTRAST_LIGHTNESS_THRESHOLD = 49.44;
 
@@ -127,10 +126,10 @@ function hexLightness(color: string): number | null {
 }
 
 /**
- * Full <svg> string for a project's monogram, sized to `size` pixels square:
+ * Full <svg> string for a desktop's monogram, sized to `size` pixels square:
  * the first letter of its name on a rounded tile painted in its color.
  *
- * This is the fallback for a project with no glyph to draw, so it has to work
+ * This is the fallback for a desktop with no glyph to draw, so it has to work
  * against any color the user picked -- the letter flips black or white off the
  * tile's lightness, the same self-theming math the titlebar does in CSS. A
  * color that is not a hex literal cannot be measured, and falls back to the
@@ -139,7 +138,7 @@ function hexLightness(color: string): number | null {
 export function monogramMarkup(name: string, color: string, size: number): string {
   const lightness = hexLightness(color);
   const ink = lightness !== null && lightness < CONTRAST_LIGHTNESS_THRESHOLD ? "#ffffff" : "#000000";
-  // Project names are user text, so the letter is escaped before it lands in
+  // Desktop names are user text, so the letter is escaped before it lands in
   // markup that callers hand to `m.trust` / `innerHTML`.
   const initial = name
     .trim()
