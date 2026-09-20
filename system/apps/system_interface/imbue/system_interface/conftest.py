@@ -56,7 +56,7 @@ def _isolate_system_interface_tests(
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
 
-# --- pytest-playwright fixture-scope overrides -------------------------------
+# pytest-playwright fixture-scope overrides
 #
 # pytest-playwright (installed as a plugin) ships these fixtures at SESSION
 # scope: `playwright` (the sync_playwright handle, which spawns the node

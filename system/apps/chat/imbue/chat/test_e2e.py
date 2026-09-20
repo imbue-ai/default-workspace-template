@@ -264,7 +264,7 @@ def _taskbar_entry(page: Page, window_id: str) -> Locator:
     return page.locator(f'[data-taskbar-entry="{window_id}"]')
 
 
-# ---------- the chat page ----------
+# the chat page
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -482,7 +482,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
 
-# ---------- layout ops ----------
+# layout ops
 
 
 def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
@@ -602,7 +602,7 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
         )
 
 
-# ---------- desktops ----------
+# desktops
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -641,7 +641,7 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
 
 
-# ---------- starting a chat ----------
+# starting a chat
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -712,7 +712,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
         expect(chat.locator(".message-list-create-failed")).to_have_count(0, timeout=15000)
 
 
-# ---------- switching a chat to another harness (the handoff, spec section 5) ----------
+# switching a chat to another harness (the handoff, spec section 5)
 
 
 def _open_provider_menu(chat: FrameLocator) -> None:

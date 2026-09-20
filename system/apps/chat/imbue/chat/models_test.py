@@ -3,7 +3,7 @@ from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 
 
 def test_a_subagent_key_is_the_chat_the_agent_and_the_session() -> None:
-    """A subagent view's key names all three; a chat's own key and the older two-part shape are not one."""
+    """A subagent view's key names all three; a chat's own key and a two-part shape are not one."""
     key = SUBAGENT_KEY_SEPARATOR.join(("agent-1", "agent-2", "sess-3"))
     parsed = parse_subagent_key(key)
     assert parsed is not None

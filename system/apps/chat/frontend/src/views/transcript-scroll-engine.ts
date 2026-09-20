@@ -181,11 +181,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   const dataSource = config.dataSource;
   const isVisible = config.isVisible ?? (() => true);
 
-  // --- state machines -------------------------------------------------------
+  // state machines
   let positionState: ScrollPositionState = FOLLOW_STATE;
   let scrollbarState = ELSEWHERE_STATE;
 
-  // --- geometry / heights ---------------------------------------------------
+  // geometry / heights
   const heightByRowKey = new Map<string, number>();
   let geometry: PhysicalGeometry | null = null;
   let geometryRows: RowDescriptor[] = [];
@@ -195,12 +195,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let heightsEpoch = 0;
   let geometryHeightsEpoch = -1;
 
-  // --- spacers --------------------------------------------------------------
+  // spacers
   let estimatePxPerEvent = DEFAULT_SPACER_PX_PER_EVENT;
   let spacerTopPx = 0;
   let spacerBottomPx = 0;
 
-  // --- DOM / viewport -------------------------------------------------------
+  // DOM / viewport
   let scrollEl: HTMLElement | null = null;
   let scrollTopPx = 0;
   let viewportHeightPx = 0;
@@ -223,7 +223,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // history was still unloaded. Once event 0 is loaded, pin scrollTop to 0.
   let pendingTopIntent = false;
 
-  // --- input classification -------------------------------------------------
+  // input classification
   let lastInputSource: ScrollInputSource = "wheel";
   // When the user last touched a native input (wheel/keys/pointer). macOS
   // momentum keeps emitting wheel events, so "no input for a while" reliably
@@ -237,7 +237,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // scrollTop after content shrank (no user intent; must not be reduced).
   let lastScrollHeightPx = 0;
 
-  // --- fill -----------------------------------------------------------------
+  // fill
   let fillInFlight = false;
   // Bumped by setChat so a fill still in flight for the previous chat cannot
   // apply its completion (clearing the single-flight guard out from under the
@@ -254,7 +254,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   /** A landed at-offset fetch whose JUMPED_TO_INDEX dispatch awaits fresh geometry. */
   let pendingJumpLandIndex: number | null = null;
 
-  // --- selection freeze -----------------------------------------------------
+  // selection freeze
   let freezeRange: VisibleRowRange | null = null;
 
   // Positioning is EVENT-DRIVEN, not continuous: during pure native scrolling
@@ -265,12 +265,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // afterRender work deferred to a microtask (see afterRender); one per task.
   let isAfterRenderQueued = false;
 
-  // --- persistence / restore ------------------------------------------------
+  // persistence / restore
   let persistChatKey: string | null = null;
   let pendingRestore: RestoredScrollState | null = null;
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // --- scrollbar interaction ------------------------------------------------
+  // scrollbar interaction
   let lastScrollbarFraction: number | null = null;
   let frozenThumbSizeFraction: number | null = null;
   let lastActivityAtMs = 0;
@@ -326,7 +326,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     },
   });
 
-  // --- small helpers --------------------------------------------------------
+  // small helpers
 
   function extent(): PhysicalExtent {
     const firstIndex = dataSource.getFirstOffset();
@@ -432,7 +432,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     return firstIndex + Math.round(Math.min(1, Math.max(0, contentFraction)) * (endIndex - firstIndex - 1));
   }
 
-  // --- persistence ----------------------------------------------------------
+  // persistence
 
   function schedulePersist(): void {
     if (persistChatKey === null || pendingRestore !== null) {
@@ -469,9 +469,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  // --- programmatic writes / echo tracking ----------------------------------
+  // programmatic writes / echo tracking
 
-  // --- smoothed programmatic writes -----------------------------------------
+  // smoothed programmatic writes
   // Engine-driven position changes (the streaming follow pin, scrollbar drag
   // steps) land as discrete multi-hundred-px snaps when written directly --
   // each streamed chunk or pointermove teleports the content, which reads as
@@ -561,7 +561,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     trace?.record("write", { reason, targetPx, afterPx, deltaPx: afterPx - beforePx });
   }
 
-  // --- live row measurement -------------------------------------------------
+  // live row measurement
 
   function measureMountedRows(): boolean {
     if (scrollEl === null) {
@@ -614,7 +614,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     return changed;
   }
 
-  // --- geometry -------------------------------------------------------------
+  // geometry
 
   function refreshGeometry(): void {
     const renderVersion = dataSource.getRenderVersion();
@@ -655,7 +655,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  // --- fill loop ------------------------------------------------------------
+  // fill loop
 
   function impliedSpacerEventIndex(): number | null {
     const { firstIndex, endIndex } = extent();
@@ -755,7 +755,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       });
   }
 
-  // --- restore --------------------------------------------------------------
+  // restore
 
   function tryFinishRestore(): void {
     if (pendingRestore === null || geometry === null) {
@@ -791,7 +791,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     schedulePersist();
   }
 
-  // --- input listeners ------------------------------------------------------
+  // input listeners
 
   function onScrollEvent(event: Event): void {
     const element = event.target as HTMLElement;
@@ -938,7 +938,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  // --- attach / detach ------------------------------------------------------
+  // attach / detach
 
   function attach(element: HTMLElement): void {
     if (scrollEl === element) {
@@ -1211,7 +1211,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     planFill();
   }
 
-  // --- public API -----------------------------------------------------------
+  // public API
 
   return {
     computeRenderPlan(): TranscriptRenderPlan {

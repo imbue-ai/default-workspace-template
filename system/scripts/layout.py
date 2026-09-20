@@ -102,7 +102,7 @@ _BROWSER_NEW_LAUNCH = "new"
 _BROWSER_URL_PARAM = "url"
 _EXTERNAL_URL_PREFIXES = ("https://", "http://")
 
-# The spellings of the tabbed shell, refused by name with the form to use instead, so an agent
+# The retired spellings, refused by name with the form to use instead, so an agent
 # working from an old note is told what to type rather than waiting on a registration that
 # never comes.
 _RETIRED_PREFIXES = (
@@ -114,7 +114,7 @@ _RETIRED_PREFIXES = (
     "url:",
     "subagent:",
 )
-# The verbs of the tabbed shell, each with its replacement.
+# The retired verbs, each with its replacement.
 _RETIRED_VERBS = {
     "split": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
     "move": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h)",
@@ -192,7 +192,7 @@ def _apps_file() -> Path:
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
-# ---------- Names ----------
+# Names
 
 
 def _fail(message: str) -> NoReturn:
@@ -271,7 +271,7 @@ def _window_ref(value: str) -> str:
     return value
 
 
-# ---------- The registry ----------
+# The registry
 
 
 def _read_registry_rows(path: Path) -> list[dict[str, Any]]:
@@ -310,7 +310,7 @@ def _require_registered(app: str) -> int | None:
     return EXIT_ERROR
 
 
-# ---------- Transport ----------
+# Transport
 
 
 def _request_json(
@@ -394,7 +394,7 @@ def _emit_structured(data: Any, as_json: bool) -> None:
         yaml.safe_dump(data, sys.stdout, sort_keys=False, default_flow_style=False)
 
 
-# ---------- Targeting and answers ----------
+# Targeting and answers
 
 
 def _target_args(desktop: str | None, client: str | None) -> dict[str, str]:
@@ -459,7 +459,7 @@ def _run_transient_op(op: str, args: dict[str, Any]) -> int:
     return EXIT_OK
 
 
-# ---------- The read commands ----------
+# The read commands
 
 
 def _fetch_inventory() -> dict[str, Any] | None:
@@ -581,7 +581,7 @@ def _cmd_load(args: argparse.Namespace) -> int:
     )
 
 
-# ---------- open ----------
+# open
 
 
 def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
@@ -641,7 +641,7 @@ def _print_window_id(answer: dict[str, Any]) -> None:
         sys.stdout.write(f"{window_id}\n")
 
 
-# ---------- The window verbs ----------
+# The window verbs
 
 
 def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace], int]:
@@ -697,7 +697,7 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
     )
 
 
-# ---------- Shortcuts and the wallpaper ----------
+# Shortcuts and the wallpaper
 
 
 def _shortcuts_document(answer: dict[str, Any]) -> dict[str, Any]:
@@ -763,14 +763,14 @@ def _cmd_wallpaper(args: argparse.Namespace) -> int:
     return _run_desktop_op("wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}")
 
 
-# ---------- The retired verbs ----------
+# The retired verbs
 
 
 def _cmd_retired(args: argparse.Namespace) -> int:
     _fail(f"'{args.verb}' is not a desktop verb: {_RETIRED_VERBS[args.verb]}")
 
 
-# ---------- The parser ----------
+# The parser
 
 
 _CLIENT_HELP = (

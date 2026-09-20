@@ -232,7 +232,7 @@
   // and 1013 "retry"): the viewer renders the terminal "terminated" overlay, no reconnect.
   const WS_CLOSE_TERMINATED = 4001;
 
-  // ---- control plane (unchanged): ownership, overlay, lifecycle, over /cast ----
+  // control plane (unchanged): ownership, overlay, lifecycle, over /cast
   let controlOwner = "human";
   let castWs = null;
   let browserId = null;
@@ -432,7 +432,7 @@
     initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the launcher.";
   }
 
-  // ---- pixel plane: per-stripe H.264 decoder over /stream ----
+  // pixel plane: per-stripe H.264 decoder over /stream
   // Each horizontal stripe row is its own H.264 chain, decoded by its own WebCodecs
   // VideoDecoder and composited at its y-offset; the viewer acks every stripe as it
   // leaves its decoder (credit-ack flow control). From the
@@ -440,7 +440,7 @@
   // fleet's init overlay (instead of a status pill) on first paint.
   let streamWs = null, streamRetry = 500, lastSentSize = "";
 
-  // ---- Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
+  // Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
   // in small batches OFF the render path (requestIdleCallback), so the server-side lens
   // can subtract client render from the round trip and show pure network. The tap in the
   // decoder callback is a bare array push; nothing here touches the ack or the paint.
@@ -703,7 +703,7 @@
   }
   pausedOverlay.addEventListener("pointerdown", claimActive, true);
 
-  // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
+  // audio playback (Opus over WebCodecs -> AudioWorklet)
   // The server sends mono Opus chunks (magic byte 0x01)
   // interleaved on the SAME /stream socket, only while the tab actually makes sound
   // (pcmflux's sample-level silence gate), so this stays idle otherwise. WebCodecs
@@ -776,7 +776,7 @@ registerProcessor('pb', PB);`;
   // Browsers suspend AudioContext until a gesture; the pane is click-driven.
   window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
 
-  // ---- input capture: Selkies grammar over /stream, gated on human control ----
+  // input capture: Selkies grammar over /stream, gated on human control
   // Ported from Selkies (keysym map, letterbox-aware coords, coalesced
   // pointer moves #26, held-key heartbeat #12, release-on-blur), with two fleet
   // adaptations: input is sent ONLY while the human holds control (client-side
@@ -907,7 +907,7 @@ registerProcessor('pb', PB);`;
   // release anything whose keyup got lost in transit. Only while driving locally.
   setInterval(() => { if (!driving()) sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")); }, 2000);
 
-  // ---- clipboard: paste-in / copy-out (text + images), OS-agnostic, with a chip ----
+  // clipboard: paste-in / copy-out (text + images), OS-agnostic, with a chip
   // We hook the browser's own copy/cut/paste ClipboardEvents rather than intercepting
   // keys, so it works identically on every OS and for menu/right-click too. Paste reads
   // the event's clipboardData and POSTs it to the remote (the server sets the X selection
@@ -1009,12 +1009,12 @@ registerProcessor('pb', PB);`;
     doWrite();
   }
 
-  // ---- tips (top-bar help card, ported from browser-fixes-v4.1) ----
+  // tips (top-bar help card, ported from browser-fixes-v4.1)
   tipsBtn.onclick = () => tipsModal.classList.add("show");
   tipsCloseBtn.onclick = () => tipsModal.classList.remove("show");
   tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
 
-  // ---- controls (ownership only) ----
+  // controls (ownership only)
   takeControlBtn.onclick = () => {
     takeControlBtn.disabled = true;
     overlay.classList.remove("show");
@@ -1025,7 +1025,7 @@ registerProcessor('pb', PB);`;
     if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify({ type: "return_to_agents" }));
   };
 
-  // ---- /cast: control/ownership only (no pixels, no tabs, no input) ----
+  // /cast: control/ownership only (no pixels, no tabs, no input)
   // A wedged (half-open) /cast socket delivers no onclose, so a lost control-change
   // message would strand this viewer thinking an agent still holds control -- input dead
   // forever even after it's ours. Key a watchdog on the server's existing 10s keepalive

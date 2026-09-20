@@ -236,7 +236,7 @@ def _body() -> dict[str, Any]:
     return request.get_json(silent=True) or {}
 
 
-# --- read-only routes (no init gate) -----------------------------------------
+# read-only routes (no init gate)
 
 
 def index() -> Response:
@@ -330,7 +330,7 @@ def list_browsers() -> Response:
     )
 
 
-# --- state-changing routes (init-gated) --------------------------------------
+# state-changing routes (init-gated)
 
 
 def create_browser() -> Response:
@@ -528,7 +528,7 @@ def cmd_clipboard_out(browser_id: str) -> Response:
     return mediastream.clipboard_out(browser_id)
 
 
-# --- control/ownership WebSocket (/cast) -------------------------------------
+# control/ownership WebSocket (/cast)
 
 
 def _cast_inbound_pump(
@@ -796,7 +796,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
         mediastream.telemetry_slots.release(browser_id)
 
 
-# --- app construction + lifecycle --------------------------------------------
+# app construction + lifecycle
 
 
 def _register_routes() -> None:

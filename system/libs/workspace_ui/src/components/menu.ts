@@ -1,9 +1,8 @@
 /* The floating-menu chrome: a card on the primary surface with a hairline
  * border, 8px radius and the overlay elevation shadow, holding 32px rows of
- * full-bleed hover highlight. Every floating menu composes this recipe --
- * a window's menu, the taskbar's running-apps menu, the chat rail's row menus,
- * and the model card with its flyouts (whose selected/locked row variants
- * extend the row shape in modelCardStyles.ts).
+ * full-bleed hover highlight. Every floating menu composes this recipe (the
+ * model card's selected/locked row variants extend the row shape in
+ * modelCardStyles.ts).
  *
  * Positioning is not part of the recipe -- callers say fixed/absolute in
  * `extra`, along with min-width and text size. The Tailwind scanner reads

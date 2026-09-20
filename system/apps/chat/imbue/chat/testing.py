@@ -592,7 +592,7 @@ def close_ws(ws: simple_websocket.Client) -> None:
         pass
 
 
-# ---------- the two-process fixture: the shell framing this chat app ----------
+# the two-process fixture: the shell framing this chat app
 
 # The fixture chat's agent id and name. A real mngr id shape (32 hex), so the send path can type
 # it as an AgentId.

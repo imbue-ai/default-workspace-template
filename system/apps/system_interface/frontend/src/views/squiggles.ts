@@ -9,7 +9,7 @@
  * 0.085 stroke ratio) are calibrated against the prototype -- changing them
  * makes the glyphs render at a visibly different weight or crop.
  *
- * One glyph here is not one of the ten: the monogram tile a desktop falls back
+ * One glyph here is not one of those: the monogram tile a desktop falls back
  * to when it has no glyph to draw.
  *
  * Like `icons.ts`, glyphs are produced as SVG *strings* so they work with both

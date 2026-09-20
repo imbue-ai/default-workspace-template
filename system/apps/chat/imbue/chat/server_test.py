@@ -2825,7 +2825,7 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert second["type"] == "chats_updated"
 
 
-# --- A chat that has run on two agents: one transcript, read across both segments ---
+# A chat that has run on two agents: one transcript, read across both segments
 
 
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:

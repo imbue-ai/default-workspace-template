@@ -133,7 +133,7 @@ def proxy_server() -> "ProxyServer | None":
 # bare dev boxes) so those still run. Force either mode with BROWSER_HEADLESS=1/0.
 _HEADLESS = os.environ.get("BROWSER_HEADLESS", "0" if os.environ.get("DISPLAY") else "1") != "0"
 
-# --- pixelflux media path --------------------------------------------------------
+# pixelflux media path
 # Every browser renders headful onto its OWN private Xvfb and is captured/encoded by
 # pixelflux (see videopipe.py). This is the ONLY pixel transport -- the human sees
 # Chrome's real chrome (tabs + omnibox) as pixels; there is no CDP-screencast path.
@@ -745,7 +745,7 @@ class LiveBrowser(MutableModel):
         self._broadcast(self._control_message())
         logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
 
-    # --- the proxy's callbacks into ownership --------------------------------
+    # the proxy's callbacks into ownership
 
     async def _token_may_drive(self, token: str) -> bool:
         """Whether a frame bearing ``token`` may be forwarded right now.
@@ -847,7 +847,7 @@ class LiveBrowser(MutableModel):
             index = active_tab if 0 <= active_tab < len(targets) else 0
             await self._focus_and_foreground(targets[index]["targetId"])
 
-    # --- tabs (the fleet's own CDP client is the single source of truth) --------
+    # tabs (the fleet's own CDP client is the single source of truth)
 
     def _active_target(self) -> str | None:
         """The tab the pane is showing. Was browser-use's ``agent_focus_target_id``;
@@ -1016,7 +1016,7 @@ class LiveBrowser(MutableModel):
         :meth:`acquire`."""
         return self.controller == "human" and self.human_pinned
 
-    # --- ownership state machine ----------------------------------------------
+    # ownership state machine
 
     def _state_tuple(self) -> tuple[ControlOwner, str | None, bool]:
         return (self.controller, self.owner_agent_id, self.human_pinned)
@@ -1547,7 +1547,7 @@ class LiveBrowser(MutableModel):
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
-    # --- socket bookkeeping ---------------------------------------------------
+    # socket bookkeeping
 
     async def register_cast_queue(self) -> "queue.Queue[str | None]":
         """Register a new cast WebSocket and SEED its initial sync, atomically on the loop.
@@ -2158,7 +2158,7 @@ class BrowserSessionManager(MutableModel):
         # rmtree of a fat profile blocks; keep it off the loop.
         await asyncio.to_thread(self.forget_profile_dir, browser_id)
 
-    # --- persistence: profiles (Tier A) + manifest (Tier B) -------------------
+    # persistence: profiles (Tier A) + manifest (Tier B)
 
     def live_browsers(self) -> list[LiveBrowser]:
         """Non-crashed sessions (init + running + stopped), by name -- the set the

@@ -1403,7 +1403,7 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
         manager.stop()
 
 
-# --- mngr CLI argv contract ---
+# mngr CLI argv contract
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
 # so a subcommand/flag rename in a new mngr fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
@@ -1520,7 +1520,7 @@ def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     assert templates == ["chat", "welcome", "fast"]
 
 
-# --- the chat's originating project (the mngr ``project`` label) ---
+# the chat's originating project (the mngr ``project`` label)
 # A chat is an agent, so the project it was created inside rides the label mngr
 # already propagates to the agent's children rather than a parallel list. The
 # label is where a chat starts out filed, not an owner: membership is
@@ -3195,7 +3195,7 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     assert session.in_flight_block() == "caught mid-send"
 
 
-# --- Watcher eviction (the chat-memory lifecycle) ---
+# Watcher eviction (the chat-memory lifecycle)
 
 
 def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
@@ -3325,7 +3325,7 @@ def test_the_agent_list_is_known_after_the_first_full_snapshot(agent_manager: Ag
     assert agent_manager.is_agent_list_known()
 
 
-# --- The auto-open reactor, fed from the observe stream ---
+# The auto-open reactor, fed from the observe stream
 
 
 def test_observe_events_feed_the_auto_open_reactor(
@@ -3358,7 +3358,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
 
 
-# --- Chats that have run on several agents (a hand-built record) ---
+# Chats that have run on several agents (a hand-built record)
 
 
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):

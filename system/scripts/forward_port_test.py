@@ -586,7 +586,7 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
             assert forward_port.validate_service_name(name) is None, name
 
 
-# --- manifests -----------------------------------------------------------------
+# manifests
 
 
 def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path:
@@ -940,7 +940,7 @@ def test_registration_ignores_the_manifests_references_and_scope_tables(
     assert row["priority"] == "files"
 
 
-# --- the stdlib writer ------------------------------------------------------------
+# the stdlib writer
 
 
 def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_icon(

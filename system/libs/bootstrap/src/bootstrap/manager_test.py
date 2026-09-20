@@ -36,7 +36,7 @@ from bootstrap.manager import (
     main,
 )
 
-# --- _configure_git_global ---
+# _configure_git_global
 
 
 def test_configure_git_global_sets_insteadof_but_not_hookspath(
@@ -71,7 +71,7 @@ def test_configure_git_global_sets_insteadof_but_not_hookspath(
     assert hooks_path == ""
 
 
-# --- _read_host_name ---
+# _read_host_name
 
 
 def test_read_host_name_returns_value_from_data_json(
@@ -104,7 +104,7 @@ def test_read_host_name_returns_none_when_field_missing(
     assert _read_host_name() is None
 
 
-# --- the shared subprocess double (the recovery path, the DRI wake)
+# the shared subprocess double (the recovery path, the DRI wake)
 
 
 class _StubSubprocess:
@@ -138,7 +138,7 @@ class _StubSubprocess:
         )
 
 
-# --- _initialize_workspace_main_branch ---
+# _initialize_workspace_main_branch
 
 
 def _git_in(work_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -238,7 +238,7 @@ def test_initialize_workspace_main_branch_runs_once_per_workspace(
     )
 
 
-# --- _ensure_git_identity ---
+# _ensure_git_identity
 
 
 def test_ensure_git_identity_sets_one_when_absent(
@@ -295,7 +295,7 @@ def test_initialize_workspace_main_branch_no_longer_sets_an_identity(
     assert _git_in(work_dir, "config", "user.email").returncode != 0
 
 
-# --- _install_runtime_cron_entries ---
+# _install_runtime_cron_entries
 
 
 def test_install_runtime_cron_entries_copies_files_with_0644(
@@ -353,7 +353,7 @@ def test_install_runtime_cron_entries_tolerates_unwritable_target(
     _install_runtime_cron_entries(target_dir=tmp_path / "missing")
 
 
-# --- _write_update_recovery_cron_entry ---
+# _write_update_recovery_cron_entry
 
 
 def test_update_recovery_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
@@ -402,7 +402,7 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
 
 
-# --- _apply_container_timezone ---
+# _apply_container_timezone
 
 
 def _make_zoneinfo_tree(tmp_path: Path) -> Path:
@@ -511,7 +511,7 @@ def test_apply_container_timezone_tolerates_oserror(tmp_path: Path) -> None:
     )
 
 
-# --- _fetch_user_timezone ---
+# _fetch_user_timezone
 
 
 def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
@@ -522,7 +522,7 @@ def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
     assert _fetch_user_timezone() == ""
 
 
-# --- _parse_timezone_response ---
+# _parse_timezone_response
 
 
 def test_parse_timezone_response_returns_the_zone_name() -> None:
@@ -558,7 +558,7 @@ def test_parse_timezone_response_rejects_a_non_json_body() -> None:
         _parse_timezone_response(b"<html>bad gateway</html>")
 
 
-# --- _recover_interrupted_update ---
+# _recover_interrupted_update
 
 
 def _clear_marker_on_recover(cmd: list[str]) -> None:

@@ -68,7 +68,7 @@ CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh; also the chat launch band
 CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
 CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
 
-# --- Chat band tunables. Every knob of the chat policy lives in this block. ---
+# Chat band tunables. Every knob of the chat policy lives in this block.
 #
 # How much each engagement signal protects a *fresh* chat, subtracted from
 # ``CHAT_AGENT_BASE``. The recency bonus starts at its max for the most recently

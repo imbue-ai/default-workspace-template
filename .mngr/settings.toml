@@ -10,7 +10,7 @@
 # that misses this budget fails loudly and is rolled back.
 agent_ready_timeout = 45.0
 
-# --- Command defaults ---
+# Command defaults
 
 # Default create command settings -- apply to all mngr create from this repo.
 #
@@ -117,7 +117,7 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
 
-# --- Agent types ---
+# Agent types
 
 # Agent type defaults -- apply to all claude agents created from this repo
 [agent_types.claude]
@@ -430,7 +430,7 @@ settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, s
 # Harness-only instructions, appended to every antigravity agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
-# --- Provider configurations ---
+# Provider configurations
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
 
@@ -575,7 +575,7 @@ host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 
-# --- Create templates ---
+# Create templates
 
 ## these are all for launching the original agent (from outside the sandbox, in the first place)
 

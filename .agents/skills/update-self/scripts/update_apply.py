@@ -858,7 +858,7 @@ def apply_update(
         marker.phase_timings[phase] = now()
         write_marker(marker, repo_root, now)
 
-    # --- Land the merge (skipped when already landed: idempotent re-entry). ---
+    # Land the merge (skipped when already landed: idempotent re-entry).
     if not is_merge_landed:
         merge_argv = (
             ["git", "merge", "--ff-only", merge_ref]
@@ -1228,7 +1228,7 @@ def apply_update(
         )
         return 3
 
-    # --- Post-success bookkeeping (update-self mode only). -----------------------
+    # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
         # For the fast-forward landing the merge commit IS the worker branch's
         # tip, so the sha is re-derivable on any re-run -- which is what keeps
