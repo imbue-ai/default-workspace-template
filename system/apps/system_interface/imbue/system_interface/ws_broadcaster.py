@@ -179,6 +179,10 @@ class WebSocketBroadcaster(MutableModel):
             }
         )
 
+    def broadcast_client_entries_changed(self, client_id: str, entries: Mapping[str, Any]) -> None:
+        """A client's presentation of its pinned entries was written; its own windows take it."""
+        self.broadcast_to_client({"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id)
+
     def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
         """A client's stored active desktop moved; its other windows switch to it."""
         self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})

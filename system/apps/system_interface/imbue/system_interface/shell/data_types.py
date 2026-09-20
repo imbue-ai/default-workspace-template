@@ -3,9 +3,11 @@ from typing import Any
 from typing import Final
 
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import OPEN_LAUNCH_PATH_ID
 from app_manifest.manifest import Pin
+from app_manifest.manifest import PinStyle
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
@@ -36,12 +38,30 @@ from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
 
 
+class FloatingPosition(FrozenModel):
+    """Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop."""
+
+    x: float = Field(ge=0.0, le=1.0, description="Left edge, 0..1")
+    y: float = Field(ge=0.0, le=1.0, description="Top edge, 0..1")
+
+
+class EntryPresentation(FrozenModel):
+    """How one client shows one pinned entry (pinned-taskbar-entries plan section 3.4); global across desktops."""
+
+    mode: EntryMode = Field(description="In the taskbar, or floating above the windows")
+    style: PinStyle = Field(description="Plain, or the style the pin declares")
+    position: FloatingPosition | None = Field(default=None, description="The floating position; None for the default")
+
+
 class ClientRecord(FrozenModel):
     """What the shell keeps about one browser context (desktop contracts.md section 4.3)."""
 
     id: ClientId = Field(description="The client's stored id")
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: AwareDatetime = Field(description="When the client last reported")
+    entries: dict[str, EntryPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each pinned entry, by app name"
+    )
 
 
 class AppInventoryEntry(FrozenModel):

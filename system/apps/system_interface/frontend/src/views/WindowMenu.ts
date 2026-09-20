@@ -7,7 +7,8 @@
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
-import type { AppRecord } from "../model/records";
+import type { AppRecord, PinStyle } from "../model/records";
+import type { EntryLook } from "../reducers/desktopState";
 import type { MenuEntry } from "./Menu";
 import { MENU_DIVIDER } from "./Menu";
 
@@ -43,6 +44,13 @@ export function windowMenuEntries(app: AppRecord | undefined, actions: WindowMen
   return entries;
 }
 
+/** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */
+export interface EntryPresentationActions {
+  readonly look: EntryLook;
+  readonly setMode: (mode: "bar" | "floating") => void;
+  readonly setStyle: (style: PinStyle) => void;
+}
+
 export interface TaskbarEntryMenuActions {
   readonly isMinimized: boolean;
   readonly isMaximized: boolean;
@@ -52,9 +60,23 @@ export interface TaskbarEntryMenuActions {
   readonly unmaximize: () => void;
   /** Null for a pinned window's entry, which offers no Close. */
   readonly close: (() => void) | null;
+  /** Null for an ordinary window's entry, which has no presentation to choose. */
+  readonly presentation: EntryPresentationActions | null;
 }
 
-/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore, Close. */
+/** What "Show as <style>" reads for a style the pin declares. */
+function styleLabel(style: PinStyle): string {
+  switch (style) {
+    case "plain":
+      return "Show as plain entry";
+    case "avatar":
+      return "Show as avatar";
+  }
+}
+
+/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size, then for a pinned entry Float
+ *  or Move to taskbar (not in compact mode, where every entry is in the bar) and the style to show it in, then
+ *  Close for an ordinary entry. */
 export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuEntry[] {
   const entries: MenuEntry[] = [
     actions.isMinimized
@@ -67,6 +89,23 @@ export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isComp
         ? { key: "unmaximize", label: "Restore size", run: actions.unmaximize }
         : { key: "maximize", label: "Maximize", run: actions.maximize },
     );
+  }
+  const presentation = actions.presentation;
+  if (presentation !== null) {
+    const { look, setMode, setStyle } = presentation;
+    const rows: MenuEntry[] = [];
+    if (!isCompact) {
+      rows.push(
+        look.mode === "floating"
+          ? { key: "move-to-taskbar", label: "Move to taskbar", run: () => setMode("bar") }
+          : { key: "float", label: "Float", run: () => setMode("floating") },
+      );
+    }
+    if (look.declaredStyle !== "plain") {
+      const other: PinStyle = look.style === "plain" ? look.declaredStyle : "plain";
+      rows.push({ key: `style-${other}`, label: styleLabel(other), run: () => setStyle(other) });
+    }
+    if (rows.length > 0) entries.push(MENU_DIVIDER, ...rows);
   }
   if (actions.close !== null) {
     entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });

@@ -29,6 +29,9 @@ export interface ThemeMetrics {
   readonly unsnapDistance: number;
   readonly dragThreshold: number;
   readonly touchTarget: number;
+  readonly floatingEntrySize: number;
+  readonly floatingEntryInsetX: number;
+  readonly floatingEntryInsetY: number;
 }
 
 const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
@@ -44,6 +47,9 @@ const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   unsnapDistance: "--desk-unsnap-distance",
   dragThreshold: "--desk-drag-threshold",
   touchTarget: "--desk-touch-target",
+  floatingEntrySize: "--desk-floating-entry-size",
+  floatingEntryInsetX: "--desk-floating-entry-inset-x",
+  floatingEntryInsetY: "--desk-floating-entry-inset-y",
 };
 
 /** Raised when a token the metrics need is missing from the computed style or is not a pixel length. */

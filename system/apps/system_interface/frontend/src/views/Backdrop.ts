@@ -1,9 +1,9 @@
 /**
  * The backdrop (concepts.md section 2.4): the active desktop's wallpaper, its shortcut grid
  * fitted to the current backdrop at render time, its windows in stacking order (each over the
- * live page the pages layer positions for it), the snap preview, and the ghost of a dragged
- * shortcut. Every pixel comes from the store's geometry; nothing here measures the DOM or
- * listens for gestures.
+ * live page the pages layer positions for it), the floating pinned entries above them, the snap
+ * preview, and the ghost of a dragged shortcut. Every pixel comes from the store's geometry;
+ * nothing here measures the DOM or listens for gestures.
  */
 
 import m from "mithril";
@@ -13,7 +13,9 @@ import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
+import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
+import { FloatingEntries } from "./FloatingEntries";
 import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
@@ -27,6 +29,11 @@ export interface BackdropAttrs {
   readonly focusedWindowId: string | null;
   readonly selectedShortcutKey: string | null;
   readonly openMenuWindowId: string | null;
+  /** The pinned entries this client draws floating above the windows. */
+  readonly floatingEntries: readonly TaskbarEntry[];
+  readonly openEntryMenuWindowId: string | null;
+  readonly onEntryClick: (windowId: string) => void;
+  readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
   readonly isOverlayOpen: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
@@ -133,6 +140,13 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               ];
             }),
           ),
+          m(FloatingEntries, {
+            entries: attrs.floatingEntries,
+            rectOf: (entry) => store.floatingEntryRect(entry.window.app, entry.look?.position ?? null),
+            openMenuWindowId: attrs.openEntryMenuWindowId,
+            onClick: attrs.onEntryClick,
+            onContextMenu: attrs.onEntryContextMenu,
+          }),
           snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
             ? shortcutGhost(gesture.iconPosition, cellRect(gesture.targetCell, metrics), appByName(state, gesture.app))

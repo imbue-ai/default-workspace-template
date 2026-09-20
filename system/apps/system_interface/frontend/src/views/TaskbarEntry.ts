@@ -24,12 +24,16 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
     const { entry, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     const isDimmed = entry.isMinimized || entry.window.is_settling;
+    const look = entry.look;
     return m(
       "button",
       {
         type: "button",
         "data-taskbar-entry": entry.window.id,
         "data-pinned": entry.isPinned ? "true" : "false",
+        "data-pinned-entry": look === null ? undefined : entry.window.app,
+        "data-entry-mode": look === null ? undefined : "bar",
+        "data-entry-style": look === null ? undefined : look.style,
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "data-settling": entry.window.is_settling ? "true" : "false",

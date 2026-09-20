@@ -20,6 +20,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         isMinimized: false,
         isFocused: true,
         isPinned: false,
+        look: null,
       },
       {
         window: windowRecord("win-2", "docs", "/b"),
@@ -28,6 +29,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         isMinimized: true,
         isFocused: false,
         isPinned: false,
+        look: null,
       },
       {
         window: windowRecord("win-3", "docs", "/new", { is_settling: true }),
@@ -36,6 +38,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         isMinimized: true,
         isFocused: false,
         isPinned: true,
+        look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
       },
     ],
     isCompact: false,
@@ -70,6 +73,9 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-focused"))).toEqual(["true", "false", "false"]);
     expect(entries.map((entry) => entry.getAttribute("data-settling"))).toEqual(["false", "false", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
+    expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
+    expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
+    expect(entries[2].getAttribute("data-entry-style")).toBe("avatar");
     expect(entries[0].querySelector(".taskbar-entry-title")?.textContent).toBe("Plan");
     (entries[1] as HTMLElement).click();
     expect(onEntryClick).toHaveBeenCalledWith("win-2");

@@ -43,6 +43,9 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-unsnap-distance": "12px",
   "--desk-drag-threshold": "4px",
   "--desk-touch-target": "32px",
+  "--desk-floating-entry-size": "56px",
+  "--desk-floating-entry-inset-x": "16px",
+  "--desk-floating-entry-inset-y": "12px",
 };
 
 describe("the theme file", () => {

@@ -8,6 +8,7 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { HttpError, errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
+  parseClientRecord,
   parseClientRecords,
   parseDesktop,
   parseDesktops,
@@ -19,6 +20,7 @@ import type {
   ClientRecord,
   Desktop,
   DesktopShortcut,
+  EntryPresentation,
   GridCell,
   IfPresent,
   Layout,
@@ -172,6 +174,20 @@ export async function savePlacements(desktopId: string, request: PlacementsSaveR
 export async function fetchClients(): Promise<ClientRecord[]> {
   const data = (await getJson(apiUrl("/api/clients"))) as { clients?: unknown };
   return parseClientRecords(data.clients);
+}
+
+/** Write how this client shows one pinned entry; answers the client record. */
+export async function setEntryPresentation(
+  clientId: string,
+  app: string,
+  presentation: EntryPresentation,
+): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(
+      apiUrl(`/api/clients/${encodeURIComponent(clientId)}/entries/${encodeURIComponent(app)}`),
+      presentation,
+    ),
+  );
 }
 
 export async function fetchWallpapers(): Promise<WallpaperListing[]> {

@@ -175,9 +175,9 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     window = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]
 
     clients = client.get("/api/clients").get_json()["clients"]
-    assert [(entry["id"], entry["is_connected"], entry["active_desktop"]) for entry in clients] == [
-        ("c1", True, "home"),
-        ("c2", False, "home"),
+    assert [(entry["id"], entry["is_connected"], entry["active_desktop"], entry["entries"]) for entry in clients] == [
+        ("c1", True, "home", {}),
+        ("c2", False, "home", {}),
     ]
 
     document = client.get("/api/inventory").get_json()
@@ -434,6 +434,66 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     )
     assert [window["path"] for window in _desktop_windows(client)] == ["/", "/?session=t2"]
     assert "desktops_updated" in [message["type"] for message in drain_messages(first_queue)]
+
+
+def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_checked_against_the_pin(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "avatar", "linked", "floating"))
+    )
+    app = shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    written = client.post(
+        "/api/clients/c1/entries/buddy",
+        json={"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}},
+    )
+    assert written.status_code == 200
+    assert written.get_json()["entries"] == {
+        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}
+    }
+    assert written.get_json()["is_connected"] is True
+    assert drain_messages(first_queue) == [
+        {
+            "type": "client_entries_changed",
+            "client_id": "c1",
+            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}},
+        }
+    ]
+    assert drain_messages(second_queue) == []
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert "buddy" in listed["c1"]["entries"] and listed["c2"]["entries"] == {}
+    # The plain style is always on offer; a style the pin does not declare, an unpinned app, an unknown app, a
+    # position outside the backdrop, and an unknown client are refused.
+    plain = client.post("/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "plain", "position": None})
+    assert plain.status_code == 200 and plain.get_json()["entries"]["buddy"]["mode"] == "bar"
+    assert (
+        client.post("/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "dot", "position": None}).status_code
+        == 400
+    )
+    assert (
+        client.post("/api/clients/c1/entries/files", json={"mode": "bar", "style": "plain", "position": None}).status_code
+        == 400
+    )
+    assert (
+        client.post("/api/clients/c1/entries/nope", json={"mode": "bar", "style": "plain", "position": None}).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/buddy", json={"mode": "floating", "style": "plain", "position": {"x": 1.5, "y": 0}}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post("/api/clients/ghost/entries/buddy", json={"mode": "bar", "style": "plain", "position": None}).status_code
+        == 404
+    )
 
 
 # The desktop routes (desktop contracts.md section 5)

@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  clientRecord,
+  desktopRecord,
+  placementRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -61,8 +68,8 @@ afterEach(() => {
 describe("bootstrap", () => {
   it("lands on the recorded desktop, reports it, and fetches its layout", async () => {
     api.clients = [
-      { id: CLIENT, active_desktop: "work" },
-      { id: "other", active_desktop: "home" },
+      clientRecord(CLIENT, { active_desktop: "work" }),
+      clientRecord("other", { active_desktop: "home" }),
     ];
     const store = await startedStore();
     expect(store.getState().activeDesktopId).toBe("work");
@@ -71,7 +78,7 @@ describe("bootstrap", () => {
   });
 
   it("a deep link's desktop wins, and its open and launch wait for the apps to arrive over the socket", async () => {
-    api.clients = [{ id: CLIENT, active_desktop: "work" }];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
     const store = makeStore();
     const started = store.start({
       desktopId: "home",
@@ -107,7 +114,7 @@ describe("bootstrap", () => {
     const store = await startedStore();
     socket.deliver().onConnected();
     // Another window of this client switched to work meanwhile; the push never reached this one.
-    api.clients = [{ id: CLIENT, active_desktop: "work" }];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
     api.writeLayout("work", CLIENT, { updated_at: null, placements: [] });
     socket.deliver().onConnected();
     await settle();
@@ -662,6 +669,83 @@ describe("gestures", () => {
     store.endShortcutDrag({ x: 230, y: 260 });
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
+    expect(store.getGesture()).toBeNull();
+  });
+});
+
+describe("pinned entries", () => {
+  const pinnedApp = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
+
+  async function pinnedStore(): Promise<DesktopStore> {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+      desktopRecord("work"),
+    ];
+    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "floating", style: "plain", position: null } } })];
+    const store = makeStore();
+    await store.start(NO_LINK);
+    socket.deliver().onAppsUpdated([appRecord("docs"), pinnedApp]);
+    return store;
+  }
+
+  it("loads this client's entries with its record and takes the shell's word on a change", async () => {
+    const store = await pinnedStore();
+    expect(store.getState().entries).toEqual({ buddy: { mode: "floating", style: "plain", position: null } });
+    socket.deliver().onClientEntriesChanged({ clientId: "other", entries: {} });
+    expect(store.getState().entries.buddy.mode).toBe("floating");
+    socket.deliver().onClientEntriesChanged({
+      clientId: CLIENT,
+      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+    });
+    expect(store.getState().entries).toEqual({ buddy: { mode: "bar", style: "avatar", position: null } });
+  });
+
+  it("writes one field of the presentation over the entry's current look", async () => {
+    const store = await pinnedStore();
+    await store.setEntryStyle("buddy", "avatar");
+    expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:floating:avatar:-");
+    await store.setEntryMode("buddy", "bar");
+    expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:bar:avatar:-");
+    expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
+    api.refusal = "no such client";
+    await store.setEntryMode("buddy", "floating");
+    expect(notices).toEqual(["Could not change the entry: no such client"]);
+    expect(store.getState().entries.buddy.mode).toBe("bar");
+    // An app with no pinned window on the active desktop has nothing to write.
+    api.refusal = null;
+    const attempted = api.calls.filter((call) => call.startsWith("setEntryPresentation")).length;
+    await store.setEntryMode("docs", "floating");
+    expect(api.calls.filter((call) => call.startsWith("setEntryPresentation"))).toHaveLength(attempted);
+  });
+
+  it("drags a floating entry, clamped inside the backdrop, and writes its position once on release", async () => {
+    const store = await pinnedStore();
+    // Grabbed 10 pixels inside the box at its default corner (928, 732).
+    store.beginFloatingEntryDrag("buddy", { x: 938, y: 742 }, { x: 10, y: 10 }, null);
+    expect(store.getGesture()).toMatchObject({
+      kind: "floating-entry",
+      app: "buddy",
+      currentRect: { x: 928, y: 732 },
+    });
+    store.updateFloatingEntryDrag({ x: 110, y: 210 });
+    expect(store.floatingEntryRect("buddy", null)).toEqual({ x: 100, y: 200, width: 56, height: 56 });
+    store.updateFloatingEntryDrag({ x: 5, y: 1000 });
+    expect(store.floatingEntryRect("buddy", null)).toEqual({ x: 0, y: 744, width: 56, height: 56 });
+    store.endFloatingEntryDrag({ x: 110, y: 210 });
+    // Landed where it was dropped before the shell has answered.
+    expect(store.getGesture()).toBeNull();
+    expect(store.getState().entries.buddy.position).toEqual({ x: 0.1, y: 0.25 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("setEntryPresentation"))).toEqual([
+      "setEntryPresentation:client-1:buddy:floating:plain:0.1,0.25",
+    ]);
+    expect(store.floatingEntryRect("buddy", { x: 0.1, y: 0.25 })).toEqual({ x: 100, y: 200, width: 56, height: 56 });
+    expect(store.gestureRectFor("win-9")).toBeNull();
+    // Compact mode has no floating entries to drag.
+    store.setThemeMetrics(METRICS, { isCompact: true, isTouch: true });
+    store.beginFloatingEntryDrag("buddy", { x: 10, y: 10 }, { x: 0, y: 0 }, null);
     expect(store.getGesture()).toBeNull();
   });
 });

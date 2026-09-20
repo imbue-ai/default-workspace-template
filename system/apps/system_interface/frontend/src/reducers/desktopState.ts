@@ -9,8 +9,12 @@
 import type {
   AppRecord,
   Desktop,
+  EntryMode,
+  EntryPresentation,
+  FloatingPosition,
   Frame,
   Layout,
+  PinStyle,
   Placement,
   StoredWindowPath,
   WindowRecord,
@@ -47,6 +51,8 @@ export interface DesktopState {
   /** The version the last save wrote, so ``isLayoutDirty`` is a comparison rather than a flag. */
   readonly savedLayoutVersion: number;
   readonly modes: RenderModes;
+  /** This client's presentation of each pinned entry, by app name (global across desktops). */
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
 }
 
 export function initialDesktopState(clientId: string, modes: RenderModes): DesktopState {
@@ -62,6 +68,7 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     layoutVersion: 0,
     savedLayoutVersion: 0,
     modes,
+    entries: {},
   };
 }
 
@@ -94,7 +101,9 @@ export type DesktopEvent =
     }
   | { readonly type: "window_closed_here"; readonly desktopId: string; readonly windowId: string }
   | { readonly type: "window_location_reported"; readonly desktopId: string; readonly window: WindowRecord }
-  | { readonly type: "render_modes_changed"; readonly modes: RenderModes };
+  | { readonly type: "render_modes_changed"; readonly modes: RenderModes }
+  /** This client's entry presentations, as its record or a ``client_entries_changed`` says. */
+  | { readonly type: "entries_updated"; readonly entries: Readonly<Record<string, EntryPresentation>> };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
 export function isLayoutDirty(state: DesktopState): boolean {
@@ -227,6 +236,8 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return withWindowLocationReported(state, event.desktopId, event.window);
     case "render_modes_changed":
       return { ...state, modes: event.modes };
+    case "entries_updated":
+      return { ...state, entries: event.entries };
   }
 }
 
@@ -307,6 +318,15 @@ export function isWindowMinimized(placements: readonly Placement[], windowId: st
   return placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true;
 }
 
+/** What a pinned entry looks like for this client: the mode and style it chose, or the pin's defaults. */
+export interface EntryLook {
+  readonly mode: EntryMode;
+  readonly style: PinStyle;
+  /** The style the pin declares, which the client may choose over plain; ``plain`` when it declares none. */
+  readonly declaredStyle: PinStyle;
+  readonly position: FloatingPosition | null;
+}
+
 /** One entry of the taskbar: a window of the active desktop, in opening order. */
 export interface TaskbarEntry {
   readonly window: WindowRecord;
@@ -316,6 +336,22 @@ export interface TaskbarEntry {
   readonly isFocused: boolean;
   /** The app's pinned window: its entry is always there and offers no Close. */
   readonly isPinned: boolean;
+  /** How this client shows the entry; null for an ordinary window's entry. */
+  readonly look: EntryLook | null;
+}
+
+/** The look a pinned entry has for this client (plan section 3.4): its own presentation, else the pin's defaults. */
+export function entryLook(state: DesktopState, window: WindowRecord, app: AppRecord | undefined): EntryLook | null {
+  if (!window.is_pinned) return null;
+  const pin = app?.pin ?? null;
+  const declaredStyle = pin?.style ?? "plain";
+  const own = state.entries[window.app];
+  return {
+    mode: own?.mode ?? pin?.default_mode ?? "bar",
+    style: own?.style ?? declaredStyle,
+    declaredStyle,
+    position: own?.position ?? null,
+  };
 }
 
 export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
@@ -332,6 +368,23 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
       isMinimized: isWindowMinimized(placements, window.id),
       isFocused: window.id === focused,
       isPinned: window.is_pinned,
+      look: entryLook(state, window, app),
     };
   });
+}
+
+/** Whether an entry is drawn floating right now: its mode says so, and the desktop is not compact (which
+ *  renders every entry in the bar without rewriting the mode). */
+export function isEntryFloating(entry: TaskbarEntry, modes: RenderModes): boolean {
+  return entry.look !== null && entry.look.mode === "floating" && !modes.isCompact;
+}
+
+/** The entries the bar draws, in opening order. */
+export function barEntries(state: DesktopState): TaskbarEntry[] {
+  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry, state.modes));
+}
+
+/** The entries drawn floating above the windows. */
+export function floatingEntries(state: DesktopState): TaskbarEntry[] {
+  return taskbarEntries(state).filter((entry) => isEntryFloating(entry, state.modes));
 }

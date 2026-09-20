@@ -12,11 +12,16 @@ import { StalePlacementsSaveError } from "../model/api";
 import { launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
+  ClientRecord,
   Desktop,
   DesktopShortcut,
+  EntryMode,
+  EntryPresentation,
+  FloatingPosition,
   GridCell,
   IfPresent,
   Layout,
+  PinStyle,
   Placement,
   SharingMode,
   ShortcutMode,
@@ -39,6 +44,7 @@ import {
   unsnapFrame,
 } from "../geometry/frames";
 import type { PixelPoint, PixelRect, PixelSize, ResizeEdge } from "../geometry/frames";
+import { defaultFloatingPosition, floatingEntryRect, floatingPositionFromPixels } from "../geometry/floating";
 import { cellAtPoint, gridDimensions } from "../geometry/grid";
 import type { GridDimensions } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
@@ -47,6 +53,7 @@ import {
   activeFocusedWindowId,
   appByName,
   effectiveWindow,
+  entryLook,
   findWindow,
   initialDesktopState,
   isAppStoppable,
@@ -57,7 +64,13 @@ import {
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
 import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
-import type { ActiveDesktopChangedEvent, DesktopSocket, LayoutOpEvent, PlacementsUpdatedEvent } from "./socket";
+import type {
+  ActiveDesktopChangedEvent,
+  ClientEntriesChangedEvent,
+  DesktopSocket,
+  LayoutOpEvent,
+  PlacementsUpdatedEvent,
+} from "./socket";
 
 // A gesture's save lands shortly after it ends; the shell edits the saved layout for agent ops, and
 // an op that follows a gesture has to see the gesture in the file.
@@ -90,8 +103,9 @@ export interface DesktopApi {
   ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
-  fetchClients(): Promise<{ id: string; active_desktop: string | null }[]>;
+  fetchClients(): Promise<ClientRecord[]>;
   setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
+  setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
 }
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
@@ -149,7 +163,15 @@ export interface ShortcutGesture {
   readonly targetCell: GridCell;
 }
 
-export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture;
+/** A floating entry being dragged: its box's top-left corner follows the pointer less the grab offset. */
+export interface FloatingEntryGesture {
+  readonly kind: "floating-entry";
+  readonly app: string;
+  readonly grabOffset: PixelPoint;
+  readonly currentRect: PixelRect;
+}
+
+export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
 
 type Listener = () => void;
 
@@ -287,10 +309,11 @@ export class DesktopStore {
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
+      onClientEntriesChanged: (event) => this.takeClientEntriesChanged(event),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
     let desktops: Desktop[];
-    let clients: Awaited<ReturnType<DesktopApi["fetchClients"]>>;
+    let clients: ClientRecord[];
     try {
       [desktops, clients] = await Promise.all([
         this.deps.api.fetchDesktops(),
@@ -306,7 +329,9 @@ export class DesktopStore {
     }
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
-    const recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
+    const own = clients.find((client) => client.id === this.deps.clientId);
+    if (own !== undefined) this.dispatch({ type: "entries_updated", entries: own.entries });
+    const recorded = own?.active_desktop ?? null;
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
@@ -411,6 +436,57 @@ export class DesktopStore {
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || event.desktopId === this.state.activeDesktopId) return;
     void this.switchDesktop(event.desktopId, { isFollowingPush: true });
+  }
+
+  private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
+    if (event.clientId !== this.deps.clientId) return;
+    this.dispatch({ type: "entries_updated", entries: event.entries });
+  }
+
+  /** Write how this client shows a pinned entry (its mode, style, and floating position). Applied at once, so a
+   *  released drag lands where it was dropped rather than at the old spot until the shell answers; the record
+   *  the shell answers is then taken, and a refusal puts the old presentation back. */
+  async setEntryPresentation(app: string, presentation: EntryPresentation): Promise<void> {
+    const previous = this.state.entries;
+    this.dispatch({ type: "entries_updated", entries: { ...previous, [app]: presentation } });
+    try {
+      const record = await this.deps.api.setEntryPresentation(this.deps.clientId, app, presentation);
+      this.dispatch({ type: "entries_updated", entries: record.entries });
+    } catch (error) {
+      this.dispatch({ type: "entries_updated", entries: previous });
+      this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
+    }
+  }
+
+  /** The presentation a write of one field starts from: the entry's current look. */
+  private presentationOf(app: string): EntryPresentation | null {
+    const desktop = activeDesktop(this.state);
+    const window = desktop?.windows.find((candidate) => candidate.app === app && candidate.is_pinned);
+    if (window === undefined) return null;
+    const look = entryLook(this.state, window, appByName(this.state, app));
+    return look === null ? null : { mode: look.mode, style: look.style, position: look.position };
+  }
+
+  setEntryMode(app: string, mode: EntryMode): Promise<void> {
+    const current = this.presentationOf(app);
+    return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, mode });
+  }
+
+  setEntryStyle(app: string, style: PinStyle): Promise<void> {
+    const current = this.presentationOf(app);
+    return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, style });
+  }
+
+  /** Where a floating entry's box is right now, in backdrop pixels: the drag's rectangle while one moves it,
+   *  else its stored position (the default corner when it has none), clamped into the backdrop. */
+  floatingEntryRect(app: string, position: FloatingPosition | null): PixelRect {
+    const gesture = this.gesture;
+    if (gesture !== null && gesture.kind === "floating-entry" && gesture.app === app) return gesture.currentRect;
+    return floatingEntryRect(
+      position ?? defaultFloatingPosition(this.backdrop, this.metrics),
+      this.backdrop,
+      this.metrics,
+    );
   }
 
   handleLayoutOp(event: LayoutOpEvent): void {
@@ -842,6 +918,43 @@ export class DesktopStore {
     void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
   }
 
+  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. */
+  beginFloatingEntryDrag(
+    app: string,
+    pointer: PixelPoint,
+    grabOffset: PixelPoint,
+    position: FloatingPosition | null,
+  ): void {
+    if (this.state.modes.isCompact) return;
+    const start = this.floatingEntryRect(app, position);
+    this.gesture = { kind: "floating-entry", app, grabOffset, currentRect: start };
+    this.updateFloatingEntryDrag(pointer);
+  }
+
+  updateFloatingEntryDrag(pointer: PixelPoint): void {
+    const gesture = this.gesture;
+    if (gesture === null || gesture.kind !== "floating-entry") return;
+    const corner = { x: pointer.x - gesture.grabOffset.x, y: pointer.y - gesture.grabOffset.y };
+    const clamped = floatingPositionFromPixels(corner, this.backdrop, this.metrics);
+    this.gesture = { ...gesture, currentRect: floatingEntryRect(clamped, this.backdrop, this.metrics) };
+    this.notifyListeners();
+  }
+
+  /** The drag ended: the position is written to the client record, once. */
+  endFloatingEntryDrag(pointer: PixelPoint): void {
+    const gesture = this.gesture;
+    if (gesture === null || gesture.kind !== "floating-entry") return;
+    this.updateFloatingEntryDrag(pointer);
+    const settled = this.gesture;
+    this.gesture = null;
+    this.notifyListeners();
+    if (settled === null || settled.kind !== "floating-entry") return;
+    const current = this.presentationOf(settled.app);
+    if (current === null) return;
+    const position = floatingPositionFromPixels(settled.currentRect, this.backdrop, this.metrics);
+    void this.setEntryPresentation(settled.app, { ...current, position });
+  }
+
   cancelGesture(): void {
     if (this.gesture === null) return;
     this.gesture = null;
@@ -928,7 +1041,8 @@ export class DesktopStore {
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
     const gesture = this.gesture;
-    if (gesture === null || gesture.kind === "shortcut" || gesture.windowId !== windowId) return null;
+    if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
+    if (gesture.windowId !== windowId) return null;
     return gesture.currentRect;
   }
 

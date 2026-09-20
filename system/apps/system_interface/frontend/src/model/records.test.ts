@@ -166,7 +166,26 @@ describe("the small helpers", () => {
       active_desktop: null,
       last_seen: "now",
       is_connected: true,
+      entries: {},
     });
+    expect(
+      parseClientRecord({
+        id: "c1",
+        active_desktop: null,
+        last_seen: "now",
+        is_connected: true,
+        entries: { docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } },
+      }).entries,
+    ).toEqual({ docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } });
+    expect(() =>
+      parseClientRecord({
+        id: "c1",
+        active_desktop: null,
+        last_seen: "now",
+        is_connected: true,
+        entries: { docs: { mode: "hidden", style: "plain", position: null } },
+      }),
+    ).toThrow(WireShapeError);
     expect(shortcutKey("docs", "new")).toBe("docs:new");
   });
 
