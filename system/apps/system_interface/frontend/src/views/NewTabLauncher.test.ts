@@ -224,14 +224,14 @@ describe("NewTabLauncher", () => {
     return attrs;
   }
 
-  it("in a preview shell, a tile runs nothing", () => {
+  it("in a preview shell, a tile still creates", () => {
     const restore = markPageAsPreviewShell();
     try {
       const attrs = mount({});
       const tile = root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!;
-      expect(tile.getAttribute("aria-disabled")).toBe("true");
+      expect(tile.getAttribute("aria-disabled")).toBeNull();
       tile.click();
-      expect(attrs.onRunAction).not.toHaveBeenCalled();
+      expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new", {});
     } finally {
       restore();
     }
