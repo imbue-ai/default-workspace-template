@@ -27,6 +27,8 @@ export interface BackdropAttrs {
   readonly focusedWindowId: string | null;
   readonly selectedShortcutKey: string | null;
   readonly openMenuWindowId: string | null;
+  /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
+  readonly isOverlayOpen: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint) => void;
@@ -118,6 +120,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isCompact: state.modes.isCompact,
                   isTouch: state.modes.isTouch,
                   isMenuOpen: attrs.openMenuWindowId === window.id,
+                  isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                   isPlacedHere: store.isPlacedHere(window.id),
                   onStartApp:
                     app !== undefined && !app.is_running && store.canStopApp(app)
