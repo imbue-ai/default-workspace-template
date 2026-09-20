@@ -214,7 +214,19 @@ export function App(): m.Component<AppAttrs> {
           : null,
       close: () => void current.closeWindow(windowId),
     });
-    return m(Menu, { anchor, placement: "below", marker: "window-menu", entries, onClose: closeMenu });
+    return m(Menu, {
+      anchor,
+      placement: "below",
+      marker: "window-menu",
+      entries,
+      onClose: closeMenu,
+      isInsideTrigger: isWindowMenuButton,
+    });
+  }
+
+  /** The kebab that opened the window menu: its press must not close the card before its click toggles it. */
+  function isWindowMenuButton(target: Node): boolean {
+    return target instanceof Element && target.closest('[data-window-control="menu"]') !== null;
   }
 
   function entryMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
