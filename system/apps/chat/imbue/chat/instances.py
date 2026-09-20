@@ -35,7 +35,6 @@ from app_instances.primitives import InstanceUrl
 from app_instances.primitives import LocationTarget
 from app_instances.primitives import MAX_INSTANCE_TITLE_LENGTH
 from app_manifest.primitives import ActionId
-from app_manifest.primitives import AppName
 from pydantic import Field
 from pydantic import PrivateAttr
 
@@ -61,14 +60,12 @@ from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import AGENT_ID_PATTERN
+from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
-
-# The registered name of the chat app, which names the shell nudge route and the manifest.
-CHAT_APP_NAME: Final[AppName] = AppName("chat")
 
 NEW_ACTION_ID: Final[ActionId] = ActionId("new")
 SUBAGENT_ACTION_ID: Final[ActionId] = ActionId("subagent")

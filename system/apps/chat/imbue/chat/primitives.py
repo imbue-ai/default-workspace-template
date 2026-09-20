@@ -10,8 +10,14 @@ type checker finds every crossing between the two, and a successor agent's chat 
 import re
 from typing import Final
 
+from app_manifest.primitives import AppName
+
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
+
+# The chat app's registered name: the one app that may name itself to the shell (the nudge route,
+# the manifest, the desktop's open op).
+CHAT_APP_NAME: Final[AppName] = AppName("chat")
 
 # An agent id: ``agent-<32 hex>`` as mngr mints it, with the instance-key alphabet so a test
 # fixture's id counts too. A chat id has the same shape (it is its first agent's id).

@@ -77,7 +77,7 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
-from imbue.chat.instances import CHAT_APP_NAME
+from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.instances import build_chat_instance_source
 from imbue.chat.instances import parse_subagent_key
 from imbue.chat.models import AgentCreationError
