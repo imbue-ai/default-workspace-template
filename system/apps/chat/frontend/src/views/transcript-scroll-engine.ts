@@ -122,7 +122,7 @@ export interface TranscriptScrollDataSource {
 
 export interface TranscriptScrollEngineConfig {
   dataSource: TranscriptScrollDataSource;
-  /** Defaults to always-visible (SubagentView); ChatPanel feeds dockview's tab visibility. */
+  /** Defaults to always-visible (SubagentView); ChatPanel feeds whether its frame is on screen. */
   isVisible?: () => boolean;
 }
 
@@ -300,7 +300,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         }
       : null;
   if (debugHandles !== null) {
-    // Window globals are last-engine-wins (hidden dockview panels overwrite
+    // Window globals are last-engine-wins (a hidden window's page overwrites
     // them); attach() also puts the handles on this engine's own scroll
     // element, which is unambiguous when several transcripts are mounted.
     Object.assign(window as unknown as Record<string, unknown>, debugHandles);

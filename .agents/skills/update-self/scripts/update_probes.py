@@ -1,5 +1,5 @@
 """Liveness and frontend probes: the pre-flight boots of the merged shell and chat app,
-the shell's health poll, the instances-API poll of every critical app that serves one,
+the shell's health poll, the health poll of every critical app the user can open,
 the served-bundle check, and the view refresh that follows a change.
 """
 
@@ -12,7 +12,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable
 
 from update_banding import ExpendWrapper, as_expendable
 from update_layout import (
@@ -48,24 +48,17 @@ FRONTEND_BUILT_HEADER = "x-frontend-built"
 # real app shell from the placeholder even on a backend too old for the header.
 _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 
-# The shell's probe route (the workspace app model, contracts section 5): alive,
-# and whether the built frontend is being served.
+# The probe route the shell and every critical app serve: 200 with a JSON body once
+# the app is usable rather than merely bound (the chat answers it only after its
+# first agent list arrived; the terminal wrapper once it can hand out sessions).
 HEALTH_PATH = "/api/health"
 
 # The chat app's own probe route, polled by its pre-flight boot: ``--preflight`` runs no
-# agent manager, so the instances API is not there to ask, and health is the boot
-# having imported mngr and the harness plugins and bound its socket.
+# agent manager, and health is the boot having imported mngr and the harness plugins
+# and bound its socket.
 CHAT_HEALTH_PATH = "/api/health"
 # The chat program's entry point; a tree without it has no chat program to pre-flight.
 CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
-
-# The instances API (the workspace app model, contracts section 4), polled after the
-# restart on every critical app that serves instances: the route the shell reads, so
-# it is the one that says the app is usable rather than merely bound. It answers 503
-# while the app is initialising (the chat, until its first agent list arrives) and
-# hangs when the app's own machinery is stuck -- both of which a plain health route
-# would pass over.
-INSTANCES_PATH = "/_instances"
 
 SERVE_PATH = "/"
 
@@ -116,22 +109,11 @@ def has_chat_program(repo_root: Path) -> bool:
     return (repo_root / CHAT_PROGRAM_ENTRY).is_file()
 
 
-class CriticalInstanceApp(NamedTuple):
-    """An app the apply holds to its instances API after the restart: one whose
-    manifest says ``critical = true`` and ``instances = true``.
-
-    ``instances_url`` is the manifest's own declaration when it makes one (the
-    terminal's sidecar port); ``None`` means the API lives at the app URL, which
-    only the registry knows.
-    """
-
-    name: str
-    instances_url: str | None
-
-
-def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, ...]:
-    """Every critical app with an instances API in the tree at ``repo_root``, in
-    directory order.
+def read_critical_apps(repo_root: Path) -> tuple[str, ...]:
+    """The name of every critical app the user can open in the tree at ``repo_root``,
+    in directory order: the manifests that say ``critical = true`` and not
+    ``internal = true``. The shell is internal and has its own probe; an internal
+    sidecar such as ``terminal-pty`` is covered by the app that fronts it.
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback) rather than the registry: right after the restart the registry
@@ -144,7 +126,7 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
         return ()
-    apps: list[CriticalInstanceApp] = []
+    names: list[str] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
         if not manifest_path.is_file():
@@ -164,23 +146,10 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
                 f"its {MANIFEST_FILENAME} names no app.\n"
             )
             continue
-        if (
-            manifest.get("critical") is not True
-            or manifest.get("instances") is not True
-        ):
+        if manifest.get("critical") is not True or manifest.get("internal") is True:
             continue
-        declared_url = manifest.get("instances_url")
-        apps.append(
-            CriticalInstanceApp(
-                name=name,
-                instances_url=(
-                    declared_url
-                    if isinstance(declared_url, str) and declared_url
-                    else None
-                ),
-            )
-        )
-    return tuple(apps)
+        names.append(name)
+    return tuple(names)
 
 
 def _read_registry_rows(repo_root: Path) -> list:
@@ -209,18 +178,17 @@ def registry_app_url(repo_root: Path, app_name: str) -> str | None:
     return None
 
 
-def instances_probe_url(repo_root: Path, app: CriticalInstanceApp) -> str | None:
-    """Where ``app``'s instances API is reached right now: the manifest's own
-    ``instances_url``, else the registry row's ``url``; ``None`` while the app has
-    no row yet."""
-    base = app.instances_url or registry_app_url(repo_root, app.name)
+def health_probe_url(repo_root: Path, app_name: str) -> str | None:
+    """Where ``app_name``'s health route is reached right now: under the URL its
+    registry row names; ``None`` while the app has no row yet."""
+    base = registry_app_url(repo_root, app_name)
     if base is None:
         return None
-    return f"{base.rstrip('/')}{INSTANCES_PATH}"
+    return f"{base.rstrip('/')}{HEALTH_PATH}"
 
 
-def is_instances_answer(page: FetchedPage | None) -> bool:
-    """Whether a response is the instances API answering: 200 with a JSON body.
+def is_health_answer(page: FetchedPage | None) -> bool:
+    """Whether a response is the app's health route answering: 200 with a JSON body.
 
     The body's type is what tells the app from a stale registry row: until the
     restarted app re-registers at the end of its boot, its row can still name
@@ -232,27 +200,27 @@ def is_instances_answer(page: FetchedPage | None) -> bool:
     )
 
 
-def wait_instances_healthy(
+def wait_app_healthy(
     http: HttpClient,
     repo_root: Path,
-    app: CriticalInstanceApp,
+    app_name: str,
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
 ) -> str | None:
-    """Poll ``app``'s instances API until it answers, re-reading the registry on
+    """Poll ``app_name``'s health route until it answers, re-reading the registry on
     every attempt so the poll follows the app's own re-registration. Returns
     ``None`` once it answered, else what the last attempt found."""
     last_finding = ""
     for index in range(attempts):
-        url = instances_probe_url(repo_root, app)
+        url = health_probe_url(repo_root, app_name)
         if url is None:
-            last_finding = _describe_missing_registry_url(repo_root, app.name)
+            last_finding = _describe_missing_registry_url(repo_root, app_name)
         else:
             page = http.get_page(url, timeout=5.0)
-            if is_instances_answer(page):
+            if is_health_answer(page):
                 return None
-            last_finding = _describe_instances_non_answer(url, page)
+            last_finding = _describe_health_non_answer(url, page)
         if index < attempts - 1:
             sleeper(interval)
     return last_finding
@@ -275,14 +243,14 @@ def _describe_missing_registry_url(repo_root: Path, app_name: str) -> str:
     return f"the app registry at {APPS_REGISTRY_PATH} never listed '{app_name}'"
 
 
-def _describe_instances_non_answer(url: str, page: FetchedPage | None) -> str:
+def _describe_health_non_answer(url: str, page: FetchedPage | None) -> str:
     if page is None:
         return f"{url} did not answer"
     if page.status != 200:
         return f"{url} answered HTTP {page.status}"
     return (
         f"{url} answered 200 but as '{page.content_type}' rather than JSON, so it is "
-        "not the app's instances API (a registry row that still names another server)"
+        "not the app's health route (a registry row that still names another server)"
     )
 
 

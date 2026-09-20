@@ -123,7 +123,7 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
   let currentChatId: string | null = null;
 
-  // Whether the page's frame is on screen. The shell keeps a hidden tab's frame mounted
+  // Whether the page's frame is on screen. The shell keeps a minimized window's frame mounted
   // and mithril redraws globally, so the component keeps running while hidden against an
   // element collapsed to zero size; running scroll work then would corrupt the retained
   // scroll position. The page feeds the shell's authoritative visibility in via the

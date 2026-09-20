@@ -3,15 +3,13 @@
  * next to its target, positioned (fixed) under the target after a hover-intent
  * delay.
  *
- * Tab content in dockview can use neither of the usual tooltip mechanisms.
- * Native ``title`` is suppressed: dockview marks every tab ``draggable``
- * (tab.js sets ``element.draggable = true``, plus
- * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble is
- * clipped by the tab strip's overflow (``.dv-tabs-container`` is
- * ``overflow: auto`` and ``.dv-groupview`` is ``overflow: hidden``). A
- * body-level, fixed-position element driven by our own listeners avoids both:
- * it is not a native tooltip, and it is not inside the clipping container.
+ * The desktop's chrome can use neither of the usual tooltip mechanisms.
+ * Native ``title`` is suppressed on anything draggable (a window's title bar,
+ * a shortcut icon): Chromium hides ``title`` tooltips on draggable elements
+ * and their descendants. A CSS ``::after`` bubble is clipped by the
+ * ``overflow: hidden`` of the taskbar and of a window's body. A body-level,
+ * fixed-position element driven by our own listeners avoids both: it is not a
+ * native tooltip, and it is not inside the clipping container.
  *
  * That being the only mechanism that works everywhere in the workspace, it is
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
@@ -359,7 +357,7 @@ function wireListeners(): void {
 
 /**
  * Give an element a tooltip, or take it away with ``null``. For DOM this
- * workspace builds by hand (the lightbox, the dock's tab strip); mithril views
+ * workspace builds by hand (the lightbox); mithril views
  * spread ``hoverTooltipAttrs`` instead. Removing the element needs no cleanup:
  * nothing is attached to it.
  */

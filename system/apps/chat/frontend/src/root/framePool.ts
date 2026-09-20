@@ -5,7 +5,7 @@
  * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
- * but not on screen counts as open-but-hidden, as a hidden tab did.
+ * but not on screen counts as open-but-hidden, like a minimized window's page.
  */
 
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";

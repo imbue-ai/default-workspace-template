@@ -42,18 +42,19 @@ _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
 _ALLOWED_FILES = ("*.test.ts", "root/relay.ts")
 
 _RETIRED_ADDRESS_RULE = RatchetRuleInfo(
-    rule_name="retired panel refs (chat:, terminal:, service:, url:, subagent:) in the chat frontend",
+    rule_name="retired address spellings (app:, chat:, terminal:, service:, url:, subagent:) in the chat frontend",
     rule_description=(
-        "Everything is addressed as app:<name> or app:<name>?instance=<key> (contracts.md section 1); "
-        "there are no per-kind address spellings. Do not spell one here -- build the address with the "
-        "library's addressFor instead."
+        "There are no address strings: a window is an app name and a path under its origin "
+        "(desktop-interface contracts.md section 1), and the tabbed shell's app:<name>?instance=<key> and "
+        "the older per-kind refs are gone with it. Do not spell one here -- ask the shell for a window "
+        "by app name and path through the app contract instead."
     ),
 )
 
 # A string literal that starts with a retired ref prefix. Anchored on the opening quote so
 # ordinary keys such as ``url: string`` and prose in comments do not count.
 _RETIRED_ADDRESS_PATTERN = RegexPattern(
-    r"""["'`](?:chat|chat-terminal|terminal|service|url|subagent):""", multiline=False
+    r"""["'`](?:app|chat|chat-terminal|terminal|service|url|subagent):""", multiline=False
 )
 
 

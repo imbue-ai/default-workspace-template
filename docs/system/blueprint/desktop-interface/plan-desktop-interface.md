@@ -433,6 +433,8 @@ A grep for `dockview`, `New Tab`, and `app:chat?instance` in `apps/minds` finds 
 
 ## 14. Phases
 
+Status: every phase has landed. Phases 1 to 5 landed on `josh/desktop-ui-phase-5` and before it; phases 6 and 7 landed together on `mngr/desktop-ui-phase-6`, with the mngr-side changes of section 12 as their own PR on the mngr branch of the same name.
+
 One pull request, ordered commits, each leaving the repository green and each verified by hand in a dev workspace before the next.
 
 The order is additive first: the apps learn the new contract and gain their launch paths while the old shell still runs them, then the shell cuts over, then the old machinery is deleted.

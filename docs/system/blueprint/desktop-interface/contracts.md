@@ -200,8 +200,8 @@ Outbound:
 ## 7. The app contract (`app_contract.js`)
 
 Served at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`.
-Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), open(address), openPath(path, ifPresent), disconnect()}`.
-`openPath` sends the path form of `shell:open` below; `open(address)` sends the tabbed shell's address form and is deleted in phase 6 of the plan.
+Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), disconnect()}`.
+`openPath` sends `shell:open` below.
 `capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
 
 | Direction | Type | Payload |

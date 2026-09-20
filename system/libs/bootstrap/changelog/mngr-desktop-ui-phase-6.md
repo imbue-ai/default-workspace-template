@@ -1,0 +1,1 @@
+The boot-time layout migration (`migrate_workspace_layouts.py`, run by the bootstrap manager after first-boot setup) is removed along with the script: the tabbed shell it migrated from is gone, and a fresh workspace boots to its default desktop with nothing to migrate.
