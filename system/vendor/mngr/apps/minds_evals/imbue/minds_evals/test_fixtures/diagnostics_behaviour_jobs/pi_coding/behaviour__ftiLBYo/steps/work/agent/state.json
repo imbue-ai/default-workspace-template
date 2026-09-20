@@ -1,0 +1,74 @@
+{
+  "eval_name": "behaviour__ftiLBYo",
+  "case_name": "behaviour",
+  "step_name": "work",
+  "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+  "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+  "modal_environment_name": "minds-staging-evals-behaviour-ftilbyo-40e0e27a",
+  "waits_done": 1,
+  "num_turns": 1,
+  "entries": [
+    {
+      "index": 0,
+      "kind": "literal",
+      "exchange_count": 1,
+      "outcome": "completed",
+      "detail": "",
+      "satisfied_at": "",
+      "satisfied_at_turn": null
+    }
+  ],
+  "snapshot_byte_count": 169751896,
+  "decider_call_count": 0,
+  "client_messages": [
+    "This is an automated harness self-check. Carry out these items in order, exactly as written, one separate tool call per numbered item, and do nothing else. Do not use the Agent or Task tool, and create no ticket or step other than the ones below.\n1. Run: tk create --step \"DIAG alpha 7f3a\"\n2. Run: tk create --step \"DIAG beta 7f3a\"\n3. Run: tk start <the id tk printed for DIAG alpha 7f3a>\n4. Run: echo DIAG-7f3a-one\n5. Run: diag-missing-command-7f3a\n6. Run: tk close <the id of DIAG alpha 7f3a> \"alpha done 7f3a\"\n7. Run: tk create \"DIAG regular ticket 7f3a\" -t chore\n8. Run: tk start <the id of DIAG beta 7f3a>\n9. Run exactly this, as one command: mkdir -p data/.tasks/launch-task/diag-worker-7f3a && printf '%s\\n' '---' 'finish_report_path: data/.tasks/launch-task/diag-worker-7f3a/reports/report.md' '---' '' '# Task: diagnostic worker 7f3a' '' 'Write a finish report whose body is the single word ok, following .agents/shared/references/worker-reporting.md with name: done, then stop.' > data/.tasks/launch-task/diag-worker-7f3a/task.md\n10. Run exactly this, as one command: uv run .agents/skills/launch-task/scripts/create_worker.py launch --name diag-worker-7f3a --template worker --runtime-dir data/.tasks/launch-task/diag-worker-7f3a/ --task-file data/.tasks/launch-task/diag-worker-7f3a/task.md\n11. Run: tk close <the id of DIAG beta 7f3a> \"beta done 7f3a\"\n12. If you have a Skill tool, invoke the skill named build-app with it and stop as soon as it has loaded; otherwise run: cat .agents/skills/build-app/SKILL.md\nWhen all twelve items are done, reply with the single word: done."
+  ],
+  "turns": [
+    {
+      "index": 1,
+      "entry_index": 0,
+      "exchange": 0,
+      "sent_at": "2026-09-16T05:07:33.449550+00:00",
+      "replied_at": "2026-09-16T05:09:57.575626+00:00",
+      "reply_seconds": 144.1,
+      "agent_message_count": 2,
+      "message_count": 13,
+      "tokens": {
+        "input": 29428,
+        "output": 4692,
+        "cache_read": 232192,
+        "cache_write": 0
+      },
+      "cost_usd": 0.022545799999999998
+    }
+  ],
+  "test_state": "finished",
+  "timed_out": false,
+  "timed_out_reason": "",
+  "preparation_stage": "conversation",
+  "seed": null,
+  "started_at": "2026-09-16T05:01:45.478727+00:00",
+  "elapsed_seconds": 712.9,
+  "step_elapsed_seconds": 712.9,
+  "conversation_seconds": 144.1,
+  "timeout_seconds": 2400.0,
+  "arm": {
+    "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+    "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+    "harness_config": {
+      "lane": "openrouter",
+      "key_provider": "",
+      "account_id": "83fae68243cd4cdaa01e9a7a97eb1275",
+      "harness": "pi-coding",
+      "model": "openrouter/openai/gpt-5-mini",
+      "effort": "medium",
+      "fast": false,
+      "model_choice_switch": "applied",
+      "observed_models": [
+        "openai/gpt-5-mini"
+      ],
+      "welcome_model": "moonshotai/kimi-k2.6",
+      "is_model_confirmed": true
+    }
+  }
+}

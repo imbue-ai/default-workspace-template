@@ -182,7 +182,10 @@ jobs:
         # where the Dockerfile looks. Without this entry, the PR that moves the
         # export skips the only job that runs that guard.
         #
-        # The workflow files at the end are not dependencies either: the suite
+        # The setup action is a dependency of a different kind: it decides what
+        # this job installs, so a change to it has to run the job.
+        #
+        # The workflow files at the end are not dependencies at all -- the suite
         # reads them and asserts against them, so a change to one can break a
         # test without touching the project. The scheduled workflow's
         # CI_ENVIRONMENT_PREFIX is pinned to the environment name a CI trial
@@ -198,6 +201,8 @@ jobs:
               libs/overlay \
               libs/resource_guards \
               justfile \
+              private.just \
+              .github/actions/setup-minds-evals-tests \
               .github/workflows/ci.yml \
               .github/workflows/minds-evals-scheduled.yml | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -205,35 +210,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up Python
+      - name: Set up the minds_evals test suite
         if: steps.evals-diff.outputs.changed == 'true'
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        if: steps.evals-diff.outputs.changed == 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-
-      - name: Install just
-        if: steps.evals-diff.outputs.changed == 'true'
-        uses: extractions/setup-just@v4
-
-      # The vendored viewer (apps/minds_evals/viewer) is source, not a committed bundle, so
-      # nothing else here would notice if it stopped building. The script bootstraps its own
-      # pinned bun, which is why no node toolchain is set up above.
-      - name: Build the vendored harbor viewer
-        if: steps.evals-diff.outputs.changed == 'true'
-        run: apps/minds_evals/scripts/build_viewer.sh
-
-      # The flow lab's tests drive a real headless Chromium, the one playwright installs for
-      # the pinned release. Its absence fails those tests rather than skipping them here
-      # (the `chromium_path` fixture reads CI), so a job that lost this step is red, not quiet.
-      - name: Install the flow lab's Chromium
-        if: steps.evals-diff.outputs.changed == 'true'
-        run: cd apps/minds_evals && uv sync --locked && uv run python -m playwright install --with-deps chromium
+        uses: ./.github/actions/setup-minds-evals-tests
 
       - name: Run minds_evals typecheck and tests
         if: steps.evals-diff.outputs.changed == 'true'

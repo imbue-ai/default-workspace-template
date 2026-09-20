@@ -657,3 +657,82 @@ def test_admin_start_workspace_is_idempotent_on_running_rows_and_refuses_parked_
     assert parked.status_code == 409
     assert parked.json()["detail"]["code"] == "workspace_under_maintenance"
     assert _row_status(backend, _WS_ID_2) == "stopped"
+
+
+def test_retire_stamps_a_running_row_and_a_stopped_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    backend.storage_config = make_storage_config()
+    running = _seed_leased_workspace(backend, _WS_ID)
+    stopped = _seed_stopped_workspace(backend, _WS_ID_2, stop_kind="owner")
+
+    retired_running = client.post(
+        f"/admin/workspaces/{_WS_ID}/stop", json={"kind": "retired"}, headers=_admin_key_headers()
+    )
+    retired_stopped = client.post(
+        f"/admin/workspaces/{_WS_ID_2}/stop", json={"kind": "retired"}, headers=_admin_key_headers()
+    )
+
+    assert retired_running.status_code == 202
+    assert retired_running.json()["stop_kind"] == "retired"
+    assert running.status == "stopping"
+    assert running.stop_kind == "retired"
+    assert retired_stopped.status_code == 202
+    assert stopped.status == "stopped"
+    assert stopped.stop_kind == "retired"
+    assert backend.spawned_supervisors == [str(_WS_ID)]
+
+
+def test_start_workspace_refuses_a_retired_row_for_the_owner_and_the_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    _seed_entitlements_row(entitlements_store, plan_name="explorer", max_remote_workspaces=2)
+    row = _seed_stopped_workspace(backend, stop_kind="retired")
+
+    owner = client.post(f"/workspaces/{_WS_ID}/start", headers=_user_headers())
+    operator = client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_admin_key_headers())
+
+    for resp in (owner, operator):
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "workspace_retired"
+        assert "cannot be started again" in resp.json()["detail"]["message"]
+    assert row.status == "stopped"
+    assert row.stop_kind == "retired"
+    assert backend.spawned_supervisors == []
+
+
+def test_admin_start_refuses_a_row_retired_between_its_read_and_its_cas(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    row = _seed_stopped_workspace(backend, stop_kind="idle")
+
+    def retire_the_row_under_the_start(query: str, _params: tuple[Any, ...]) -> None:
+        if query.startswith("UPDATE pool_hosts SET status = 'starting'"):
+            row.stop_kind = "retired"
+
+    backend.query_callback = retire_the_row_under_the_start
+
+    resp = client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_admin_key_headers())
+
+    assert resp.status_code == 409
+    assert row.status == "stopped"
+    assert backend.spawned_supervisors == []
+
+
+def test_set_stop_kind_idle_hands_a_retired_row_back_to_the_operator_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend, stop_kind="retired")
+
+    rekinded = client.post(
+        f"/admin/workspaces/{_WS_ID}/stop-kind", json={"kind": "idle"}, headers=_admin_key_headers()
+    )
+    started = client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_admin_key_headers())
+
+    assert rekinded.status_code == 200
+    assert started.status_code == 202
+    assert row.status == "starting"
+    assert row.stop_kind is None

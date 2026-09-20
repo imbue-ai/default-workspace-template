@@ -6,10 +6,11 @@ Runs inside the box, next to the proxy. Two jobs:
   and without either a master key or this, litellm grants internal-user rights to *any* key. A
   single per-trial key is issued by the driver and checked here, so a workspace that loses or alters
   its credential simply cannot reach a model.
-* **Usage.** One JSON line per request, with the cache buckets kept separate. This is the metering
-  boundary the transcript cannot provide: every agent in the workspace -- the chat agent, subagents,
-  and separately created worker agents -- shares the workspace's credential, so all of their traffic
-  lands here whether or not it ever appears in the graded transcript.
+* **Usage.** One JSON line per request, with the cache buckets kept separate; a failed request gets
+  one too, marked ``outcome: "failed"`` with zero tokens, so failures are counted but never priced.
+  This is the metering boundary the transcript cannot provide: every agent in the workspace -- the
+  chat agent, subagents, and separately created worker agents -- shares the workspace's credential,
+  so all of their traffic lands here whether or not it ever appears in the graded transcript.
 
 Configured through the environment rather than arguments, because litellm imports these by name.
 """
@@ -19,12 +20,17 @@ import json
 import os
 import threading
 from typing import Any
+from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 PROXY_KEY_ENV_VAR = "MINDS_EVAL_PROXY_KEY"
 USAGE_LOG_ENV_VAR = "MINDS_EVAL_PROXY_USAGE_LOG"
+
+# Each record's `outcome`. `usage.summarize_proxy_usage` reads these values, so they must not change.
+_OUTCOME_SUCCEEDED: Final[str] = "succeeded"
+_OUTCOME_FAILED: Final[str] = "failed"
 
 _LOG_LOCK = threading.Lock()
 
@@ -97,44 +103,96 @@ def _cache_tokens(usage_fields: dict[str, Any]) -> tuple[int, int]:
     return read, write
 
 
+def _request_record(
+    kwargs: dict[str, Any], outcome: str, usage_fields: dict[str, Any], cost_usd: Any
+) -> dict[str, Any]:
+    """The fields every record carries, whatever the request's outcome.
+
+    A failed request passes no usage fields, so its every token bucket is zero: the shape stays the
+    same as a success's, and a reader that sums buckets without checking ``outcome`` still adds
+    nothing for it.
+    """
+    cache_read, cache_write = _cache_tokens(usage_fields)
+    prompt_tokens = int(usage_fields.get("prompt_tokens") or 0)
+    return {
+        "model": kwargs.get("model") or "",
+        # "succeeded" or "failed". A record without this key comes from a log written before
+        # failures were recorded, and every such record is a success.
+        "outcome": outcome,
+        # Non-overlapping buckets, matching how the eval accounts for transcript usage: litellm
+        # reports prompt_tokens *inclusive* of cache, so the cached portions come back out.
+        # Leaving it inclusive would price cached tokens at the full input rate as well as the
+        # cache rate.
+        "input_tokens": max(0, prompt_tokens - cache_read - cache_write),
+        "output_tokens": int(usage_fields.get("completion_tokens") or 0),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        # Kept as reported so the normalization above can be re-derived from the record.
+        "prompt_tokens_including_cache": prompt_tokens,
+        # litellm's own cost for the call, priced from the model_list entry the driver
+        # generated. Recorded alongside the tokens so the two can be reconciled. Note that the
+        # model_list carries one price per model, so a fast-mode call is priced at the standard
+        # rate it is not billed at -- hence recording the speed next to it.
+        "cost_usd": cost_usd,
+        # "fast" or null. Always written (even when null) so that a log which simply predates
+        # this field stays distinguishable from one that observed only standard-speed traffic.
+        "speed": _requested_speed(kwargs),
+        "call_type": kwargs.get("call_type") or "",
+    }
+
+
+def _failure_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """What went wrong with a failed request, as litellm's own failure payload states it.
+
+    litellm's failure handler reduces the exception to ``error_information`` before it calls any
+    failure callback: ``error_code`` is the HTTP status as a string, read from whichever attribute
+    that exception type carries it on (empty when none does), and ``error_class`` is the exception's
+    class name. A non-numeric code is a provider's own error code rather than a status, so it is
+    recorded as no status.
+    """
+    standard_logging_object = kwargs.get("standard_logging_object") or {}
+    error_information = standard_logging_object.get("error_information") or {}
+    error_code = str(error_information.get("error_code") or "")
+    return {
+        "status_code": int(error_code) if error_code.isdigit() else None,
+        "error_class": str(error_information.get("error_class") or ""),
+    }
+
+
+def _append_record(record: dict[str, Any]) -> None:
+    log_path = os.environ.get(USAGE_LOG_ENV_VAR, "")
+    if not log_path:
+        return
+    # The proxy serves requests concurrently, so serialize the appends.
+    with _LOG_LOCK:
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(record) + "\n")
+
+
 class UsageLogger(CustomLogger):
-    """Appends one record per completed request to the trial's proxy usage log."""
+    """Appends one record per completed or failed request to the trial's proxy usage log."""
 
     async def async_log_success_event(
         self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
-        log_path = os.environ.get(USAGE_LOG_ENV_VAR, "")
-        if not log_path:
-            return
-        usage_fields = _usage_fields(response_obj)
-        cache_read, cache_write = _cache_tokens(usage_fields)
-        prompt_tokens = int(usage_fields.get("prompt_tokens") or 0)
-        record = {
-            "model": kwargs.get("model") or "",
-            # Non-overlapping buckets, matching how the eval accounts for transcript usage: litellm
-            # reports prompt_tokens *inclusive* of cache, so the cached portions come back out.
-            # Leaving it inclusive would price cached tokens at the full input rate as well as the
-            # cache rate.
-            "input_tokens": max(0, prompt_tokens - cache_read - cache_write),
-            "output_tokens": int(usage_fields.get("completion_tokens") or 0),
-            "cache_read_tokens": cache_read,
-            "cache_write_tokens": cache_write,
-            # Kept as reported so the normalization above can be re-derived from the record.
-            "prompt_tokens_including_cache": prompt_tokens,
-            # litellm's own cost for the call, priced from the model_list entry the driver
-            # generated. Recorded alongside the tokens so the two can be reconciled. Note that the
-            # model_list carries one price per model, so a fast-mode call is priced at the standard
-            # rate it is not billed at -- hence recording the speed next to it.
-            "cost_usd": kwargs.get("response_cost"),
-            # "fast" or null. Always written (even when null) so that a log which simply predates
-            # this field stays distinguishable from one that observed only standard-speed traffic.
-            "speed": _requested_speed(kwargs),
-            "call_type": kwargs.get("call_type") or "",
-        }
-        # The proxy serves requests concurrently, so serialize the appends.
-        with _LOG_LOCK:
-            with open(log_path, "a", encoding="utf-8") as log_file:
-                log_file.write(json.dumps(record) + "\n")
+        _append_record(
+            _request_record(
+                kwargs,
+                outcome=_OUTCOME_SUCCEEDED,
+                usage_fields=_usage_fields(response_obj),
+                cost_usd=kwargs.get("response_cost"),
+            )
+        )
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        # A failure is counted, never priced: its buckets are zero and its cost null. That holds
+        # even when litellm recovered partial usage from a stream interrupted mid-flight, which
+        # this record does not carry.
+        _append_record(
+            _request_record(kwargs, outcome=_OUTCOME_FAILED, usage_fields={}, cost_usd=None) | _failure_fields(kwargs)
+        )
 
 
 usage_logger = UsageLogger()

@@ -1,12 +1,12 @@
-"""A scripted VerificationAgent for the tests of the UI-flow loop.
+"""A canned VerificationAgent for the collector's tests of a model-driven UI flow.
 
 The loop's behaviour is a function of what the agent decides and what the step script reports, so
-scripting the decisions holds one of those two still and no test of it needs an API call. Both tests
-that drive the loop use this: the collector's pair it with the scripted box environment, which holds
-the other half still too, and the flow lab's leave a real browser to answer so what the executor
-reports is the only thing under test. Actions and readings are consumed in order across the whole
-run; the last entry repeats, so a test that only cares about the first few decisions does not have
-to pad the script to the step cap.
+canning the decisions holds one of those two still and no test of it needs an API call. Unlike the
+production `ScriptVerificationAgent`, this double can stand in for a model that misbehaves: a None
+entry is a call that produced nothing, a reading can be anything, every call is billed, and each
+decision's history is kept for the test to inspect. Actions and readings are consumed in order across
+the whole run; the last entry repeats, so a test that only cares about the first few decisions does
+not have to pad the list to the step cap.
 """
 
 from pydantic import Field

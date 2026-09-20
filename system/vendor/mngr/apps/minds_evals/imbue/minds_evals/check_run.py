@@ -57,7 +57,7 @@ _EVIDENCE_MANIFEST_PATH: Final[str] = "{}/{}/{}".format(
 
 # The dimension whose criteria zero the reward when any of them fails: the transcript parses, the
 # agent engaged, every turn completed, the run did not time out.
-_GATES_DIMENSION: Final[str] = "gates"
+GATES_DIMENSION: Final[str] = "gates"
 # rewardkit tags each reward it emits with how it was produced: "llm" and "agent" for its two judge
 # kinds, "programmatic" for the .py criteria, whose pass/fail guards are gated elsewhere. Both judge
 # kinds are collected, so a case that grows an agent judge does not quietly stop being reported.
@@ -91,7 +91,7 @@ def _load_json_object(path: Path) -> dict[str, Any]:
     return parsed
 
 
-def _load_optional_json_object(path: Path) -> dict[str, Any] | None:
+def load_optional_json_object(path: Path) -> dict[str, Any] | None:
     """The file's contents, or None when it was never written. An unreadable file still raises:
     absent and corrupt are different claims and only the first one is expected."""
     if not path.is_file():
@@ -103,7 +103,7 @@ def _load_optional_json_object(path: Path) -> dict[str, Any] | None:
 # _criteria and _gates_all_passed in templates/tests/verifier/finalize.py, which decides the same gate
 # verdict inside the verifier container. They cannot be shared: that file runs on stdlib and
 # rewardkit alone, with no imbue package. Keep the two in step. Two helpers are deliberately local to
-# one side: _criterion_value below, because this side must always reach a verdict where finalize.py is
+# one side: criterion_value below, because this side must always reach a verdict where finalize.py is
 # entitled to raise on a malformed file; and finalize.py's _is_gates_dimension_scored, because only
 # that side decides whether a trial is graded at all.
 @pure
@@ -129,7 +129,17 @@ def _criteria(reward_dict: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 @pure
-def _criterion_value(criterion: Mapping[str, Any]) -> float:
+def criteria_of_dimension(reward_details: Mapping[str, Any], dimension_name: str) -> list[dict[str, Any]]:
+    """Every criterion of one dimension of reward-details.json, across the rewards it emitted."""
+    return [
+        criterion
+        for reward_dict in _reward_dicts(reward_details.get(dimension_name))
+        for criterion in _criteria(reward_dict)
+    ]
+
+
+@pure
+def criterion_value(criterion: Mapping[str, Any]) -> float:
     """A criterion's normalized 0-1 score, or 0.0 when it carries none this can read.
 
     reward-details.json is read without a schema, so an unreadable value has to mean something. Zero
@@ -154,12 +164,12 @@ def is_gates_dimension_passed(reward_details: Mapping[str, Any] | None) -> bool:
     """
     if reward_details is None:
         return False
-    reward_dicts = _reward_dicts(reward_details.get(_GATES_DIMENSION))
+    reward_dicts = _reward_dicts(reward_details.get(GATES_DIMENSION))
     is_any_criterion_seen = False
     for reward_dict in reward_dicts:
         for criterion in _criteria(reward_dict):
             is_any_criterion_seen = True
-            if _criterion_value(criterion) <= 0.0:
+            if criterion_value(criterion) <= 0.0:
                 return False
     return is_any_criterion_seen
 
@@ -193,14 +203,14 @@ def collect_judge_scores(reward_details: Mapping[str, Any] | None) -> tuple[Judg
                     JudgeScore(
                         dimension=dimension_name,
                         criterion=str(criterion.get("name") or ""),
-                        normalized_score=_criterion_value(criterion),
+                        normalized_score=criterion_value(criterion),
                         raw_score=float(raw_score),
                     )
                 )
     return tuple(scores)
 
 
-def _collect_error_entry_ids(manifest: Mapping[str, Any] | None, manifest_path: Path) -> tuple[str, ...]:
+def collect_error_entry_ids(manifest: Mapping[str, Any] | None, manifest_path: Path) -> tuple[str, ...]:
     """The evidence entries the harness could not measure.
 
     A missing manifest yields nothing rather than an error: a trial that never reached a workspace
@@ -227,7 +237,7 @@ def _collect_error_entry_ids(manifest: Mapping[str, Any] | None, manifest_path: 
 
 
 @pure
-def _describe_incompletion(result: TrialResult | None, state: Mapping[str, Any] | None) -> str:
+def describe_incompletion(result: TrialResult | None, state: Mapping[str, Any] | None) -> str:
     """Why the trial did not run to the end, or empty when it did.
 
     Harbor records infrastructure failures as an exception and everything else as a graded trial, so
@@ -255,7 +265,7 @@ def _describe_incompletion(result: TrialResult | None, state: Mapping[str, Any] 
 
 
 @pure
-def _harness_config_block(state: Mapping[str, Any] | None) -> Mapping[str, Any]:
+def harness_config_block(state: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """The harness settings the trial was asked to run on, nested inside the arm block its state
     file records the whole treatment in, or an empty block when the state file says nothing about
     them -- every trial written before arms existed, and any trial that died before the sign-in."""
@@ -302,7 +312,7 @@ def _trial_reward(result: TrialResult | None) -> float | None:
     return None if reward is None else float(reward)
 
 
-def _load_trial_result(result_path: Path) -> TrialResult | None:
+def load_trial_result(result_path: Path) -> TrialResult | None:
     """Harbor's own record of the trial, or None when it never wrote one.
 
     Raises JobReadError for a file that is there but is not a TrialResult -- truncated by the crash
@@ -323,26 +333,26 @@ def read_trial_state(trial_dir: Path) -> dict[str, Any] | None:
     Read without a schema on purpose: state.json is written by whichever driver version produced the
     trial, and it grows keys over time. Raises JobReadError for a file that is there but unreadable.
     """
-    return _load_optional_json_object(trial_dir / _AGENT_STATE_PATH)
+    return load_optional_json_object(trial_dir / _AGENT_STATE_PATH)
 
 
 def _read_trial_check(trial_dir: Path) -> TrialCheck:
     """Everything the run gate needs from one trial directory, tolerating each artifact's absence."""
-    result = _load_trial_result(trial_dir / _TRIAL_RESULT_FILENAME)
+    result = load_trial_result(trial_dir / _TRIAL_RESULT_FILENAME)
     state = read_trial_state(trial_dir)
-    reward_details = _load_optional_json_object(trial_dir / _REWARD_DETAILS_PATH)
+    reward_details = load_optional_json_object(trial_dir / _REWARD_DETAILS_PATH)
     manifest_path = trial_dir / _EVIDENCE_MANIFEST_PATH
-    manifest = _load_optional_json_object(manifest_path)
-    incompletion_reason = _describe_incompletion(result, state)
+    manifest = load_optional_json_object(manifest_path)
+    incompletion_reason = describe_incompletion(result, state)
     state_values = state or {}
-    harness_config = _harness_config_block(state)
+    harness_config = harness_config_block(state)
     return TrialCheck(
         trial_name=trial_dir.name,
         case_id=str(state_values.get("case_name") or ""),
         is_completed=not incompletion_reason,
         incompletion_reason=incompletion_reason,
         is_gates_passed=is_gates_dimension_passed(reward_details),
-        error_entry_ids=_collect_error_entry_ids(manifest, manifest_path),
+        error_entry_ids=collect_error_entry_ids(manifest, manifest_path),
         reward=_trial_reward(result),
         judge_scores=collect_judge_scores(reward_details),
         lane=str(harness_config.get("lane") or ""),

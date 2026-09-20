@@ -44,6 +44,9 @@ from tabulate import tabulate
 
 from imbue.apt_mirror.cli import CURRENT_TIMESTAMP_PATH
 from imbue.apt_mirror.cli import read_current_timestamp
+from imbue.apt_mirror.errors import AptMirrorError
+from imbue.apt_mirror.template_base_image import read_template_checkout_pins
+from imbue.apt_mirror.template_base_image import resolve_floating_base_image_build_context_arg
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import ObservableThread
@@ -2243,6 +2246,9 @@ def _bake_one_slice(
     # the box: the slice is torn down as soon as the create returns, with none of
     # the pool-row steps (finalize, converge wait, primary-agent check, row).
     is_image_seed_bake: bool,
+    # Extra ``docker build`` args for the image build (the floating-base override
+    # of an old tag); forwarded verbatim through ``mngr create -b``.
+    image_build_args: Sequence[str],
 ) -> SliceBakeOutcome:
     """Bake one slice (laptop-driven ``mngr create`` against the slice provider) + insert its pool row.
 
@@ -2294,20 +2300,23 @@ def _bake_one_slice(
                 host_name=host_name,
                 attributes=attributes,
                 workspace_dir=workspace_dir,
-                extra_create_args=_build_slice_create_args(
-                    server=server,
-                    sizing=sizing,
-                    region=region,
-                    env_name=env_name,
-                    management_trust=management_trust,
-                    private_key_path=private_key_path,
-                    ssh_user=ssh_user,
-                    port_range_start=port_range_start,
-                    port_range_end=port_range_end,
-                    default_workspace_template_cache_tag=default_workspace_template_cache_tag,
-                    container_runtime=container_runtime,
-                    slice_host_id=host_id_obj,
-                ),
+                extra_create_args=[
+                    *_build_slice_create_args(
+                        server=server,
+                        sizing=sizing,
+                        region=region,
+                        env_name=env_name,
+                        management_trust=management_trust,
+                        private_key_path=private_key_path,
+                        ssh_user=ssh_user,
+                        port_range_start=port_range_start,
+                        port_range_end=port_range_end,
+                        default_workspace_template_cache_tag=default_workspace_template_cache_tag,
+                        container_runtime=container_runtime,
+                        slice_host_id=host_id_obj,
+                    ),
+                    *build_image_build_create_args(image_build_args),
+                ],
                 extra_create_env=extra_create_env,
                 mngr_create_timeout_seconds=_SLICE_MNGR_CREATE_TIMEOUT_SECONDS,
             )
@@ -3296,6 +3305,33 @@ def assert_gen2_box_storage_is_encrypted(server: BareMetalServer, storage_state:
     )
 
 
+def resolve_from_tag_image_build_args(workspace_dir: Path) -> tuple[str, ...]:
+    """The extra ``docker build`` args a ``--from-tag`` bake's image build needs, read from the tag's checkout.
+
+    A tag whose Dockerfile floats its base image (every tag through
+    minds-v0.6.2) is built against the digest recorded for its apt snapshot,
+    so the seed never resolves whatever Docker Hub currently serves under the
+    floating tag (imbue-ai/mngr-internal#1143); a tag that pins its own base
+    needs nothing. Raises click.UsageError before anything is carved when the
+    checkout's pins are unreadable, or the base floats and no digest is
+    recorded for the tag's snapshot.
+    """
+    try:
+        build_context_arg = resolve_floating_base_image_build_context_arg(read_template_checkout_pins(workspace_dir))
+    except AptMirrorError as exc:
+        raise click.UsageError(str(exc)) from exc
+    if build_context_arg is None:
+        return ()
+    logger.info("The tag's Dockerfile floats its base image; building it with {}", build_context_arg)
+    return (build_context_arg,)
+
+
+@pure
+def build_image_build_create_args(image_build_args: Sequence[str]) -> list[str]:
+    """Render extra ``docker build`` args as the ``-b`` create options that forward them verbatim to the build."""
+    return [token for image_build_arg in image_build_args for token in ("-b", image_build_arg)]
+
+
 def _is_seed_phase_needed(cache: BoxImageCacheInterface, cache_tag: str | None) -> bool:
     """Whether the bake must run its own seed phase (one slice baked alone) before the fan-out.
 
@@ -3414,6 +3450,10 @@ def allocate_slices(
             raise click.UsageError(tag_guard_error)
     sizing = compute_server_slice_sizing(server, machine_units)
     container_runtime = resolve_slice_container_runtime(server, container_runtime_override)
+    # A --from-tag bake builds the tag's own Dockerfile; an old tag that floats its
+    # base image gets the base its snapshot covers, or is refused here, before any
+    # box is touched. Dev (--workspace-dir) bakes build whatever the tree says.
+    image_build_args = resolve_from_tag_image_build_args(workspace_dir) if is_from_tag else ()
 
     ssh_user = box_service_user(server)
     management_trust, private_key_path = resolve_bake_management_trust_and_key(server, identities)
@@ -3479,6 +3519,7 @@ def allocate_slices(
                 "per_slice_sizing": sizing,
                 "container_runtime": docker_runtime_name(container_runtime) if container_runtime else None,
                 "attributes": {**lease_attributes, **slice_advertised_attributes(sizing)},
+                "image_build_args": list(image_build_args),
             }
         )
         return
@@ -3562,6 +3603,7 @@ def allocate_slices(
             ),
             row_ledger=row_ledger,
             is_image_seed_bake=is_image_seed_bake,
+            image_build_args=image_build_args,
         )
         logger.info("Baking {} slice(s) on {} ({} at a time)", count, server.public_address, max_concurrency)
 

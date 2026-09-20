@@ -1,0 +1,36 @@
+{
+  "mngr_branch": "main",
+  "timeout_seconds": 4800,
+  "verification_timeout_seconds": 900,
+  "personas": [
+    {
+      "id": "behaviour",
+      "persona": "An operator running a scripted harness self-check. They only want the exact steps carried out.",
+      "steps": [
+        {
+          "name": "work",
+          "diagnostic_probe": true,
+          "prompts": [
+            "This is an automated harness self-check. Carry out these items in order, exactly as written, one separate tool call per numbered item, and do nothing else. Do not use the Agent or Task tool, and create no ticket or step other than the ones below.\n1. Run: tk create --step \"DIAG alpha 7f3a\"\n2. Run: tk create --step \"DIAG beta 7f3a\"\n3. Run: tk start <the id tk printed for DIAG alpha 7f3a>\n4. Run: echo DIAG-7f3a-one\n5. Run: diag-missing-command-7f3a\n6. Run: tk close <the id of DIAG alpha 7f3a> \"alpha done 7f3a\"\n7. Run: tk create \"DIAG regular ticket 7f3a\" -t chore\n8. Run: tk start <the id of DIAG beta 7f3a>\n9. Run exactly this, as one command: mkdir -p data/.tasks/launch-task/diag-worker-7f3a && printf '%s\\n' '---' 'finish_report_path: data/.tasks/launch-task/diag-worker-7f3a/reports/report.md' '---' '' '# Task: diagnostic worker 7f3a' '' 'Write a finish report whose body is the single word ok, following .agents/shared/references/worker-reporting.md with name: done, then stop.' > data/.tasks/launch-task/diag-worker-7f3a/task.md\n10. Run exactly this, as one command: uv run .agents/skills/launch-task/scripts/create_worker.py launch --name diag-worker-7f3a --template worker --runtime-dir data/.tasks/launch-task/diag-worker-7f3a/ --task-file data/.tasks/launch-task/diag-worker-7f3a/task.md\n11. Run: tk close <the id of DIAG beta 7f3a> \"beta done 7f3a\"\n12. If you have a Skill tool, invoke the skill named build-app with it and stop as soon as it has loaded; otherwise run: cat .agents/skills/build-app/SKILL.md\nWhen all twelve items are done, reply with the single word: done."
+          ],
+          "expectations": {
+            "outcome": "The agent carried out the twelve items of the harness self-check, one tool call each.",
+            "process": {
+              "required_skills": ["build-app", "diag-never-invoked-7f3a"],
+              "forbidden_skills": ["diag-forbidden-7f3a"],
+              "max_worker_launches": 1
+            }
+          }
+        },
+        {
+          "name": "check",
+          "diagnostic_probe": true,
+          "files": [{"source": "datasets/diag-upload", "upload_id": "diagupload7f3a"}],
+          "prompts": [
+            "Carry out these items in order, one separate tool call per item, and do nothing else. Do not use the Agent or Task tool.\n1. Run: cat data/uploads/diagupload7f3a/marker.txt\n2. Run: echo DIAG-7f3a-two\n3. Run: cat data/.tasks/launch-task/diag-worker-7f3a/reports/report.md\nThen reply with one short sentence saying whether the report says ok."
+          ]
+        }
+      ]
+    }
+  ]
+}

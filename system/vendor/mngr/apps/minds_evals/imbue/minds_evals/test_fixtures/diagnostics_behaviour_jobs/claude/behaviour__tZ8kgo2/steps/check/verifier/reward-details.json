@@ -1,0 +1,192 @@
+{
+  "gates": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "transcript_has_agent_reply",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "transcript_has_agent_reply"
+      },
+      {
+        "name": "agent_engaged_substantively",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "agent_engaged_substantively"
+      },
+      {
+        "name": "all_turns_completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "all_turns_completed"
+      },
+      {
+        "name": "progress_timeline_was_read",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "progress_timeline_was_read"
+      },
+      {
+        "name": "finished_within_time",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "finished_within_time"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "harness_quality": [
+    {
+      "score": 0.9,
+      "criteria": [
+        {
+          "name": "main_harness_soundness",
+          "value": 0.8,
+          "raw": 0.8,
+          "weight": 1.0,
+          "description": "How soundly the lead agent's own skills, plugins and tooling held up"
+        },
+        {
+          "name": "worker_harness_soundness",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "How soundly the launched workers' skills, plugins and tooling held up"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "main_harness_success",
+          "value": 1.0,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How well did the harness hold for the LEAD agent? 5 = every skill and tool it reached for resolved and worked. 3 = something failed but the agent routed around it and the work still happened. 1 = the tooling it depended on did not load and the work it was for did not happen.",
+          "reasoning": "Two steps were flagged. Step 9 is a probe using a diagnostic command name (diag-missing-command-7f3a) that returned 127 -- this is an environment check, not a tool the agent depended on for its work. Step 16 shows the build-app skill resolving and launching successfully. No unknown_skill or missing_plugin errors, and the skill the agent actually reached for loaded fine. The single missing_command is a throwaway probe with no downstream cost, so the harness effectively held for the lead agent."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/harness_main.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 5, \"reasoning\": \"Two steps were flagged. Step 9 is a probe using a diagnostic command name (diag-missing-command-7f3a) that returned 127 -- this is an environment check, not a tool the agent depended on for its work. Step 16 shows the build-app skill resolving and launching successfully. No unknown_skill or missing_plugin errors, and the skill the agent actually reached for loaded fine. The single missing_command is a throwaway probe with no downstream cost, so the harness effectively held for the lead agent.\"}"
+    },
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "worker_harness_success",
+          "value": 1.0,
+          "raw": 5,
+          "weight": 1.0,
+          "description": "How well did the harness hold for the agent's LAUNCHED WORKERS? 5 = every skill and tool they reached for resolved and worked, or the trial launched no worker. 3 = something failed but the worker routed around it and the hardening still happened. 1 = the tooling the worker depended on did not load, so the pass it was launched for did not really run.",
+          "reasoning": "The single launched worker ran 9 steps with 0 kept as harness-relevant: no skill invocations failed, no tool errors, and no failure signatures. A run with no failure signatures and no errored steps is a 5 -- the harness held for the launched worker."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/harness_workers.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\":5,\"reasoning\":\"The single launched worker ran 9 steps with 0 kept as harness-relevant: no skill invocations failed, no tool errors, and no failure signatures. A run with no failure signatures and no errored steps is a 5 -- the harness held for the launched worker.\"}"
+    }
+  ],
+  "quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "message_lengths_within_limits",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "message_lengths_within_limits"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.6944,
+      "criteria": [
+        {
+          "name": "conciseness",
+          "value": 1.0,
+          "raw": 10,
+          "weight": 1.0,
+          "description": "How concise is the AGENT in its chat messages? 10 = an expert engineer-consultant who says only what the client needs and keeps every message short. 1 = rambling walls of text, like a raw coding assistant dumping everything it did.",
+          "reasoning": "The agent's chat messages are as short as possible -- 'done' and 'The report says ok.' Nothing extraneous whatsoever."
+        },
+        {
+          "name": "nontechnical_language",
+          "value": 1.0,
+          "raw": 10,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's language to the client in its chat messages? 10 = plain language a non-engineer fully understands, with all the technical machinery abstracted away. 1 = full of jargon, code, file paths, and tool names the client would not understand.",
+          "reasoning": "The two chat messages contain only plain words ('done', 'The report says ok.') with zero jargon, paths, or tool names visible to the client."
+        },
+        {
+          "name": "nontechnical_status_language",
+          "value": 0.1111,
+          "raw": 2,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's progress-timeline copy -- the step titles it declares and the one-line summaries it closes them with? 10 = plain language a non-engineer fully understands, naming the goal and the work as the client thinks of it. 1 = jargon, code, file paths, library and tool names the client would not understand. Score 10 if the transcript has no progress timeline.",
+          "reasoning": "The progress timeline titles and summaries are raw diagnostic strings like 'DIAG alpha 7f3a' and 'alpha done 7f3a' -- meaningless codes a non-technical client could not understand, naming no real goal."
+        },
+        {
+          "name": "proactive",
+          "value": 0.6667,
+          "raw": 7,
+          "weight": 1.0,
+          "description": "How self-directed is the AGENT? 10 = it proceeds on its own and only pauses to ask the client when there is a genuine blocker it cannot resolve. 1 = it stops to ask about trivial things it should have just decided.",
+          "reasoning": "The agent proceeded through the whole sequence on its own without stopping to ask trivial questions, though the task was fully scripted so genuine self-direction was barely exercised."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/judge_transcript.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"conciseness\":{\"score\":10,\"reasoning\":\"The agent's chat messages are as short as possible -- 'done' and 'The report says ok.' Nothing extraneous whatsoever.\"},\"nontechnical_language\":{\"score\":10,\"reasoning\":\"The two chat messages contain only plain words ('done', 'The report says ok.') with zero jargon, paths, or tool names visible to the client.\"},\"nontechnical_status_language\":{\"score\":2,\"reasoning\":\"The progress timeline titles and summaries are raw diagnostic strings like 'DIAG alpha 7f3a' and 'alpha done 7f3a' -- meaningless codes a non-technical client could not understand, naming no real goal.\"},\"proactive\":{\"score\":7,\"reasoning\":\"The agent proceeded through the whole sequence on its own without stopping to ask trivial questions, though the task was fully scripted so genuine self-direction was barely exercised.\"}}"
+    }
+  ],
+  "timed_out": false,
+  "harness": {
+    "name": "claude",
+    "is_harness_quality_scored": true
+  },
+  "outcome_evidence": {
+    "is_evidence_complete": true,
+    "entry_count": 1,
+    "error_count_by_class": {}
+  }
+}

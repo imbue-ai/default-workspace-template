@@ -49,7 +49,7 @@ A kind beside the status leaves the state machine alone: the row is still `stopp
 | # | Decision |
 |---|---|
 | S1 | The status machine is unchanged. A nullable `stop_kind` column is added to `pool_hosts`, stamped by every stop and cleared by every start. |
-| S2 | Kinds: `owner`, `maintenance`, `idle`, `suspension`. NULL (a row stopped before this change) means `owner`. |
+| S2 | Kinds: `owner`, `maintenance`, `idle`, `suspension`, and (since 2026-09-18) `retired`. NULL (a row stopped before this change) means `owner`. |
 | S3 | `maintenance` covers the migration and any other operator hold. The owner cannot start it; only an operator can. |
 | S4 | `idle` is an operator stop to free capacity (`server drain`, future idle shutdown). The owner can start it by an explicit click. |
 | S5 | `suspension` is stamped by the suspend fan-out. Unsuspending an account rewrites its `suspension` rows to `idle`. |
@@ -60,6 +60,7 @@ A kind beside the status leaves the state machine alone: the row is still `stopp
 | S10 | Old (pre-fix) clients get the 409 with that same sentence when they try to start a held machine; one RECOVERY_FAILED card and one error report per outage on those clients is accepted. |
 | S11 | Operators can change a stopped row's kind (`minds-admin workspaces set-stop-kind`), which is also how a held migration that has not yet parked its row is handed back without a rollback (a parked row stays refused by the parked-shape guard, whatever its kind, and has no artifact to restore from; `cutover rollback` is its way back). |
 | S12 | The migrate refuses to run against a connector that predates stop kinds. |
+| S13 | `retired` (migration 044) is final: a workspace the gen-2 migration cannot take (below the version floor, or without a release tag), archived for its owner by `minds-admin archives create` and stamped by `minds-admin workspaces retire`. Nobody starts it: the owner's start answers 409 `workspace_retired` ("This machine has been retired and cannot be started again. Download its data from its backups, or contact support if it has none."), and the operator start refuses it too; `set-stop-kind idle` is the deliberate way back. The desktop badge says "Retired", the notice band carries the same sentence, and Start is hidden. |
 
 ## 4. Design
 
@@ -81,6 +82,7 @@ The column is set by the stop CAS and by the kind route (4.2.3), and cleared (se
 | `idle` | admin stop with `kind=idle` (drain, idle shutdown); unsuspend | allowed | allowed | "Stopped" | shown | none |
 | `maintenance` | admin stop with `kind=maintenance` (the migrate) | refused (409) | allowed | "Maintenance" | hidden | maintenance sentence |
 | `suspension` | the suspend fan-out | refused (409; the account gates refuse earlier anyway) | allowed | "Stopped" | hidden | none |
+| `retired` | `minds-admin workspaces retire` (after `archives create`) | refused (409 `workspace_retired`) | refused (409 `workspace_retired`) | "Retired" | hidden | retired sentence |
 | unrecognized (newer server) | -- | client refuses before calling | -- | "Stopped" | hidden | none |
 
 The kind describes the *current* stop only.
@@ -93,7 +95,7 @@ It says nothing once the row is `leased`, so every start clears it and a later s
 `_STOP_LEASED_WORKSPACE_SQL` gains `stop_kind = %s`.
 The owner route passes `owner`.
 `begin_stopping_all_leased_workspaces` passes `suspension`.
-`POST /admin/workspaces/{id}/stop` accepts an optional JSON body `{"kind": "maintenance" | "idle" | "suspension"}`; an absent body means `idle`, so an operator checkout from before this change keeps today's user-restartable semantics.
+`POST /admin/workspaces/{id}/stop` accepts an optional JSON body `{"kind": "maintenance" | "idle" | "suspension" | "retired"}`; an absent body means `idle`, so an operator checkout from before this change keeps today's user-restartable semantics.
 
 The operator route is idempotent on the transition but **always stamps the kind**: a row that is already `stopping` or `stopped` (for example one the owner stopped an hour ago, which the migrate now wants) has its `stop_kind` set to the requested kind in the same call, without a new transition.
 Without this an owner-stopped row would carry no hold through its migration.
@@ -155,7 +157,7 @@ A pure `is_owner_startable(stop_kind: WorkspaceStopKind | None) -> bool` in the 
 
 ### 4.4 Operator CLI (`apps/minds_admin`)
 
-- `workspaces stop` gains a required `--kind {maintenance,idle,suspension}`.
+- `workspaces stop` gains a required `--kind {maintenance,idle,suspension,retired}`; `workspaces retire HOST_DB_ID` is the dedicated command for the retired kind.
 - New `workspaces set-stop-kind HOST_DB_ID KIND`.
 - `server drain` stops with `idle` (its docstring already promises the user's next start restores the workspace).
 - `cutover migrate`: `_stop_workspace_via_product` stops with `maintenance`.

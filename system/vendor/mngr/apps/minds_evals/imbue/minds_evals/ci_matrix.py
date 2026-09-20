@@ -21,8 +21,10 @@ tier existed then, and `--force` is how any of that is re-verified.
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from loguru import logger
@@ -30,13 +32,18 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import driver
+from imbue.minds_evals.data_types import BehaviourDiagnosticCell
+from imbue.minds_evals.data_types import BehaviourHarnessEntry
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import DecidedPair
+from imbue.minds_evals.data_types import DiagnosticHarnessEntry
+from imbue.minds_evals.data_types import FixtureDiagnosticCell
 from imbue.minds_evals.data_types import FrozenPair
 from imbue.minds_evals.data_types import HarnessConfig
 from imbue.minds_evals.data_types import HarnessConfigEntry
 from imbue.minds_evals.data_types import HarnessConfigsFile
+from imbue.minds_evals.data_types import HarnessName
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import NightlySuite
 from imbue.minds_evals.data_types import NightlySuiteArm
@@ -44,6 +51,9 @@ from imbue.minds_evals.data_types import NightlySuitesFile
 from imbue.minds_evals.data_types import PairDecision
 from imbue.minds_evals.data_types import ResolvedSuite
 from imbue.minds_evals.data_types import SuiteArm
+from imbue.minds_evals.data_types import UnsupportedDiagnosticCell
+from imbue.minds_evals.data_types import harness_for_lane
+from imbue.minds_evals.data_types import harness_id
 from imbue.minds_evals.data_types import lane_id
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import CiMatrixError
@@ -53,6 +63,12 @@ from imbue.minds_evals.reporting import write_reports
 
 # The harness configs the scheduled run reads when a dispatch names no file of its own.
 CHECKED_IN_HARNESS_CONFIGS_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "harness_configs.json"
+
+# What the two self-diagnostic families run on: the fixture family's one config, and the behaviour
+# family's config per harness, keyed by the harness as the workspace spells it.
+_CHECKED_IN_DIAGNOSTICS_DIR: Final[Path] = CHECKED_IN_HARNESS_CONFIGS_PATH.parent / "diagnostics"
+CHECKED_IN_FIXTURE_HARNESS_CONFIG_PATH: Final[Path] = _CHECKED_IN_DIAGNOSTICS_DIR / "fixture_harness_config.json"
+CHECKED_IN_BEHAVIOUR_HARNESS_CONFIGS_PATH: Final[Path] = _CHECKED_IN_DIAGNOSTICS_DIR / "behaviour_harness_configs.json"
 
 # The suites the scheduled run evaluates when a dispatch names no config of its own.
 CHECKED_IN_NIGHTLY_SUITES_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "nightly_suites.json"
@@ -89,6 +105,20 @@ _KEY_ENV_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # replace the other. The same word is refused as a config slug, so that a suite cannot reach the
 # same collision from the other side.
 _RESERVED_NAMES: Final[frozenset[str]] = frozenset({"oracle"})
+
+# The diagnose jobs upload `minds-evals-summary-<pair>-diagnose-fixture` and
+# `minds-evals-summary-<pair>-diagnose-behaviour-<harness>`, where a cell uploads
+# `minds-evals-summary-<pair>-<config>`: a config named `diagnose` or under this prefix could take a
+# diagnose job's artifact name, and every upload overwrites.
+DIAGNOSE_NAME: Final[str] = "diagnose"
+_DIAGNOSE_NAME_PREFIX: Final[str] = DIAGNOSE_NAME + "-"
+
+# Why a behaviour cell is left out of the matrix. There is one reason a config may give, and it is the
+# same one whichever harness gives it, so the report prints it rather than the file spelling one.
+UNSUPPORTED_PAIR_REASON: Final[str] = "the pair's workspace template offers this lane no pasted-key sign-in"
+
+# How an error names the fixture family's single config, where a behaviour one is named by its harness.
+FIXTURE_FAMILY_NAME: Final[str] = "fixture"
 
 # A suite names its eval config by repo-relative path, held to the same shape the freeze step holds a
 # dispatched one to: it is echoed into a green marker key and onto a command line.
@@ -150,6 +180,13 @@ def _check_label(label: str, kind: str, path: Path) -> None:
             "{} {!r} in {} is reserved: a cell of that name would upload its job "
             "directory under the same artifact name as its own oracle pass".format(kind, label, path)
         )
+    if label == DIAGNOSE_NAME or label.startswith(_DIAGNOSE_NAME_PREFIX):
+        raise CiMatrixError(
+            "{} {!r} in {} is reserved: a label {!r} or starting with {!r} could upload its summary "
+            "under the artifact name of one of its pair's diagnose jobs".format(
+                kind, label, path, DIAGNOSE_NAME, _DIAGNOSE_NAME_PREFIX
+            )
+        )
 
 
 def _check_name(name: str, path: Path) -> None:
@@ -157,30 +194,25 @@ def _check_name(name: str, path: Path) -> None:
     _check_label(name, "harness config name", path)
 
 
-def _check_kwarg_values(entry: HarnessConfigEntry, path: Path) -> None:
+def _check_kwarg_values(config_label: str, value_by_field_name: Mapping[str, str], path: Path) -> None:
     """Raises CiMatrixError for a kwarg value that would not survive the run line it rides on.
 
-    An empty value is how an entry says nothing about that axis, so only what is given is checked.
+    An empty value is how a config says nothing about that axis, so only what is given is checked.
     """
-    for field_name, value in (
-        ("lane", entry.lane),
-        ("key_provider", entry.key_provider),
-        ("model", entry.model),
-        ("effort", entry.effort),
-    ):
+    for field_name, value in value_by_field_name.items():
         if value and not _KWARG_VALUE_PATTERN.match(value):
             raise CiMatrixError(
                 "harness config {!r} in {} gives {} as {!r}; a kwarg value becomes one word of the run "
                 "line and cannot carry whitespace, quotes or shell characters".format(
-                    entry.name, path, field_name, value
+                    config_label, path, field_name, value
                 )
             )
 
 
-def _check_key_env(key_env: str, entry: HarnessConfigEntry, path: Path) -> None:
+def _check_key_env(key_env: str, config_label: str, path: Path) -> None:
     """Raises CiMatrixError unless the variable a config's key is read from can be one.
 
-    The resolved name, not the field: an entry that names no `key_env` has one derived from its lane
+    The resolved name, not the field: a config that names no `key_env` has one derived from its lane
     and its `key_provider`, and on the api-key lane that derivation is `<KEY_PROVIDER>_API_KEY` --
     so the derived name inherits whatever the provider carried, and a provider is held to the
     permissive shape a catalog id needs.
@@ -188,8 +220,20 @@ def _check_key_env(key_env: str, entry: HarnessConfigEntry, path: Path) -> None:
     if not _KEY_ENV_PATTERN.match(key_env):
         raise CiMatrixError(
             "harness config {!r} in {} reads its key from {!r}; it names an environment variable and is "
-            "spelled into a Vault secret path".format(entry.name, path, key_env)
+            "spelled into a Vault secret path".format(config_label, path, key_env)
         )
+
+
+def _load_json_file(path: Path, file_description: str) -> Any:
+    """Raises CiMatrixError for a file that cannot be read or is not JSON."""
+    try:
+        raw_text = path.read_bytes().decode()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CiMatrixError("cannot read the {} {}: {}".format(file_description, path, exc)) from exc
+    try:
+        return json.loads(raw_text)
+    except ValueError as exc:
+        raise CiMatrixError("the {} {} is not valid JSON: {}".format(file_description, path, exc)) from exc
 
 
 def load_harness_configs(path: Path) -> tuple[HarnessConfigEntry, ...]:
@@ -201,14 +245,7 @@ def load_harness_configs(path: Path) -> tuple[HarnessConfigEntry, ...]:
 
     Raises CiMatrixError for a file, a name, or an entry that could not name a runnable arm.
     """
-    try:
-        raw_text = path.read_bytes().decode()
-    except (OSError, UnicodeDecodeError) as exc:
-        raise CiMatrixError("cannot read the harness configs file {}: {}".format(path, exc)) from exc
-    try:
-        payload = json.loads(raw_text)
-    except ValueError as exc:
-        raise CiMatrixError("the harness configs file {} is not valid JSON: {}".format(path, exc)) from exc
+    payload = _load_json_file(path, "harness configs file")
     try:
         configs_file = HarnessConfigsFile.model_validate(payload)
     except ValidationError as exc:
@@ -224,14 +261,18 @@ def load_harness_configs(path: Path) -> tuple[HarnessConfigEntry, ...]:
                 "the harness configs file {} names {!r} twice; a name has to identify one arm".format(path, entry.name)
             )
         seen_names.add(entry.name)
-        _check_kwarg_values(entry, path)
+        _check_kwarg_values(
+            entry.name,
+            {"lane": entry.lane, "key_provider": entry.key_provider, "model": entry.model, "effort": entry.effort},
+            path,
+        )
         try:
             parsed_config = harness_config_kwargs(entry)
         except AgentKwargError as exc:
             raise CiMatrixError(
                 "harness config {!r} in {} is not one the driver can run: {}".format(entry.name, path, exc)
             ) from exc
-        _check_key_env(parsed_config.key_env, entry, path)
+        _check_key_env(parsed_config.key_env, entry.name, path)
     return entries
 
 
@@ -270,6 +311,132 @@ def select_harness_configs(entries: Sequence[HarnessConfigEntry], selection: str
             "no harness config is named {}; the file holds {}".format(", ".join(unknown), ", ".join(sorted(known)))
         )
     return tuple(entry for entry in entries if entry.name in wanted)
+
+
+@pure
+def select_nightly_harnesses(entries: Sequence[HarnessConfigEntry]) -> tuple[HarnessName, ...]:
+    """The distinct harnesses the nightly configs run on, in the order the file first names each.
+
+    A behaviour diagnostic runs one cell per harness here, so each harness a night measures has its
+    reader checked, whichever of its configs are nightly.
+
+    Raises CiMatrixError when no config is nightly, as `select_harness_configs` does.
+    """
+    nightly_harnesses = (
+        harness_for_lane(harness_config_kwargs(entry).lane) for entry in select_harness_configs(entries, "")
+    )
+    return tuple(dict.fromkeys(nightly_harnesses))
+
+
+def diagnostic_harness_config_kwargs(entry: DiagnosticHarnessEntry) -> HarnessConfig:
+    """A diagnostic family's entry parsed by the driver's own kwarg parsing, the way a named config is.
+
+    Raises AgentKwargError for a combination the workspace would refuse.
+    """
+    return driver.parse_harness_config(
+        lane=entry.lane,
+        key_provider=entry.key_provider,
+        key_env=entry.key_env,
+        model=entry.model,
+        effort=entry.effort,
+        fast=entry.fast,
+    )
+
+
+def _check_diagnostic_harness_entry(entry: DiagnosticHarnessEntry, config_label: str, path: Path) -> HarnessConfig:
+    """The entry as the driver parses it, refused here on the free job rather than on a paid runner.
+
+    Raises CiMatrixError for kwargs the run line could not carry or the driver would not accept.
+    """
+    _check_kwarg_values(
+        config_label,
+        {"lane": entry.lane, "key_provider": entry.key_provider, "model": entry.model, "effort": entry.effort},
+        path,
+    )
+    try:
+        parsed = diagnostic_harness_config_kwargs(entry)
+    except AgentKwargError as exc:
+        raise CiMatrixError(
+            "diagnostic harness config {!r} in {} is not one the driver can run: {}".format(config_label, path, exc)
+        ) from exc
+    _check_key_env(parsed.key_env, config_label, path)
+    return parsed
+
+
+def load_fixture_harness_config(path: Path) -> DiagnosticHarnessEntry:
+    """The fixture family's entry, validated through the driver's own kwarg parsing.
+
+    Raises CiMatrixError for a file that is not one runnable harness config.
+    """
+    payload = _load_json_file(path, "fixture harness config")
+    try:
+        entry = DiagnosticHarnessEntry.model_validate(payload)
+    except ValidationError as exc:
+        raise CiMatrixError(
+            "the fixture harness config {} is not a set of `--ak` kwargs: {}".format(path, exc)
+        ) from exc
+    _check_diagnostic_harness_entry(entry, FIXTURE_FAMILY_NAME, path)
+    return entry
+
+
+def load_behaviour_harness_configs(path: Path) -> dict[HarnessName, BehaviourHarnessEntry]:
+    """The behaviour family's entry per harness, every one validated whether or not a night runs it.
+
+    Raises CiMatrixError for a file that is not an object of runnable harness configs, keyed each by
+    the harness its lane actually runs.
+    """
+    payload = _load_json_file(path, "behaviour harness configs file")
+    if not isinstance(payload, dict):
+        raise CiMatrixError(
+            "the behaviour harness configs file {} is a {}, not an object keyed by harness".format(
+                path, type(payload).__name__
+            )
+        )
+    harness_by_id = {harness_id(harness): harness for harness in HarnessName}
+    entry_by_harness: dict[HarnessName, BehaviourHarnessEntry] = {}
+    for harness_key, raw_entry in payload.items():
+        harness = harness_by_id.get(harness_key)
+        if harness is None:
+            raise CiMatrixError(
+                "the behaviour harness configs file {} names {!r}, which is no harness; expected one of {}".format(
+                    path, harness_key, ", ".join(sorted(harness_by_id))
+                )
+            )
+        try:
+            entry = BehaviourHarnessEntry.model_validate(raw_entry)
+        except ValidationError as exc:
+            raise CiMatrixError(
+                "behaviour harness config {!r} in {} is not a set of `--ak` kwargs: {}".format(harness_key, path, exc)
+            ) from exc
+        parsed = _check_diagnostic_harness_entry(entry, harness_key, path)
+        lane_harness = harness_for_lane(parsed.lane)
+        if lane_harness is not harness:
+            raise CiMatrixError(
+                "behaviour harness config {!r} in {} signs in on lane {}, whose chats run {}".format(
+                    harness_key, path, lane_id(parsed.lane), harness_id(lane_harness)
+                )
+            )
+        entry_by_harness[harness] = entry
+    return entry_by_harness
+
+
+@pure
+def select_behaviour_harness_configs(
+    entry_by_harness: Mapping[HarnessName, BehaviourHarnessEntry], harnesses: Sequence[HarnessName]
+) -> tuple[tuple[HarnessName, BehaviourHarnessEntry], ...]:
+    """The behaviour entry of each harness a night measures, in the order given.
+
+    Raises CiMatrixError for a harness with no entry: a nightly harness without one would get no
+    behaviour cell, and the readers only it exercises would go unchecked in silence.
+    """
+    missing = [harness_id(harness) for harness in harnesses if harness not in entry_by_harness]
+    if missing:
+        raise CiMatrixError(
+            "the nightly harness configs run on {} but the behaviour harness configs name no config for {}".format(
+                ", ".join(harness_id(harness) for harness in harnesses), ", ".join(missing)
+            )
+        )
+    return tuple((harness, entry_by_harness[harness]) for harness in harnesses)
 
 
 @pure
@@ -508,14 +675,19 @@ def read_green_marker_keys(path: Path, restorable_refs: Sequence[str]) -> frozen
 
 @pure
 def harbor_args_for(entry: HarnessConfigEntry) -> tuple[str, ...]:
-    """The `--ak` arguments a cell appends to its harbor run line, as a flat argv tuple.
+    """The `--ak` arguments a cell appends to its harbor run line, as a flat argv tuple."""
+    return harbor_args_for_harness_config(harness_config_kwargs(entry))
 
-    Built from the parsed config rather than the file's fields, so what a cell runs on is exactly
-    what was validated. Only a config that names a model carries the model axes: the driver refuses
+
+@pure
+def harbor_args_for_harness_config(parsed: HarnessConfig) -> tuple[str, ...]:
+    """The `--ak` arguments that drive a parsed harness config, as a flat argv tuple.
+
+    Built from the parsed config rather than a file's fields, so what a job runs on is exactly what
+    was validated. Only a config that names a model carries the model axes: the driver refuses
     `effort` or `fast` without one, and a config that names no model must leave the workspace's own
     model and speed tier alone -- that is what makes the default arm the product as it ships.
     """
-    parsed = harness_config_kwargs(entry)
     args = ["--ak", "lane={}".format(lane_id(parsed.lane)), "--ak", "key_env={}".format(parsed.key_env)]
     if parsed.key_provider:
         args += ["--ak", "key_provider={}".format(parsed.key_provider)]
@@ -607,8 +779,11 @@ def decide_matrix(
     suites: Sequence[ResolvedSuite],
     green_keys: frozenset[str],
     is_forced: bool,
+    fixture_harness_config: DiagnosticHarnessEntry,
+    behaviour_harness_configs: Sequence[tuple[HarnessName, BehaviourHarnessEntry]],
 ) -> CiMatrix:
-    """Every arm the run considered and what it decided about each.
+    """Every arm the run considered and what it decided about each, and the diagnose jobs of every
+    resolved pair.
 
     A pair whose refs did not resolve has no SHAs to key a marker on and nothing to check out, so it
     gets no cells at all and is reported as unresolved; the other pairs still run, because the pairs
@@ -618,9 +793,19 @@ def decide_matrix(
 
     The pairs are the outer loop, so a pair's cells stay together in the summary table and in the
     matrix a job fans out over.
+
+    Every resolved pair gets its diagnostics whatever its cells decided: an all-green night moves no
+    SHA the diagnostics would notice, and is exactly the night the instrument still has to be checked.
+    A behaviour cell whose harness config names the pair as unsupported is left out rather than run
+    against a template that cannot sign its lane in, and is reported instead.
     """
     decided_pairs: list[DecidedPair] = []
     all_cells: list[MatrixCell] = []
+    fixture_diagnostics: list[FixtureDiagnosticCell] = []
+    behaviour_diagnostics: list[BehaviourDiagnosticCell] = []
+    unsupported_diagnostics: list[UnsupportedDiagnosticCell] = []
+    fixture_config = diagnostic_harness_config_kwargs(fixture_harness_config)
+    fixture_harbor_args = json.dumps(list(harbor_args_for_harness_config(fixture_config)))
     for pair in pairs:
         if not pair.is_resolved:
             decided_pairs.append(DecidedPair(**pair.model_dump(), decision=PairDecision.UNRESOLVED))
@@ -631,8 +816,35 @@ def decide_matrix(
         decided_pairs.append(
             DecidedPair(**pair.model_dump(), decision=PairDecision.RUN if is_any_running else PairDecision.SKIP)
         )
+        fixture_diagnostics.append(
+            FixtureDiagnosticCell(
+                **pair.model_dump(), lane_key_env=fixture_config.key_env, harbor_args=fixture_harbor_args
+            )
+        )
+        for harness, entry in behaviour_harness_configs:
+            if pair.pair in entry.unsupported_pairs:
+                unsupported_diagnostics.append(
+                    UnsupportedDiagnosticCell(
+                        pair=pair.pair, harness=harness_id(harness), reason=UNSUPPORTED_PAIR_REASON
+                    )
+                )
+                continue
+            parsed = diagnostic_harness_config_kwargs(entry)
+            behaviour_diagnostics.append(
+                BehaviourDiagnosticCell(
+                    **pair.model_dump(),
+                    harness=harness_id(harness),
+                    lane_key_env=parsed.key_env,
+                    harbor_args=json.dumps(list(harbor_args_for_harness_config(parsed))),
+                )
+            )
     return CiMatrix(
-        configs=tuple(suite.config for suite in suites), pairs=tuple(decided_pairs), cells=tuple(all_cells)
+        configs=tuple(suite.config for suite in suites),
+        pairs=tuple(decided_pairs),
+        cells=tuple(all_cells),
+        fixture_diagnostics=tuple(fixture_diagnostics),
+        behaviour_diagnostics=tuple(behaviour_diagnostics),
+        unsupported_diagnostics=tuple(unsupported_diagnostics),
     )
 
 
@@ -702,6 +914,32 @@ def render_matrix_summary_markdown(matrix: CiMatrix, repository: str) -> str:
         "```",
         _marker_listing_hint(repository),
         "```",
+        "",
+        "## Diagnostics",
+        "",
+        "| pair | family | harness | decision |",
+        "|---|---|---|---|",
+        *(
+            "| `{}` | fixture | - | **run** |".format(as_table_cell(diagnostic.pair))
+            for diagnostic in matrix.fixture_diagnostics
+        ),
+        *(
+            "| `{}` | behaviour | `{}` | **run** |".format(
+                as_table_cell(diagnostic.pair), as_table_cell(diagnostic.harness)
+            )
+            for diagnostic in matrix.behaviour_diagnostics
+        ),
+        *(
+            "| `{}` | behaviour | `{}` | **unsupported**: {} |".format(
+                as_table_cell(diagnostic.pair), as_table_cell(diagnostic.harness), as_table_cell(diagnostic.reason)
+            )
+            for diagnostic in matrix.unsupported_diagnostics
+        ),
+        "",
+        "- every resolved pair runs its diagnose jobs whatever its cells decided: they write no green marker, "
+        "read none, and gate nothing",
+        "- an `unsupported` behaviour cell is not run at all, and the Slack report names it: no box is spent to "
+        "produce a dark cell",
     ]
     return "\n".join(lines) + "\n"
 

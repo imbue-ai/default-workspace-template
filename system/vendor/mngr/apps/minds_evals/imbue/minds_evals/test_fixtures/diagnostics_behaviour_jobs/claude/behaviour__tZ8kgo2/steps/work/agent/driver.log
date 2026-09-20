@@ -1,0 +1,2 @@
+2026-09-16 05:01:46.525 | INFO     | imbue.minds_evals.driver:3187 - Preparing the workspace template clone (https://github.com/imbue-ai/default-workspace-template.git@d525d62ef939, pinned from main)
+2026-09-16 05:18:54.694 | WARNING  | imbue.minds_evals.driver:3573 - Speed tier unobserved, so every request is priced at the standard rate. Minds runs fast mode by default and fast mode bills at twice that, so treat this cost as a floor; run with --ak proxy=true to price it exactly

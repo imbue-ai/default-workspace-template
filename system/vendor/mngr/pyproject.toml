@@ -384,6 +384,7 @@ type = "layers"
 layers = [
     "imbue.apt_mirror.cli",
     "imbue.apt_mirror.service",
+    "imbue.apt_mirror.template_base_image",
     "imbue.apt_mirror.storage",
     "imbue.apt_mirror.fetcher",
     "imbue.apt_mirror.interfaces",
