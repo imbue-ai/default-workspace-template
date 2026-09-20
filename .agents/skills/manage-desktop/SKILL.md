@@ -128,8 +128,8 @@ grid cells. A new desktop is seeded with every app's `default_shortcut` from
 its manifest.
 
 ```bash
-# A desktop's shortcuts: app, launch path, mode, cell.
-python3 system/scripts/layout.py shortcuts --desktop "Research"
+# The target client's active desktop's shortcuts: app, launch path, mode, cell.
+python3 system/scripts/layout.py shortcuts
 
 # Add the docs app's "open" to Research's backdrop, always opening anew, in column 2 row 0.
 python3 system/scripts/layout.py shortcut set docs open --mode new --cell 2,0 --desktop "Research"
@@ -138,10 +138,15 @@ python3 system/scripts/layout.py shortcut set docs open --mode new --cell 2,0 --
 python3 system/scripts/layout.py shortcut move docs open --cell 3,0 --desktop "Research"
 python3 system/scripts/layout.py shortcut remove docs open --desktop "Research"
 
-# The wallpaper: a bundled image, a file under data/.apps/system_interface/wallpapers/, or none.
-python3 system/scripts/layout.py wallpaper bundled apricot-coast --desktop "Research"
+# The wallpaper: a bundled image (`dawn` ships; GET /api/wallpapers lists what does), a file
+# under data/.apps/system_interface/wallpapers/, or none.
+python3 system/scripts/layout.py wallpaper bundled dawn --desktop "Research"
 python3 system/scripts/layout.py wallpaper none
 ```
+
+`--desktop` switches the target client onto that desktop for every op, `shortcuts`
+included, so to look at another desktop's shortcuts without moving anyone, read them
+off `desktops`, which lists every desktop's shortcuts.
 
 `shortcut set` refuses an app or launch path the registry does not declare.
 Creating, renaming, or deleting a *desktop itself* has no `layout.py`
