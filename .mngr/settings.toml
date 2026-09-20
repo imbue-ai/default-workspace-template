@@ -1681,7 +1681,7 @@ setting__extend = [
 # absent until then, weekly and findings-gated via
 # system/services/caretaker/caretaker_check.sh once enabled) via
 # system/libs/automations/run_automation.sh, and labelled automation=caretaker
-# so it can be found as a singleton (the agent surfaces its own chat tab via
+# so it can be found as a singleton (the agent surfaces its own chat window via
 # system/scripts/layout.py after its first message).
 [create_templates.caretaker]
 transfer = "none"
@@ -1696,7 +1696,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat window by running: python3 system/scripts/layout.py open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: python3 system/scripts/layout.py open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
