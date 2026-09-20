@@ -146,8 +146,8 @@ export async function loadAccounts(): Promise<void> {
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
- * answers, and a decision made off one silently failed fetch (the page of a chat awaiting
- * an account foremost) would be wrong for the whole page load. Never rejects.
+ * answers, and a decision made off one silently failed fetch (the provider chooser the chat
+ * root offers foremost) would be wrong for the whole page load. Never rejects.
  */
 export async function loadAccountsWithRetry(): Promise<void> {
   const backoff = new ReconnectBackoff();

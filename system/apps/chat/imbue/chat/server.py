@@ -1230,8 +1230,8 @@ def _run_create_chat() -> CreatedChat | Response:
 
     One endpoint for every harness: the ``chat`` role is the same, and the account the
     chat is bound to (the request's ``account_id``, else the most recently used one)
-    decides which harness template the server stacks under it. A request naming an
-    ``chat_id`` launches a chat minted earlier -- one that waited for an account, or one
+    decides which harness template the server stacks under it. A request naming a
+    ``chat_id`` launches a chat minted earlier -- a seeded one awaiting its first send, or one
     whose create failed -- under that id, keeping the name it was minted with.
 
     The chat's display name is minted here (server-side) when the request names
