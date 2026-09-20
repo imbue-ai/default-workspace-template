@@ -20,15 +20,6 @@ const STROKE_PATHS = {
     '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   // The single canonical "x".
   close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
-  // Closing a window and taking its object off the machine are different acts, so
-  // they get different glyphs: a minus puts the window away and leaves the thing
-  // running, an "x" ends it everywhere.
-  minus: '<path d="M6 12h12"/>',
-  // A third act between those two, and it gets a third glyph: taking an object
-  // off ONE desktop while it keeps running elsewhere. The bare minus is already
-  // "put the window away", so neither that nor the "x" says it. The ring is what
-  // marks it as acting on the filing rather than on the window.
-  "minus-circle": '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
   trash:
