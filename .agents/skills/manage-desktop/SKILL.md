@@ -177,8 +177,8 @@ the app's own to name, stop, or end:
 
 `layout.py` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
 `delete`, `stop`, `start`, `replace-url`, `inspect`, `where`, `views`) and the
-old `app:`, `chat:`, `terminal:`, `service:`, `url:`, and `subagent:` spellings
-with the verb or form to use instead.
+old `app:`, `chat:`, `chat-terminal:`, `terminal:`, `service:`, `url:`, and
+`subagent:` spellings with the verb or form to use instead.
 
 ## Ops answer at once
 
