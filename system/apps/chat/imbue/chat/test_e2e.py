@@ -15,6 +15,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -154,17 +155,25 @@ def _the_chat_window(server: RunningWorkspace) -> dict[str, Any]:
     return window
 
 
-def _wait_for_chat_window_at(server: RunningWorkspace, path_prefix: str) -> dict[str, Any]:
-    """Wait until the one chat window's stored path starts with ``path_prefix``.
+def _wait_for_chat_window_path(
+    server: RunningWorkspace, is_reported: Callable[[str], bool], described: str
+) -> dict[str, Any]:
+    """Wait until the one chat window's stored path satisfies ``is_reported``.
 
-    A window opened at the ``new`` launch path stays at ``/new`` until the chat root reports the chat it
-    created, and a reload before that report would run the launch again.
+    A window opened at the ``new`` launch path stays at ``/new`` until the chat root reports its location
+    (the chat it created, or the bare root while it waits for an account), and a reload before that report
+    would run the launch again.
     """
+
+    def _has_reported() -> bool:
+        windows = _chat_windows(server)
+        return len(windows) == 1 and is_reported(windows[0]["path"])
+
     wait_for(
-        lambda: len(_chat_windows(server)) == 1 and _chat_windows(server)[0]["path"].startswith(path_prefix),
+        _has_reported,
         timeout=15.0,
         poll_interval=0.1,
-        error_message=f"the chat window never reported a path under {path_prefix!r}",
+        error_message=f"the chat window never reported {described}",
     )
     return _the_chat_window(server)
 
@@ -653,7 +662,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
             FIXTURE_AGENT_ID
         ]
         # The window is the desktop's, so the chat root is back on reload.
-        _wait_for_chat_window_at(server, "/")
+        _wait_for_chat_window_path(server, lambda path: path == "/", "the bare root path")
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
@@ -691,7 +700,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
         # The composer stays under the notice: a message held through the failure is back in it.
         expect(chat.locator(".message-input-textbox")).to_be_visible()
         # The instance stays listed, in the error state, so the window survives a reload.
-        _wait_for_chat_window_at(server, "/?chat=")
+        _wait_for_chat_window_path(server, lambda path: path.startswith("/?chat="), "a path selecting a chat")
         page.reload()
         chat = _shown_chat(page)
         expect(chat.locator(".message-list-create-failed")).to_be_visible(timeout=15000)
