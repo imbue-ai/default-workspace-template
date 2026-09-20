@@ -466,6 +466,9 @@ export class DesktopStore {
   async openWindowAt(app: string, path: string, launch: string | null, ifPresent: IfPresent): Promise<string | null> {
     const desktopId = this.state.activeDesktopId;
     if (desktopId === null) return null;
+    // The shell writes the new placement over the stored layout, and the refetch takes that: a gesture
+    // still waiting in the debounce goes into the file first or it is lost.
+    await this.flushPendingSave();
     let outcome: WindowOpenOutcome;
     try {
       outcome = await this.deps.api.openWindow(desktopId, {
