@@ -100,4 +100,3 @@ class DisplayKind(StrEnum):
     # the baseline bubble showing ``display_body`` -- the user's own words -- rather than the
     # whole content, so the context the agent needs never becomes a wall of text in the chat.
     PROMPT_WITH_CONTEXT = "prompt_with_context"
-

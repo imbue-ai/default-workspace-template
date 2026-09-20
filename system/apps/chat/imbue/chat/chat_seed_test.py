@@ -5,16 +5,16 @@ from pathlib import Path
 
 from loguru import logger
 
-from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
+from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
-from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
