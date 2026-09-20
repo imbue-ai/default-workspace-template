@@ -19,120 +19,30 @@ import os
 import queue
 import subprocess
 import sys
-import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from typing import Generator
 
 import pytest
-from flask import Flask
-from pydantic import Field
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.config import Config
-from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.testing import drain_messages
-from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import write_registry
-from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import serve_app
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from imbue.system_interface.wsgi import make_threaded_server
+from imbue.system_interface.testing import PIPELINE_CLIENT_ID
+from imbue.system_interface.testing import PIPELINE_DEFAULT_DESKTOP_ID
+from imbue.system_interface.testing import PIPELINE_SEEDED_APP_NAME
+from imbue.system_interface.testing import PIPELINE_STUB_APP_NAME
+from imbue.system_interface.testing import PipelineHarness
 
 pytestmark = pytest.mark.acceptance
 
-_PORT = 18766
-_BASE_URL = f"http://127.0.0.1:{_PORT}"
-# The app that declares launch paths, and the marker of the requester's own page of it.
-_SEEDED_APP_NAME = "chat"
+# The marker and title of the requester's own page of the seeded app.
 _SEEDED_KEY = "stub-1"
 _SEEDED_TITLE = "alice"
 # The requesting agent, which the script resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
-_STUB_APP_NAME = "docs"
-# The one connected client of most tests, on the default desktop.
-_CLIENT_ID = "client-1"
-_DEFAULT_DESKTOP_ID = "home"
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
-
-
-def _server_is_up(url: str) -> bool:
-    """Any HTTP answer from ``/api/desktops`` means the app is serving."""
-    try:
-        urllib.request.urlopen(f"{url}/api/desktops", timeout=0.5)
-        return True
-    except urllib.error.HTTPError:
-        return True
-    except OSError:
-        return False
-
-
-class PipelineHarness(FrozenModel):
-    """What one test gets: the shell's URL, its broadcaster, and the registry file."""
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    base_url: str = Field(description="The shell's loopback URL")
-    broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
-    registry_path: Path = Field(description="The registry file the shell and the script read")
-
-
-def _stand_in_app() -> Flask:
-    """An app that answers every path, so the liveness probe finds it running."""
-    app = Flask("stand-in")
-    app.add_url_rule("/", view_func=lambda: "ok", endpoint="root")
-    app.add_url_rule("/<path:path>", view_func=lambda path: "ok", endpoint="page")
-    return app
-
-
-@pytest.fixture
-def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[PipelineHarness, None, None]:
-    """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell."""
-    registry_path = tmp_path / "apps.toml"
-    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
-    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", _BASE_URL)
-
-    with serve_app(_stand_in_app()) as seeded, serve_app(_stand_in_app()) as stub:
-        write_registry(
-            registry_path,
-            registry_row_toml(
-                _SEEDED_APP_NAME,
-                seeded.http_url,
-                is_critical=True,
-                default_shortcut=("new", "new"),
-                launch_paths=(("new", "New Chat", "/new"), ("subagent", "Open subagent", "/subagent")),
-            ),
-            registry_row_toml(_STUB_APP_NAME, stub.http_url),
-        )
-
-        broadcaster = WebSocketBroadcaster()
-        config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
-        state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
-        app = create_application(state)
-
-        server = make_threaded_server("127.0.0.1", _PORT, app)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            wait_for(
-                lambda: _server_is_up(_BASE_URL),
-                timeout=5.0,
-                poll_interval=0.05,
-                error_message=f"workspace server did not come up at {_BASE_URL}",
-            )
-            state.shell.start()
-            try:
-                yield PipelineHarness(base_url=_BASE_URL, broadcaster=broadcaster, registry_path=registry_path)
-            finally:
-                state.shell.stop()
-        finally:
-            server.shutdown()
-            thread.join(timeout=5.0)
 
 
 def _run_layout_script(args: list[str], harness: PipelineHarness, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -177,17 +87,6 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
-@pytest.fixture
-def connected_client(layout_server: PipelineHarness) -> Generator["queue.Queue[str | None]", None, None]:
-    """One connected browser client on the default desktop: the client every op with no ``--client`` targets."""
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, _CLIENT_ID, _DEFAULT_DESKTOP_ID)
-    try:
-        yield client_queue
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
-
-
 def test_context_and_desktops_round_trip_through_script_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
@@ -213,12 +112,14 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
     desktops = _run_layout_script(["desktops", "--json"], layout_server, sandbox)
     assert desktops.returncode == 0, f"stderr={desktops.stderr!r}"
     listed = json.loads(desktops.stdout)
-    assert [(desktop["id"], desktop["windows"]) for desktop in listed["desktops"]] == [(_DEFAULT_DESKTOP_ID, [])]
+    assert [(desktop["id"], desktop["windows"]) for desktop in listed["desktops"]] == [
+        (PIPELINE_DEFAULT_DESKTOP_ID, [])
+    ]
 
 
 def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """With no client connected or recorded, there is nobody's placements to edit, and the script says so."""
-    result = _run_layout_script(["open", _STUB_APP_NAME], layout_server, _sandbox(tmp_path))
+    result = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, _sandbox(tmp_path))
 
     assert result.returncode == 1
     assert "Could not tell which client" in result.stderr and "--client" in result.stderr
@@ -228,12 +129,14 @@ def test_list_shows_every_app_with_its_launch_paths(layout_server: PipelineHarne
     """``list --json`` is the inventory: every app a user can open, its launch paths, and whether it runs."""
     listing = _listing(layout_server, _sandbox(tmp_path))
 
-    assert set(listing) == {_SEEDED_APP_NAME, _STUB_APP_NAME}
+    assert set(listing) == {PIPELINE_SEEDED_APP_NAME, PIPELINE_STUB_APP_NAME}
     # An app declaring no launch path offers the synthesized ``open`` at its root.
-    assert [(launch["id"], launch["path"]) for launch in listing[_STUB_APP_NAME]["launch_paths"]] == [("open", "/")]
-    assert [launch["id"] for launch in listing[_SEEDED_APP_NAME]["launch_paths"]] == ["new", "subagent"]
-    assert listing[_STUB_APP_NAME]["is_running"] is True
-    assert listing[_STUB_APP_NAME]["windows"] == []
+    assert [(launch["id"], launch["path"]) for launch in listing[PIPELINE_STUB_APP_NAME]["launch_paths"]] == [
+        ("open", "/")
+    ]
+    assert [launch["id"] for launch in listing[PIPELINE_SEEDED_APP_NAME]["launch_paths"]] == ["new", "subagent"]
+    assert listing[PIPELINE_STUB_APP_NAME]["is_running"] is True
+    assert listing[PIPELINE_STUB_APP_NAME]["windows"] == []
 
 
 def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
@@ -244,28 +147,30 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     everyone; the writes are announced to the client."""
     sandbox = _sandbox(tmp_path)
 
-    opened = _run_layout_script(["open", _STUB_APP_NAME], layout_server, sandbox)
+    opened = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
     assert opened.returncode == 0, f"stderr={opened.stderr!r}"
     window_id = opened.stdout.strip()
     assert window_id.startswith("win-")
-    assert f"opened window {window_id} ({_STUB_APP_NAME} at /)" in opened.stderr
+    assert f"opened window {window_id} ({PIPELINE_STUB_APP_NAME} at /)" in opened.stderr
     (window,) = _windows(layout_server, sandbox)
     assert (window["id"], window["app"], window["path"], window["is_settling"]) == (
         window_id,
-        _STUB_APP_NAME,
+        PIPELINE_STUB_APP_NAME,
         "/",
         True,
     )
-    assert [entry["id"] for entry in _listing(layout_server, sandbox)[_STUB_APP_NAME]["windows"]] == [window_id]
+    assert [entry["id"] for entry in _listing(layout_server, sandbox)[PIPELINE_STUB_APP_NAME]["windows"]] == [
+        window_id
+    ]
 
     # Opening the app again focuses the window already at its launch path rather than opening another.
-    focused = _run_layout_script(["open", _STUB_APP_NAME], layout_server, sandbox)
+    focused = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
     assert focused.returncode == 0, f"stderr={focused.stderr!r}"
     assert focused.stdout.strip() == window_id
     assert len(_windows(layout_server, sandbox)) == 1
 
     def placement_states() -> list[tuple[str, str, bool]]:
-        stored = _get_json(layout_server, f"/api/placements/{_DEFAULT_DESKTOP_ID}?client={_CLIENT_ID}")
+        stored = _get_json(layout_server, f"/api/placements/{PIPELINE_DEFAULT_DESKTOP_ID}?client={PIPELINE_CLIENT_ID}")
         return [(row["window_id"], row["state"], row["is_minimized"]) for row in stored["placements"]]
 
     for verb, extra, expected in (
@@ -299,7 +204,7 @@ def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     sandbox = _sandbox(tmp_path)
     own_path = f"/?chat={_AGENT_ID}"
 
-    opened = _run_layout_script(["open", _SEEDED_APP_NAME, "--path", own_path], layout_server, sandbox)
+    opened = _run_layout_script(["open", PIPELINE_SEEDED_APP_NAME, "--path", own_path], layout_server, sandbox)
     assert opened.returncode == 0, f"stderr={opened.stderr!r}"
     own_window_id = opened.stdout.strip()
     (window,) = _windows(layout_server, sandbox)
@@ -316,7 +221,7 @@ def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     gone = _run_layout_script(["focus", "self"], layout_server, sandbox)
     assert gone.returncode == 1 and "self" in gone.stderr
 
-    by_app = _run_layout_script(["maximize", _SEEDED_APP_NAME], layout_server, sandbox)
+    by_app = _run_layout_script(["maximize", PIPELINE_SEEDED_APP_NAME], layout_server, sandbox)
     assert by_app.returncode == 0, f"stderr={by_app.stderr!r}"
     assert f"maximized window {own_window_id}" in by_app.stderr
 
@@ -324,11 +229,11 @@ def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
 @pytest.mark.parametrize(
     ("argv", "expected_hint"),
     [
-        (["open", f"app:{_STUB_APP_NAME}"], "give an app name and a path"),
+        (["open", f"app:{PIPELINE_STUB_APP_NAME}"], "give an app name and a path"),
         (["open", f"chat:{_SEEDED_TITLE}"], "give an app name and a path"),
-        (["focus", f"app:{_STUB_APP_NAME}?instance=x"], "give an app name and a path"),
-        (["split", _STUB_APP_NAME, "--relative-to", "self"], "not a desktop verb"),
-        (["rename", f"app:{_STUB_APP_NAME}?instance=x", "Docs"], "not a desktop verb"),
+        (["focus", f"app:{PIPELINE_STUB_APP_NAME}?instance=x"], "give an app name and a path"),
+        (["split", PIPELINE_STUB_APP_NAME, "--relative-to", "self"], "not a desktop verb"),
+        (["rename", f"app:{PIPELINE_STUB_APP_NAME}?instance=x", "Docs"], "not a desktop verb"),
     ],
 )
 def test_retired_spellings_and_verbs_are_refused_before_they_reach_the_shell(
@@ -375,27 +280,31 @@ def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
     sandbox = _sandbox(tmp_path)
 
     set_result = _run_layout_script(
-        ["shortcut", "set", _STUB_APP_NAME, "open", "--mode", "new", "--cell", "1,0"], layout_server, sandbox
+        ["shortcut", "set", PIPELINE_STUB_APP_NAME, "open", "--mode", "new", "--cell", "1,0"], layout_server, sandbox
     )
     assert set_result.returncode == 0, f"stderr={set_result.stderr!r}"
     listed = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
     assert listed.returncode == 0, f"stderr={listed.stderr!r}"
     shortcuts = json.loads(listed.stdout)
-    assert shortcuts["desktop"] == _DEFAULT_DESKTOP_ID
+    assert shortcuts["desktop"] == PIPELINE_DEFAULT_DESKTOP_ID
     rows = {(row["target"]["app"], row["target"]["launch"]): row for row in shortcuts["shortcuts"]}
-    assert rows[(_STUB_APP_NAME, "open")]["mode"] == "new"
-    assert rows[(_STUB_APP_NAME, "open")]["cell"] == {"column": 1, "row": 0}
+    assert rows[(PIPELINE_STUB_APP_NAME, "open")]["mode"] == "new"
+    assert rows[(PIPELINE_STUB_APP_NAME, "open")]["cell"] == {"column": 1, "row": 0}
 
-    moved = _run_layout_script(["shortcut", "move", _STUB_APP_NAME, "open", "--cell", "2,1"], layout_server, sandbox)
+    moved = _run_layout_script(
+        ["shortcut", "move", PIPELINE_STUB_APP_NAME, "open", "--cell", "2,1"], layout_server, sandbox
+    )
     assert moved.returncode == 0, f"stderr={moved.stderr!r}"
     desktops = _get_json(layout_server, "/api/desktops")["desktops"]
-    (shortcut,) = [shortcut for shortcut in desktops[0]["shortcuts"] if shortcut["target"]["app"] == _STUB_APP_NAME]
+    (shortcut,) = [
+        shortcut for shortcut in desktops[0]["shortcuts"] if shortcut["target"]["app"] == PIPELINE_STUB_APP_NAME
+    ]
     assert shortcut["cell"] == {"column": 2, "row": 1}
 
-    removed = _run_layout_script(["shortcut", "remove", _STUB_APP_NAME, "open"], layout_server, sandbox)
+    removed = _run_layout_script(["shortcut", "remove", PIPELINE_STUB_APP_NAME, "open"], layout_server, sandbox)
     assert removed.returncode == 0, f"stderr={removed.stderr!r}"
     listed_after = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
-    assert (_STUB_APP_NAME, "open") not in {
+    assert (PIPELINE_STUB_APP_NAME, "open") not in {
         (row["target"]["app"], row["target"]["launch"]) for row in json.loads(listed_after.stdout)["shortcuts"]
     }
 
@@ -417,7 +326,7 @@ def test_script_runs_without_a_registry_file_for_read_ops(layout_server: Pipelin
         timeout=15,
     )
     assert result.returncode == 0, f"stderr={result.stderr!r}"
-    assert [desktop["id"] for desktop in json.loads(result.stdout)["desktops"]] == [_DEFAULT_DESKTOP_ID]
+    assert [desktop["id"] for desktop in json.loads(result.stdout)["desktops"]] == [PIPELINE_DEFAULT_DESKTOP_ID]
 
 
 def _post_op(
@@ -449,18 +358,18 @@ def test_desktop_verbs_open_and_close_a_window_in_the_clients_layout_with_no_bro
     """The desktop vocabulary on the op route: ``open`` at the app's synthesized launch path lands a window on the
     default desktop and a placement in the target client's file, and ``close`` takes both away, whether or not a
     window is open; the writes are announced to that client."""
-    requester = {"app": _SEEDED_APP_NAME, "marker": _SEEDED_KEY}
+    requester = {"app": PIPELINE_SEEDED_APP_NAME, "marker": _SEEDED_KEY}
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "home")
     try:
         status, listed = _post_op(layout_server, "desktops", {}, requester)
         assert status == 200 and [desktop["id"] for desktop in listed["desktops"]] == ["home"]
 
-        status, opened = _post_op(layout_server, "open", {"app": _STUB_APP_NAME}, requester)
+        status, opened = _post_op(layout_server, "open", {"app": PIPELINE_STUB_APP_NAME}, requester)
         assert status == 200, opened
         window_id = opened["window_id"]
         (window,) = opened["desktop"]["windows"]
-        assert window["app"] == _STUB_APP_NAME and window["path"] == "/" and window["is_settling"] is True
+        assert window["app"] == PIPELINE_STUB_APP_NAME and window["path"] == "/" and window["is_settling"] is True
         assert [placement["window_id"] for placement in opened["layout"]["placements"]] == [window_id]
         stored = _get_json(layout_server, "/api/placements/home?client=client-1")
         assert [placement["window_id"] for placement in stored["placements"]] == [window_id]

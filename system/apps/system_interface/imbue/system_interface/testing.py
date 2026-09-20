@@ -35,6 +35,7 @@ from app_manifest.registry import registry_path
 from flask import Flask
 from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
@@ -251,6 +252,35 @@ def build_test_state(
         template_catalog=template_catalog,
         static_directory=resolved_static_directory,
     )
+
+
+# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the shell's fixed loopback port, the two
+# stand-in apps its registry holds (one declaring launch paths), and the one connected client most of its
+# tests target, on the default desktop.
+PIPELINE_PORT: Final[int] = 18766
+PIPELINE_BASE_URL: Final[str] = f"http://127.0.0.1:{PIPELINE_PORT}"
+PIPELINE_SEEDED_APP_NAME: Final[str] = "chat"
+PIPELINE_STUB_APP_NAME: Final[str] = "docs"
+PIPELINE_CLIENT_ID: Final[str] = "client-1"
+PIPELINE_DEFAULT_DESKTOP_ID: Final[str] = "home"
+
+
+class PipelineHarness(FrozenModel):
+    """What one pipeline test gets: the shell's URL, its broadcaster, and the registry file."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    base_url: str = Field(description="The shell's loopback URL")
+    broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
+    registry_path: Path = Field(description="The registry file the shell and the script read")
+
+
+def stand_in_app() -> Flask:
+    """An app that answers every path, so the liveness probe finds it running."""
+    app = Flask("stand-in")
+    app.add_url_rule("/", view_func=lambda: "ok", endpoint="root")
+    app.add_url_rule("/<path:path>", view_func=lambda path: "ok", endpoint="page")
+    return app
 
 
 def find_free_port() -> int:
