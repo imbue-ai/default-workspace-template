@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  defaultLaunchPathOf,
   launchPathOf,
   launchPathWithParams,
   launchRowLabel,
@@ -39,12 +38,9 @@ describe("launch tiles", () => {
 });
 
 describe("launch paths of an app", () => {
-  it("finds a launch path by id, and the default one", () => {
+  it("finds a launch path by id", () => {
     expect(launchPathOf(docs, "new")?.label).toBe("New docs");
     expect(launchPathOf(docs, "other")).toBeNull();
-    expect(defaultLaunchPathOf(docs)?.id).toBe("new");
-    expect(defaultLaunchPathOf(appRecord("first", { default_shortcut: null }))?.id).toBe("new");
-    expect(defaultLaunchPathOf(appRecord("none", { launch_paths: [], default_shortcut: null }))).toBeNull();
   });
 
   it("appends params as a query string", () => {

@@ -28,7 +28,7 @@ export function dropStalePlacements(layout: Layout, liveWindowIds: ReadonlySet<s
  *  windows the layout lacks read as the default placement at the start of the list, in opening order. */
 export function effectivePlacements(layout: Layout, desktop: Desktop): Placement[] {
   const liveIds = new Set(desktop.windows.map((window) => window.id));
-  const stored = layout.placements.filter((placement) => liveIds.has(placement.window_id));
+  const stored = dropStalePlacements(layout, liveIds).placements;
   const storedIds = new Set(stored.map((placement) => placement.window_id));
   const missing = desktop.windows
     .filter((window) => !storedIds.has(window.id))
@@ -115,21 +115,4 @@ export function withWindowFrame(layout: Layout, windowId: string, frame: Frame):
 export function withoutPlacement(layout: Layout, windowId: string): Layout {
   if (!layout.placements.some((candidate) => candidate.window_id === windowId)) return layout;
   return { ...layout, placements: layout.placements.filter((candidate) => candidate.window_id !== windowId) };
-}
-
-/** Whether two layouts place the same windows the same way (the stamp aside). */
-export function isSameLayout(first: Layout, second: Layout): boolean {
-  if (first.placements.length !== second.placements.length) return false;
-  return first.placements.every((placement, index) => {
-    const other = second.placements[index];
-    return (
-      placement.window_id === other.window_id &&
-      placement.state === other.state &&
-      placement.is_minimized === other.is_minimized &&
-      placement.frame.x === other.frame.x &&
-      placement.frame.y === other.frame.y &&
-      placement.frame.width === other.frame.width &&
-      placement.frame.height === other.frame.height
-    );
-  });
 }

@@ -322,13 +322,6 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
   };
 }
 
-/** Whether two frames are the same rectangle. */
-export function isSameFrame(first: Frame, second: Frame): boolean {
-  return (
-    first.x === second.x && first.y === second.y && first.width === second.width && first.height === second.height
-  );
-}
-
 /** Whether two cells are the same cell. */
 export function isSameCell(first: GridCell, second: GridCell): boolean {
   return first.column === second.column && first.row === second.row;
