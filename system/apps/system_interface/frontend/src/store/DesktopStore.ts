@@ -158,6 +158,9 @@ export class DesktopStore {
   private layoutFetchSequence = 0;
   private pageDriver: PageDriver | null = null;
   private hasSocketConnected = false;
+  // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast), and
+  // not by a local edit: the live pages follow their windows' stored paths after the shell speaks.
+  private desktopsRevision = 0;
   // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
@@ -188,6 +191,11 @@ export class DesktopStore {
 
   isLauncherOpen(): boolean {
     return this.isLauncherOpenNow;
+  }
+
+  /** How many times the shell has said what the desktops are; changes only with a ``desktops_updated``. */
+  getDesktopsRevision(): number {
+    return this.desktopsRevision;
   }
 
   /** Whether this client's layout holds a placement for the window. While a window settles, only the
@@ -275,6 +283,7 @@ export class DesktopStore {
       this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
       return;
     }
+    this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     const recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
@@ -324,6 +333,7 @@ export class DesktopStore {
 
   private takeDesktops(desktops: Desktop[]): void {
     const previous = this.state.activeDesktopId;
+    this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     if (this.state.activeDesktopId !== previous) {
       // The active desktop was deleted and the reducer landed on the fallback: this client follows as it

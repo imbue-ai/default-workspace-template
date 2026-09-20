@@ -323,6 +323,21 @@ describe("the contract", () => {
     expect(frameOf("win-1").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
   });
 
+  it("a local edit between a page's report and the broadcast does not point the page back", async () => {
+    const urls = spyOnSrc("win-1");
+    load("win-1");
+    // A page with no in-place navigation: being sent back would mean a reload.
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: "" });
+    await settle();
+    // Another window opens (the desktops record changes locally) while the broadcast is still on its way.
+    await store.openWindowAt("notes", "/c", null, "new");
+    layer.reconcile();
+    expect(urls).toEqual([]);
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(urls).toEqual([]);
+  });
+
   it("follows a path changed elsewhere: navigate for a capable page, reload for the rest", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
