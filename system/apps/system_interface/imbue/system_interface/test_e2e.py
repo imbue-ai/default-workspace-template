@@ -73,6 +73,9 @@ pytestmark = [
 # The default desktop every shell starts with (desktops.py), whose shortcuts are seeded from the registry.
 HOME_DESKTOP_ID = "home"
 
+# How long a negative assertion ("nothing more opened") gives the shell before reading its state.
+_NEGATIVE_SETTLE_MS = 1000
+
 # The stub app the machine offers: a multi-instance app with one launch path, ``new`` at ``/new``, and a
 # focus-mode default shortcut for it. Its pages are the stand-ins the stub serves at every other path.
 _STUB_APP_NAME = "docs"
@@ -365,6 +368,13 @@ def _wait_for_stored_placement(
     return _stored_placements(server.state_dir, client_id, desktop_id)[window_id]
 
 
+def _assert_no_further_window(page: Page, server: E2EServer, expected_ids: list[str]) -> None:
+    """The shell opened nothing beyond ``expected_ids``: a negative nothing announces, so this settles once and
+    then reads the desktop's windows."""
+    page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+    assert [window["id"] for window in _windows(server.base_url)] == expected_ids
+
+
 def _wait_for_window_count(base_url: str, count: int, desktop_id: str = HOME_DESKTOP_ID) -> list[dict[str, Any]]:
     wait_for(
         lambda: len(_windows(base_url, desktop_id)) == count,
@@ -618,8 +628,7 @@ def test_focus_shortcut_raises_the_existing_window_and_its_menu_opens_another(
     expect(_taskbar_entry(page, first)).to_have_attribute("data-minimized", "true")
     page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').dblclick()
     expect(_window(page, first)).to_be_visible(timeout=10000)
-    page.wait_for_timeout(1000)
-    assert [window["id"] for window in _windows(e2e_server.base_url)] == [first]
+    _assert_no_further_window(page, e2e_server, [first])
 
     page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
     expect(page.locator('[data-floating="shortcut-menu"]')).to_be_visible(timeout=5000)
@@ -707,8 +716,7 @@ def test_page_shell_open_opens_a_sibling_window_of_its_app(e2e_server: E2EServer
     assert second_frame.url == f"{e2e_server.stub_url}/?doc=2"
 
     frame.evaluate("() => window.__openPath('/?doc=2', 'focus')")
-    page.wait_for_timeout(1000)
-    assert len(_windows(e2e_server.base_url)) == 2
+    _assert_no_further_window(page, e2e_server, [first, second["id"]])
     frame.evaluate("() => window.__openPath('/?doc=2', 'new')")
     assert len(_wait_for_window_count(e2e_server.base_url, 3)) == 3
 
@@ -747,8 +755,7 @@ def test_deep_links_open_a_path_and_run_a_launch_path(e2e_server: E2EServer, pag
     assert "launch=" not in page.url
     page.reload()
     expect(_shown_windows(page)).to_have_count(2, timeout=15000)
-    page.wait_for_timeout(1000)
-    assert len(_windows(e2e_server.base_url)) == 2
+    _assert_no_further_window(page, e2e_server, [window["id"] for window in windows])
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1213,8 +1220,7 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
 
         phone_page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').tap()
         expect(_window(phone_page, laptop_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
-        phone_page.wait_for_timeout(1000)
-        assert [window["id"] for window in _windows(e2e_server.base_url)] == [laptop_window]
+        _assert_no_further_window(phone_page, e2e_server, [laptop_window])
 
         phone_page.locator("[data-launcher-field]").tap()
         overlay = phone_page.locator("[data-launcher-overlay]")
