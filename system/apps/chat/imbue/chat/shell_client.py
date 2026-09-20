@@ -44,6 +44,8 @@ def post_to_shell(url: str, body: Mapping[str, Any] | None) -> None:
     elapsed = time.monotonic() - started_at
     if elapsed > SHELL_POST_SLOW_SECONDS:
         logger.warning("Posted to the shell at {} slowly, in {:.1f}s", url, elapsed)
+    if not response.is_error:
+        return
     if response.is_client_error:
         logger.warning(
             "Posted to the shell at {} and it refused the body with {}: {}",
@@ -51,5 +53,5 @@ def post_to_shell(url: str, body: Mapping[str, Any] | None) -> None:
             response.status_code,
             response.text[:_REFUSAL_DETAIL_LIMIT],
         )
-    elif response.is_error:
+    else:
         logger.debug("Posted to the shell at {} and it answered {}", url, response.status_code)
