@@ -48,14 +48,18 @@ export function isCellInsideGrid(cell: GridCell, dimensions: GridDimensions): bo
   return cell.column >= 0 && cell.row >= 0 && cell.column < dimensions.columns && cell.row < dimensions.rows;
 }
 
-function cellDistance(first: GridCell, second: GridCell): number {
-  return Math.hypot(first.column - second.column, first.row - second.row);
+/** The squared Euclidean distance between two cells: exact in integers, so a genuine tie compares equal
+ *  (a rounded ``Math.hypot`` need not, and the shell's editor decides the same ties). */
+function squaredCellDistance(first: GridCell, second: GridCell): number {
+  const columns = first.column - second.column;
+  const rows = first.row - second.row;
+  return columns * columns + rows * rows;
 }
 
 /** Whether ``candidate`` is nearer the target than ``best`` (ties by lower column, then lower row). */
 function isNearer(candidate: GridCell, best: GridCell, target: GridCell): boolean {
-  const candidateDistance = cellDistance(candidate, target);
-  const bestDistance = cellDistance(best, target);
+  const candidateDistance = squaredCellDistance(candidate, target);
+  const bestDistance = squaredCellDistance(best, target);
   if (candidateDistance !== bestDistance) return candidateDistance < bestDistance;
   if (candidate.column !== best.column) return candidate.column < best.column;
   return candidate.row < best.row;

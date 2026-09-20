@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { cellAtPoint, cellRect, drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "./grid";
+import {
+  cellAtPoint,
+  cellRect,
+  drawnCells,
+  firstFreeCellInReadingOrder,
+  nearestFreeCell,
+  placeShortcuts,
+} from "./grid";
 
 const METRICS = { cellWidth: 96, cellHeight: 112, gridInset: 16 };
 const GRID = { columns: 4, rows: 3 };
@@ -25,6 +32,27 @@ describe("firstFreeCellInReadingOrder", () => {
     ];
     expect(firstFreeCellInReadingOrder(occupied, 2)).toEqual({ column: 1, row: 1 });
     expect(firstFreeCellInReadingOrder([], 3)).toEqual({ column: 0, row: 0 });
+  });
+});
+
+describe("nearestFreeCell", () => {
+  it("decides a genuine tie by lower column then lower row, however hypot rounds it", () => {
+    // Every cell nearer than sqrt(85) to the origin is taken; (2,9) and (6,7) tie at exactly sqrt(85).
+    const occupied: { column: number; row: number }[] = [];
+    for (let column = 0; column < 10; column += 1) {
+      for (let row = 0; row < 10; row += 1) {
+        if (column * column + row * row < 85) occupied.push({ column, row });
+      }
+    }
+    expect(nearestFreeCell({ column: 0, row: 0 }, occupied, { columns: 10, rows: 10 })).toEqual({ column: 2, row: 9 });
+  });
+
+  it("answers the clamped target itself when no cell is free", () => {
+    const occupied = [
+      { column: 0, row: 0 },
+      { column: 1, row: 0 },
+    ];
+    expect(nearestFreeCell({ column: 5, row: 5 }, occupied, { columns: 2, rows: 1 })).toEqual({ column: 1, row: 0 });
   });
 });
 
