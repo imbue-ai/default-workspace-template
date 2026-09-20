@@ -457,13 +457,14 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
             conf.read_text(encoding="utf-8")
         )
     ]
-    # The chat, the terminal and the files app register from inside their own processes
-    # (the registry scan covers them), so the config itself names the other two.
+    # The chat and the terminal register from inside their own processes (the registry
+    # scan covers them); the other three register from their program lines.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
         ("browser", 8081),
+        ("files", 8300),
     }
-    assert not {port.name for port in ports} & {"terminal", "files", "chat"}
+    assert not {port.name for port in ports} & {"terminal", "chat"}
     assert [port.name for port in ports].count("system_interface") == 1
 
 
