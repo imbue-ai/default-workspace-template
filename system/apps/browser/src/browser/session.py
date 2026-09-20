@@ -606,10 +606,6 @@ class LiveBrowser(MutableModel):
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
     # restore the dead browser as healthy next boot.
     _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
-    # Tells the shell this browser's instance changed (its status derives from the controller
-    # and the lifecycle, so every ownership write and every lifecycle flip reports). Installed
-    # by the manager at registration; the default reports to nobody, which is what a
-    # LiveBrowser built on its own (tests) wants.
 
     @property
     def _crashed(self) -> bool:
