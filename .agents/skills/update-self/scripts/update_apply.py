@@ -1008,10 +1008,9 @@ def apply_update(
         # Whether the npm manifest *changed* says nothing about whether the
         # dependencies are *installed*: a merge that touches neither
         # package.json nor package-lock.json still has to build, and a tree with
-        # no node_modules has no tsc or vite to build with. Both conditions are
-        # asked, as the recovery path already asks them
-        # (``_is_recovery_npm_ci_needed``). The bundle-copy shortcut still wins
-        # over both: installing a verified worker bundle needs no node_modules.
+        # no node_modules has no tsc or vite to build with. Either is reason
+        # enough to refresh. The bundle-copy shortcut still wins over both:
+        # installing a verified worker bundle needs no node_modules.
         if usable_worker_bundles is None and (
             plan.frontend_manifest
             or (plan.frontend and not (repo_root / NPM_ROOT_DIR / "node_modules").is_dir())
