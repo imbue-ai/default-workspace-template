@@ -260,7 +260,6 @@ describe("the contract", () => {
         windowId: "win-1",
         desktopId: "home",
         path: "/?doc=1",
-        viewId: "home",
       },
       { type: SHELL_SHOWN },
     ]);
@@ -276,7 +275,6 @@ describe("the contract", () => {
         windowId: "win-1",
         desktopId: "home",
         path: "/?doc=1",
-        viewId: "home",
       },
       { type: SHELL_HIDDEN },
     ]);

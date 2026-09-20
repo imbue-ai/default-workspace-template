@@ -23,10 +23,9 @@ import type { ShellConnection } from "./app_contract";
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
   clientId: "client-1",
-  deviceKind: "desktop",
-  viewId: "everything",
-  address: "app:chat?instance=agent-1",
-  tabId: "chat-agent-1",
+  windowId: "win-1",
+  desktopId: "home",
+  path: "/?chat=agent-1",
 };
 
 let connection: ShellConnection | null = null;
@@ -74,13 +73,9 @@ describe("connectToShell", () => {
     expect(handlers.onHandshake).toHaveBeenCalledTimes(1);
     expect(handlers.onHandshake).toHaveBeenCalledWith({
       clientId: "client-1",
-      windowId: "",
-      desktopId: "",
-      path: "",
-      deviceKind: "desktop",
-      viewId: "everything",
-      address: "app:chat?instance=agent-1",
-      tabId: "chat-agent-1",
+      windowId: "win-1",
+      desktopId: "home",
+      path: "/?chat=agent-1",
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -96,31 +91,12 @@ describe("connectToShell", () => {
     expect(onHandshake).not.toHaveBeenCalled();
   });
 
-  it("reads the desktop shell's fields, and the tabbed shell's as empty when a shell does not send them", () => {
+  it("reads a field the shell does not send as empty, and ignores fields it does not know", () => {
     const parent = framed();
     const onHandshake = vi.fn();
     connection = connectToShell({ onHandshake });
-    deliver(
-      {
-        type: SHELL_HANDSHAKE,
-        clientId: "client-1",
-        windowId: "win-1",
-        desktopId: "home",
-        path: "/?chat=agent-1",
-        viewId: "home",
-      },
-      parent,
-    );
-    expect(onHandshake).toHaveBeenCalledWith({
-      clientId: "client-1",
-      windowId: "win-1",
-      desktopId: "home",
-      path: "/?chat=agent-1",
-      deviceKind: "",
-      viewId: "home",
-      address: "",
-      tabId: "",
-    });
+    deliver({ type: SHELL_HANDSHAKE, clientId: "client-1", desktopId: "home", viewId: "home" }, parent);
+    expect(onHandshake).toHaveBeenCalledWith({ clientId: "client-1", windowId: "", desktopId: "home", path: "" });
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {

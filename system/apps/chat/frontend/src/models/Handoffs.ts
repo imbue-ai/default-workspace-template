@@ -6,7 +6,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import type { HandoffPhase, TransitionKind } from "./Chats";
 import type { ModelIdentity } from "./ModelSettings";
 import { announceMessageSent } from "./Response";
@@ -41,8 +41,7 @@ export async function switchChat(
       message_id: messageId,
       model: pick,
       client_id: getClientId(),
-      active_layout: getActiveProjectId(),
-      device_kind: getDeviceKind(),
+      desktop_id: getActiveDesktopId(),
     },
   });
 }

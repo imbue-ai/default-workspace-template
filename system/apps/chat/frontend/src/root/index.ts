@@ -192,7 +192,7 @@ function connectRootToShell(): void {
     capabilities: { navigation: true },
     onHandshake: (received) => {
       handshake = received;
-      adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
+      adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
       pool?.setHandshake(received);
       // Whatever went up before the shell was listening is told again.
       reportedLocation = null;

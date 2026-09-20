@@ -182,10 +182,9 @@ def mint_save_id() -> SaveId:
 
 
 class ClientActivityKind(LowerCaseStrEnum):
-    """What a client-activity report records: a message sent to an instance, or a view switch (a wire value)."""
+    """What a client-activity report records: a message a client sent to an app's page (a wire value)."""
 
     MESSAGE = auto()
-    VIEW_SWITCH = auto()
 
 
 class AppLifecycleAction(LowerCaseStrEnum):

@@ -15,10 +15,6 @@ const HANDSHAKE: ShellHandshake = {
   windowId: "win-1",
   desktopId: "home",
   path: "/",
-  deviceKind: "",
-  viewId: "home",
-  address: "",
-  tabId: "",
 };
 
 let container: HTMLElement;

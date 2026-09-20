@@ -274,19 +274,7 @@ def client_activity_route() -> ResponseReturnValue:
     match report.kind:
         case ClientActivityKind.MESSAGE:
             shell.activity.append_message(
-                str(report.client_id),
-                report.device_kind.value,
-                str(report.view_id),
-                report.app,
-                report.key,
-                report.text,
-            )
-        case ClientActivityKind.VIEW_SWITCH:
-            shell.activity.append_view_switch(
-                str(report.client_id),
-                report.device_kind.value,
-                report.from_view_id,
-                str(report.view_id),
+                str(report.client_id), str(report.desktop_id), report.app, report.key, report.text
             )
         case _ as unreachable:
             assert_never(unreachable)

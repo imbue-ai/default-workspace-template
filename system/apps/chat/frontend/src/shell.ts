@@ -61,7 +61,7 @@ export interface ChatShellOptions {
 export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;
   const onHandshake = (received: ShellHandshake): void => {
-    adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
+    adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any client's unexpired report) is what a hidden report keeps.
     if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");

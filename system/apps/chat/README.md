@@ -164,8 +164,8 @@ The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
-chat. A send that names no client (no `client_id`, `device_kind`, or
-`active_layout`) posts no client-activity report. The route answers 503 until
+chat. A send that names no client (no `client_id` or `desktop_id`) posts no
+client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 

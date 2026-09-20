@@ -481,8 +481,8 @@ def _handle_client_state_message(
     ``client_state`` is the only message type clients send: it registers the browser's client id and the
     view (the tabbed shell, with its device kind) or the desktop (the desktop shell) it is on, on connect and
     on every switch. Registration feeds the broadcaster's client registry (which targets layout ops), the
-    client record, and the client-activity log (a ``view_switch`` or ``desktop_switch`` when the report
-    names a different previous one).
+    client record, and the client-activity log (a ``desktop_switch`` when the report names a different
+    previous desktop).
     """
     try:
         parsed = json.loads(raw_message)
@@ -527,31 +527,14 @@ def _handle_client_state_message(
 def _log_client_switches(
     report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
 ) -> None:
-    """Log, and append to the activity log, the view switch and the desktop switch a re-report names (a report
-    whose previous view or desktop is empty or unchanged names none)."""
-    is_view_switch = (
-        report.active_view is not None and bool(report.previous_view) and report.previous_view != report.active_view
-    )
+    """Log, and append to the activity log, the desktop switch a re-report names (a report whose previous desktop
+    is empty or unchanged names none)."""
     is_desktop_switch = (
         report.active_desktop is not None
         and bool(report.previous_desktop)
         and report.previous_desktop != report.active_desktop
     )
     # A switch the log cannot take is a warning: the record already moved the client.
-    if is_view_switch:
-        _loguru_logger.info(
-            "WS client {} switched view {} -> {} (conn {})",
-            report.client_id,
-            report.previous_view,
-            report.active_view,
-            id(client_queue),
-        )
-        try:
-            shell.activity.append_view_switch(
-                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
-            )
-        except OSError as e:
-            _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
     if is_desktop_switch:
         _loguru_logger.info(
             "WS client {} switched desktop {} -> {} (conn {})",

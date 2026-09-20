@@ -155,43 +155,22 @@ def test_a_tab_report_is_refused_when_it_names_no_tab_or_the_wrong_app(client: F
     )
 
 
-def test_client_activity_is_appended_by_kind(client: FlaskClient, app: Flask) -> None:
-    base = {"client_id": "c1", "device_kind": "desktop", "view_id": "everything"}
+def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: Flask) -> None:
+    message = {"client_id": "c1", "desktop_id": "home", "kind": "message", "app": "chat", "key": "agent-1", "text": "hi"}
+    assert client.post("/api/client-activity", json=message).status_code == 204
+    assert client.post("/api/client-activity", json={**message, "kind": "view_switch"}).status_code == 400
+    # A report is what the desktop shell's pages send; the tabbed shell's view and device kind are refused.
     assert (
         client.post(
             "/api/client-activity",
-            json={
-                **base,
-                "kind": "message",
-                "app": "chat",
-                "key": "agent-1",
-                "text": "hi",
-            },
+            json={"client_id": "c1", "device_kind": "desktop", "view_id": "everything", "kind": "message", "app": "chat", "key": "agent-1"},
         ).status_code
-        == 204
+        == 400
     )
-    assert (
-        client.post(
-            "/api/client-activity",
-            json={**base, "kind": "view_switch", "from_view_id": "alpha"},
-        ).status_code
-        == 204
-    )
-    assert client.post("/api/client-activity", json={**base, "kind": "nope"}).status_code == 400
-    assert (
-        client.post(
-            "/api/client-activity",
-            json={**base, "kind": "message"},
-            environ_base=_NOT_LOOPBACK,
-        ).status_code
-        == 403
-    )
+    assert client.post("/api/client-activity", json=message, environ_base=_NOT_LOOPBACK).status_code == 403
     events = _shell(app).activity.read_events()
-    assert [(event["type"], event["client_id"]) for event in events] == [
-        ("message", "c1"),
-        ("view_switch", "c1"),
-    ]
-    assert events[0]["key"] == "agent-1" and events[1]["from_view_id"] == "alpha"
+    assert [(event["type"], event["client_id"], event["desktop_id"]) for event in events] == [("message", "c1", "home")]
+    assert events[0]["key"] == "agent-1" and events[0]["text"] == "hi"
 
 
 # Section 6: the relay
@@ -623,7 +602,7 @@ def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: F
         ),
         TEST_NOW,
     )
-    shell.activity.append_message("c1", "desktop", "alpha", "chat", "agent-1", "hello")
+    shell.activity.append_message("c1", "alpha", "chat", "agent-1", "hello")
     _register_client(app, "c1", "alpha")
     # A second client that has connected and done nothing else: it has no event in the log.
     _register_client(app, "c9", "everything")
@@ -644,12 +623,10 @@ def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: F
 
     context = _broadcast(client, "context").get_json()["clients"]
     assert [entry["client_id"] for entry in context] == ["c1", "c9"]
-    assert context[0]["is_connected"] is True and context[0]["active_view"] == "alpha"
+    assert context[0]["is_connected"] is True and context[0]["active_desktop"] is None
     assert context[0]["recent_messages"][0]["address"] == "app:chat?instance=agent-1"
     assert context[1] == {
         "client_id": "c9",
-        "device_kind": "desktop",
-        "active_view": "everything",
         "active_desktop": None,
         "last_seen": "",
         "is_connected": True,
@@ -670,7 +647,7 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
 
     assert _broadcast(client, "inspect", {"view": "alpha"}).get_json()["client_id"] is None
 
-    shell.activity.append_message("c7", "desktop", "alpha", "chat", "agent-1", "hello")
+    shell.activity.append_message("c7", "alpha", "chat", "agent-1", "hello")
     attributed = _broadcast(client, "inspect", {"view": "alpha"}).get_json()
     assert attributed["client_id"] == "c7"
     assert [panel["address"] for panel in attributed["layout"]["panels"]] == [str(_TERMINAL_1)]
@@ -685,7 +662,7 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     searched under a made-up key."""
     shell = _shell(app)
     _register_client(app, "c7", "alpha")
-    shell.activity.append_message("c7", "desktop", "alpha", "files", "None", "hello")
+    shell.activity.append_message("c7", "alpha", "files", "None", "hello")
     _register_client(app, "c1", "alpha")
 
     assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
@@ -693,7 +670,7 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
 
 def test_load_switches_the_requesting_agents_client(client: FlaskClient, app: Flask) -> None:
     client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
-    _shell(app).activity.append_message("c7", "desktop", "everything", "chat", "agent-1", "hello")
+    _shell(app).activity.append_message("c7", "everything", "chat", "agent-1", "hello")
     client_queue = _register_client(app, "c7", "everything")
     _register_client(app, "c8", "everything")
 
@@ -911,7 +888,7 @@ def test_an_op_lands_with_no_browser_connected_and_never_on_a_guessed_client(cli
     )
     assert shell.layouts.read_client_layout("alpha", "c2") is None
     # The client that last messaged the requesting agent is the one the op is for.
-    shell.activity.append_message("c3", "desktop", "everything", "chat", "agent-2", "hello")
+    shell.activity.append_message("c3", "everything", "chat", "agent-2", "hello")
     attributed = _broadcast(client, "open", {"address": str(_FILES)}, agent_id="agent-2")
     assert attributed.status_code == 200 and attributed.get_json()["client_id"] == "c3"
     assert shell.layouts.read_client_layout("everything", "c3") is not None
@@ -994,7 +971,7 @@ def test_transient_ops_reach_the_target_clients_windows(client: FlaskClient, app
     first_window = _register_client(app, "c1", "alpha")
     second_window = _register_client(app, "c1", "everything")
     other_client = _register_client(app, "c2", "alpha")
-    _shell(app).activity.append_message("c1", "desktop", "alpha", "chat", "agent-1", "hello")
+    _shell(app).activity.append_message("c1", "alpha", "chat", "agent-1", "hello")
 
     assert _broadcast(client, "maximize", {"address": "terminal:terminal-1"}).status_code == 400
     assert _broadcast(client, "maximize", {"address": "app:nope"}).status_code == 404
