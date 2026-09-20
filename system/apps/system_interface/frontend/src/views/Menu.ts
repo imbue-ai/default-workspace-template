@@ -112,9 +112,10 @@ export function FloatingCard(): m.Component<FloatingCardAttrs> {
     const attrs = currentAttrs;
     if (attrs === null) return;
     const target = event.target;
-    if (!(target instanceof Node)) return attrs.onClose();
-    if (element !== null && element.contains(target)) return;
-    if (attrs.isInsideTrigger?.(target) === true) return;
+    if (target instanceof Node) {
+      if (element !== null && element.contains(target)) return;
+      if (attrs.isInsideTrigger?.(target) === true) return;
+    }
     attrs.onClose();
     m.redraw();
   };
