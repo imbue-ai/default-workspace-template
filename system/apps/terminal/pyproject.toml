@@ -16,7 +16,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    # The process test polls the app coming up through mngr's poller.
+    # The tests poll the app and its listener coming up through mngr's poller.
     "imbue-mngr",
     "httpx>=0.27",
 ]
