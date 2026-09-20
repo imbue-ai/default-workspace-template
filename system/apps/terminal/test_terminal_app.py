@@ -19,7 +19,7 @@ from app_manifest.manifest import MANIFEST_FILENAME
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.mngr.utils.polling import wait_for
+from imbue.mngr.utils.polling import poll_until
 from pydantic import Field
 from terminal_app.data_types import TerminalPaths
 from terminal_app.testing import (
@@ -192,12 +192,10 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
     app = _prepare_app(terminal_environment, fake_tmux)
     process = _spawn(app.command, app.environment, app.log_path)
     try:
-        wait_for(
-            terminal_environment.registry_path.exists,
-            timeout=_STARTUP_TIMEOUT_SECONDS,
-            poll_interval=0.1,
-            error_message=f"the app never registered: {_read_log(app.log_path)}",
-        )
+        # The assertion message reads the log only once the wait has failed, so it quotes the startup error.
+        assert poll_until(
+            terminal_environment.registry_path.exists, timeout=_STARTUP_TIMEOUT_SECONDS, poll_interval=0.1
+        ), f"the app never registered: {_read_log(app.log_path)}"
         assert is_port_accepting(app.pages_port), _read_log(app.log_path)
 
         # The startup work: the discovery event and the registration.
@@ -251,12 +249,11 @@ def test_terminal_pty_installs_dispatch_registers_and_becomes_ttyd(
     pty = _prepare_pty(terminal_environment, fake_tmux)
     process = _spawn(pty.command, pty.environment, pty.log_path)
     try:
-        wait_for(
+        assert poll_until(
             lambda: read_fake_ttyd_argv(pty.ttyd_record_dir) is not None,
             timeout=_STARTUP_TIMEOUT_SECONDS,
             poll_interval=0.1,
-            error_message=f"ttyd never started: {_read_log(pty.log_path)}",
-        )
+        ), f"ttyd never started: {_read_log(pty.log_path)}"
 
         # The startup work: dispatch scripts, the patched web client, the registration.
         assert sorted(path.name for path in pty.paths.commands_dir.iterdir()) == [
