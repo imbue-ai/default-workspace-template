@@ -7,3 +7,5 @@ The chat app follows the desktop shell (phase 5 of `docs/system/blueprint/deskto
 - The agent-side auto-open posts the desktop's `open` op (`{"op": "open", "args": {"app": "chat", "path": "/?chat=<id>", "client": <client id>}}`) instead of the tabbed shell's address op.
 
 - The shell handshake test fixtures carry the desktop's window, desktop, and path fields.
+
+- A chat started from inside a chat page is filed in no project: the shell's handshake now names a desktop where the tabbed shell named a project, and the desktop has no projects to file into.

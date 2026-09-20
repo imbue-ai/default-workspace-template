@@ -14,7 +14,6 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
-import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
@@ -27,7 +26,6 @@ export function subagentViewPath(key: string): string {
 }
 
 let connection: ShellConnection | null = null;
-let handshake: ShellHandshake | null = null;
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
 // visit, and false from the moment a framed page connects, until the shell says shown.
 let isShown = true;
@@ -44,11 +42,6 @@ let isShown = true;
  */
 export function isFrameRendered(): boolean {
   return document.documentElement.getBoundingClientRect().height > 0;
-}
-
-/** The view (project id, or Everything) the shell says this page's tab is in; "" until the handshake. */
-export function shellViewId(): string {
-  return handshake?.viewId ?? "";
 }
 
 export interface ChatShellOptions {
@@ -70,7 +63,6 @@ export interface ChatShellOptions {
 export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;
   const onHandshake = (received: ShellHandshake): void => {
-    handshake = received;
     adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any client's unexpired report) is what a hidden report keeps.
@@ -138,19 +130,17 @@ function reportChatLocation(chatId: string, path: string): void {
  * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
  * given and ``pick`` as the model it runs on (null for the harness's default). The switch
  * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
- * notice with neither. A chat started inside a project carries that project's id in its label;
- * the shell files its tab when it docks the page.
+ * notice with neither. The chat is filed in no project: the desktop has none, and the view id the
+ * handshake still carries is the desktop's.
  */
 export async function startChatOnAccount(
   accountId: string,
   message: string = "",
   pick: ModelIdentity | null = null,
 ): Promise<boolean> {
-  const viewId = shellViewId();
-  const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChat;
   try {
-    created = await createChat(projectId, accountId, message, pick);
+    created = await createChat("", accountId, message, pick);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return false;
