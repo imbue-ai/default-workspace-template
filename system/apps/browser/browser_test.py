@@ -42,7 +42,7 @@ def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
     return json.loads(payload)
 
 
-# --- env / key helpers (unchanged) -------------------------------------------
+# env / key helpers (unchanged)
 
 
 def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,7 +72,7 @@ def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest
         shutil.rmtree(staging, ignore_errors=True)
 
 
-# --- ownership state machine (no browser needed) -----------------------------
+# ownership state machine (no browser needed)
 
 
 def test_acquire_release_is_compare_and_set() -> None:
@@ -579,7 +579,7 @@ def test_close_releases_a_queued_waiter(monkeypatch: pytest.MonkeyPatch) -> None
     asyncio.run(go())
 
 
-# --- lifecycle: init -> running -> crashed -----------------------------------
+# lifecycle: init -> running -> crashed
 
 
 def test_create_registers_init_immediately_and_returns_fast(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -819,7 +819,7 @@ def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.Monk
     asyncio.run(go())
 
 
-# --- manager: ids + cap ------------------------------------------------------
+# manager: ids + cap
 
 
 def test_crashed_browser_reports_crashed_to_agent_and_viewer() -> None:
@@ -986,7 +986,7 @@ def test_profile_dir_round_trips_the_name() -> None:
     assert "browser-use-user-data-dir-" in path.name
 
 
-# --- persistence: restore + manifest (stubbed Chromium) ----------------------
+# persistence: restore + manifest (stubbed Chromium)
 # The autouse conftest fixture redirects the profile root + manifest path to tmp.
 
 
@@ -1440,7 +1440,7 @@ def test_looking_at_a_busy_browser_does_not_enqueue_the_agent() -> None:
     asyncio.run(go())
 
 
-# --- ownership: the lease, now enforced per CDP frame ------------------------
+# ownership: the lease, now enforced per CDP frame
 
 
 def _leased(name: str = "alex-smith", agent_id: str = "A") -> bsession.LiveBrowser:
@@ -1576,7 +1576,7 @@ def test_idle_lease_sweep_releases_only_a_quiet_lease() -> None:
     asyncio.run(go())
 
 
-# --- cast fan-out: outbound queue per socket (the Flask<->loop WS inversion) ---
+# cast fan-out: outbound queue per socket (the Flask<->loop WS inversion)
 
 
 def test_register_cast_queue_seeds_initial_control() -> None:

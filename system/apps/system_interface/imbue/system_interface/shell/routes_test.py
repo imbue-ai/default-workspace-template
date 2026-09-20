@@ -86,7 +86,7 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
     }
     assert client.post("/api/client-activity", json=message).status_code == 204
     assert client.post("/api/client-activity", json={**message, "kind": "view_switch"}).status_code == 400
-    # A report is what the desktop shell's pages send; the tabbed shell's view and device kind are refused.
+    # A report is what the shell's pages send; a view and a device kind are refused.
     assert (
         client.post(
             "/api/client-activity",

@@ -366,7 +366,7 @@ def test_load_manifest_reports_a_missing_file(tmp_path: Path) -> None:
         load_manifest(tmp_path / "nope.toml")
 
 
-# --- references and scope -------------------------------------------------------
+# references and scope
 
 _REFERENCING_MANIFEST = """
 name = "news"

@@ -30,7 +30,7 @@ def _posted_ops(fake_shell: Any) -> list[tuple[str, dict[str, Any]]]:
     return [(body["op"], body["args"]) for path, body in fake_shell.posted if path == "/api/layout/broadcast"]
 
 
-# ---------- naming apps and windows ----------
+# naming apps and windows
 
 
 def test_the_requester_is_the_callers_chat(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,7 +110,7 @@ def test_windows_are_named_by_id_self_or_app(capsys: pytest.CaptureFixture[str])
     assert "not a window" in capsys.readouterr().err
 
 
-# ---------- open ----------
+# open
 
 
 def test_open_waits_for_registration_then_posts_the_app_and_prints_the_window_id(
@@ -172,7 +172,7 @@ def test_open_of_an_unregistered_app_fails_without_posting(
     assert "not registered" in capsys.readouterr().err
 
 
-# ---------- the window verbs ----------
+# the window verbs
 
 
 def test_the_window_verbs_post_the_window_and_the_target(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
@@ -240,7 +240,7 @@ def test_refresh_reaches_one_window_or_every_page_of_an_app(fake_shell: Any, cap
     assert "do not apply" in capsys.readouterr().err
 
 
-# ---------- the read commands ----------
+# the read commands
 
 
 def test_context_and_load_ride_the_op_route(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
@@ -307,7 +307,7 @@ def test_desktops_and_list_read_the_inventory_document(fake_shell: Any, capsys: 
     assert [desktop["id"] for desktop in listing["desktops"]] == ["home"]
 
 
-# ---------- shortcuts and the wallpaper ----------
+# shortcuts and the wallpaper
 
 
 def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
@@ -340,7 +340,7 @@ def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(fake_shell: 
         layout.main(["wallpaper", "none", "dunes"])
 
 
-# ---------- exit codes and the wire ----------
+# exit codes and the wire
 
 
 @pytest.mark.parametrize(

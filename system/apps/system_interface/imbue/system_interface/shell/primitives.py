@@ -29,7 +29,7 @@ _MINTED_ID_BYTES: Final[int] = 8
 MAX_WINDOW_PATH_LENGTH: Final[int] = 2048
 MAX_WINDOW_TITLE_LENGTH: Final[int] = 256
 
-# A desktop's ``glyph`` indexes the frontend's squiggle table, which has exactly ten entries.
+# A desktop's ``glyph`` indexes the frontend's squiggle table.
 GLYPH_COUNT: Final[int] = 10
 
 

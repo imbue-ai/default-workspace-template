@@ -168,7 +168,7 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-# --- opening the viewer window (reuse system/scripts/layout.py) ---------------------
+# opening the viewer window (reuse system/scripts/layout.py)
 
 
 def _layout(*args: str, quiet: bool = False) -> bool:
@@ -203,7 +203,7 @@ def _open_viewer_window(browser_name: str) -> None:
          'launcher (Browser -> ' + f"{browser_name}).")
 
 
-# --- commands -----------------------------------------------------------------
+# commands
 
 
 def _stopped_hint(browser_name: str) -> str:
@@ -392,7 +392,7 @@ def cmd_release(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
-# --- direct control: you drive the browser yourself, one command at a time ----
+# direct control: you drive the browser yourself, one command at a time
 
 
 def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int:

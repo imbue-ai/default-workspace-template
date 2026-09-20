@@ -31,14 +31,14 @@ const FLYOUT_VISIBLE_ROWS = 10;
 /** Rows, plus the search field standing under them, plus the shell's own padding. */
 export const FLYOUT_MAX_HEIGHT = FLYOUT_ROW_HEIGHT * FLYOUT_VISIBLE_ROWS + 44;
 
-// --- the composer trigger ------------------------------------------------------------------
+// the composer trigger
 export const TRIGGER =
   "flex h-[30px] items-center gap-1.5 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
 /** The separators between the chip's three parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
 
-// --- the card ------------------------------------------------------------------------------
+// the card
 /** The workspace's shared menu chrome; `fixed` and the width are the caller's. `overflow-hidden`
  *  keeps a full-bleed row highlight inside the rounded corners. */
 export const CARD = menuCardClass("fixed overflow-hidden text-(length:--font-size-row)");
@@ -63,7 +63,7 @@ export const DIVIDER = menuDividerClass();
 /** Marks a row group as a tooltip host. */
 export const ROW_WRAP = "group/conn relative";
 
-// --- the effort slider ---------------------------------------------------------------------
+// the effort slider
 export const EFFORT_VALUE = "type-helper text-primary";
 /** Wraps the track so the level dots can be positioned over it -- a bare slider gives no clue
  *  where the levels are, which is exactly what makes it feel like guesswork. */
@@ -95,7 +95,7 @@ export const SLIDER =
   "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-surface " +
   "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
 
-// --- the fast switch -----------------------------------------------------------------------
+// the fast switch
 export const SWITCH =
   "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
@@ -108,7 +108,7 @@ export const SWITCH_KNOB_ON = "translate-x-[22px]";
 export const SWITCH_KNOB_OFF = "translate-x-[2px]";
 export const SWITCH_CHECK = "text-accent";
 
-// --- the flyouts ---------------------------------------------------------------------------
+// the flyouts
 /** Same shared chrome as the card. The flex column caps the scroll region under the pinned
  *  search field. */
 export const FLYOUT = menuCardClass("fixed flex flex-col overflow-hidden text-(length:--font-size-row)");
