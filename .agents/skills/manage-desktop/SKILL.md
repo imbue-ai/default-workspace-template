@@ -93,9 +93,11 @@ target client's active desktop (or `--desktop`), on top of that client's stack.
 Some paths worth knowing: your own chat is `open chat --path
 "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`; a folder is `open files --path
 /notes/` (dufs serves `data/` at `/`, so `/notes/` is `data/notes`; the `path`
-launch parameter, `open files --param path=/notes/`, is the same thing); a
-browser is `open browser --path "/?session=<name>"`; a terminal is `open
-terminal --path "/?session=<name>"`.
+launch parameter, `open files --param path=/notes/`, lands in the same folder
+but as a window at `/?path=/notes/`, and a window is focused only when its
+path matches exactly, so use one form per folder); a browser is `open browser
+--path "/?session=<name>"`; a terminal is `open terminal --path
+"/?session=<name>"`.
 
 ## Arranging windows
 

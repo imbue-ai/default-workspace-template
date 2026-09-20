@@ -46,8 +46,10 @@ desktop and switches the client to it.
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
 A window of the app already at that path is focused rather than duplicated unless
 ``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
-printed to stdout. To open a folder in the file viewer, ``open files --path /notes/`` (the ``path`` launch parameter is the same:
-``open files --param path=/notes/``).
+printed to stdout. To open a folder in the file viewer, ``open files --path /notes/``; the
+``path`` launch parameter (``open files --param path=/notes/``) lands in the same folder but as
+a window at ``/?path=/notes/``, and a window is focused only when its path matches exactly, so
+use one form per folder.
 
 Every op POSTs one body ``{op, args, requester}`` to a loopback-only endpoint on the shell:
 ``requester`` is the caller's own chat, ``{"app": "chat", "marker": $MINDS_CHAT_ID}`` (the chat
