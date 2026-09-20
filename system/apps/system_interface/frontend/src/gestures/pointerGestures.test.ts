@@ -147,15 +147,19 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("a touch held still is a long press; one that moves is a drag", () => {
+  it("a touch held still is a long press whose release's click is swallowed; one that moves is a drag", () => {
     vi.useFakeTimers();
     try {
       detach = new PointerGestureSource().attach(root, listener());
       const shortcut = root.querySelector("#icon") as Element;
+      const clicks: number[] = [];
+      shortcut.addEventListener("click", () => clicks.push(1));
       pointer("pointerdown", shortcut, 50, 60, { pointerType: "touch" });
       vi.advanceTimersByTime(600);
       expect(events).toEqual(["long:shortcut(docs:new):50,60"]);
       pointer("pointerup", shortcut, 50, 60, { pointerType: "touch" });
+      shortcut.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(clicks).toEqual([]);
 
       events = [];
       pointer("pointerdown", shortcut, 50, 60, { pointerType: "touch" });

@@ -126,6 +126,8 @@ export class PointerGestureSource implements GestureSource {
         pending.longPressTimer = setTimeout(() => {
           if (pending === null || pending.isDragging) return;
           const held = pending;
+          // The press is spent on the menu: the click its release fires must not run the element too.
+          suppressNextClick = true;
           finish();
           listener.onLongPress(held.binding, held.pressClient);
         }, LONG_PRESS_MS);
@@ -168,7 +170,7 @@ export class PointerGestureSource implements GestureSource {
       if (held.isDragging) listener.onCancel(held.binding);
     };
 
-    // A drag that began suppresses the click a release would otherwise fire on the handle.
+    // A drag that began, or a long press, suppresses the click a release would otherwise fire on the handle.
     const onClick = (event: MouseEvent): void => {
       if (suppressNextClick) {
         suppressNextClick = false;
