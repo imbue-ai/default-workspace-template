@@ -14,9 +14,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from app_instances.data_types import InstanceStatus
-from app_instances.testing import RecordingNudger
-from app_instances.testing import wait_until
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
@@ -90,6 +87,7 @@ from imbue.chat.models import TransitionKind
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import make_chat_agent_entry
@@ -441,7 +439,7 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     )
     try:
         created = manager.create_chat("", message="hello")
-        assert wait_until(lambda: manager.get_provisional_chat(created.chat_id) is None, timeout_seconds=10)
+        wait_for(lambda: manager.get_provisional_chat(created.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
     finally:
         manager.stop()
 
@@ -560,7 +558,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
         seeded = manager.seed_chat("Getting started", _seed_turns())
         launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
         # The create runs on a thread; stopping the manager before it lands would kill the fake mngr.
-        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
     finally:
         manager.stop()
 
@@ -608,7 +606,7 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
         with pytest.raises(AgentCreationError, match="keeps the first message"):
             manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id, message="Something else")
         relaunched = manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id)
-        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
 
         assert relaunched.chat_id == seeded.chat_id
         record = store.read(chat_id)
@@ -683,7 +681,7 @@ def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_
         assert [segment.agent.harness for segment in segments] == [HarnessType.SEED, HarnessType.CLAUDE]
 
         go_path.touch()
-        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+        wait_for(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout=10, poll_interval=0.05, error_message="the condition never held")
         landed = store.read(chat_id)
         assert landed is not None
         assert [entry.agent_id for entry in landed.agents] == [seeded.chat_id, agent.agent_id]
@@ -712,7 +710,7 @@ def test_a_seeded_chats_failed_create_takes_its_agent_back_off_the_record(
         seeded = manager.seed_chat("Getting started", _seed_turns())
         chat_id = ChatId(seeded.chat_id)
         manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
-        assert wait_until(is_failed, timeout_seconds=10)
+        wait_for(is_failed, timeout=10, poll_interval=0.05, error_message="the condition never held")
 
         failed = manager.get_provisional_chat(seeded.chat_id)
         assert failed is not None
@@ -759,7 +757,7 @@ def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
         assert manager.get_agent_by_id(agent.agent_id) is not None
 
         go_path.touch()
-        assert wait_until(lambda: len(destroys()) == 1, timeout_seconds=10)
+        wait_for(lambda: len(destroys()) == 1, timeout=10, poll_interval=0.05, error_message="the condition never held")
 
         assert destroys() == [f"destroy {agent.agent_id} --force"]
         failed = manager.get_provisional_chat(seeded.chat_id)
@@ -3312,16 +3310,12 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
-    nudger = RecordingNudger()
-    agent_manager.set_nudger(nudger)
     try:
         agent_manager.update_session_events(
             "agent-1",
             [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}],
         )
         assert agent_manager.has_pending_permission(ChatId("agent-1"))
-        nudges_after_filing = nudger.nudge_count
-        assert nudges_after_filing >= 1
 
         agent_manager.update_session_events(
             "agent-1",
@@ -3335,7 +3329,6 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
             ],
         )
         assert not agent_manager.has_pending_permission(ChatId("agent-1"))
-        assert nudger.nudge_count > nudges_after_filing
     finally:
         agent_manager.stop()
 
@@ -3355,15 +3348,6 @@ def test_the_agent_list_is_known_after_the_first_full_snapshot(agent_manager: Ag
     assert not agent_manager.is_agent_list_known()
     agent_manager._handle_observe_event(make_full_agent_state_event([]))
     assert agent_manager.is_agent_list_known()
-
-
-def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager) -> None:
-    nudger = RecordingNudger()
-    agent_manager.set_nudger(nudger)
-    agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("chat-1")]))
-    assert nudger.nudge_count == 1
-    agent_manager.remove_agent(next(iter(agent_manager.get_agents())).id)
-    assert nudger.nudge_count == 2
 
 
 # --- The auto-open reactor, fed from the observe stream ---
@@ -3831,7 +3815,7 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         # The successor exists and is tracked, hidden inside its chat rather than listed as one of its own.
         assert manager.get_agent_by_id(successor) is not None
         (snapshot,) = manager.get_chat_snapshots()
-        assert snapshot.status is InstanceStatus.ERROR and snapshot.handoff is not None
+        assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
         # Only the summary request went out: the prompt waits for the pick.
@@ -3999,7 +3983,7 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         assert [held.message_id for held in record.handoff.held_sends] == ["trigger-1", "m-2"]
 
         (snapshot,) = manager.get_chat_snapshots()
-        assert snapshot.status is InstanceStatus.WORKING
+        assert snapshot.status is ChatStatus.WORKING
         assert snapshot.handoff is not None and snapshot.handoff.phase is HandoffPhase.SUMMARIZING
         assert manager.get_handoff_state(chat_id) == snapshot.handoff
 
@@ -4032,7 +4016,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
     chat_id = ChatId(first)
     try:
         (snapshot,) = manager.get_chat_snapshots()
-        assert snapshot.status is InstanceStatus.ERROR
+        assert snapshot.status is ChatStatus.ERROR
         assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
         # The stand-in already carries its archival name; the snapshot still says what the chat is called.
         assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
@@ -4114,7 +4098,7 @@ def test_a_successor_being_made_is_its_chats_and_not_a_chat_of_its_own(
         assert (snapshot.chat_id, snapshot.active_agent.agent_id, snapshot.status) == (
             first,
             first,
-            InstanceStatus.WORKING,
+            ChatStatus.WORKING,
         )
         assert manager.get_chat_snapshot(successor) is None
         assert manager.get_active_agent_info(ChatId(successor)) is None

@@ -72,7 +72,7 @@ const llmApi: LlmApi = {
     if (!chatId) return;
 
     if (options.type === "subagent" && options.subagentSessionId) {
-      void openSubagentTab(chatId, options.subagentSessionId, options.title ?? "Sub-agent");
+      openSubagentTab(chatId, options.subagentSessionId);
     } else if (options.type === "iframe" && options.url) {
       // A chat page can only ask the shell for instances of its own app, and an ad-hoc URL
       // is not one.

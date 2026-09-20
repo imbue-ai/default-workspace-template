@@ -5,9 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import free_port
 from flask import Flask
 from flask import jsonify
 from flask import request
@@ -20,6 +17,7 @@ from imbue.chat.auto_open import is_auto_open_labeled
 from imbue.chat.auto_open import open_chat_op_body
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import serve_app
 
 _LABELED = {"assist": "true"}
 
@@ -210,10 +208,8 @@ def test_the_shell_client_posts_the_open_op_and_reads_the_shell_s_answer() -> No
         )
 
     application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
-    port = free_port()
-
-    with serve_in_background(LOOPBACK_HOST, port, application):
-        client = ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}")
+    with serve_app(application) as served:
+        client = ShellLayoutClient(shell_url=served.http_url)
         assert client.open_chat(ChatId("agent-1"), "c1") is True
         assert client.open_chat(ChatId("agent-1"), "nobody") is False
 
@@ -246,7 +242,5 @@ def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_th
     answer the shell should never give would end the thread and silently stop surfacing every tab."""
     application = Flask("stub-shell")
     application.add_url_rule("/api/clients", view_func=lambda: jsonify(body), endpoint="clients")
-    port = free_port()
-
-    with serve_in_background(LOOPBACK_HOST, port, application):
-        assert ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}").connected_client_ids() == expected
+    with serve_app(application) as served:
+        assert ShellLayoutClient(shell_url=served.http_url).connected_client_ids() == expected

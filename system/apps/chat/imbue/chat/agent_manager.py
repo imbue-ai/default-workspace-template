@@ -12,9 +12,6 @@ from typing import Any
 from typing import Final
 from uuid import uuid4
 
-from app_instances.data_types import InstanceStatus
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.nudge import SilentNudger
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
@@ -138,6 +135,7 @@ from imbue.chat.naming import is_name_conflict
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -489,15 +487,15 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
 @pure
 def chat_status_for_agent(
     lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
-) -> InstanceStatus:
+) -> ChatStatus:
     """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn."""
     if is_lifecycle_dead(lifecycle_state):
-        return InstanceStatus.STOPPED
+        return ChatStatus.STOPPED
     if is_permission_pending:
-        return InstanceStatus.ATTENTION
+        return ChatStatus.ATTENTION
     if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
-        return InstanceStatus.WORKING
-    return InstanceStatus.IDLE
+        return ChatStatus.WORKING
+    return ChatStatus.IDLE
 
 
 class _ResolvedChat(FrozenModel):
@@ -639,9 +637,9 @@ def _is_rebind_retry_target(rebind: ChatRebindRecord, target: _SwitchTarget) -> 
 
 
 @pure
-def _converging_status(phase: HandoffPhase) -> InstanceStatus:
+def _converging_status(phase: HandoffPhase) -> ChatStatus:
     """A converging chat is ``working`` whatever its agent does, and ``error`` once the start failed (spec 5.4)."""
-    return InstanceStatus.ERROR if phase is HandoffPhase.FAILED else InstanceStatus.WORKING
+    return ChatStatus.ERROR if phase is HandoffPhase.FAILED else ChatStatus.WORKING
 
 
 @pure
@@ -845,11 +843,6 @@ class AgentManager:
     _oom_prioritizer: ChatOomPrioritizer
     # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
-    # Tells the shell that the chat app's instance list changed (contracts.md section 5):
-    # every broadcast of the agent list is a change of that list or of a status in it, so the
-    # nudge rides ``_broadcast_chats_updated``. ``SilentNudger`` until ``main`` installs the
-    # real one, so a manager built by a test posts nothing to the workspace shell.
-    _nudger: InstanceNudgerInterface
     # Surfaces the tab of a chat created from outside with an auto-open label (the Mind
     # app's update and help chats): fed the agents that appear and go, seeded once with the
     # agents found at startup. Delivers through the shell, so ``main`` installs one that can
@@ -857,12 +850,12 @@ class AgentManager:
     _auto_open: AutoOpenReactor
     # Whether the agent list has been read from mngr at least once (the initial discovery
     # or the observe stream's first full snapshot). Before that the list is empty because
-    # nothing has been asked yet, not because there are no agents, and the instances API
-    # answers "not ready" rather than an empty list the shell would prune tabs against.
+    # nothing has been asked yet, not because there are no agents, and the routes answer
+    # "not ready" rather than an empty list.
     _is_agent_list_known: bool
     # Per agent, the ids of the filed permission requests no verdict has landed for, folded
-    # from the transcript events the watcher parses. A non-empty set is the ``attention``
-    # status of the chat's instance record.
+    # from the transcript events the watcher parses. A non-empty set is the chat's
+    # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
@@ -946,7 +939,6 @@ class AgentManager:
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
-        manager._nudger = SilentNudger()
         manager._auto_open = (
             auto_open
             if auto_open is not None
@@ -1061,10 +1053,6 @@ class AgentManager:
         a test injects brings its broadcaster with it)."""
         return self._broadcaster
 
-    def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
-        """Install the nudger every agent-list broadcast also fires; ``main`` installs the real one."""
-        self._nudger = nudger
-
     def is_agent_list_known(self) -> bool:
         """Whether the agent list has been read from mngr at least once."""
         with self._lock:
@@ -1075,14 +1063,9 @@ class AgentManager:
         with self._lock:
             self._is_agent_list_known = True
 
-    def nudge_shell(self) -> None:
-        """Fire the installed nudger: the instance list changed with no agent-list broadcast to carry it."""
-        self._nudger.nudge()
-
     def _broadcast_chats_updated(self) -> None:
-        """Push every chat's snapshot to every WebSocket client, then nudge the shell about the instance list."""
+        """Push every chat's snapshot to every WebSocket client."""
         self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots())
-        self._nudger.nudge()
 
     # Agent-level: the tracked agents.
 
@@ -2599,7 +2582,6 @@ class AgentManager:
             )
             self._provisional_chats[chat_id] = provisional
         self._broadcaster.broadcast_provisional_chat_created(provisional)
-        self._nudger.nudge()
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
     def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
@@ -2650,7 +2632,6 @@ class AgentManager:
             )
             self._provisional_chats[chat_id] = provisional
         self._broadcaster.broadcast_provisional_chat_created(provisional)
-        self._nudger.nudge()
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
@@ -2699,7 +2680,6 @@ class AgentManager:
                 self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
-        self._nudger.nudge()
         return True
 
     def create_chat(
@@ -2870,7 +2850,6 @@ class AgentManager:
         )
 
         self._broadcaster.broadcast_provisional_chat_created(provisional)
-        self._nudger.nudge()
 
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
@@ -3042,9 +3021,6 @@ class AgentManager:
                 self._broadcast_chats_updated()
                 self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
             else:
-                # The provisional record changed phase with no agent-list broadcast to carry the
-                # change (a success nudges through the broadcast above).
-                self._nudger.nudge()
                 # The pages show what the record holds: the reason and the output behind it.
                 failed = self.get_provisional_chat(chat_id)
                 if failed is not None and failed.error is not None:
@@ -3958,10 +3934,6 @@ class AgentManager:
             is_activity_changed = tracker is not None and tracker.observe(events)
         if is_activity_changed:
             self._recompute_activity_state(agent_id, broadcast_on_change=True)
-        if is_permission_state_changed:
-            # No chats_updated carries the verdict (it is transcript-only), so the instance
-            # list's ``attention`` status changes with nothing else to announce it.
-            self._nudger.nudge()
 
     def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
         """Fold a batch of events into the agent's pending permission requests; True when the set changed.

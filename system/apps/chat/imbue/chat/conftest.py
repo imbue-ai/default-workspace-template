@@ -61,7 +61,7 @@ def _isolate_chat_tests(
     # The chat document reads the app registry (for the terminal's origin label) from the
     # working directory otherwise, which in a workspace is the live one.
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
-    # The chat's posts to the shell (nudges, client activity) go to the workspace's real shell
+    # The chat's posts to the shell (client activity) go to the workspace's real shell
     # otherwise; a port nothing listens on refuses them at once. The pipeline and e2e tests
     # serve a shell of their own and point at it.
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")

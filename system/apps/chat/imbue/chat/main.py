@@ -7,9 +7,6 @@ from types import FrameType
 from typing import Final
 
 import httpx
-from app_instances.nudge import ShellNudger
-from app_instances.nudge import ThreadedNudger
-from app_instances.nudge import shell_base_url
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
 from flask import Flask
@@ -33,10 +30,10 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.server import create_application
+from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -82,7 +79,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=(
             "Boot without side effects, for the update apply's pre-flight check: no account "
             "reconciliation (it reaps sign-in processes), no agent manager (no mngr observe, "
-            "no sweep, no memory prioritizer, no nudges to the shell), and no registration"
+            "no sweep, no memory prioritizer), and no registration"
         ),
     )
     return parser.parse_args(argv)
@@ -217,13 +214,6 @@ def main() -> None:
     state = state_of(application)
 
     if not args.preflight:
-        # The chat app tells the shell when its instance list changes (contracts.md section
-        # 5). Installed here, at the process entry point, so a manager a test builds nudges
-        # nobody; on a thread of its own, so an agent event never waits on the shell.
-        state.agent_manager.set_nudger(
-            ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
-        )
-
         # Start the ``mngr observe`` pipeline now that the app is assembled. This is
         # the one place observe is started; ``build_application`` only constructs, so
         # tests that build an app never spawn it.
@@ -243,9 +233,8 @@ def main() -> None:
     # SSE streaming.
     server = make_threaded_server(config.chat_host, config.chat_port, application)
 
-    # Registered once the socket is bound and just before serving, so the shell's first
-    # fetch after the registration finds the app answering (a 503 until the agent list is
-    # known, never a refused connection).
+    # Registered once the socket is bound and just before serving, so a window the shell opens
+    # on the chat right after the registration finds the app answering.
     if not (args.no_register or args.preflight):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
     server.serve_forever()
