@@ -167,9 +167,8 @@ def seed_transcript(events: list[dict[str, Any]]) -> str:
     """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
 
     The turns are markdown the Mind app wrote, so they are quoted whole rather than summarised.
-    A closing context tag inside a turn (nothing the app writes, but a workspace name or a repo
-    URL is the user's to type) is broken up, so the block the page strips always ends where this
-    builder put its end.
+    A closing context tag inside a turn is broken up, so the block the page strips always ends
+    where this builder put its end.
     """
     blocks: list[str] = []
     for event in events:
@@ -185,10 +184,9 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
     """A seeded chat's first send as its first agent receives it: the conversation, then the words.
 
     The seed is a segment this app renders from a file -- no agent ever ran on it, and no
-    ``mngr transcript`` can read it -- so a first agent that is handed the user's message alone
-    joins a conversation it cannot see, and a reply like "1" names an option it never read. The
-    context block carries that conversation ahead of the message; the page strips the block and
-    shows the message alone (``harnesses/message_display.py``).
+    ``mngr transcript`` can read it -- so the context block is how the conversation reaches the
+    chat's first agent at all. The page strips the block and shows the message alone
+    (``harnesses/message_display.py``).
 
     Returns ``message`` unchanged when the chat has no seed to carry (a damaged or absent file),
     which is the behaviour of a chat that never had one.
