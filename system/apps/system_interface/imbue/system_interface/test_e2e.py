@@ -689,7 +689,10 @@ def test_launcher_tile_search_and_this_desktop_rows(tmp_path: Path, page: Page) 
         expect(overlay.locator("[data-launcher-window]")).to_have_count(0)
         page.locator("[data-launcher-field] input").fill("zzzz")
         expect(overlay.locator(".launcher-no-matches")).to_be_visible()
+        # One Escape clears the search; the next, on an empty field, closes the launcher.
         page.keyboard.press("Escape")
+        expect(page.locator("[data-launcher-field] input")).to_have_value("")
+        expect(overlay.locator(".launcher-no-matches")).to_have_count(0)
         page.keyboard.press("Escape")
         expect(overlay).to_be_hidden()
 
@@ -820,6 +823,9 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
     page.reload()
     expect(_window(page, window_id)).to_be_visible(timeout=15000)
     _assert_same_box(_box(_window(page, window_id)), resized, "after reload")
+    # The page is back too, laid over the restored window, whatever order the loads landed in.
+    expect(page.locator(f'iframe[data-live-page="{window_id}"]')).to_be_visible(timeout=15000)
+    assert _page_frame(page, window_id).url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
 
 
 @pytest.mark.timeout(90, func_only=False)
