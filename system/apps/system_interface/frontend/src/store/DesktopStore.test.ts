@@ -337,6 +337,14 @@ describe("windows", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-3");
   });
 
+  it("raising the window already on top is not a gesture: nothing dirty, nothing saved", async () => {
+    const store = await startedStore();
+    const layout = store.getState().layout;
+    store.raiseWindow("win-1");
+    expect(store.getState().layout).toBe(layout);
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
   it("toggles maximize, except in compact mode", async () => {
     const store = await startedStore();
     store.toggleMaximized("win-1");

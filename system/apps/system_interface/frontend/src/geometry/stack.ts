@@ -2,10 +2,13 @@
  * The stack (desktop-interface plan section 3.4): one client's placements of one desktop, back to
  * front, and the verbs over them, mirroring ``shell/desktop_document.py``. A window the layout
  * has no placement for reads as minimized at the bottom of the stack with a cascaded frame; the
- * focused window is the last placement that is not minimized. Nothing here reads the DOM.
+ * focused window is the last placement that is not minimized. A verb that changes nothing answers
+ * the same layout object, which is how the store tells a gesture from a no-op. Nothing here reads
+ * the DOM.
  */
 
 import type { Desktop, Frame, Layout, Placement, WindowRecord, WindowState } from "../model/records";
+import { isSamePlacement } from "../model/records";
 import { cascadeFrame } from "./frames";
 
 /** What a window with no placement reads as: the cascade frame at the bottom of the stack, minimized. */
@@ -64,15 +67,17 @@ export function placementOf(layout: Layout, windowId: string): Placement {
 }
 
 function withPlacementOnTop(layout: Layout, placement: Placement): Layout {
+  const top = layout.placements[layout.placements.length - 1];
+  if (top !== undefined && isSamePlacement(top, placement)) return layout;
   const others = layout.placements.filter((candidate) => candidate.window_id !== placement.window_id);
   return { ...layout, placements: [...others, placement] };
 }
 
 /** The layout with the placement replacing its window's entry where it stands, or appended when there is none. */
 function withPlacementInPlace(layout: Layout, placement: Placement): Layout {
-  if (!layout.placements.some((candidate) => candidate.window_id === placement.window_id)) {
-    return { ...layout, placements: [...layout.placements, placement] };
-  }
+  const current = layout.placements.find((candidate) => candidate.window_id === placement.window_id);
+  if (current === undefined) return { ...layout, placements: [...layout.placements, placement] };
+  if (isSamePlacement(current, placement)) return layout;
   return {
     ...layout,
     placements: layout.placements.map((candidate) =>
