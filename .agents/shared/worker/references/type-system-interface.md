@@ -89,11 +89,10 @@ exist before reporting `done`.
 If the task names a real motivating conversation under `## Real scenario`, **LOOK
 AT IT before you touch anything.** You are *not* cut off from that conversation.
 Boot your built instance with `MINDS_APPS_FILE` left at its default (see "Running
-and testing" above): the system interface then lists the same real chats the user
-sees, docked from the live chat app, so you can drive Playwright (`--no-sandbox`) to the named agent's
-conversation and **screenshot the actual thing the user complained about** (use
-the tab bar's add-tab `+` dropdown to switch to the agent, or navigate to it
-directly). Open the screenshot and study the real rendering. Fix against *that*,
+and testing" above): the system interface then shows the same real chats the user
+sees, as windows from the live chat app, so you can drive Playwright (`--no-sandbox`) to the named agent's
+conversation and **screenshot the actual thing the user complained about** (open
+the agent's chat from the launcher, or navigate to it directly). Open the screenshot and study the real rendering. Fix against *that*,
 then re-render the same conversation and confirm with your own eyes that it now
 looks right. This is the whole point: you see the real case rather than
 reconstructing it from the brief.
