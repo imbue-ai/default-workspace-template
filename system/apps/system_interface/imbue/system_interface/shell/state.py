@@ -290,7 +290,7 @@ class ShellState(MutableModel):
         # is broadcast: a window following a push reports what it was pushed to, which matches the record, so the
         # chain ends after one hop.
         is_redirected = resolved is not report
-        if (outcome.is_active_desktop_changed or is_redirected) and outcome.record.active_desktop is not None:
+        if outcome.is_active_desktop_changed or is_redirected:
             self.broadcaster.broadcast_active_desktop_changed(
                 str(report.client_id), str(outcome.record.active_desktop)
             )
