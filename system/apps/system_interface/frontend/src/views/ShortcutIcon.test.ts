@@ -42,6 +42,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     app: docs,
     isSelected: false,
     isLifted: false,
+    isRunOnClick: false,
     onSelect: vi.fn(),
     onRun: vi.fn(),
     onContextMenu: vi.fn(),
@@ -75,6 +76,17 @@ describe("ShortcutIcon", () => {
     expect(onRun).toHaveBeenCalledTimes(3);
     icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 5, clientY: 6 }));
     expect(onContextMenu).toHaveBeenCalledWith(5, 6);
+  });
+
+  it("runs on a click when a click is a run (touch), and the double click a double tap adds runs nothing more", () => {
+    const onSelect = vi.fn();
+    const onRun = vi.fn();
+    const icon = render({ isRunOnClick: true, onSelect, onRun });
+    icon.click();
+    icon.click();
+    icon.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(onRun).toHaveBeenCalledTimes(2);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("marks selection and fades while lifted", () => {
