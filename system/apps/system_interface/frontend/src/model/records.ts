@@ -303,6 +303,10 @@ export function parseAppRecords(raw: unknown): AppRecord[] {
   return asArray(raw, "apps").map(parseAppRecord);
 }
 
+export function parseClientRecords(raw: unknown): ClientRecord[] {
+  return asArray(raw, "clients").map(parseClientRecord);
+}
+
 export function parseClientRecord(raw: unknown): ClientRecord {
   const record = asObject(raw, "client");
   return {
@@ -311,6 +315,10 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
   };
+}
+
+export function parseWallpaperListings(raw: unknown): WallpaperListing[] {
+  return asArray(raw, "wallpapers").map(parseWallpaperListing);
 }
 
 export function parseWallpaperListing(raw: unknown): WallpaperListing {
