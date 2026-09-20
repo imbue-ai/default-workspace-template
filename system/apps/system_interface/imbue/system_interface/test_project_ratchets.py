@@ -182,14 +182,15 @@ def test_the_chat_name_pattern_catches_the_name_in_an_address_and_not_in_prose(l
 
 
 _PIXEL_METRIC_RULE = RatchetRuleInfo(
-    rule_name="literal pixel metrics in the desktop's views and reducers",
+    rule_name="literal pixel lengths in the desktop's views and reducers",
     rule_description=(
         "Every metric the desktop's behaviour needs (title bar and taskbar heights, cell sizes, the grid "
         "inset, minimum window size, snap and drag thresholds, the touch target) is a token in "
         "frontend/src/theme/default.css, read once into ThemeMetrics by theme/metrics.ts and handed to the "
-        "views and reducers by the store (desktop-interface plan section 6.6). A pixel literal in views/ or "
-        "reducers/ is a metric living in two places: reference the token (a `--desk-*` utility or the store's "
-        "metrics) instead."
+        "views and reducers by the store (desktop-interface plan section 6.6). A `px` length written in a "
+        "string in views/ or reducers/ (a Tailwind utility such as `h-[36px]`, an inline style, a class) is a "
+        "metric living in two places: reference the token (a `--desk-*` utility or the store's metrics) "
+        "instead. Only lengths spelled with `px` are checked; a bare number the code treats as pixels is not."
     ),
 )
 
