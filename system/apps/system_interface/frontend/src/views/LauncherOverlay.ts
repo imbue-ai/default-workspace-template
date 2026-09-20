@@ -21,6 +21,7 @@ import { launchRowLabel, launchTilesOf, orderLaunchTiles, promptTargetOfTiles } 
 import type { LaunchTile } from "../model/launch";
 import { MESSAGE_PARAM } from "../model/launch";
 import type { AppRecord, Desktop, LaunchPath, WindowRecord } from "../model/records";
+import { shortcutKey } from "../model/records";
 import { matchesQuery } from "../model/search";
 import { resolveShelves, searchTemplates } from "../model/TemplateCatalog";
 import type { CatalogTemplate, TemplateCatalogState } from "../model/TemplateCatalog";
@@ -156,7 +157,7 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
   }
 
   function tileView(tile: LaunchTile, attrs: LauncherOverlayAttrs): m.Vnode {
-    const key = `${tile.app.name}:${tile.launchPath.id}`;
+    const key = shortcutKey(tile.app.name, tile.launchPath.id);
     return m(
       "button",
       {
@@ -225,12 +226,13 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
   }
 
   function launchRow(tile: LaunchTile, attrs: LauncherOverlayAttrs): m.Vnode {
+    const key = shortcutKey(tile.app.name, tile.launchPath.id);
     return m(
       "button",
       {
-        key: `${tile.app.name}:${tile.launchPath.id}`,
+        key,
         type: "button",
-        "data-launch": `${tile.app.name}:${tile.launchPath.id}`,
+        "data-launch": key,
         class: `launcher-launch-row ${ROW_CLASS} text-primary`,
         onclick: () => attrs.onRunLaunch(tile.app, tile.launchPath, {}),
       },
