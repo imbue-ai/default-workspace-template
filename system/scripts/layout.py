@@ -58,7 +58,8 @@ client (the one that last messaged that chat). ``desktops`` and ``list`` read ``
 
 Output for the read commands is YAML by default; pass ``--json`` for the raw structured
 object. Descriptions of what an op did go to stderr; stdout carries only the window id of an
-``open`` and the structured output of the read commands.
+``open``, the structured output of the read commands, and the desktop's shortcuts as they stand
+after a ``shortcut`` write.
 
 Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
 ``replace-url``, ``inspect``, ``where``, ``views``) and the old ``app:``, ``chat:``,
