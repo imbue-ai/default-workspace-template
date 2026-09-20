@@ -235,7 +235,7 @@ def _find_echoed_object(content: str, is_match: Callable[[dict[str, Any]], bool]
             # The C scanner recurses per nesting level on absurdly deep input; every later
             # candidate in the same nest would just recurse again, so give up on the
             # result: no gateway echo nests thousands deep.
-            logger.warning("Giving up on a permission-request probe: absurdly deep JSON nesting in tool output")
+            logger.warning("Giving up on an echoed-request probe: absurdly deep JSON nesting in tool output")
             return None
         if isinstance(parsed, dict) and is_match(parsed):
             body = content[start:end]
