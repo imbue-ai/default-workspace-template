@@ -347,6 +347,28 @@ describe("windows", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-3");
   });
 
+  it("defers maximizing or raising a settling window the same way, so its launch path never runs twice", async () => {
+    const store = await startedStore();
+    const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const home = store.getState().desktops[0];
+    const work = store.getState().desktops[1];
+    socket.deliver().onDesktopsUpdated([{ ...home, windows: [...home.windows, settling] }, work]);
+    // The taskbar entry menu's Maximize, and a focus shortcut whose most recent docs window is the settling one.
+    store.setWindowState("win-3", "MAXIMIZED");
+    store.toggleMaximized("win-3");
+    await store.runLaunch("docs", "new", "focus");
+    expect(store.isPlacedHere("win-3")).toBe(false);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        { ...home, windows: [...home.windows, { ...settling, path: "/?doc=9", is_settling: false }] },
+        work,
+      ]);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+  });
+
   it("drops a deferred restore when the user leaves the desktop", async () => {
     const store = await startedStore();
     const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
