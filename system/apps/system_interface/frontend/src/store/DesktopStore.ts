@@ -578,10 +578,12 @@ export class DesktopStore {
     this.pageDriver?.reload(windowId);
   }
 
-  /** A page reported where it is; posted to the window's location route (the broadcast follows). */
+  /** A page reported where it is; posted to the window's location route when it differs from the stored
+   *  record (the broadcast follows). A settling window's first report ends the settling, so it always goes. */
   async reportLocation(windowId: string, path: string, title: string): Promise<void> {
     const found = findWindow(this.state, windowId);
     if (found === null) return;
+    if (!found.window.is_settling && found.window.path === path && found.window.title === title) return;
     try {
       await this.deps.api.reportWindowLocation(found.desktop.id, windowId, path, title);
     } catch (error) {
