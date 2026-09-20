@@ -24,24 +24,10 @@ import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { activeFocusedWindowId } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, windowRecord } from "../testing/records";
-import type { ThemeMetrics } from "../theme/metrics";
+import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
 import { LivePagesLayer } from "./livePages";
 
-const METRICS: ThemeMetrics = {
-  titleBarHeight: 36,
-  taskbarHeight: 48,
-  cellWidth: 96,
-  cellHeight: 112,
-  gridInset: 16,
-  windowMinWidth: 320,
-  windowMinHeight: 240,
-  titleMinVisible: 120,
-  snapThreshold: 16,
-  unsnapDistance: 12,
-  dragThreshold: 4,
-  touchTarget: 32,
-};
+const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const docs = appRecord("docs", { url: "http://127.0.0.1:7001" });

@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { describe, expect, it, vi } from "vitest";
+import { themeMetricsRecord } from "../testing/records";
 import type { MediaQueryLike } from "./metrics";
 import {
   COMPACT_ATTRIBUTE,
@@ -72,20 +73,7 @@ describe("the theme file", () => {
 
 describe("readThemeMetrics", () => {
   it("reads every metric off the computed tokens", () => {
-    expect(readThemeMetrics(styleOf(CONTRACT_TOKENS))).toEqual({
-      titleBarHeight: 36,
-      taskbarHeight: 48,
-      cellWidth: 96,
-      cellHeight: 112,
-      gridInset: 16,
-      windowMinWidth: 320,
-      windowMinHeight: 240,
-      titleMinVisible: 120,
-      snapThreshold: 16,
-      unsnapDistance: 12,
-      dragThreshold: 4,
-      touchTarget: 32,
-    });
+    expect(readThemeMetrics(styleOf(CONTRACT_TOKENS))).toEqual(themeMetricsRecord());
   });
 
   it("refuses a missing or non-pixel token", () => {
