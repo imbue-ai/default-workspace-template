@@ -5,7 +5,6 @@
  */
 
 import m from "mithril";
-import type { AppRecord, Desktop } from "../model/records";
 import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
@@ -18,11 +17,7 @@ export interface TaskbarAttrs {
   readonly isCompact: boolean;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
-  readonly tray: Omit<SystemTrayAttrs, "desktops" | "activeDesktopId" | "apps"> & {
-    readonly desktops: readonly Desktop[];
-    readonly activeDesktopId: string | null;
-    readonly apps: readonly AppRecord[];
-  };
+  readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
 }
