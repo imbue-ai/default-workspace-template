@@ -52,6 +52,8 @@ describe("the launcher's pure helpers", () => {
     expect(searchWindowRows(rows("home"), "budget").map((row) => row.window.id)).toEqual(["win-3"]);
     expect(searchWindowRows(rows("home"), "notes").map((row) => row.window.id)).toEqual(["win-2"]);
     expect(searchWindowRows(rows("home"), "work").map((row) => row.window.id)).toEqual(["win-3"]);
+    // The raw path is not what the user reads: a fragment of one finds nothing.
+    expect(searchWindowRows(rows("home"), "/c")).toEqual([]);
     expect(searchTiles(launchTilesOf([docs, notes]), "open new no").map((tile) => tile.app.name)).toEqual(["notes"]);
     expect(searchTiles(launchTilesOf([docs, notes]), "new docs").map((tile) => tile.app.name)).toEqual(["docs"]);
   });
@@ -63,7 +65,13 @@ describe("the launcher's pure helpers", () => {
   });
 });
 
-afterEach(unmountViews);
+// jsdom has no scrollIntoView; the scroll test stands one in and puts this back.
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+afterEach(() => {
+  unmountViews();
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 function render(overrides: Partial<LauncherOverlayAttrs> = {}): HTMLElement {
   const attrs: LauncherOverlayAttrs = {
