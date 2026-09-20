@@ -217,6 +217,7 @@ def build_test_state(
     inventory: AppInventory | None = None,
     template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
     static_directory: Path | None = None,
+    agent_events_path: Path | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -227,7 +228,9 @@ def build_test_state(
     is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
     the network for it; with one, the store fetches the config's URL through it.
     ``static_directory`` replaces the package's built bundle directory (the frontend bundle
-    and the bundled wallpapers) with one the test fills itself.
+    and the bundled wallpapers) with one the test fills itself. The avatar's catalog lives under the
+    state directory, and its mood is read from ``agent_events_path`` (a file under the state directory
+    by default, absent until a test writes it).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_config = config if config is not None else Config()
@@ -237,6 +240,8 @@ def build_test_state(
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
         wallpaper_files_directory=state_directory / "wallpapers",
+        avatar_catalog_directory=state_directory / "avatars",
+        agent_events_path=agent_events_path if agent_events_path is not None else state_directory / "agent-events.jsonl",
     )
     template_catalog = build_template_catalog_store(
         catalog_url=resolved_config.system_interface_template_catalog_url

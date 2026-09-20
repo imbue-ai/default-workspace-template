@@ -3,10 +3,12 @@ import {
   WireShapeError,
   isSameWindowPaths,
   parseAppRecord,
+  parseAvatarCatalog,
+  parseAvatarStatus,
+  parseClientRecord,
   parseClientRecords,
   parseDesktop,
   parseLayout,
-  parseClientRecord,
   parseWallpaperListings,
   shortcutKey,
 } from "./records";
@@ -187,6 +189,29 @@ describe("the small helpers", () => {
       }),
     ).toThrow(WireShapeError);
     expect(shortcutKey("docs", "new")).toBe("docs:new");
+  });
+
+  it("reads the avatar status and catalog, refusing a mood outside the vocabulary", () => {
+    expect(parseAvatarStatus({ mood: "working", is_stale: true })).toEqual({ mood: "working", is_stale: true });
+    expect(() => parseAvatarStatus({ mood: "listening", is_stale: false })).toThrow(WireShapeError);
+    expect(
+      parseAvatarCatalog({
+        designs: [
+          { id: "gummy-seal", label: "Gummy seal", source_path: null },
+          { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
+        ],
+        selected: "mine",
+        default: "gummy-seal",
+      }),
+    ).toEqual({
+      designs: [
+        { id: "gummy-seal", label: "Gummy seal", source_path: null },
+        { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
+      ],
+      selected: "mine",
+      default: "gummy-seal",
+    });
+    expect(() => parseAvatarCatalog({ designs: [], selected: "x" })).toThrow(WireShapeError);
   });
 
   it("refuses a clients or wallpapers document missing its list instead of reading it as empty", () => {

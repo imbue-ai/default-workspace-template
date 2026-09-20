@@ -12,6 +12,7 @@ import { StalePlacementsSaveError } from "../model/api";
 import { launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
+  AvatarCatalog,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -106,6 +107,8 @@ export interface DesktopApi {
   fetchClients(): Promise<ClientRecord[]>;
   setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
+  fetchAvatars(): Promise<AvatarCatalog>;
+  selectAvatar(design: string): Promise<void>;
 }
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
@@ -310,8 +313,12 @@ export class DesktopStore {
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
       onClientEntriesChanged: (event) => this.takeClientEntriesChanged(event),
+      onAvatarStatus: (status) => this.dispatch({ type: "avatar_status_updated", status }),
+      onAvatarSelectionChanged: (design) =>
+        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
+    void this.loadAvatarSelection();
     let desktops: Desktop[];
     let clients: ClientRecord[];
     try {
@@ -441,6 +448,25 @@ export class DesktopStore {
   private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
     if (event.clientId !== this.deps.clientId) return;
     this.dispatch({ type: "entries_updated", entries: event.entries });
+  }
+
+  /** The workspace's design and the fallback, from the catalog; a read that fails leaves the initial ones. */
+  private async loadAvatarSelection(): Promise<void> {
+    try {
+      const catalog = await this.deps.api.fetchAvatars();
+      this.dispatch({ type: "avatar_selection_updated", design: catalog.selected, defaultDesign: catalog.default });
+    } catch (error) {
+      console.warn("[si] could not read the avatar designs", error);
+    }
+  }
+
+  /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */
+  async selectAvatar(design: string): Promise<void> {
+    try {
+      await this.deps.api.selectAvatar(design);
+    } catch (error) {
+      this.deps.notify(`Could not change the avatar: ${(error as Error).message}`);
+    }
   }
 
   /** Write how this client shows a pinned entry (its mode, style, and floating position). Applied at once, so a

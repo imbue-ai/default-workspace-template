@@ -2,18 +2,21 @@
  * One taskbar entry (plan section 4.10): a window of the active desktop, the app's icon and the
  * title (icon only in compact mode), dimmed while minimized or while settling on another
  * client's open, the focused one marked. A click restores and raises, minimizes the focused
- * window, or raises; a right click or long press opens the entry's menu.
+ * window, or raises; a right click or long press opens the entry's menu. A pinned entry in the
+ * ``avatar`` style draws the workspace's avatar in place of the icon, wearing the current mood.
  */
 
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import { AvatarImage, avatarTooltip } from "./AvatarImage";
 import { appGlyph } from "./glyphs";
 
 const ENTRY_GLYPH_SIZE = 16;
 
 export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
+  readonly avatar: AvatarState;
   readonly isCompact: boolean;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
@@ -22,9 +25,11 @@ export interface TaskbarEntryAttrs {
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
+    const { entry, avatar, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     const isDimmed = entry.isMinimized || entry.window.is_settling;
     const look = entry.look;
+    const isAvatar = look?.style === "avatar";
+    const tooltip = isAvatar ? avatarTooltip(entry.title, avatar.status) : entry.title;
     return m(
       "button",
       {
@@ -34,6 +39,8 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-pinned-entry": look === null ? undefined : entry.window.app,
         "data-entry-mode": look === null ? undefined : "bar",
         "data-entry-style": look === null ? undefined : look.style,
+        "data-mood": isAvatar ? avatar.status.mood : undefined,
+        "data-stale": isAvatar ? (avatar.status.is_stale ? "true" : "false") : undefined,
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "data-settling": entry.window.is_settling ? "true" : "false",
@@ -49,7 +56,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
             : "border-transparent hover:bg-fill-hover ") +
           (isDimmed ? "text-faint " : entry.isFocused ? "" : "text-secondary ") +
           (isMenuOpen ? "bg-fill-active" : ""),
-        ...hoverTooltipAttrs(isCompact ? entry.title : null),
+        ...hoverTooltipAttrs(isCompact || (isAvatar && avatar.status.is_stale) ? tooltip : null),
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -60,7 +67,14 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         m(
           "span",
           { class: "flex shrink-0 items-center" + (isDimmed ? " opacity-60" : "") },
-          m.trust(appGlyph(entry.app, ENTRY_GLYPH_SIZE)),
+          isAvatar
+            ? m(AvatarImage, {
+                design: avatar.design,
+                defaultDesign: avatar.defaultDesign,
+                mood: avatar.status.mood,
+                class: "size-7",
+              })
+            : m.trust(appGlyph(entry.app, ENTRY_GLYPH_SIZE)),
         ),
         isCompact ? null : m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
       ],

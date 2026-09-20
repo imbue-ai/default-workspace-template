@@ -8,6 +8,7 @@ import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, W
 import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
+import type { AvatarState } from "../reducers/desktopState";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -86,6 +87,16 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
 }
 
 /** A layout of ``placements`` with the stamp ``updatedAt`` and no stored window paths. */
+/** The default design, idle and fresh. */
+export function avatarStateRecord(overrides: Partial<AvatarState> = {}): AvatarState {
+  return {
+    design: "gummy-seal",
+    defaultDesign: "gummy-seal",
+    status: { mood: "idle", is_stale: false },
+    ...overrides,
+  };
+}
+
 export function layoutRecord(placements: readonly Placement[], updatedAt: string | null = null): Layout {
   return { updated_at: updatedAt, placements, window_paths: {} };
 }

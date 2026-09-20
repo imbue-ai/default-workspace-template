@@ -1,5 +1,6 @@
 """``ShellState``: everything the shell's routes and WebSocket loop share, built in ``main.py`` (or by a test)."""
 
+import os
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -16,6 +17,11 @@ from pydantic import PrivateAttr
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
+from imbue.system_interface.avatar.catalog import AvatarCatalogStore
+from imbue.system_interface.avatar.selection import AvatarSelectionStore
+from imbue.system_interface.avatar.status import AvatarStatusReader
+from imbue.system_interface.avatar.status import agent_events_path
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -89,6 +95,9 @@ class ShellState(MutableModel):
     clients: ClientStore = Field(frozen=True, description="clients.json")
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
+    avatar_catalog: AvatarCatalogStore = Field(frozen=True, description="The avatar designs registered in the workspace")
+    avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
+    avatar_status: AvatarStatusReader = Field(frozen=True, description="The avatar's mood, read from mngr's event file")
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
@@ -97,12 +106,14 @@ class ShellState(MutableModel):
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
     def start(self) -> None:
-        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness)."""
+        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness)
+        and the avatar status reader (the event file watch)."""
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
         thread.start()
         self.inventory.start()
+        self.avatar_status.start()
 
     def stop(self) -> None:
         self._prune_stop.set()
@@ -110,6 +121,7 @@ class ShellState(MutableModel):
             self._prune_thread.join(timeout=5)
             self._prune_thread = None
         self.inventory.stop()
+        self.avatar_status.stop()
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -358,8 +370,12 @@ def build_shell_state(
     broadcaster: WebSocketBroadcaster,
     inventory: AppInventory | None = None,
     wallpaper_files_directory: Path = DEFAULT_WALLPAPER_FILES_DIRECTORY,
+    avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
+    agent_events_path: Path | None = None,
 ) -> ShellState:
-    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests."""
+    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
+    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
+    environment names."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -372,4 +388,14 @@ def build_shell_state(
         clients=ClientStore(state_directory=state_directory),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
+        avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),
+        avatar_selection=AvatarSelectionStore(state_directory=state_directory),
+        avatar_status=AvatarStatusReader(
+            events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
+            broadcaster=broadcaster,
+        ),
     )
+
+
+def agent_events_path_from_environment() -> Path:
+    return agent_events_path(os.environ)

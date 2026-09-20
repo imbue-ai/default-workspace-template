@@ -179,6 +179,29 @@ export interface WallpaperListing {
   readonly url: string;
 }
 
+/** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
+export type AvatarMood = "idle" | "working";
+
+export interface AvatarStatus {
+  readonly mood: AvatarMood;
+  /** Whether the status may be out of date: the events it is read from are old, or absent. */
+  readonly is_stale: boolean;
+}
+
+/** One design as ``GET /api/avatars`` lists it; ``source_path`` is null for a bundled one. */
+export interface AvatarDesign {
+  readonly id: string;
+  readonly label: string;
+  readonly source_path: string | null;
+}
+
+/** The whole of ``GET /api/avatars``: the designs on offer, the workspace's choice, and the fallback. */
+export interface AvatarCatalog {
+  readonly designs: readonly AvatarDesign[];
+  readonly selected: string;
+  readonly default: string;
+}
+
 /** Raised when a wire document does not have the shape the contract gives it. */
 export class WireShapeError extends Error {}
 
@@ -415,6 +438,32 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
     entries: parseEntries(record.entries),
+  };
+}
+
+export function parseAvatarStatus(raw: unknown): AvatarStatus {
+  const record = asObject(raw, "avatar status");
+  return {
+    mood: asOneOf(record.mood, ["idle", "working"], "avatar status.mood"),
+    is_stale: asBoolean(record.is_stale, "avatar status.is_stale"),
+  };
+}
+
+export function parseAvatarDesign(raw: unknown): AvatarDesign {
+  const record = asObject(raw, "avatar design");
+  return {
+    id: asString(record.id, "avatar design.id"),
+    label: asString(record.label, "avatar design.label"),
+    source_path: asOptionalString(record.source_path, "avatar design.source_path"),
+  };
+}
+
+export function parseAvatarCatalog(raw: unknown): AvatarCatalog {
+  const record = asObject(raw, "avatar catalog");
+  return {
+    designs: asArray(record.designs, "avatar catalog.designs").map(parseAvatarDesign),
+    selected: asString(record.selected, "avatar catalog.selected"),
+    default: asString(record.default, "avatar catalog.default"),
   };
 }
 

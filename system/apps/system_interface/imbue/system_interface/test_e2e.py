@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+from datetime import datetime
+from datetime import timezone
 import threading
 import urllib.error
 import urllib.parse
@@ -125,6 +127,7 @@ class E2EServer(FrozenModel):
     state_dir: Path = Field(description="The shell's state directory")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
+    agent_events_path: Path = Field(description="The agents event file the avatar's mood is read from, absent at first")
 
 
 def _get_json(url: str) -> Any:
@@ -199,8 +202,13 @@ def _running_e2e_server(
         if is_catalog_offered:
             catalog_fetcher = FakeTemplateCatalogFetcher()
             catalog_fetcher.body_by_url[config.system_interface_template_catalog_url] = _CATALOG_DOCUMENT
+        agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
+        agent_events_path.parent.mkdir()
         state = build_test_state(
-            config=config, shell_state_directory=state_dir, template_catalog_fetcher=catalog_fetcher
+            config=config,
+            shell_state_directory=state_dir,
+            template_catalog_fetcher=catalog_fetcher,
+            agent_events_path=agent_events_path,
         )
         app = create_application(state)
         # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
@@ -223,6 +231,7 @@ def _running_e2e_server(
                     state_dir=state_dir,
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                    agent_events_path=agent_events_path,
                 )
             finally:
                 state.shell.stop()
@@ -1408,6 +1417,73 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(page.locator('[data-floating-entries] [data-pinned-entry]')).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
         _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+
+
+def _avatar_image_source(entry: Locator) -> str:
+    return str(entry.locator("img").get_attribute("src"))
+
+
+def _write_agent_events(path: Path, state: str) -> None:
+    """One ``AGENT_STATE`` line stamped now, for an agent in ``state``, beside the services agent (always running)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
+    lines = [
+        {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "services", "state": "RUNNING", "labels": {"is_primary": "true"}}},
+        {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "worker", "state": state, "labels": {}}},
+    ]
+    with path.open("a") as stream:
+        stream.writelines(json.dumps(line) + "\n" for line in lines)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_every_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """An ``avatar`` pin draws the workspace's design wearing the mood the agents event file folds to (stale and
+    idle until the file exists, working once an agent runs), its menu's "Change avatar..." opens the chooser,
+    choosing a design changes every open window, and "Design your own..." starts a chat seeded with the design
+    prompt through the app that takes a message."""
+    with _running_e2e_server(tmp_path, is_stub_taking_message=True, pin=("avatar", "linked", "floating")) as server:
+        _land(page, server)
+        entry = _pinned_entry(page)
+        expect(entry).to_be_visible(timeout=15000)
+        expect(entry).to_have_attribute("data-entry-style", "avatar")
+        expect(entry).to_have_attribute("data-mood", "idle")
+        expect(entry).to_have_attribute("data-stale", "true")
+        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=idle")
+
+        _write_agent_events(server.agent_events_path, "RUNNING")
+        expect(entry).to_have_attribute("data-mood", "working", timeout=15000)
+        expect(entry).to_have_attribute("data-stale", "false")
+        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=working")
+        _write_agent_events(server.agent_events_path, "STOPPED")
+        expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
+
+        with _second_client(page, server) as other:
+            other_entry = _pinned_entry(other)
+            expect(other_entry).to_be_visible(timeout=15000)
+            entry.click(button="right")
+            expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+            page.locator('[data-menu-item="change-avatar"]').click()
+            chooser = page.locator("[data-avatar-chooser]")
+            expect(chooser).to_be_visible(timeout=5000)
+            expect(chooser.locator('[data-avatar-design="gummy-seal"]')).to_have_attribute("aria-pressed", "true")
+            chooser.locator('[data-avatar-design="jelly-cat"]').click()
+            expect(chooser.locator('[data-avatar-design="jelly-cat"]')).to_have_attribute(
+                "aria-pressed", "true", timeout=10000
+            )
+            assert _get_json(f"{server.base_url}/api/avatars")["selected"] == "jelly-cat"
+            wait_for(
+                lambda: _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle"),
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the windows never drew the chosen design",
+            )
+            chooser.locator(".avatar-design-own").click()
+            expect(chooser).to_have_count(0)
+            (window,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["app"] == _STUB_APP_NAME]
+            assert window["path"].startswith(f"{_STUB_LAUNCH_PATH}?message=")
+            assert "design my own desktop avatar" in _launch_message(window["path"])
 
 
 @pytest.mark.timeout(90, func_only=False)

@@ -77,6 +77,7 @@ describe("taskbarEntryMenuEntries", () => {
   it("offers a pinned entry the float and style verbs in place of Close", () => {
     const setMode = vi.fn();
     const setStyle = vi.fn();
+    const changeAvatar = vi.fn();
     const inBar = taskbarEntryMenuEntries(
       {
         ...actions,
@@ -87,12 +88,16 @@ describe("taskbarEntryMenuEntries", () => {
           look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
           setMode,
           setStyle,
+          changeAvatar,
         },
       },
       false,
     );
-    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain"]);
+    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain", "change-avatar"]);
     expect(rowOf(inBar, "style-plain").label).toBe("Show as plain entry");
+    expect(rowOf(inBar, "change-avatar").label).toBe("Change avatar...");
+    rowOf(inBar, "change-avatar").run();
+    expect(changeAvatar).toHaveBeenCalledTimes(1);
     rowOf(inBar, "float").run();
     expect(setMode).toHaveBeenCalledWith("floating");
     rowOf(inBar, "style-plain").run();
@@ -107,6 +112,7 @@ describe("taskbarEntryMenuEntries", () => {
           look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: null },
           setMode,
           setStyle,
+          changeAvatar,
         },
       },
       false,
@@ -124,6 +130,7 @@ describe("taskbarEntryMenuEntries", () => {
           look: { mode: "bar", style: "plain", declaredStyle: "plain", position: null },
           setMode,
           setStyle,
+          changeAvatar,
         },
       },
       false,
@@ -141,6 +148,7 @@ describe("taskbarEntryMenuEntries", () => {
               look: { mode: "floating", style: "plain", declaredStyle: "plain", position: null },
               setMode,
               setStyle,
+              changeAvatar,
             },
           },
           true,

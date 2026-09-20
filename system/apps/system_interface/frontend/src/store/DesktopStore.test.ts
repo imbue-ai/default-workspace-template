@@ -750,6 +750,41 @@ describe("pinned entries", () => {
   });
 });
 
+describe("the avatar", () => {
+  it("reads the workspace's design at start and follows the status and selection pushes", async () => {
+    api.avatars = { ...api.avatars, selected: "jelly-cat" };
+    const store = await startedStore();
+    expect(api.calls).toContain("fetchAvatars");
+    expect(store.getState().avatar).toEqual({
+      design: "jelly-cat",
+      defaultDesign: "gummy-seal",
+      status: { mood: "idle", is_stale: true },
+    });
+    socket.deliver().onAvatarStatus({ mood: "working", is_stale: false });
+    expect(store.getState().avatar.status).toEqual({ mood: "working", is_stale: false });
+    socket.deliver().onAvatarSelectionChanged("gummy-seal");
+    expect(store.getState().avatar.design).toBe("gummy-seal");
+  });
+
+  it("selects a design through the shell and tells the user about a refusal", async () => {
+    const store = await startedStore();
+    await store.selectAvatar("jelly-cat");
+    expect(last(api.calls)).toBe("selectAvatar:jelly-cat");
+    // The window follows the broadcast, not the answer.
+    expect(store.getState().avatar.design).toBe("gummy-seal");
+    await store.selectAvatar("nobody");
+    expect(notices).toEqual(["Could not change the avatar: No design nobody"]);
+  });
+
+  it("keeps the initial design when the catalog cannot be read", async () => {
+    api.refusal = "down";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    api.refusal = null;
+    expect(store.getState().avatar.design).toBe("gummy-seal");
+  });
+});
+
 describe("desktops and shortcuts", () => {
   it("creating a desktop switches to it", async () => {
     const store = await startedStore();
