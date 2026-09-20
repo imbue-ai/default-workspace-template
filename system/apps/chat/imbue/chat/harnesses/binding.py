@@ -140,11 +140,6 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     return accounts.resolve_account(chosen.id, home)
 
 
-def has_usable_account(home: Path | None = None) -> bool:
-    """Whether any signed-in account is on a lane this build runs: what ``resolve_binding("")`` needs."""
-    return any(harness_for(account) is not None for account in accounts.read_index(home).accounts)
-
-
 # The harnesses a chat may change account on in place (a rebind, spec 6): every one with an
 # account scope. A same-harness target on a harness outside this set takes the handoff path,
 # which is the fallback the spec names for a harness that cannot resume under a swapped
