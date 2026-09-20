@@ -30,7 +30,7 @@ import type { GestureBinding, GestureListener, GestureSource } from "../gestures
 import { LivePagesLayer } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog } from "./DesktopSettingsDialog";
+import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
 import { FloatingCard, Menu, anchorForEvent, anchorForPoint } from "./Menu";
@@ -404,8 +404,7 @@ export function App(): m.Component<AppAttrs> {
       isDeleting: dialog.isDeleting,
       onSave: async (name, color, glyph, sharing, wallpaper) => {
         await current.updateDesktopSettings(desktop.id, name, color, glyph, sharing);
-        if (JSON.stringify(wallpaper) !== JSON.stringify(desktop.wallpaper))
-          await current.setDesktopWallpaper(desktop.id, wallpaper);
+        if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         settingsDialog = null;
       },
       onDelete: async () => {
