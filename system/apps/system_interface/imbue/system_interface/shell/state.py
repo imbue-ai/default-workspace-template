@@ -80,7 +80,6 @@ class ShellState(MutableModel):
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
 
-    _sweep_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
