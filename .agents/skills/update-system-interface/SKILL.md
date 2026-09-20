@@ -153,9 +153,10 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
     --slug update-<slug> --work-dir "$WORK_DIR"
 ```
 
-This boots the worker's already-built instance on a free port with layout
-persistence neutered (it reads the same agents, so the user's real conversations
-render, but it cannot clobber the live `layout.json`), then boots a small wrapper
+This boots the worker's already-built instance on a free port from the worker's
+own checkout (it reads the same agents, so the user's real conversations render,
+but its desktops and window placements are written under that checkout, never
+into the live shell's state files), then boots a small wrapper
 page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
 service points at that wrapper (the inner instance is registered separately as
 `si-preview-app`), so the window reads as a clearly-marked proposed change. It does
