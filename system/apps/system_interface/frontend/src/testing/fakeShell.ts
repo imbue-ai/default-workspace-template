@@ -16,7 +16,7 @@ import type {
   Wallpaper,
   WindowRecord,
 } from "../model/records";
-import { withWindowPlacedOnOpen, withWindowRaised } from "../geometry/stack";
+import { withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
 
 export class FakeDesktopApi implements DesktopApi {
@@ -188,6 +188,12 @@ export class FakeDesktopApi implements DesktopApi {
     this.refuse();
     const desktop = this.desktop(desktopId);
     this.replace({ ...desktop, windows: desktop.windows.filter((candidate) => candidate.id !== windowId) });
+    // As the shell does: the window leaves every client's layout of the desktop, each rewrite stamped.
+    for (const [key, layout] of [...this.layouts]) {
+      const [layoutDesktopId, clientId] = key.split("/");
+      const dropped = withoutPlacement(layout, windowId);
+      if (layoutDesktopId === desktopId && dropped !== layout) this.writeLayout(desktopId, clientId, dropped);
+    }
   }
 
   async reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord> {
