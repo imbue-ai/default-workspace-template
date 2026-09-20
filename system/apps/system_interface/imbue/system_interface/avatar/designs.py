@@ -271,7 +271,6 @@ def render_design_svg(svg: str, mood: AvatarMood, is_preview: bool, design_id: s
     shared stylesheet, and (for a bundled design) its expression and motion; a preview holds every pose still."""
     root = parse_design_svg(svg)
     root.set("data-mood", mood.value)
-    # The rendered copy always animates through the current shared sheet, whatever the source embedded.
     styles = list(root.iter(_STYLE_TAG))
     if not styles:
         styles = [SubElement(root, _STYLE_TAG)]

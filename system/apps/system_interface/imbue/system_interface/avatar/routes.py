@@ -52,7 +52,6 @@ def register_avatar() -> ResponseReturnValue:
     refusal = require_loopback()
     if refusal is not None:
         return refusal
-    # Enforced by Flask before the body is read, chunked requests included.
     request.max_content_length = _MAX_REGISTRATION_BYTES
     registration = parse_request_body(DesignRegistration)
     _shell().avatar_catalog.register(registration)
