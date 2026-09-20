@@ -300,8 +300,13 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-default-wallpaper` | `url(/wallpapers/bundled/<name>)` | | | no |
 | `--desk-icon-size` | `48px` | `40px` | | no |
 | `--desk-shortcut-label-shadow` | `0 1px 2px rgb(0 0 0 / 0.6)` | | | no |
+| `--desk-resize-edge` | `8px` | | | no |
+| `--desk-resize-corner` | `16px` | | | no |
+| `--desk-resize-overhang` | `3px` | | | no |
+| `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
+The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
 
 ## 12. Selectors shared with tests

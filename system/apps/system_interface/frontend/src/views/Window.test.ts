@@ -48,6 +48,20 @@ describe("Window", () => {
     expect(element.querySelector(".window-title")?.textContent).toBe("Plan");
   });
 
+  it("keeps the resize handles outside the clipped frame, so they can overhang the border", () => {
+    const element = render();
+    const frame = element.querySelector("[data-window-frame]") as HTMLElement;
+    expect(frame.classList.contains("overflow-hidden")).toBe(true);
+    expect(element.classList.contains("overflow-hidden")).toBe(false);
+    expect(frame.querySelector("[data-window-content]")).not.toBeNull();
+    for (const handle of element.querySelectorAll("[data-resize-edge]")) {
+      expect(handle.parentElement).toBe(element);
+      expect(handle.className).toContain("-(--desk-resize-overhang)");
+    }
+    expect(element.querySelector('[data-resize-edge="se"]')?.className).toContain("size-(--desk-resize-corner)");
+    expect(element.querySelector('[data-resize-edge="n"]')?.className).toContain("h-(--desk-resize-edge)");
+  });
+
   it("lays a shield over the content when asked, whose press raises an unfocused window and not a focused one", () => {
     const onRaise = vi.fn();
     const unfocused = render({ isFocused: false, isShielded: true, onRaise });
