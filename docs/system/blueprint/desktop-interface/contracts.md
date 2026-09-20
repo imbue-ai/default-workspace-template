@@ -206,7 +206,7 @@ Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavig
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes |
+| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes. Until phase 6 of the plan the shell also sends the desktop id as `viewId`, which the chat's client-activity report still requires |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
 | shell to page | `shell:close-request` | `{}` |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
@@ -219,7 +219,8 @@ Following rule: after every `desktops_updated`, for every live page of a window 
 A page's own report never navigates it.
 A client other than the opener creates no page for a window while `is_settling` is true.
 
-Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, and re-posts the inner page's `shell:focused` as its own, from one module named in `test_embed_ratchets.py`'s allowlist.
+Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view, from one module named in `test_embed_ratchets.py`'s allowlist.
+A `shell:open` whose path is the root's own (`/` or `/?chat=<id>`) it answers itself, by selecting that chat in place, rather than asking the shell for a second root window.
 The shell and the minds chrome accept messages only from frames they created, so nothing else reaches them from an inner frame.
 
 ## 8. The op route and `layout.py`
