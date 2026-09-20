@@ -19,6 +19,7 @@ import {
   activePlacements,
   appByName,
   desktopById,
+  isWindowMinimized,
   openableApps,
   taskbarEntries,
   windowTitle,
@@ -379,7 +380,7 @@ export function App(): m.Component<AppAttrs> {
       .map((window) => ({
         window,
         title: windowTitle(window, app),
-        isMinimized: placements.find((placement) => placement.window_id === window.id)?.is_minimized ?? true,
+        isMinimized: isWindowMinimized(placements, window.id),
       }));
     return m(
       FloatingCard,
@@ -455,10 +456,7 @@ export function App(): m.Component<AppAttrs> {
       state.activeDesktopId,
       (name) => appByName(state, name),
       windowTitle,
-      (desktopId, windowId) =>
-        desktopId === state.activeDesktopId
-          ? (placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true)
-          : false,
+      (desktopId, windowId) => (desktopId === state.activeDesktopId ? isWindowMinimized(placements, windowId) : false),
     );
   }
 
