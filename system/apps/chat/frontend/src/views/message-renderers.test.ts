@@ -27,25 +27,20 @@ vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
 
 // The auth-error note moves the chat through the switch dialog's entry point and reads the chat
-// and its accounts from their models; the chooser's open/pick state is the real module's.
+// from its model; the chooser's open/pick state is the real module's.
 const switching = vi.hoisted(() => {
   // Opening the chooser redraws, and mithril schedules a redraw on an animation frame.
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
   return {
     chat: undefined as unknown,
-    accounts: [] as { id: string; harness: string; lane: string; label: string }[],
-    beginSwitchTo: vi.fn(),
+    beginSwitchToAccountId: vi.fn(),
   };
 });
-vi.mock("./SwitchDialog", () => ({ beginSwitchTo: switching.beginSwitchTo }));
+vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => switching.chat,
-}));
-vi.mock("../models/Providers", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../models/Providers")>()),
-  accountForAgent: (id?: string) => switching.accounts.find((account) => account.id === id) ?? null,
 }));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
@@ -636,8 +631,8 @@ describe("expanded tool row payload states", () => {
 });
 
 describe("the auth-error note's switch link", () => {
-  const OPENAI = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
-  const ANTHROPIC = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
+  const OPENAI_ID = "acct-openai";
+  const ANTHROPIC_ID = "acct-anthropic";
 
   function authErrorEvent(): AssistantMessageEvent {
     return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
@@ -659,10 +654,9 @@ describe("the auth-error note's switch link", () => {
 
   beforeEach(() => {
     closeProviderChooser();
-    switching.beginSwitchTo.mockClear();
+    switching.beginSwitchToAccountId.mockClear();
     vi.mocked(startChatOnAccount).mockClear();
-    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI.id } });
-    switching.accounts = [OPENAI, ANTHROPIC];
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
   });
 
   it("switches the failed chat to the account picked, rather than starting a new chat", () => {
@@ -671,11 +665,11 @@ describe("the auth-error note's switch link", () => {
 
     expect(isProviderChooserOpen()).toBe(true);
     expect(isPickingAccount()).toBe(true);
-    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI.id, note: "Not working", isFailing: true });
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, note: "Not working", isFailing: true });
 
-    pickAccount(ANTHROPIC.id);
+    pickAccount(ANTHROPIC_ID);
 
-    expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
     expect(startChatOnAccount).not.toHaveBeenCalled();
     expect(isProviderChooserOpen()).toBe(false);
   });
