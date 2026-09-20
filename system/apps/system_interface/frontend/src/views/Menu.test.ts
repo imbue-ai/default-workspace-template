@@ -38,11 +38,13 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function mountMenu(entries: MenuEntry[], onClose: () => void): void {
+function mountMenu(entries: MenuEntry[], onClose: () => void, isInsideTrigger?: (target: Node) => boolean): void {
   root = document.createElement("div");
   document.body.appendChild(root);
   const anchor = { left: 10, right: 20, top: 10, bottom: 20, width: 10 };
-  m.mount(root, { view: () => m(Menu, { anchor, placement: "below", marker: "test-menu", entries, onClose }) });
+  m.mount(root, {
+    view: () => m(Menu, { anchor, placement: "below", marker: "test-menu", entries, onClose, isInsideTrigger }),
+  });
 }
 
 describe("Menu", () => {
@@ -76,5 +78,21 @@ describe("Menu", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays open through a press on its trigger, so the trigger's click can toggle it closed", () => {
+    const onClose = vi.fn();
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-trigger", "");
+    document.body.appendChild(trigger);
+    mountMenu(
+      [{ key: "one", label: "One", run: () => undefined }],
+      onClose,
+      (target) => target instanceof Element && target.closest("[data-trigger]") !== null,
+    );
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
