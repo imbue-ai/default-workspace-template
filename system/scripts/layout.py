@@ -45,8 +45,8 @@ desktop and switches the client to it.
 ``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
 A window of the app already at that path is focused rather than duplicated unless
-``--if-present new`` is passed. The new window's id is printed to stdout. To open a folder in
-the file viewer, ``open files --path /notes/`` (the ``path`` launch parameter is the same:
+``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
+printed to stdout. To open a folder in the file viewer, ``open files --path /notes/`` (the ``path`` launch parameter is the same:
 ``open files --param path=/notes/``).
 
 Every op POSTs one body ``{op, args, requester}`` to a loopback-only endpoint on the shell:
@@ -677,6 +677,8 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
     if bool(args.window) == bool(args.app):
         _fail("refresh takes a window (a window id, 'self', or an app name) or --app <name> for every page of an app")
     if args.app:
+        if args.client or args.desktop:
+            _fail("refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it")
         return _run_transient_op("refresh", {"app": _app_name(args.app)})
     return _run_transient_op(
         "refresh", {"window": _window_ref(args.window), **_target_args(args.desktop, args.client)}

@@ -131,6 +131,9 @@ def test_open_waits_for_registration_then_posts_the_app_and_prints_the_window_id
 def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
     registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # The shell answers an open with the window's id whether it opened the window or focused the one
+    # already at that path; both are printed alike.
+    fake_shell.op_answer = desktop_answer(windows=[_CHAT_WINDOW], window_id=_CHAT_WINDOW["id"])
     assert layout.main(["open", "terminal", "--launch", "new", "--param", "workdir=/data", "--if-present", "new"]) == 0
     assert layout.main(["open", "https://example.com/docs"]) == 0
     assert layout.main(["open", "chat"]) == 0
@@ -139,8 +142,7 @@ def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
         ("open", {"app": "browser", "launch": "new", "params": {"url": "https://example.com/docs"}}),
         ("open", {"app": "chat"}),
     ]
-    # An answer that made no window (the app's window at that path was focused) prints no id.
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 3
 
 
 def test_open_arguments_are_refused_where_they_make_no_sense(
@@ -222,6 +224,11 @@ def test_refresh_reaches_one_window_or_every_page_of_an_app(fake_shell: Any, cap
         layout.main(["refresh"])
     with pytest.raises(SystemExit):
         layout.main(["refresh", "self", "--app", "files"])
+    # A whole-app refresh reaches every client, so a --client or --desktop beside it is refused rather
+    # than silently dropped.
+    with pytest.raises(SystemExit):
+        layout.main(["refresh", "--app", "files", "--client", "c2"])
+    assert "do not apply" in capsys.readouterr().err
 
 
 # ---------- the read commands ----------
@@ -357,41 +364,21 @@ def test_an_unreachable_shell_is_an_error(monkeypatch: pytest.MonkeyPatch, capsy
     assert "could not read the inventory" in capsys.readouterr().err
 
 
-def test_post_layout_sends_the_requester_in_the_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The requester rides in the body as ``{app, marker}``; no header names the agent (the shell reads none)."""
-    seen: dict[str, Any] = {}
-
-    class _Response:
-        status = 200
-
-        def read(self) -> bytes:
-            return b'{"ok": true}'
-
-        def __enter__(self) -> "_Response":
-            return self
-
-        def __exit__(self, *_: Any) -> None:
-            return None
-
-    def fake_urlopen(request: urllib.request.Request, timeout: float) -> _Response:
-        seen["url"] = request.full_url
-        seen["body"] = json.loads(request.data or b"{}")
-        seen["headers"] = dict(request.header_items())
-        return _Response()
-
+def test_post_layout_sends_the_requester_in_the_body(fake_shell: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The requester rides in the body as ``{app, marker}``, posted as JSON to the op route; no header names the
+    agent (the shell reads none)."""
     monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
-    monkeypatch.setenv(layout.ENV_WORKSPACE_URL, "http://127.0.0.1:1/")
-    monkeypatch.setattr(layout.urllib.request, "urlopen", fake_urlopen)
-    assert layout._post_layout("focus", {"window": "self"}) == (200, {"ok": True})
-    assert seen == {
-        "url": "http://127.0.0.1:1/api/layout/broadcast",
-        "body": {
-            "op": "focus",
-            "args": {"window": "self"},
-            "requester": {"app": "chat", "marker": "agent-42"},
-        },
-        "headers": {"Content-type": "application/json"},
-    }
+
+    status, answer = layout._post_layout("focus", {"window": "self"})
+
+    assert status == 200 and isinstance(answer, dict) and answer["ok"] is True
+    assert fake_shell.posted == [
+        (
+            "/api/layout/broadcast",
+            {"op": "focus", "args": {"window": "self"}, "requester": {"app": "chat", "marker": "agent-42"}},
+        )
+    ]
+    assert fake_shell.posted_content_types == ["application/json"]
 
 
 def test_a_read_timeout_is_an_unreachable_shell(monkeypatch: pytest.MonkeyPatch) -> None:

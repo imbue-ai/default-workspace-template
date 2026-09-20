@@ -83,8 +83,8 @@ A window argument is one of:
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
 | Close a window | `python3 system/scripts/layout.py close <window>` |
 
-`open` prints the new window's id to **stdout** so you can name it in later
-ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
+`open` prints the window's id (the new one's, or the focused one's) to **stdout**
+so you can name it in later ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
 `--param name=value` for its parameters; with neither, the app's default launch
 path). A window of the app already at that path is focused rather than
 duplicated; pass `--if-present new` to open another. The window lands on the
