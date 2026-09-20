@@ -115,7 +115,13 @@ export class PointerGestureSource implements GestureSource {
     const onPointerDown = (event: PointerEvent): void => {
       // A new press: the last drag's click has fired by now or never will.
       suppressNextClick = false;
-      if (event.button !== PRIMARY_BUTTON || pending !== null) return;
+      if (event.button !== PRIMARY_BUTTON) return;
+      // A second pointer during a drag is ignored; a press still pending without a drag is stale (it was
+      // released over a live page, whose document took the pointerup) and this press replaces it.
+      if (pending !== null) {
+        if (pending.isDragging) return;
+        finish();
+      }
       if (!(event.target instanceof Element)) return;
       const binding = bindingForTarget(event.target);
       if (binding === null) return;
@@ -136,6 +142,12 @@ export class PointerGestureSource implements GestureSource {
 
     const onPointerMove = (event: PointerEvent): void => {
       if (pending === null || event.pointerId !== pending.pointerId) return;
+      // No button held: the press ended where the root could not see it (over a live page), before it
+      // travelled the threshold; the pointer is only hovering now.
+      if (event.buttons === 0) {
+        finish();
+        return;
+      }
       const point = pointOf(event);
       const delta = { x: point.x - pending.press.x, y: point.y - pending.press.y };
       if (!pending.isDragging) {
