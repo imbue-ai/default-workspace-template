@@ -15,7 +15,7 @@
  * until every tile is shown. The paging arithmetic and the search match are pure and tested.
  */
 
-import { matchesQuery } from "../models/search";
+import { matchesQuery } from "../model/search";
 
 export interface StartOption {
   /** Stable marker (``data-start``) and vnode key. */

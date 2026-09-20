@@ -74,6 +74,9 @@ describe("connectToShell", () => {
     expect(handlers.onHandshake).toHaveBeenCalledTimes(1);
     expect(handlers.onHandshake).toHaveBeenCalledWith({
       clientId: "client-1",
+      windowId: "",
+      desktopId: "",
+      path: "",
       deviceKind: "desktop",
       viewId: "everything",
       address: "app:chat?instance=agent-1",
@@ -93,15 +96,28 @@ describe("connectToShell", () => {
     expect(onHandshake).not.toHaveBeenCalled();
   });
 
-  it("reads the tabbed shell's fields as empty when a shell does not send them", () => {
+  it("reads the desktop shell's fields, and the tabbed shell's as empty when a shell does not send them", () => {
     const parent = framed();
     const onHandshake = vi.fn();
     connection = connectToShell({ onHandshake });
-    deliver({ type: SHELL_HANDSHAKE, clientId: "client-1", windowId: "win-1", desktopId: "home", path: "/" }, parent);
+    deliver(
+      {
+        type: SHELL_HANDSHAKE,
+        clientId: "client-1",
+        windowId: "win-1",
+        desktopId: "home",
+        path: "/?chat=agent-1",
+        viewId: "home",
+      },
+      parent,
+    );
     expect(onHandshake).toHaveBeenCalledWith({
       clientId: "client-1",
+      windowId: "win-1",
+      desktopId: "home",
+      path: "/?chat=agent-1",
       deviceKind: "",
-      viewId: "",
+      viewId: "home",
       address: "",
       tabId: "",
     });

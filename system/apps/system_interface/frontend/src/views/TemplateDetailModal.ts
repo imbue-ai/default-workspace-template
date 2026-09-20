@@ -10,8 +10,8 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { Modal, MODAL_TITLE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import type { CatalogTemplate } from "../models/TemplateCatalog";
-import { writeUpParagraphs } from "../models/TemplateCatalog";
+import type { CatalogTemplate } from "../model/TemplateCatalog";
+import { writeUpParagraphs } from "../model/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 
 const DETAIL_WIDTH_PX = 640;
