@@ -86,3 +86,34 @@ def test_store_refuses_a_document_of_another_version(
 
     with pytest.raises(TerminalStoreError, match="is version 2"):
         session_store.list_records()
+
+
+def test_store_refuses_a_file_that_is_not_json(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text("{not json")
+
+    with pytest.raises(TerminalStoreError, match="not valid JSON"):
+        session_store.list_records()
+
+
+def test_store_refuses_a_document_that_does_not_fit(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text('{"version": 1, "sessions": [{"title": "no name"}]}')
+
+    with pytest.raises(TerminalStoreError, match="is malformed"):
+        session_store.list_records()
+
+
+def test_save_record_writes_the_store_atomically_and_leaves_no_temp_file(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    record = make_terminal_record(name="terminal-1", title="Build", workdir="/srv")
+
+    session_store.save_record(record)
+
+    assert session_store.list_records() == [record]
+    assert [path.name for path in session_store.store_path.parent.iterdir()] == [session_store.store_path.name]
