@@ -81,8 +81,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 app: appByName(state, shortcut.target.app),
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,
-                // A finger has no double tap worth asking for: on touch a tap runs the shortcut.
-                onSelect: () => (state.modes.isTouch ? attrs.onRunShortcut(shortcut) : attrs.onSelectShortcut(key)),
+                isRunOnClick: state.modes.isTouch,
+                onSelect: () => attrs.onSelectShortcut(key),
                 onRun: () => attrs.onRunShortcut(shortcut),
                 onContextMenu: (x, y) => attrs.onShortcutContextMenu(shortcut, { x, y }),
               });

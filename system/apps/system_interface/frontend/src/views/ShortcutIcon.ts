@@ -26,6 +26,8 @@ export interface ShortcutIconAttrs {
   readonly isSelected: boolean;
   /** The icon is lifted by a drag: it draws faded in its cell while the ghost follows the pointer. */
   readonly isLifted: boolean;
+  /** A click runs the shortcut instead of selecting it (touch: a finger has no double tap worth asking for). */
+  readonly isRunOnClick: boolean;
   readonly onSelect: () => void;
   readonly onRun: () => void;
   readonly onContextMenu: (x: number, y: number) => void;
@@ -42,7 +44,8 @@ export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefi
 export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
   return {
     view(vnode) {
-      const { shortcut, cell, rect, app, isSelected, isLifted, onSelect, onRun, onContextMenu } = vnode.attrs;
+      const { shortcut, cell, rect, app, isSelected, isLifted, isRunOnClick, onSelect, onRun, onContextMenu } =
+        vnode.attrs;
       const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
       const label = shortcutLabel(shortcut, app);
       const isStopped = app !== undefined && !app.is_running;
@@ -66,10 +69,11 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             height: `${rect.height}px`,
           },
           ...hoverTooltipAttrs(isStopped ? `${label}: not running` : null),
-          onclick: onSelect,
+          onclick: isRunOnClick ? onRun : onSelect,
+          // A double tap's dblclick follows two clicks that already ran the shortcut.
           ondblclick: (event: MouseEvent) => {
             event.preventDefault();
-            onRun();
+            if (!isRunOnClick) onRun();
           },
           onkeydown: (event: KeyboardEvent) => {
             if (event.key === "Enter" || event.key === " ") {
