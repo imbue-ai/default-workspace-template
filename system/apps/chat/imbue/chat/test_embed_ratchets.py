@@ -37,7 +37,8 @@ _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
 # The test suites stand in windows and listeners to exercise the page against the boundaries;
 # ``root/relay.ts`` is the chat root's declared relay (desktop-interface contracts.md section
 # 7): it forwards the inner chat page's ``minds:`` messages and its ``shell:focused`` and
-# ``shell:open`` to the shell, and nothing else touches the primitives.
+# ``shell:open`` to the shell (a ``shell:open`` of the root's own path it answers itself, by
+# selecting that chat), and nothing else touches the primitives.
 _ALLOWED_FILES = ("*.test.ts", "root/relay.ts")
 
 _RETIRED_ADDRESS_RULE = RatchetRuleInfo(
