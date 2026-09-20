@@ -119,7 +119,6 @@ class E2EServer(FrozenModel):
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
-    second_url: str | None = Field(description="The second stub app's loopback URL, when offered")
 
 
 def _get_json(url: str) -> Any:
@@ -217,12 +216,7 @@ def _running_e2e_server(
                 # Started only once the apps are serving: the first instance fetch must find them answering.
                 state.shell.start()
                 try:
-                    yield E2EServer(
-                        base_url=base_url,
-                        state_dir=state_dir,
-                        stub_url=stub_url,
-                        second_url=second_url if is_second_app_offered else None,
-                    )
+                    yield E2EServer(base_url=base_url, state_dir=state_dir, stub_url=stub_url)
                 finally:
                     state.shell.stop()
             finally:
