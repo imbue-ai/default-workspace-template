@@ -4,7 +4,7 @@
  * Every reveal of a changed interface ends by broadcasting a
  * `reload_system_interface` layout op, through
  * `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
- * not just a rebuilt bundle. The dockview shell handles that op by calling
+ * not just a rebuilt bundle. The desktop store handles that op by calling
  * `reloadInterface()`, which reloads the top-level page so the browser picks up
  * the new hashed assets (and any change to the shell chrome itself),
  * transitively reloading every child chat iframe.

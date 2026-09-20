@@ -1,4 +1,4 @@
-"""Tests for the reactor that surfaces an app-launched chat's tab: once, to the clients connected when it can."""
+"""Tests for the reactor that surfaces an app-launched chat's window: once, to the clients connected when it can."""
 
 import json
 from pathlib import Path
@@ -10,12 +10,14 @@ from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import free_port
 from flask import Flask
 from flask import jsonify
+from flask import request
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
+from imbue.chat.auto_open import open_chat_op_body
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
 
@@ -182,6 +184,40 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     assert not ledger.is_delivered(ChatId("chat-1"))
     assert not ledger.is_history_known
     assert any("wrong shape" in record for record in loguru_records)
+
+
+def test_the_open_op_names_the_chat_app_and_the_root_path_for_the_chat() -> None:
+    """The desktop op route's ``open`` (desktop-interface contracts.md section 8): the app by name and a path, never
+    the tabbed shell's address form, which the desktop frontend no longer reads."""
+    assert open_chat_op_body(ChatId("agent-1"), "c1") == {
+        "op": "open",
+        "args": {"app": "chat", "path": "/?chat=agent-1", "client": "c1"},
+        "requester": None,
+    }
+
+
+def test_the_shell_client_posts_the_open_op_and_reads_the_shell_s_answer() -> None:
+    """A 2xx from the op route is an accepted open; a refusal (a 412 with no client, say) is not."""
+    posted: list[Any] = []
+    application = Flask("stub-shell")
+
+    def _broadcast() -> Any:
+        posted.append(request.get_json())
+        return (
+            (jsonify({"detail": "no client"}), 412)
+            if posted[-1]["args"]["client"] == "nobody"
+            else jsonify({"ok": True})
+        )
+
+    application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
+    port = free_port()
+
+    with serve_in_background(LOOPBACK_HOST, port, application):
+        client = ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}")
+        assert client.open_chat(ChatId("agent-1"), "c1") is True
+        assert client.open_chat(ChatId("agent-1"), "nobody") is False
+
+    assert posted == [open_chat_op_body(ChatId("agent-1"), "c1"), open_chat_op_body(ChatId("agent-1"), "nobody")]
 
 
 def test_the_disconnected_shell_reaches_nobody() -> None:

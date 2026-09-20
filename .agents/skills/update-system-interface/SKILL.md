@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the desktop: its windows, taskbar, and launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / desktop.
 metadata:
   author: imbue
 ---
@@ -8,7 +8,7 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
+(the desktop: its windows, taskbar, and launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -181,8 +181,9 @@ agent, not the motivating conversation -- so the real case isn't on screen by
 default. If a real conversation motivated the change:
 
 - Open the **motivating** conversation in the preview's inner app with Playwright
-  (`--no-sandbox`): use the tab bar's add-tab (`+`) dropdown and pick the real
-  agent (its `.dockview-add-tab-dropdown-item`), or otherwise navigate to it.
+  (`--no-sandbox`): type the chat's title into the taskbar's launcher field
+  (`[data-launcher-field] input`) and pick its row, or land on the preview with the
+  deep link `?open=chat:/?chat=<chat-id>`.
 - Look at it and **confirm the change actually fixed the real case**, comparing
   it against what looked wrong in the original complaint. A worker reporting
   `done` with passing tests is not proof the real case is fixed -- you have the

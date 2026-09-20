@@ -114,7 +114,7 @@ def _live_instance_record(
     name = record.name if record is not None else TmuxSessionName(session.name)
     return InstanceRecord(
         key=InstanceKey(name),
-        url=instance_url_for_session(name, record.workdir if record else None),
+        url=instance_url_for_session(name),
         title=record.title if record and record.title else derive_terminal_title(name),
         status=InstanceStatus.IDLE,
         lifetime=InstanceLifetime.EXPLICIT,
@@ -128,7 +128,7 @@ def _live_instance_record(
 def _stopped_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
     return InstanceRecord(
         key=InstanceKey(record.name),
-        url=instance_url_for_session(record.name, record.workdir),
+        url=instance_url_for_session(record.name),
         title=record.title if record.title else derive_terminal_title(record.name),
         status=InstanceStatus.STOPPED,
         lifetime=InstanceLifetime.EXPLICIT,
@@ -506,6 +506,11 @@ class TmuxSessionSource(InstanceSourceInterface):
         self.store.save_record(bound)
         self._write_session_id_file(bound)
         return bound
+
+    def remembered_record(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
+        """The store's record of the terminal named ``name``, or None for a session the store never saw."""
+        with self._lock:
+            return self._record_named(name)
 
     def _record_named(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
         return next(

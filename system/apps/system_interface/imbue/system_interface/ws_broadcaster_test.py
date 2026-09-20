@@ -304,18 +304,20 @@ def test_set_client_info_and_view_lookup() -> None:
     first_queue = broadcaster.register()
     broadcaster.register()
 
-    broadcaster.set_client_info(first_queue, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(first_queue, "client-1", "everything", "desktop", active_desktop="")
 
     assert broadcaster.connected_client_ids() == {"client-1"}
     infos = broadcaster.get_connected_client_infos()
-    assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
+    assert infos == [
+        {"client_id": "client-1", "active_view": "everything", "device_kind": "desktop", "active_desktop": ""}
+    ]
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:
     broadcaster = WebSocketBroadcaster()
     stray_queue: queue.Queue[str | None] = queue.Queue()
 
-    broadcaster.set_client_info(stray_queue, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(stray_queue, "client-1", "everything", "desktop", active_desktop="")
 
     assert broadcaster.get_connected_client_infos() == []
 
@@ -323,7 +325,7 @@ def test_set_client_info_ignores_unregistered_queue() -> None:
 def test_unregister_drops_client_info() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
 
     broadcaster.unregister(client_queue)
 
@@ -334,7 +336,7 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     broadcaster = WebSocketBroadcaster()
     desktop_queue = broadcaster.register()
     unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(desktop_queue, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(desktop_queue, "client-1", "everything", "desktop", active_desktop="")
 
     broadcaster.broadcast_layout_op("refresh", {"address": "app:files"}, "agent-1")
 
@@ -348,9 +350,9 @@ def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
     second_window = broadcaster.register()
     other_client = broadcaster.register()
     unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(first_window, "client-1", "everything", "desktop")
-    broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop")
-    broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile")
+    broadcaster.set_client_info(first_window, "client-1", "everything", "desktop", active_desktop="")
+    broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop", active_desktop="")
+    broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile", active_desktop="")
 
     broadcaster.broadcast_layout_op(
         "maximize", {"address": "app:files"}, "app:chat?instance=agent-1", target_client_id="client-1"
@@ -381,4 +383,26 @@ def test_layout_updated_and_active_view_changed_are_typed_events() -> None:
         "type": "active_view_changed",
         "client_id": "client-1",
         "view_id": "project-1",
+    }
+
+
+def test_desktops_placements_and_active_desktop_events_are_typed() -> None:
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+
+    broadcaster.broadcast_desktops_updated([{"id": "home"}])
+    broadcaster.broadcast_placements_updated("home", "client-1", "save-0123456789abcdef")
+    broadcaster.broadcast_active_desktop_changed("client-1", "home")
+
+    assert json.loads(_get_message(client_queue)) == {"type": "desktops_updated", "desktops": [{"id": "home"}]}
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "placements_updated",
+        "desktop_id": "home",
+        "client_id": "client-1",
+        "save_id": "save-0123456789abcdef",
+    }
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "active_desktop_changed",
+        "client_id": "client-1",
+        "desktop_id": "home",
     }

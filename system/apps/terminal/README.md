@@ -1,37 +1,38 @@
 # terminal
 
-The terminal tab: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-supervised as the `terminal` program, declared in
-`system/supervisord.conf.d/terminal.conf`, which runs the `terminal-app` entry
-point of this package (installed as its own uv tool by
-`system/scripts/build_workspace.sh`, like every Python app with a manifest).
+The terminal app: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
+run as two supervisord programs declared in `system/supervisord.conf.d/` and both
+installed as entry points of this package's uv tool (`system/scripts/build_workspace.sh`,
+like every Python app with a manifest):
 
-`terminal-app` prepares the workspace for ttyd, then runs it as the sidecar's
-child (`app_instances.sidecar.run_sidecar_app`):
-
-1. Writes the ttyd dispatch scripts into `data/.state/terminal/commands/`
-   (`dispatch.py`): `session.sh` attaches to a `terminal-N` tmux session by the
-   id and creation time recorded under `data/.state/terminal/sessions/<key>`
-   (falling back to `tmux new-session -A` by name, which creates the session
-   when tmux lost it, when there is no record, or when the session under that
-   id is a later server's)
-   and records the tab's pty under `commands/clients/<tab id>`; `workdir.sh`
-   opens a shell in a directory;
-   `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
-   terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
-   `commands/<key>.sh` with the remaining arguments.
-2. Decompresses the OSC 52-capable ttyd web client vendored with the
-   `mngr_ttyd` plugin (`system/vendor/mngr/libs/mngr_ttyd/`) and serves it via
-   `ttyd -I`, falling back to the stock client (with a warning) when the asset
-   is missing or will not decompress.
-3. Appends the `server_registered` discovery event to
-   `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`).
-4. Serves the instances API (`GET/POST /_instances`, ...) on `127.0.0.1:7682`,
-   the manifest's `instances_url`, registers `app.toml` and the ttyd port 7681
-   through `system/scripts/forward_port.py`, and runs
-   `ttyd -p 7681 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`
-   as its child, forwarding `SIGTERM` and `SIGINT` to it and exiting with its
-   status.
+- `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
+  on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
+  pty origin, reports its path and the session's title to the shell through the app
+  contract (imported from the shell origin), re-points the frame on `shell:navigate`,
+  and passes the shell's `ttyd-focus` grant on to ttyd; `/new[?workdir=]` allocates
+  the lowest free `terminal-N`, creates its tmux session, and redirects to its page;
+  `/api/sessions/<name>` is what the page refreshes from, and `/api/health` the probe.
+  It serves the instances API (`GET/POST /_instances`, ...) and the tmux hook route on
+  `127.0.0.1:7682`, the manifest's `instances_url`, appends the `server_registered`
+  discovery event to `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl`
+  (`discovery.py`), recreates the remembered sessions, registers `app.toml` and 7681
+  through `system/scripts/forward_port.py`, and waits for `SIGTERM`.
+- `terminal-pty` (`pty_main.py`) is ttyd itself, on its own internal origin
+  (`system/apps/terminal_pty/app.toml`, port 7683), framed by the wrapper. It writes
+  the ttyd dispatch scripts into `data/.state/terminal/commands/` (`dispatch.py`):
+  `session.sh` attaches to a `terminal-N` tmux session by the id and creation time
+  recorded under `data/.state/terminal/sessions/<key>` (falling back to `tmux
+  new-session -A` by name, which creates the session when tmux lost it, when there is
+  no record, or when the session under that id is a later server's) and records the
+  tab's pty under `commands/clients/<tab id>`; `workdir.sh` opens a shell in a
+  directory; `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
+  terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
+  `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
+  ttyd web client vendored with the `mngr_ttyd` plugin
+  (`system/vendor/mngr/libs/mngr_ttyd/`) and serves it via `ttyd -I`, falling back to
+  the stock client (with a warning) when the asset is missing or will not decompress,
+  registers its manifest and port, and execs
+  `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
 
 ## Instances
 
@@ -51,9 +52,10 @@ the record of its name when that record's own session is not live (a record
 that holds no id, or a session the dispatch created on attach; a session
 that only carries the old name of a terminal whose own session is live is
 skipped, whichever tmux lists first), and one with no record at all lists under
-its own name. The URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the
-shell substitutes the tab id, and `session.sh` receives it as its second
-argument. A terminal created through `new` always carries a workdir: the
+its own name. The URL is the wrapper page, `/?session=<key>&tab={tab}`; the shell
+substitutes the tab id, the wrapper passes it to ttyd as
+`/?arg=_&arg=session&arg=<key>&arg=<tab>[&arg=<workdir>]` on the pty origin, and
+`session.sh` receives it as its second argument. A terminal created through `new` always carries a workdir: the
 `workdir` param when the create gave one, else the directory the app runs from
 (the workspace root under supervisord); a record of a hand-made session holds
 none, and a session recreated for it starts in the default.
@@ -118,5 +120,5 @@ commands it read at start; see the `CLEANUP` note in `terminal_tmux.conf`).
 
 `uv run pytest system/apps/terminal` from the repo root. The unit tests drive
 the real source and tmux client over a fake `tmux` on `PATH`
-(`testing.py`); `test_terminal_app.py` runs `terminal-app` as a process around
-a fake `ttyd`.
+(`testing.py`); `test_terminal_app.py` runs `terminal-app` and `terminal-pty`
+as processes, the latter around a fake `ttyd`.

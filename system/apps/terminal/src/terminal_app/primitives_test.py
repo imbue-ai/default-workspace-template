@@ -9,6 +9,7 @@ from terminal_app.primitives import (
     Workdir,
     derive_terminal_title,
     instance_url_for_session,
+    pty_path_for_session,
 )
 
 
@@ -86,21 +87,19 @@ def test_derive_terminal_title_matches_the_frontends_derived_name_rule(
     assert derive_terminal_title(TmuxSessionName(name)) == expected
 
 
-def test_instance_url_carries_the_ttyd_arguments_with_the_tab_placeholder() -> None:
+def test_instance_url_is_the_wrapper_page_with_the_tab_placeholder() -> None:
+    assert instance_url_for_session(TmuxSessionName("terminal-2")) == "/?session=terminal-2&tab={tab}"
+
+
+def test_pty_path_carries_the_ttyd_arguments_in_dispatch_order() -> None:
     assert (
-        instance_url_for_session(TmuxSessionName("terminal-2"), None)
-        == "/?arg=_&arg=session&arg=terminal-2&arg={tab}"
+        pty_path_for_session(TmuxSessionName("terminal-2"), TerminalTabId("tab-0123"), None)
+        == "/?arg=_&arg=session&arg=terminal-2&arg=tab-0123"
     )
 
 
-def test_instance_url_appends_the_workdir_percent_encoded_as_the_last_argument() -> (
-    None
-):
-    url = instance_url_for_session(
-        TmuxSessionName("build"), Workdir("/home/user/my project")
-    )
-
+def test_pty_path_keeps_an_empty_tab_slot_before_the_workdir() -> None:
     assert (
-        url
-        == "/?arg=_&arg=session&arg=build&arg={tab}&arg=%2Fhome%2Fuser%2Fmy%20project"
+        pty_path_for_session(TmuxSessionName("build"), None, Workdir("/home/user/my project"))
+        == "/?arg=_&arg=session&arg=build&arg=&arg=%2Fhome%2Fuser%2Fmy%20project"
     )

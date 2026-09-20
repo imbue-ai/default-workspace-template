@@ -1121,5 +1121,36 @@ registerProcessor('pb', PB);`;
   boot();
 })();
 </script>
+<script type="module">
+  // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
+  // section 7), imported from the shell's origin: the label the daemon stamps into the page,
+  // prefixed onto this page's workspace coordinate the way system/libs/workspace_ui/src/origin.ts
+  // derives every app's origin. The window's path says WHICH browser this page shows and its
+  // title is that browser's name; what the browser itself is looking at stays inside the
+  // streamed pixels. A session switch is a whole new stream, so this page declares no
+  // navigation capability and the shell reloads the frame to move it.
+  const shellLabel = document.querySelector('meta[name="workspace-shell-label"]')?.getAttribute("content") ?? "";
+  const COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i;
+  function coordinate(host) {
+    const labels = host.split(".");
+    const index = labels.findIndex((label) => COORDINATE_LABEL.test(label));
+    return index < 0 ? host : labels.slice(index).join(".");
+  }
+  function browserTitle(name) {
+    const numbered = /^browser-([0-9]+)$/.exec(name);
+    return numbered === null ? name : `Browser ${numbered[1]}`;
+  }
+  const session = new URLSearchParams(location.search).get("session");
+  if (session) document.title = browserTitle(session);
+  if (window.parent !== window && shellLabel !== "") {
+    import(`${location.protocol}//${shellLabel}.${coordinate(location.host)}/_static/app_contract.js`)
+      .then(({ connectToShell }) => {
+        const connection = connectToShell({});
+        window.addEventListener("focus", () => connection.focused());
+        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+      })
+      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+  }
+</script>
 </body>
 </html>

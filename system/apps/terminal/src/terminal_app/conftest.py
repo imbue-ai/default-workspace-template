@@ -19,9 +19,13 @@ from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     ENV_FAKE_TMUX_DIR,
+    TEST_PTY_LABEL,
     TEST_SESSION_COMMAND,
+    TEST_SHELL_LABEL,
     FakeTmux,
+    build_pages_test_client,
     install_fake_tmux,
+    write_registry_labels,
 )
 from terminal_app.tmux import SubprocessTmux
 
@@ -93,3 +97,14 @@ def hook_client(
         )
     )
     return app.test_client()
+
+
+@pytest.fixture
+def pages_client(
+    session_source: TmuxSessionSource, recording_nudger: RecordingNudger, tmp_path: Path
+) -> FlaskClient:
+    """A test client over the wrapper pages, with both the shell and the pty registered."""
+    registry_path = write_registry_labels(
+        tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL, "terminal-pty": TEST_PTY_LABEL}
+    )
+    return build_pages_test_client(session_source, recording_nudger, registry_path)

@@ -212,3 +212,57 @@ def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch
         _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
         _record_client_message_activity(chat_id, framed)
         assert wait_until(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout_seconds=5.0)
+
+
+def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = tmp_path / "registry" / "apps.toml"
+    registry.parent.mkdir()
+    registry.write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n\n'
+        '[[apps]]\nname = "terminal-pty"\nurl = "http://localhost:7683"\nlabel = "terminal-pty-a1b2c3d4"\ninternal = true\n'
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path / "static", chat_id)
+
+    response = client.get(f"/{chat_id}")
+
+    assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="terminal-pty-a1b2c3d4">' in response.text
+
+
+def test_the_root_and_new_serve_the_chat_root_document(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+    (tmp_path / "root.html").write_text("<html><head></head><body>root</body></html>")
+
+    root = client.get("/?chat=" + chat_id)
+    new = client.get("/new?message=hello")
+
+    for response in (root, new):
+        assert response.status_code == 200
+        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "root</body>" in response.text
+        assert CHAT_ID_META_NAME not in response.text
+        assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="">' in response.text
+
+
+def test_the_root_without_a_bundle_is_the_not_built_placeholder(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, _agent_id())
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+
+
+def test_rename_route_maps_the_managers_refusals(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+
+    # A name with no usable characters is the manager's own refusal, answered as a bad request.
+    unusable = client.post(f"/api/chats/{chat_id}/rename", json={"title": "---"})
+    assert unusable.status_code == 400
+    assert "usable" in unusable.get_json()["detail"]
+    assert client.post(f"/api/chats/{chat_id}/rename", json={"title": ""}).status_code == 400
+    assert client.post(f"/api/chats/{_agent_id()}/rename", json={"title": "x"}).status_code == 404

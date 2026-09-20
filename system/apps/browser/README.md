@@ -36,7 +36,10 @@ background agent, which is its own chat -- or the human).
   browser still launching included), `error` once it crashed; `explicit`
   lifetime, not renameable. `new` creates through the same path as `POST
   /browsers` (409 with the reason while the fleet is full or Chromium is not
-  installed), delete is the same close as `DELETE /browsers/<name>`, and a
+  installed); `GET /new[?url=]`, the manifest's `new` launch path, is that same
+  create answered as a redirect to the new browser's page `/?session=<name>`
+  (an empty `url` opens the home page, like no `url` at all). Delete is the
+  same close as `DELETE /browsers/<name>`, and a
   location report with an absolute `http(s)` URL navigates the live browser's
   active tab (409 while an agent holds it, while it is launching, stopped, or
   crashed, or when Chromium refuses the navigation; a rooted path is 400) and checkpoints
@@ -73,7 +76,11 @@ background agent, which is its own chat -- or the human).
 - **Viewer** (`assets/index.html`): a viewer-only page (no in-tab chat). It shows
   the live browser and, when an agent is driving, a grey "Agent has control"
   overlay with a "Take control" button; the agent's trace lives in the agent's
-  output, not the tab.
+  output, not the tab. The daemon stamps the workspace shell's origin label into
+  the page (the `workspace-shell-label` meta tag), from which the viewer, when
+  framed, imports the shell's app contract module and reports `/?session=<name>`
+  and `Browser N` as its location; it declares no navigation capability, since a
+  session switch is a whole new stream, so the shell reloads the frame to move it.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium

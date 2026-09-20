@@ -12,14 +12,23 @@ from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
+from app_instances.primitives import InstanceKey
+from app_manifest.manifest import ShortcutMode
+from app_manifest.primitives import AppName
+from app_manifest.primitives import LaunchPathId
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import DEFAULT_SPLIT_RATIO
 from imbue.system_interface.shell.dockview_document import Direction
+from imbue.system_interface.shell.errors import LayoutOpError
+from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import address_for
 
 # The ops the endpoint dispatches on. Anything else is a 400.
 READ_OPS: Final[frozenset[str]] = frozenset({"inspect", "context"})
@@ -29,7 +38,28 @@ DOCUMENT_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "clos
 # Ops that change what is on screen without changing the saved document: they alone reach the
 # browser as a ``layout_op`` message.
 TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"maximize", "restore", "refresh", "reload_system_interface"})
-KNOWN_OPS: Final[frozenset[str]] = READ_OPS | {LOAD_OP} | DOCUMENT_OPS | TRANSIENT_OPS
+# The desktop interface's verbs (desktop contracts.md section 8), served on the same route beside the address
+# verbs above until the tabbed shell is deleted. ``open``, ``focus``, ``close``, ``load``, ``maximize``,
+# ``restore``, and ``refresh`` are spelled the same in both vocabularies and are told apart by their arguments
+# (``is_desktop_op``): the address verbs carry ``address`` or ``view``, the desktop verbs ``window``, ``app``, or
+# ``desktop``.
+# CLEANUP: fold the desktop tables into the plain op tables, and drop the shape dispatch, once the address verbs
+# leave the route (desktop-interface plan, phase 6).
+DESKTOP_READ_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
+DESKTOP_WINDOW_OPS: Final[frozenset[str]] = frozenset(
+    {"focus", "minimize", "restore", "maximize", "place", "close", "navigate"}
+)
+DESKTOP_SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
+    {"shortcuts", "shortcut_set", "shortcut_move", "shortcut_remove", "wallpaper"}
+)
+DESKTOP_DOCUMENT_OPS: Final[frozenset[str]] = frozenset({"open"}) | DESKTOP_WINDOW_OPS | DESKTOP_SHORTCUT_OPS
+# Ops that only the desktop vocabulary has: an op with one of these names is a desktop op whatever it carries.
+_DESKTOP_ONLY_OPS: Final[frozenset[str]] = (
+    DESKTOP_READ_OPS | DESKTOP_SHORTCUT_OPS | frozenset({"minimize", "place", "navigate"})
+)
+KNOWN_OPS: Final[frozenset[str]] = (
+    READ_OPS | {LOAD_OP} | DOCUMENT_OPS | TRANSIENT_OPS | DESKTOP_DOCUMENT_OPS | DESKTOP_READ_OPS
+)
 
 # Ops that name an instance or an app in ``args.address``.
 ADDRESSED_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move", "maximize", "refresh"})
@@ -65,6 +95,87 @@ def is_addressed_op(op: str) -> bool:
 @pure
 def is_creating_op(op: str) -> bool:
     return op in CREATING_OPS
+
+
+@pure
+def is_desktop_op(op: str, args_raw: Mapping[str, Any]) -> bool:
+    """Whether an op posted to the route is a desktop verb: by name for the verbs only that vocabulary has, and by
+    argument shape (``window``, ``app``, or ``desktop`` present; ``address`` and ``view`` absent) for the shared names."""
+    if op in _DESKTOP_ONLY_OPS:
+        return True
+    if "address" in args_raw or "view" in args_raw:
+        return False
+    if op == LOAD_OP:
+        return "desktop" in args_raw
+    if op == "open":
+        return "app" in args_raw
+    if op == "refresh":
+        return "window" in args_raw or "app" in args_raw
+    if op in DESKTOP_WINDOW_OPS:
+        return "window" in args_raw
+    return False
+
+
+class OpRequester(FrozenModel):
+    """Who posted an op: the app whose agent asked, and the marker (a chat id, an agent id) its window's path carries.
+
+    ``layout.py`` sends the address form (``app:<name>?instance=<key>``) today and the ``{app, marker}`` form of
+    desktop contracts.md section 8 later; both parse to this.
+    """
+
+    app: AppName = Field(description="The requesting app")
+    marker: str = Field(description="The requester's marker; empty for a bare app")
+
+
+@pure
+def parse_op_requester(raw: Any) -> OpRequester | None:
+    """The requester an op body carries: an address string, a ``{app, marker}`` object, or nothing (None or "").
+    Raises LayoutOpError (a 400) for anything else: dropping a malformed requester would silently cost the op its
+    attribution."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        return op_requester_of_address(Address(raw))
+    if isinstance(raw, dict) and isinstance(raw.get("app"), str):
+        raw_marker = raw.get("marker")
+        marker = "" if raw_marker is None else raw_marker
+        if not isinstance(marker, str):
+            raise LayoutOpError("``requester.marker`` must be a string")
+        return OpRequester(app=AppName(raw["app"]), marker=marker)
+    raise LayoutOpError("``requester`` must be an address or an object with ``app`` and ``marker``")
+
+
+@pure
+def op_requester_of_address(address: Address) -> OpRequester:
+    """The requester an address names: its app, with its instance key as the marker (empty for a bare app)."""
+    return OpRequester(app=address.app, marker=str(address.key) if address.key is not None else "")
+
+
+@pure
+def requester_address(requester: OpRequester) -> Address:
+    """The requester as the address verbs name it."""
+    return address_for(requester.app, InstanceKey(requester.marker) if requester.marker else None)
+
+
+class DesktopOpArguments(FrozenModel):
+    """The arguments of a desktop op, as desktop contracts.md section 8 spells them (the target keys stripped)."""
+
+    window: str = Field(default="", description="A window id, ``self``, or an app name")
+    app: str = Field(default="", description="The app an ``open`` or a whole-app ``refresh`` names")
+    path: str = Field(default="", description="The path an ``open`` or a ``navigate`` names")
+    launch: LaunchPathId | None = Field(
+        default=None,
+        description="The launch path an ``open`` runs (None for the app's default) or a shortcut op names",
+    )
+    params: dict[str, str] = Field(default_factory=dict, description="The launch path's query parameters")
+    if_present: IfPresent = Field(
+        default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
+    )
+    zone: str = Field(default="", description="``left``, ``right``, or ``maximized`` for ``place``")
+    frame: str = Field(default="", description="``x,y,width,height`` in fractions for ``place``")
+    mode: ShortcutMode = Field(default=ShortcutMode.FOCUS, description="A shortcut's mode for ``shortcut_set``")
+    cell: str = Field(default="", description="``column,row`` for ``shortcut_set`` and ``shortcut_move``")
+    wallpaper: Wallpaper | None = Field(default=None, description="The wallpaper reference for ``wallpaper``")
 
 
 class DocumentOpArguments(FrozenModel):

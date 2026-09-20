@@ -4,8 +4,10 @@ import pytest
 from loguru import logger
 
 from app_manifest.errors import RegistryReadError
+from app_manifest.primitives import AppName
 from app_manifest.registry import DEFAULT_APPS_FILE
 from app_manifest.registry import ENV_APPS_FILE
+from app_manifest.registry import read_origin_label
 from app_manifest.registry import read_registry
 from app_manifest.registry import registry_path
 
@@ -54,8 +56,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'instances_url = "http://127.0.0.1:8301"\n'
         "critical = false\n"
         'priority = "files"\n'
-        'default_shortcut = {action = "new", mode = "focus"}\n'
+        'default_shortcut = {action = "new", launch = "new", mode = "focus"}\n'
         'actions = [{id = "new", label = "New File Viewer", params = ["path"]}, {id = "recent", label = "Recent"}]\n'
+        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
     )
 
@@ -70,9 +73,17 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.action == "new"
+    assert row.default_shortcut.launch == "new"
     assert [(action.id, action.label, action.params) for action in row.actions] == [
         ("new", "New File Viewer", ("path",)),
         ("recent", "Recent", ()),
+    ]
+    assert [
+        (launch_path.id, launch_path.label, launch_path.path, launch_path.params)
+        for launch_path in row.launch_paths
+    ] == [
+        ("new", "New File Viewer", "/", ("path",)),
+        ("recent", "Recent", "/recent", ()),
     ]
     assert row.launcher_rank == 20
 
@@ -126,3 +137,32 @@ def test_registry_path_honours_the_environment_override(monkeypatch: pytest.Monk
 
     monkeypatch.setenv(ENV_APPS_FILE, "/elsewhere/apps.toml")
     assert registry_path() == Path("/elsewhere/apps.toml")
+
+
+def test_read_origin_label_answers_the_registered_apps_label_and_nothing_for_an_unregistered_one(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text(
+        '[[apps]]\nname = "web"\nurl = "http://localhost:5000"\nlabel = "web-a1b2c3d4"\n'
+        '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-e5f6"\n'
+    )
+
+    assert read_origin_label(registry, AppName("system_interface")) == "system_interface-e5f6"
+    assert read_origin_label(registry, AppName("web")) == "web-a1b2c3d4"
+    assert read_origin_label(registry, AppName("absent")) == ""
+
+
+def test_read_origin_label_of_an_unreadable_registry_is_empty_and_warns(tmp_path: Path) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text("[[apps]\nname = \n")
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        label = read_origin_label(registry, AppName("web"))
+    finally:
+        logger.remove(sink_id)
+
+    assert label == ""
+    assert len(captured) == 1
+    assert "web" in captured[0] and "not valid TOML" in captured[0]

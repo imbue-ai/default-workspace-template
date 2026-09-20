@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
 
 import { catalogTemplateRecord } from "../testing/records";
-import type { CatalogTemplate } from "../models/TemplateCatalog";
+import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 
 describe("TemplateArt", () => {

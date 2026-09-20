@@ -11,9 +11,14 @@ def _log(tmp_path: Path) -> ClientActivityLog:
     return ClientActivityLog(events_path=tmp_path / "events" / "client_activity" / "events.jsonl")
 
 
-def _connected(client_id: str, active_view: str, device_kind: str) -> dict[str, str]:
-    """A live registration as the broadcaster reports it."""
-    return {"client_id": client_id, "active_view": active_view, "device_kind": device_kind}
+def _connected(client_id: str, active_view: str, active_desktop: str, device_kind: str) -> dict[str, str]:
+    """A live registration as the broadcaster reports it (the view or the desktop "" for a shell without one)."""
+    return {
+        "client_id": client_id,
+        "active_view": active_view,
+        "active_desktop": active_desktop,
+        "device_kind": device_kind,
+    }
 
 
 def test_messages_are_appended_truncated_and_read_back_in_order(tmp_path: Path) -> None:
@@ -35,7 +40,7 @@ def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
         log.append_message("c1", "desktop", "alpha", "chat", "agent-1", f"m{index}")
     log.append_view_switch("c1", "desktop", "alpha", "everything")
     log.append_message("c2", "mobile", "beta", "chat", "agent-2", "hello")
-    summaries = summarize_client_activity(log.read_events(), [_connected("c2", "gamma", "mobile")])
+    summaries = summarize_client_activity(log.read_events(), [_connected("c2", "gamma", "", "mobile")])
     assert [summary["client_id"] for summary in summaries] == ["c2", "c1"]
     first, second = summaries[1], summaries[0]
     assert first["active_view"] == "everything"
@@ -49,10 +54,28 @@ def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
     assert second["active_view"] == "gamma"
 
 
+def test_the_summary_folds_desktop_switches_and_the_live_registration_settles_the_desktop(tmp_path: Path) -> None:
+    log = _log(tmp_path)
+    log.append_desktop_switch("c1", "home", "research")
+    log.append_desktop_switch("c2", "", "home")
+    log.append_view_switch("c3", "desktop", "alpha", "everything")
+    log.append_desktop_switch("c3", "", "home")
+    summaries = summarize_client_activity(
+        log.read_events(), [_connected("c2", "", "alpha", "desktop"), _connected("c3", "beta", "", "mobile")]
+    )
+    by_id = {summary["client_id"]: summary for summary in summaries}
+    # A logged switch settles a disconnected client's desktop and leaves its view alone.
+    assert by_id["c1"]["active_desktop"] == "research" and by_id["c1"]["active_view"] is None
+    # A live registration outranks the log for the desktop, and its empty view reads as none.
+    assert by_id["c2"]["active_desktop"] == "alpha" and by_id["c2"]["active_view"] is None
+    # A tabbed-shell registration names no desktop, whatever the log says.
+    assert by_id["c3"]["active_desktop"] is None and by_id["c3"]["active_view"] == "beta"
+
+
 def test_a_connected_client_with_no_activity_is_still_listed(tmp_path: Path) -> None:
     log = _log(tmp_path)
     log.append_message("c1", "desktop", "alpha", "chat", "agent-1", "hello")
-    summaries = summarize_client_activity(log.read_events(), [_connected("c9", "beta", "desktop")])
+    summaries = summarize_client_activity(log.read_events(), [_connected("c9", "beta", "", "desktop")])
     assert [summary["client_id"] for summary in summaries] == ["c1", "c9"]
     silent = summaries[1]
     assert silent["is_connected"] is True

@@ -1,10 +1,10 @@
 /**
- * "Start something": the ways INTO the product the New Tab page offers as tiles, each a title, a
+ * "Start something": the ways INTO the product the launcher offers as tiles, each a title, a
  * sentence, a glyph, and the first message of the chat it starts. Where "Open new" spins up an
  * empty object, these name an intent; the prompts are plain-language requests written so the
  * mind's own skills match on them, and name no skill.
  *
- * One tile is the exception: "Start from a template" has its answer further down the same page,
+ * One tile is the exception: "Start from a template" has its answer further down the same overlay,
  * so it scrolls there instead of opening anything (``prompt`` is null).
  *
  * Each tile has a hue from the Mind brand palette (the sheet the workspace accents come from).
@@ -15,7 +15,7 @@
  * until every tile is shown. The paging arithmetic and the search match are pure and tested.
  */
 
-import { matchesQuery } from "../models/search";
+import { matchesQuery } from "../model/search";
 
 export interface StartOption {
   /** Stable marker (``data-start``) and vnode key. */

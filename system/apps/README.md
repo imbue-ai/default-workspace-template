@@ -17,8 +17,13 @@ Built-in apps:
   accounts. Its frontend and the shell's are two builds of one npm workspace
   (`system/package.json`) sharing the `system/libs/workspace_ui` library.
 - `terminal/` - The terminal tab (ttyd over the web), including its named
-  persistent sessions; a Python package (`terminal-app`) that runs ttyd and
-  serves the instances API over the workspace's tmux sessions.
+  persistent sessions; a Python package with two entry points: `terminal-app`
+  serves the wrapper pages (each frames one session's ttyd page) and the
+  instances API over the workspace's tmux sessions, and `terminal-pty` runs
+  ttyd itself on its own internal origin.
+- `terminal_pty/` - Only the manifest of that ttyd origin (`terminal-pty`,
+  internal); the program that registers it is the `terminal-pty` entry point of
+  `terminal/`.
 - `files/` - The file viewer tab: the `files-app` package, the instances
   library's sidecar around dufs over `data/`.
 - `browser/` - The live browser tab: a fleet of Chromium browsers streamed to

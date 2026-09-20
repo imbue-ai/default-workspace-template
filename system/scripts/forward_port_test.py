@@ -611,6 +611,7 @@ launcher_rank = 20
 
 [default_shortcut]
 action = "new"
+launch = "new"
 mode = "focus"
 
 [[actions]]
@@ -621,6 +622,17 @@ params = [{name = "path", label = "Path", required = false}]
 [[actions]]
 id = "recent"
 label = "Recent files"
+
+[[launch_paths]]
+id = "new"
+label = "New File Viewer"
+path = "/"
+params = [{name = "path", label = "Path", required = false}]
+
+[[launch_paths]]
+id = "recent"
+label = "Recent files"
+path = "/recent"
 """
 
 
@@ -647,7 +659,9 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
-    assert row["default_shortcut"] == {"action": "new", "mode": "focus"}
+    assert row["default_shortcut"] == {"action": "new", "launch": "new", "mode": "focus"}
+    # Written in the order the contract spells the inline table (tomllib keeps file order).
+    assert list(row["default_shortcut"]) == ["action", "launch", "mode"]
     assert row["launcher_rank"] == 20
     # The row carries each action's param NAMES (the New Tab page reads them), and no ``params``
     # key at all for an action that declares none.
@@ -655,6 +669,51 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         {"id": "new", "label": "New File Viewer", "params": ["path"]},
         {"id": "recent", "label": "Recent files"},
     ]
+    assert row["launch_paths"] == [
+        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
+        {"id": "recent", "label": "Recent files", "path": "/recent"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected_error"),
+    [
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\n',
+            "every launch path needs a string 'id', 'label', and 'path'",
+            id="launch-path-without-a-path",
+        ),
+        pytest.param(
+            'launch_paths = "new"\n',
+            "launch_paths must be an array of tables",
+            id="launch-paths-not-an-array",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nparams = [{label = "Path"}]\n',
+            "every launch path param needs a string 'name'",
+            id="launch-path-param-without-a-name",
+        ),
+        pytest.param(
+            '[default_shortcut]\naction = "open"\nlaunch = 3\nmode = "focus"\n',
+            "default_shortcut.launch must be a string",
+            id="default-shortcut-launch-not-a-string",
+        ),
+    ],
+)
+def test_manifest_registration_refuses_a_malformed_launch_declaration(
+    tmp_path: Path, declaration: str, expected_error: str
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        f'name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\n\n{declaration}',
+    )
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not apps_file.exists()
 
 
 def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) -> None:
@@ -688,6 +747,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "instances_url",
         "default_shortcut",
         "actions",
+        "launch_paths",
         "launcher_rank",
     ):
         assert stale_key not in row, stale_key
@@ -923,10 +983,14 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
             "label": "web-abcd1234",
             "icon": awkward_icon,
             "internal": True,
-            "default_shortcut": {"action": "new", "mode": "focus"},
+            "default_shortcut": {"action": "new", "launch": "new", "mode": "focus"},
             "actions": [
                 {"id": "new", "label": 'Say "hi"', "params": ["message", "account_id"]},
                 {"id": "other", "label": "Other"},
+            ],
+            "launch_paths": [
+                {"id": "new", "label": 'Say "hi"', "path": "/new", "params": ["message", "account_id"]},
+                {"id": "other", "label": "Other", "path": "/other"},
             ],
             "launcher_rank": 10,
         },

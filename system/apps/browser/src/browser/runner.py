@@ -43,6 +43,7 @@ Flask+WS pattern in system/apps/system_interface. The service owns its origin, s
 the viewer's relative URLs need no prefix or root-path awareness anywhere.
 """
 
+import html
 import json
 import os
 import queue
@@ -52,11 +53,12 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from app_instances.blueprint import build_instances_blueprint
+from app_instances.blueprint import HTTP_FOUND, build_instances_blueprint
 from app_instances.errors import InvalidInstanceValueError
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
 from app_instances.primitives import AbsoluteHttpUrl
-from flask import Flask, Response, jsonify, request
+from app_manifest.registry import SHELL_APP_NAME, read_origin_label, registry_path
+from flask import Flask, Response, jsonify, redirect, request
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
@@ -65,11 +67,11 @@ from browser import mediastream, telemetry
 from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.instances import FleetInstanceSource
+from browser.instances import START_URL_PARAM, FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import APP_NAME
+from browser.primitives import APP_NAME, BrowserName, instance_url_for_browser
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -87,6 +89,12 @@ from browser.wsgi import make_threaded_server
 _PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+
+# The ``new`` launch path (system/apps/browser/app.toml), and the meta tag the viewer reads the
+# shell's origin label from to import the app contract module (desktop-interface contracts.md
+# section 7).
+NEW_PATH = "/new"
+SHELL_LABEL_META_NAME = "workspace-shell-label"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -234,7 +242,53 @@ def _body() -> dict[str, Any]:
 
 
 def index() -> Response:
-    return Response(_INDEX_HTML.read_text(), mimetype="text/html")
+    """The viewer page, with the shell's origin label stamped in so it can import the app contract module."""
+    shell_label = read_origin_label(registry_path(), SHELL_APP_NAME)
+    meta_tag = f'<meta name="{SHELL_LABEL_META_NAME}" content="{html.escape(shell_label, quote=True)}">'
+    response = Response(_INDEX_HTML.read_text().replace("</head>", f"{meta_tag}\n</head>", 1), mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Response":
+    """Register a new browser and return it at once (the Chromium launch runs in the background), or the refusal.
+
+    What ``POST /browsers`` and the ``new`` launch path share: 503 while Chromium is still
+    installing, 400 for a start page that is not an absolute http(s) URL or a name the fleet
+    cannot take, 409 for a duplicate name or a full fleet, 503 when the launch cannot be
+    registered. A missing or empty ``raw_url`` opens the home page.
+    """
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _error({"error": reason}, 503)
+    start_url: str | None = None
+    if raw_url:
+        try:
+            start_url = str(AbsoluteHttpUrl(raw_url))
+        except InvalidInstanceValueError as e:
+            return _error({"error": f"url: {e}"}, 400)
+    try:
+        # Returns fast: registers init + spawns the serialized launch on the loop.
+        return bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
+    except InvalidBrowserNameError as e:
+        return _error({"error": str(e)}, 400)
+    except (DuplicateBrowserNameError, FleetFullError) as e:
+        return _error({"error": str(e)}, 409)
+    except _STARTUP_ERRORS as e:
+        logger.error("failed to register browser: {}", e)
+        return _error({"error": f"Could not start browser: {e}"}, 503)
+
+
+def new_browser() -> Response:
+    """``GET /new[?url=]``, the ``new`` launch path: create a browser and redirect to its viewer page.
+
+    The same create as ``POST /browsers`` with no name, answered as a redirect so a window
+    opened at the launch path lands on the browser it made and reports that path as its own.
+    """
+    started = _start_browser(None, request.args.get(START_URL_PARAM))
+    if isinstance(started, Response):
+        return started
+    return redirect(str(instance_url_for_browser(BrowserName(started.browser_id))), code=HTTP_FOUND)
 
 
 def health() -> Response:
@@ -300,29 +354,12 @@ def create_browser() -> Response:
     Response ``{"name": <chosen-name>}``. Errors: 400 invalid name or url, 409 duplicate name or
     fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
     still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _error({"error": reason}, 503)
     body = _body()
-    name = body.get("name")
     raw_url = body.get("url")
-    start_url: str | None = None
-    if raw_url is not None:
-        try:
-            start_url = str(AbsoluteHttpUrl(str(raw_url)))
-        except InvalidInstanceValueError as e:
-            return _error({"error": f"url: {e}"}, 400)
-    try:
-        # Returns fast: registers init + spawns the serialized launch on the loop.
-        session = bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
-    except InvalidBrowserNameError as e:
-        return _error({"error": str(e)}, 400)
-    except (DuplicateBrowserNameError, FleetFullError) as e:
-        return _error({"error": str(e)}, 409)
-    except _STARTUP_ERRORS as e:
-        logger.error("failed to register browser: {}", e)
-        return _error({"error": f"Could not start browser: {e}"}, 503)
-    return jsonify({"name": session.browser_id})
+    started = _start_browser(body.get("name"), None if raw_url is None else str(raw_url))
+    if isinstance(started, Response):
+        return started
+    return jsonify({"name": started.browser_id})
 
 
 def close_browser(browser_id: str) -> Response:
@@ -766,6 +803,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["GET"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
     )

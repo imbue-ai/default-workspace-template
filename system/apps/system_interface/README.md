@@ -1,7 +1,7 @@
 # System Interface
 
 The workspace's shell: its window manager and app management. It serves one
-document (`/`, the dockview UI) that arranges tabs, keeps projects, and
+document (`/`, the desktop) that arranges windows, keeps desktops, and
 manages apps, and it knows every app only through the workspace app model: a
 manifest, a registry row, an instances API, and the browser-side contract.
 This package imports nothing from mngr or from any app, never runs the `mngr`
@@ -38,7 +38,7 @@ format. In brief:
 The `system-interface` tool (the shell's own uv tool environment, run by
 supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 
-- `/` and the SPA catch-all: the dockview UI, built into
+- `/` and the SPA catch-all: the desktop UI, built into
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
@@ -59,9 +59,57 @@ Its state lives under `data/.state/system_interface/`: `projects.json`,
 `clients.json`, the migration marker, and the client-activity event log
 (`events/client_activity/events.jsonl`, what `layout.py context` reads).
 
+### The desktop model, beside the tabbed one
+
+The shell has moved from a tabbed dock to a desktop (the spec is
+`docs/system/blueprint/desktop-interface/plan-desktop-interface.md`, with the
+exact shapes in `contracts.md` beside it). The frontend renders the desktop
+and reads only its routes and socket messages; the tabbed model's routes,
+stores, and state files are still served for the agent tooling until phase 6
+deletes them, so where the sections below speak of tabs, views, and projects,
+they describe that backend, not what the browser shows.
+
+- **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
+  sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
+  under its origin, and the title its page last reported; shared), and per
+  client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
+  backdrop, state, minimized; the order is the stack).
+- **State files**: `desktops.json`, `placements/<desktop>/<client>.json`, and
+  the client records, which now carry `active_desktop` beside the tabbed
+  shell's `active_view` (`clients.json` stays at version 1 until the old
+  fields go). A fresh workspace gets one desktop, `Home`, seeded from every
+  registered app's `default_shortcut` on the first read after the registry
+  has been read. Wallpapers are listed from `static/wallpapers/` (bundled)
+  and `data/.apps/system_interface/wallpapers/` (files).
+- **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
+  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
+  free cell, reading order, shortcut placement) as pure functions over the
+  records. The rules the frontend also applies pass the shared vectors in
+  `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
+- **Routes** (`shell/desktop_routes.py`): `/api/desktops...` (create,
+  settings, wallpaper, delete, shortcuts), `/api/desktops/<id>/windows...`
+  (open with `if_present`, close, location), `/api/placements/<desktop>`
+  (read, save with the same save-id and stamp rules as the layouts),
+  `/api/wallpapers` and `/wallpapers/<kind>/<name>`. `GET /api/inventory` and
+  `GET /api/clients` carry the desktop fields beside the old ones, and each
+  `app` object carries its `launch_paths`.
+- **The socket** adds `desktops_updated`, `placements_updated`, and
+  `active_desktop_changed`, and accepts a `client_state` report naming
+  `active_desktop` beside the old shape.
+- **The op route** speaks both vocabularies: an op carrying `address` or
+  `view` is a tabbed-shell op, one carrying `window`, `app`, or `desktop` (or
+  a verb only the desktop has: `desktops`, `list`, `minimize`, `place`,
+  `navigate`, `shortcuts`, `shortcut_set`, `shortcut_move`,
+  `shortcut_remove`, `wallpaper`) is a desktop op. The requester may be the
+  address form or `{app, marker}`; `self` names the requester's app's window
+  whose path carries the marker.
+
 The backend is the `imbue/system_interface/shell/` subpackage (inventory,
-relay, projects, layouts, clients, client activity, layout ops, the pure
-dockview document editor, routes, state); the package root holds the process
+relay, projects, layouts, desktops, placements, wallpapers, clients, client
+activity, layout ops, the pure dockview and desktop document editors, the
+tabbed and desktop routes with their shared route helpers, state); the
+package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
@@ -79,13 +127,11 @@ window) and on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`.
 
 Every verb an instance accepts goes through the **relay** to the app that owns
-it, so the tab menu and the rail row offer exactly what the record allows
-(`renameable`, `stoppable` read with the record's status; the app's
-`instances`, `program`, and `critical` flags), from one definition
-(`frontend/src/views/tabMenu.ts`). Stop and Start of the whole app act on its
-supervisord program and are refused for critical apps; a single-instance app
-offers them on its tab, every other app on the rail's per-app row menu
-(`frontend/src/views/Sidebar.ts`). A framed page reaches the shell only
+it, and the record says what it allows (`renameable`, `stoppable` read with the
+record's status; the app's `instances`, `program`, and `critical` flags). Stop
+and Start of the whole app act on its supervisord program and are refused for
+critical apps; the desktop offers them on the window menu
+(`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`);
 a page that reports the path it is showing gets it stored on its own record
 and reopens there.
@@ -168,7 +214,7 @@ that, tokens or not.
 
 ## Driving the workspace layout from an agent
 
-An agent inside the workspace rearranges the dockview through
+An agent inside the workspace rearranges the tabbed layout through
 `system/scripts/layout.py` (`list / inspect / where / context / views / load /
 open / focus / split / close / move / rename / delete / stop / start /
 maximize / restore / replace-url / refresh / shortcuts / shortcut set /

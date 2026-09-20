@@ -6,7 +6,7 @@
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
  * untrusted: every surface that draws an app goes through
- * `appIconMarkup`/`appIconMarkupByName` here, and nothing inlines a registry
+ * `appIconMarkup`/`appIconMarkupForApp` here, and nothing inlines a registry
  * string on its own.
  *
  * The gate is `sanitizeIconMarkup`, and it is deliberately the only one:
@@ -39,7 +39,7 @@
  */
 
 import DOMPurify from "dompurify";
-import { getApp } from "../../models/Inventory";
+import type { AppRecord } from "../../model/records";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -331,18 +331,18 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
 }
 
 /**
- * The same, for surfaces that hold an app name rather than the app row --
- * ones that address an app by the name in its address.
+ * The same, for surfaces that hold the app's record (or nothing, when the app a window or a
+ * shortcut names has since been deregistered): the record's icon, its monogram, or the caller's
+ * generic glyph when there is no app to draw.
  *
- * An unknown name (an app that has since been deregistered, an address from a
- * hand-edited layout) has no icon to draw and takes the fallback.
+ * An unknown app has no icon to draw and takes the fallback: there is no app to monogram, and
+ * inventing one would dress up a dead name as a real app.
  */
-export function appIconMarkupByName(appName: string | null, sizePx: number, fallbackMarkup: string): string {
-  if (appName === null) return fallbackMarkup;
-  const app = getApp(appName);
-  // A name the machine no longer registers keeps the caller's generic glyph:
-  // there is no app to monogram, and inventing one would dress up a dead name
-  // as a real app.
+export function appIconMarkupForApp(
+  app: Pick<AppRecord, "name" | "icon"> | undefined,
+  sizePx: number,
+  fallbackMarkup: string,
+): string {
   if (app === undefined) return fallbackMarkup;
   return appIconMarkup(app.icon, sizePx, fallbackMarkup, app.name);
 }

@@ -492,6 +492,9 @@ class ChatSnapshot(FrozenModel):
         description="The in-progress handoff, or None while the chat is not converging"
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
+    last_messaged_at: float | None = Field(
+        description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
 
 
 class ChatSegmentInfo(FrozenModel):
@@ -603,6 +606,18 @@ class CreateChatResponse(FrozenModel):
     chat_id: str = Field(description="The chat's id (its first agent's id, minted before the create)")
     name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
+
+
+class RenameChatRequest(FrozenModel):
+    """The body of ``POST /api/chats/<chat_id>/rename``: the name the user typed."""
+
+    title: str = Field(min_length=1, max_length=256, description="The chat's new display name")
+
+
+class RenameChatResponse(FrozenModel):
+    """Response from ``POST /api/chats/<chat_id>/rename``."""
+
+    status: str = Field(description="Always 'ok'")
 
 
 class DestroyAgentResponse(FrozenModel):

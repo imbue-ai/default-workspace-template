@@ -217,7 +217,9 @@ def test_inspect_and_context_round_trip_through_script_and_endpoint(
     assert json.loads(context.stdout) == []
 
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(
+        client_queue, "client-silent", "everything", "desktop", active_desktop=""
+    )
     try:
         connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
         assert connected.returncode == 0, f"stderr={connected.stderr!r}"
@@ -264,7 +266,7 @@ def test_open_of_a_bare_app_creates_the_instance_and_docks_it_in_the_clients_fil
     it in the one connected client's arrangement; the write is announced to that client's windows."""
     sandbox = _sandbox(tmp_path)
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
     try:
         result = _run_layout_script(
             ["open", _STUB_APP_NAME, "--view", "Everything", "--param", "path=/notes"], layout_server, sandbox
@@ -290,7 +292,7 @@ def test_open_and_close_of_an_instance_address_edit_the_clients_file(
     sandbox = _sandbox(tmp_path)
     _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
     try:
         open_result = _run_layout_script(["open", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
         assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
@@ -320,7 +322,7 @@ def test_retired_spellings_are_refused_before_they_reach_the_shell(
 ) -> None:
     """A retired ref fails at the script, naming the new form, and edits nobody's arrangement."""
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
     try:
         result = _run_layout_script(["open", spelling, "--view", "Everything"], layout_server, _sandbox(tmp_path))
         assert result.returncode != 0
@@ -334,7 +336,7 @@ def test_retired_spellings_are_refused_before_they_reach_the_shell(
 def test_a_url_needs_the_browser_app(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """``open https://...`` is the browser's ``new``, so with no browser registered it fails naming the browser."""
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
     try:
         result = _run_layout_script(
             ["open", "https://example.com/", "--view", "Everything"], layout_server, _sandbox(tmp_path)
@@ -348,7 +350,7 @@ def test_a_url_needs_the_browser_app(layout_server: PipelineHarness, tmp_path: P
 def test_unknown_app_is_refused_by_name(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """``open app:nowhere`` names the missing registration and edits nobody's arrangement."""
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
     try:
         result = _run_layout_script(["open", "app:nowhere", "--view", "Everything"], layout_server, _sandbox(tmp_path))
         assert result.returncode != 0
@@ -477,3 +479,62 @@ def test_script_runs_without_a_registry_file_for_read_ops(layout_server: Pipelin
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     views = json.loads(result.stdout)
     assert any(view["id"] == "everything" for view in views)
+
+
+def _post_op(
+    harness: PipelineHarness, op: str, args: dict[str, Any], requester: dict[str, str]
+) -> tuple[int, dict[str, Any]]:
+    """Post one desktop verb to the op route the way the desktop interface's ``layout.py`` will."""
+    body = json.dumps({"op": op, "args": args, "requester": requester}).encode()
+    request = urllib.request.Request(
+        f"{harness.base_url}/api/layout/broadcast",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def _get_json(harness: PipelineHarness, path: str) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{harness.base_url}{path}", timeout=10) as response:
+        return json.loads(response.read())
+
+
+def test_desktop_verbs_open_and_close_a_window_in_the_clients_layout_with_no_browser_connected(
+    layout_server: PipelineHarness,
+) -> None:
+    """The desktop vocabulary on the op route: ``open`` at the app's synthesized launch path lands a window on the
+    default desktop and a placement in the target client's file, and ``close`` takes both away, whether or not a
+    window is open; the writes are announced to that client."""
+    requester = {"app": _SEEDED_APP_NAME, "marker": _SEEDED_KEY}
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "", "desktop", active_desktop="home")
+    try:
+        status, listed = _post_op(layout_server, "desktops", {}, requester)
+        assert status == 200 and [desktop["id"] for desktop in listed["desktops"]] == ["home"]
+
+        status, opened = _post_op(layout_server, "open", {"app": _STUB_APP_NAME}, requester)
+        assert status == 200, opened
+        window_id = opened["window_id"]
+        (window,) = opened["desktop"]["windows"]
+        assert window["app"] == _STUB_APP_NAME and window["path"] == "/" and window["is_settling"] is True
+        assert [placement["window_id"] for placement in opened["layout"]["placements"]] == [window_id]
+        stored = _get_json(layout_server, "/api/placements/home?client=client-1")
+        assert [placement["window_id"] for placement in stored["placements"]] == [window_id]
+        assert [desktop["windows"][0]["id"] for desktop in _get_json(layout_server, "/api/desktops")["desktops"]] == [
+            window_id
+        ]
+
+        status, closed = _post_op(layout_server, "close", {"window": window_id}, requester)
+        assert status == 200 and closed["desktop"]["windows"] == [] and closed["layout"]["placements"] == []
+        types = [message["type"] for message in drain_messages(client_queue)]
+        assert "desktops_updated" in types and "placements_updated" in types
+
+        status, refused = _post_op(layout_server, "focus", {"window": window_id}, requester)
+        assert status == 404 and window_id in refused["detail"]
+    finally:
+        layout_server.broadcaster.unregister(client_queue)

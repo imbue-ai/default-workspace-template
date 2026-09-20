@@ -3,8 +3,8 @@
 The chat page is an app page: it reaches the shell only through the shared library's
 ``app_contract.ts`` and the minds chrome only through its ``embed.ts`` (whose messages the
 shell relays). Nothing in this frontend touches ``postMessage`` or registers a ``message``
-listener itself; any NEW file that does fails at once, so the whole message surface stays in
-the library's allowlisted files. Lives outside ``test_ratchets.py`` because that file must
+listener itself, except the chat root's relay for the frame it nests; any NEW file that does
+fails at once, so the whole message surface stays in the allowlisted files. Lives outside ``test_ratchets.py`` because that file must
 define the same test set across every project (enforced by ``test_meta_ratchets.py``).
 """
 
@@ -34,8 +34,12 @@ _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
     ),
 )
 
-# The test suites stand in windows and listeners to exercise the page against the boundaries.
-_ALLOWED_FILES = ("*.test.ts",)
+# The test suites stand in windows and listeners to exercise the page against the boundaries;
+# ``root/relay.ts`` is the chat root's declared relay (desktop-interface contracts.md section
+# 7): it forwards the inner chat page's ``minds:`` messages and its ``shell:focused`` and
+# ``shell:open`` to the shell (a ``shell:open`` of the root's own path it answers itself, by
+# selecting that chat), and nothing else touches the primitives.
+_ALLOWED_FILES = ("*.test.ts", "root/relay.ts")
 
 _RETIRED_ADDRESS_RULE = RatchetRuleInfo(
     rule_name="retired panel refs (chat:, terminal:, service:, url:, subagent:) in the chat frontend",

@@ -98,6 +98,9 @@ export interface ChatSnapshot {
   // Null while the chat is not converging on a new agent.
   handoff: HandoffState | null;
   active_agent: ActiveAgent;
+  // Epoch seconds of the chat's most recent message; null when it has never been messaged.
+  // The chat root's list orders on it.
+  last_messaged_at: number | null;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -358,6 +361,11 @@ export function getQueuedMessagesForChat(chatId: string): QueuedMessage[] {
 /** Whether the shoulder-tap is available for this chat, per the backend. */
 export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
+}
+
+/** Every chat the app has minted that is not an agent yet, for the root's list. */
+export function getProvisionalChats(): ProvisionalChat[] {
+  return provisionalChats;
 }
 
 /** The provisional record of ``chatId``, while the app lists it as one. */

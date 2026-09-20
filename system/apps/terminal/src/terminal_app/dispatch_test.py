@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from inline_snapshot import snapshot
+from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.dispatch import (
@@ -15,6 +16,7 @@ from terminal_app.dispatch import (
     render_dispatch_snippet,
     render_session_script,
     render_workdir_script,
+    warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import UnsafeDispatchPathError
 
@@ -160,6 +162,24 @@ def test_session_command_tags_the_login_shell_into_the_terminal_session_band() -
         "bash",
         "-l",
     ]
+
+
+def test_a_missing_tag_wrapper_is_warned_about_and_a_present_one_is_not(
+    tmp_path: Path,
+) -> None:
+    present = tmp_path / "oom_tag_service.py"
+    present.write_text("")
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        warn_if_oom_tag_script_is_missing(present)
+        assert captured == []
+        warn_if_oom_tag_script_is_missing(tmp_path / "absent.py")
+    finally:
+        logger.remove(sink_id)
+
+    assert len(captured) == 1
+    assert "absent.py" in captured[0] and "will not start a shell" in captured[0]
 
 
 def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(

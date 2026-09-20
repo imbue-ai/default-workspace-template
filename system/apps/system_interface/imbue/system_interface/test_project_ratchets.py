@@ -181,6 +181,67 @@ def test_the_chat_name_pattern_catches_the_name_in_an_address_and_not_in_prose(l
     assert (_CHAT_NAME_LITERAL.search(line) is not None) is is_named
 
 
+_PIXEL_METRIC_RULE = RatchetRuleInfo(
+    rule_name="literal pixel lengths in the desktop's views and reducers",
+    rule_description=(
+        "Every metric the desktop's behaviour needs (title bar and taskbar heights, cell sizes, the grid "
+        "inset, minimum window size, snap and drag thresholds, the touch target) is a token in "
+        "frontend/src/theme/default.css, read once into ThemeMetrics by theme/metrics.ts and handed to the "
+        "views and reducers by the store (desktop-interface plan section 6.6). A `px` length written in a "
+        "string in views/ or reducers/ (a Tailwind utility such as `h-[36px]`, an inline style, a class) is a "
+        "metric living in two places: reference the token (a `--desk-*` utility or the store's metrics) "
+        "instead. Only lengths spelled with `px` are checked; a bare number the code treats as pixels is not."
+    ),
+)
+
+# A pixel length inside a balanced string literal on a code line: a Tailwind utility (``h-[36px]``),
+# an inline style, a class. Comment lines and trailing comments do not count, and neither do the
+# container-query breakpoints (``@max-[620px]``), which are breakpoints rather than metrics and,
+# like the compact breakpoint, live in the code by design. The length is bounded by lookarounds
+# rather than ``\b`` so an underscore-joined arbitrary value (``shadow-[0_2px_8px_...]``) counts.
+_PIXEL_METRIC_PATTERN = RegexPattern(
+    r"""^(?![ \t]*(?://|\*|/\*)).*?(["'`])(?:(?!\1)[^\n])*?(?<!@max-\[)(?<!@min-\[)(?<![A-Za-z0-9.])\d+(?:\.\d+)?px(?![A-Za-z0-9])(?:(?!\1)[^\n])*\1""",
+    multiline=True,
+)
+
+_DESKTOP_METRIC_FREE_DIRECTORIES: Final[tuple[str, ...]] = ("views", "reducers")
+
+
+def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
+    chunks = [
+        chunk
+        for directory in _DESKTOP_METRIC_FREE_DIRECTORIES
+        for chunk in check_regex_ratchet(
+            _FRONTEND_SRC / directory, FileExtension(".ts"), _PIXEL_METRIC_PATTERN, ("*.test.ts",)
+        )
+    ]
+    assert len(chunks) <= snapshot(0), _PIXEL_METRIC_RULE.format_failure(tuple(chunks))
+
+
+@pytest.mark.parametrize(
+    ("line", "is_metric"),
+    [
+        ('class: "h-[36px] w-full",', True),
+        ("style: `top: 0px`,", True),
+        ('const TITLE_BAR = "36px";', True),
+        ('class: "@max-[620px]:w-1/2 h-9",', False),
+        ("// the bar is 36px tall", False),
+        (" * 24px would not be visible", False),
+        ("style: { left: `${rect.x}px` },", False),
+        ('class: "h-(--desk-title-bar-height)",', False),
+        ('const x = "a"; // 36px tall', False),
+        ('m("div", { class: "h-9" }), // pad 12px', False),
+        ('class: "it\'s 36px wide",', True),
+        ('class: "shadow-[0_2px_8px_rgb(0,0,0,0.2)]",', True),
+        ('class: "[text-shadow:var(--desk-shortcut-label-shadow)]",', False),
+    ],
+)
+def test_the_pixel_metric_pattern_catches_a_literal_and_not_a_breakpoint_or_a_comment(
+    line: str, is_metric: bool
+) -> None:
+    assert (_PIXEL_METRIC_PATTERN.compiled.search(line) is not None) is is_metric
+
+
 def test_the_shell_names_no_app() -> None:
     offenders = sorted(
         f"{source_file.relative_to(_PACKAGE.parent.parent)}:{line_number}"
