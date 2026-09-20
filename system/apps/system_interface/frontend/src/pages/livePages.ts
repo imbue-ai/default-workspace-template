@@ -55,6 +55,9 @@ export const PAGE_FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
 // Lets embedded apps (the browser fleet viewer) reach the user's clipboard.
 export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write";
+// The shell's WindowTitle rule (contracts.md section 1, ``shell/primitives.py``): a longer title is
+// refused with a 400, which would leave the whole report, path included, unstored.
+export const MAX_WINDOW_TITLE_LENGTH = 256;
 
 interface LivePage {
   readonly windowId: string;
@@ -358,7 +361,7 @@ export class LivePagesLayer implements PageDriver {
     const page = this.pageOfFrame(frame);
     const path = payload.path;
     if (page === undefined || typeof path !== "string" || path === "") return;
-    const title = typeof payload.title === "string" ? payload.title : "";
+    const title = typeof payload.title === "string" ? payload.title.trim().slice(0, MAX_WINDOW_TITLE_LENGTH) : "";
     // Remembered before the post, so this client's own report never navigates the page.
     page.lastReportedPath = path;
     if (title !== "") page.frame.title = title;
