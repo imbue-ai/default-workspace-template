@@ -4,8 +4,10 @@
 
 The workspace app model's contracts record the chat's `agent_events` health field and the observer's band; the chat, apps, and services READMEs describe the program.
 
+`forward_port.py --display-name <label>` gives a manifest-less row the label users read, instead of the raw service name the workspace falls back to. Like `--internal` and `--program`, every call is authoritative, so a re-registration that stops passing one leaves no stale label behind; a label the shell would reject on read (empty, or over 64 characters) is refused at registration, since such a row is skipped and the app disappears rather than showing a bad name.
+
 `system/test_app_manifests.py` checks that every critical built-in's `[preview]` table names the app's own console script, and pins the chat, shell, and terminal tables' shapes.
 
-The workspace app model's contracts describe the manifest's `[preview]` table and the built-ins' tables, the preview shell's 403 on the relay verbs and its meta tag, `is_preview` on the inventory document, and where an isolated instance's copies and scratch space live.
+The workspace app model's contracts describe `--display-name` and where a row's `display_name` comes from, the manifest's `[preview]` table and the built-ins' tables, the preview shell's 403 on the relay verbs and its meta tag, `is_preview` on the inventory document, and where an isolated instance's copies and scratch space live.
 
 `AGENTS.md` says `layout.py open` puts a tab on the user's screen the moment it returns, and that `update-app` reads the app's manifest first and takes its careful flow for a critical app; `docs/system/workspace-internals.md` names the careful flow in place of the removed `update-system-interface` skill; `system/scripts/agent_rewrite_bash_command.py`'s note names app previews. `docs/system/blueprint/critical-app-editing/test-plan.md` is the hand-run test plan for the branch: the automated suites to run, component checks for every script subcommand and app flag, and the end-to-end scenarios composed from them, with a coverage matrix, the findings of its first run in a staging workspace, and the fixes those findings led to.

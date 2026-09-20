@@ -18,7 +18,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from app_manifest.primitives import describe_app_name_problem
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.primitives import DisplayName, describe_app_name_problem
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
@@ -364,6 +365,61 @@ def test_program_cannot_be_combined_with_remove(tmp_path: Path) -> None:
     assert "cannot be combined with --remove" in result.stderr
 
 
+def test_display_name_is_stored_and_authoritative_on_every_call(tmp_path: Path) -> None:
+    """A manifest-less row reads as its raw service name unless a registration
+    gives it a display name. Like ``internal`` and ``program``, every call is
+    authoritative, so a re-registration that stops passing one cannot leave a
+    label from an earlier boot behind."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        [
+            "--name",
+            "chat-preview",
+            "--url",
+            "http://localhost:8000",
+            "--no-icon",
+            "--display-name",
+            "Chat (update-quieter)",
+        ],
+        apps_file,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["display_name"] == "Chat (update-quieter)"
+
+    result = _run(
+        ["--name", "chat-preview", "--url", "http://localhost:8001"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert "display_name" not in rows[0]
+
+
+@pytest.mark.parametrize("display_name", ["  ", "x" * 65])
+def test_a_display_name_the_registry_cannot_hold_is_refused(
+    tmp_path: Path, display_name: str
+) -> None:
+    """A row whose display name breaks the library's rule fails validation on
+    read and is skipped, which hides the app altogether. Catch it here, where
+    the caller can see it, instead."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        [
+            "--name",
+            "web",
+            "--url",
+            "http://localhost:8000",
+            "--no-icon",
+            "--display-name",
+            display_name,
+        ],
+        apps_file,
+    )
+    assert result.returncode != 0
+    assert "display_name must" in result.stderr
+    assert not apps_file.exists()
+
+
 def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     forward_port = _load_module("_forward_port_icon_cap", _SCRIPT)
@@ -536,6 +592,23 @@ def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
         is_script_accepted = forward_port.validate_service_name(name) is None
         is_library_accepted = describe_app_name_problem(name) is None
         assert is_script_accepted == is_library_accepted, name
+
+
+def test_app_manifest_display_name_rule_is_identical_to_the_registration_rule() -> None:
+    """Drift guard, as for names: the library validates display names on read
+    with its own copy of this script's rule, and a row it rejects is skipped
+    rather than shown. The two must accept and reject exactly the same values."""
+    forward_port = _load_module("_forward_port_display_name_drift_check", _SCRIPT)
+    values = ("Chat", "Chat (update-quieter)", " ", "", "  x  ", "x" * 64, "x" * 65)
+    for value in values:
+        is_script_accepted = forward_port.validate_display_name(value) is None
+        try:
+            DisplayName(value)
+        except InvalidManifestValueError:
+            is_library_accepted = False
+        else:
+            is_library_accepted = True
+        assert is_script_accepted == is_library_accepted, value
 
 
 def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
