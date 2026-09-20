@@ -94,6 +94,13 @@ def test_a_secret_request_call_is_recognised_from_its_input_and_renders_as_the_c
     assert classify_tool_call_display(is_pure_tk=False, raw_input=_SECRET_REQUEST_CALL) is DisplayKind.SECRET_REQUEST
     # A mention that is not the script (another file with a longer name) is not a request.
     assert not is_secret_request_call("cat request_secret.pyc")
+    # Naming the script without running it (a Read of its path, a grep for its name) files
+    # nothing, so no card: the script's own --file is what marks a filing.
+    assert not is_secret_request_call(
+        '{"file_path":".agents/skills/connect-external-service/scripts/request_secret.py"}'
+    )
+    assert not is_secret_request_call('{"pattern":"request_secret.py","path":".agents"}')
+    assert is_secret_request_call('{"command":"python3 scripts/request_secret.py \\\n--file svc --var SVC_TOKEN"}')
     assert classify_tool_call_display(is_pure_tk=False, raw_input="ls data/.secrets") is None
 
 

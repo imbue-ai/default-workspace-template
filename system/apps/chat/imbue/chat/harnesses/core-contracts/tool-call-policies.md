@@ -129,6 +129,11 @@ pi's `read`/`edit`/`write`/`grep`/`find`, and a codex `apply_patch` whose file l
 the directory. Unlike the other blockers, this one therefore polices every tool call, not only
 shell calls. The checker never prints the command or a path back, since either may carry a value.
 
+What it guarantees is narrower than "the value never leaves the file": the checker judges the
+text of a tool call, so it catches the ordinary reads and cannot see what a program run under
+the wrapper does with its environment, nor a path spelled so that the prefilter misses it. It
+is a backstop against a slip; the skill's own rule carries the rest.
+
 ### P9. A secret request must be the only thing in its tool call
 `agent_latchkey_request_standalone.sh` -> `agent_latchkey_request_check.py` -- **hard block.**
 

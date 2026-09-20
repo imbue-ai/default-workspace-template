@@ -40,9 +40,11 @@ whole table when an earlier row is plainly workable.
   chat app writes `data/.secrets/<name>.env`. You never see the value; you name
   the file and the variables. A program reads the file only through
   `python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>`,
-  which puts the variables in that process's environment. A guard refuses every
-  other read (`cat`, `source`, `Read`, ...). To rotate a value, request it again;
-  to remove one, `rm` the file.
+  which puts the variables in that process's environment. A guard refuses the
+  other reads it can recognise (`cat`, `source`, `Read`, ...) so a slip does not
+  reach the transcript; it is a backstop, not a boundary, and a program you run
+  under the wrapper prints what you tell it to, so never run one that echoes its
+  environment. To rotate a value, request it again; to remove one, `rm` the file.
 - **A secret request stands alone in its tool call**, output untouched, and you
   end the turn after it prints: the chat builds the card from the echoed JSON
   and the answer arrives as a message (`Secret stored: ...` or `Secret declined:

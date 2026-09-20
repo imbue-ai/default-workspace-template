@@ -63,10 +63,13 @@ from imbue.imbue_common.frozen_model import FrozenModel
 PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 _PERMISSION_REQUEST_POST_RE = re.compile(r"-X\s*POST|--request\s*POST", re.IGNORECASE)
 
-# The connect-external-service skill's request script, matched by basename: the input is
-# the whole command, so the skill's path and a `python3` or `uv run` prefix both match.
+# The connect-external-service skill's request script, matched by basename as a whole
+# shell word (the input is the whole command, so the skill's path and a `python3` or
+# `uv run` prefix both match), with the script's required `--file` after it: a `Read`
+# or `Grep` of the script names it too but files nothing.
 SECRET_REQUEST_SCRIPT = "request_secret.py"
-_SECRET_REQUEST_SCRIPT_RE = re.compile(r"request_secret\.py(?![\w.])")
+_SECRET_REQUEST_SCRIPT_RE = re.compile(r"(?:^|[\s\"'/])request_secret\.py(?=$|[\s\"'\\])")
+_SECRET_REQUEST_FILE_FLAG_RE = re.compile(r"\s--file(?:=|\s)")
 
 _TK_OUTPUT_DECORATION_PATTERN = re.compile(
     r"Updated \S+ -> (?:open|in_progress|closed)|tk-step \S+ (?:title|summary): .*"
@@ -150,8 +153,10 @@ def is_permission_request_call(raw_input: str) -> bool:
 def is_secret_request_call(raw_input: str) -> bool:
     """True when a tool call runs the secret request script. Detected from the tool INPUT
     alone, for the same reason as a permission request: the card must show while the
-    request is pending."""
-    return _SECRET_REQUEST_SCRIPT_RE.search(raw_input) is not None
+    request is pending. The script is a whole word followed by its ``--file``, the same
+    "an argument, not a mention" test the P9 checker applies."""
+    script = _SECRET_REQUEST_SCRIPT_RE.search(raw_input)
+    return script is not None and _SECRET_REQUEST_FILE_FLAG_RE.search(raw_input, script.end()) is not None
 
 
 def classify_tool_call_display(*, is_pure_tk: bool, raw_input: str) -> DisplayKind | None:

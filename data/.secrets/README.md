@@ -28,3 +28,9 @@ a PreToolUse guard (`system/scripts/agent_secrets_guard.sh`) refuses `cat`,
 names the directory, because a value that lands in a tool call lands in the
 transcript. `ls data/.secrets` and `rm data/.secrets/<name>.env` are allowed. To
 rotate a value, request it again; the card merges the new value into the file.
+
+The guard is a backstop against a slip, not a boundary: it judges the text of a
+tool call, so it cannot see what a program run under the wrapper does with its
+environment, and a command that reaches the file by a path the checker does not
+recognise passes. The rule that the value stays out of the transcript is the
+agent's to keep; the guard catches the ordinary ways of breaking it.

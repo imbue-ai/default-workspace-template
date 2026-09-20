@@ -29,7 +29,7 @@ _CHAT = "agent-00000000000000000000000000000001"
 def _store(tmp_path: Path) -> SecretRequestStore:
     workspace = tmp_path / "workspace"
     return SecretRequestStore(
-        requests_directory=workspace / "data" / ".state" / "secret-requests",
+        requests_directory=workspace / "data" / ".apps" / "chat" / "secret-requests",
         secrets_directory=workspace / "data" / ".secrets",
     )
 
@@ -155,7 +155,7 @@ def test_the_value_appears_nowhere_but_the_env_file(tmp_path: Path, loguru_recor
     value = "hunter2-" + "z" * 24
     store.submit(filed.request.request_id, {"A": value})
     record = (
-        tmp_path / "workspace" / "data" / ".state" / "secret-requests" / f"{filed.request.request_id}.json"
+        tmp_path / "workspace" / "data" / ".apps" / "chat" / "secret-requests" / f"{filed.request.request_id}.json"
     ).read_text()
     assert value not in record
     assert all(value not in line for line in loguru_records)
