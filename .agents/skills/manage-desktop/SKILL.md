@@ -177,9 +177,9 @@ the app's own to name, stop, or end:
 
 | Goal | Where it lives |
 |---|---|
-| Retitle a chat / a terminal | the app's own route: `POST <chat url>/api/chats/<id>/rename`; the terminal's rename route |
+| Retitle a chat / a terminal | the chat's own route: `POST <chat url>/api/chats/<id>/rename`; the terminal offers no rename route yet |
 | Stop or start what backs a page | the app's own route (the chat's stop route; the browser's `POST /browsers/<name>/stop` and `.../start`) |
-| End a chat, a terminal, a browser | the app's own route (the chat's destroy route, the terminal's delete route, the browser's `DELETE /browsers/<name>`); `close` only closes the window |
+| End a chat, a terminal, a browser | the app's own route (the chat's destroy route, the browser's `DELETE /browsers/<name>`); the terminal offers no delete route yet, so end its tmux session from a shell; `close` only closes the window |
 | Open another chat | the chat root page (`open chat`), or `open chat --path "/?chat=<id>"` |
 
 `layout.py` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
