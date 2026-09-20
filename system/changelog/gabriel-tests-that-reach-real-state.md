@@ -5,3 +5,5 @@ Pytest's temp tree now moves to a filesystem that can execute what tests write t
 The lead-address test no longer depends on which providers the host has enabled. It resolves a name that should be gone, but a name that resolves nowhere reports the first provider that could not be reached rather than "not found" -- and the docker provider is on by built-in default with no daemon to reach inside a workspace container. It creates a local agent, so it now takes part in no other provider.
 
 The agy shim's OOM-tag test is skipped off Linux. It asserts the tag the shim applies by reading `/proc/self/oom_score_adj`, and both the tag and the file are Linux kernel interfaces, so on macOS it was failing for the absence of the mechanism rather than for its behavior.
+
+The strict-mode bash ratchet now reads the committed tree rather than walking the filesystem. It scanned every `.sh` file on disk, and in a live workspace that includes the shell scripts the terminal app generates under `data/` -- machine state, not template code, whose style is not this ratchet's business. It asks git for tracked scripts, the way the prose ratchets beside it already do.

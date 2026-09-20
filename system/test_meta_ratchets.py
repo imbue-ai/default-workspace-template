@@ -1,6 +1,5 @@
 import ast
 import io
-import os
 import re
 import subprocess
 import tokenize
@@ -129,28 +128,32 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
-    """Find bash scripts missing 'set -euo pipefail', excluding vendored and venv code.
+    """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
 
-    Walks with os.walk and prunes excluded directories in place (the vendored
-    tree, .git, virtualenvs, node_modules) rather than rglob-ing the whole
-    tree: the vendored mngr checkout alone carries a ~30k-file .venv that a
-    full recursive glob would traverse on every run.
+    Only git-tracked files count, for the same reason :func:`_live_prose_files`
+    asks git: in a live workspace ``data/`` accumulates generated machine state,
+    and the terminal app writes shell scripts into it. Those are not the
+    template's code and their style is not this ratchet's business, but a
+    filesystem walk cannot tell them from a committed script -- so this failed
+    inside a workspace and passed in CI, where ``data/`` is empty. Asking git
+    also drops the trees the walk had to prune by name (virtualenvs,
+    node_modules, git internals), all of which are gitignored.
     """
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "*.sh"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     violations: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
-        current_dir = Path(dirpath)
-        dirnames[:] = [
-            d
-            for d in dirnames
-            if d not in _PRUNED_DIR_NAMES and current_dir / d != _VENDORED_DIR
-        ]
-        for filename in filenames:
-            if not filename.endswith(".sh"):
-                continue
-            script = current_dir / filename
-            content = script.read_text(errors="replace")
-            if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
-                violations.append(str(script.relative_to(_REPO_ROOT)))
+    for rel in tracked.stdout.splitlines():
+        script = _REPO_ROOT / rel
+        if _VENDORED_DIR in script.parents or not script.is_file():
+            continue
+        content = script.read_text(errors="replace")
+        if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
+            violations.append(rel)
     return sorted(violations)
 
 
