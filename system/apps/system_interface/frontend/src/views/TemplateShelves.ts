@@ -11,7 +11,7 @@
  */
 
 import m from "mithril";
-import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
+import type { CatalogTemplate, ResolvedShelf } from "../model/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 import { HOVER_LIFT_GROUP } from "./hoverLift";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -19,14 +19,16 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 const CARD_FALLBACK_GLYPH_SIZE = 20;
 const RAIL_ARROW_GLYPH_SIZE = 20;
 
-// A card is sized so the rail shows exactly three and a half: with three 24px gaps before the
-// half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
+// A card is sized so the rail shows exactly three and a half: with three gap-6 gaps before the
+// half one, 3.5w + 3 gaps is the rail's width. The sliced card is what says the rail scrolls.
 //
 // Then two and a half, then one and a half as the pane narrows, each too thin to read a title in
 // by the step below it. The subtrahend tracks both the gap count and the gap itself, which
-// tightens to 16px at the same step. Container queries, like the rest of the page.
+// tightens to gap-4 at the same step. Container queries, like the rest of the page; the gaps are
+// spelled off the spacing scale so no pixel value lives here.
 const CARD_WIDTH_CLASS =
-  "w-[calc((100%-72px)/3.5)] @max-[620px]:w-[calc((100%-32px)/2.5)] @max-[440px]:w-[calc((100%-16px)/1.5)]";
+  "w-[calc((100%-var(--spacing)*18)/3.5)] @max-[620px]:w-[calc((100%-var(--spacing)*8)/2.5)] " +
+  "@max-[440px]:w-[calc((100%-var(--spacing)*4)/1.5)]";
 
 // The three layers a rail row stacks, innermost first: the cards (no z-index of their own, though
 // a hovered one's scale still promotes it), the edge fade over them, and the paging arrows over
@@ -237,7 +239,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
     return m("div", {
       class:
         `new-tab-template-rail-fade-${isEnd ? "end" : "start"} ${RAIL_FADE_LAYER} pointer-events-none ` +
-        `absolute inset-y-0 w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
+        `absolute inset-y-0 w-7.5 transition-opacity duration-(--dur-slow) ease-[ease] ` +
         (isEnd ? "right-5" : "left-5"),
       // Written as a style rather than an opacity-* utility on purpose: the utilities did not take
       // on this element (the class landed but the computed opacity stayed 0), and an inline style

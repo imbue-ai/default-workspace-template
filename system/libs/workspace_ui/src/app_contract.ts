@@ -38,11 +38,18 @@ export const SHELL_OPEN = "shell:open";
 
 /**
  * What the shell says about the frame it created. The client id is the one field every shell
- * sends; the rest are the tabbed shell's (device kind, view, address, tab), which the desktop
- * shell does not send, so a page reads them as "" there.
+ * sends. The desktop shell sends the window, its desktop, and the path the window is at
+ * (desktop-interface contracts.md section 7); the tabbed shell sent a device kind, a view, an
+ * address, and a tab. Whichever fields a shell does not send, a page reads as "".
  */
 export interface ShellHandshake {
   clientId: string;
+  windowId: string;
+  desktopId: string;
+  path: string;
+  // CLEANUP: drop ``deviceKind``, ``address``, and ``tabId`` once the tabbed shell is deleted
+  // (desktop-interface plan, phase 6); ``viewId`` stays until the chat's client-activity report
+  // names a desktop, since the desktop shell sends the desktop id under it too.
   deviceKind: string;
   viewId: string;
   address: string;
@@ -95,10 +102,13 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, deviceKind, viewId, address, tabId } = data;
+  const { clientId, windowId, desktopId, path, deviceKind, viewId, address, tabId } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
+    windowId: optionalString(windowId),
+    desktopId: optionalString(desktopId),
+    path: optionalString(path),
     deviceKind: optionalString(deviceKind),
     viewId: optionalString(viewId),
     address: optionalString(address),

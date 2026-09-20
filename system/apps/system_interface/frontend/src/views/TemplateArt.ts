@@ -6,7 +6,7 @@
  */
 
 import m from "mithril";
-import type { CatalogTemplate } from "../models/TemplateCatalog";
+import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 export interface TemplateArtAttrs {
