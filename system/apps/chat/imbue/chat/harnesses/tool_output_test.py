@@ -6,6 +6,8 @@ between them. The resident error snippet is shared the same way, so its rule (an
 hook-block exception to it) is tested here too.
 """
 
+import json
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
@@ -111,7 +113,7 @@ def test_the_two_echoed_shapes_are_told_apart_and_stamped_side_by_side() -> None
     assert find_permission_request(_SECRET_ECHO) is None
     event: dict[str, object] = {}
     stamp_echoed_requests(event, _SECRET_ECHO)
-    assert event == {"secret_request": {**__import__("json").loads(_SECRET_ECHO)}}
+    assert event == {"secret_request": json.loads(_SECRET_ECHO)}
     other: dict[str, object] = {}
     stamp_echoed_requests(other, _PERMISSION_ECHO)
     assert set(other) == {"permission_request"}
