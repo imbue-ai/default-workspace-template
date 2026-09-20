@@ -66,41 +66,43 @@ def test_broadcast_apps_updated() -> None:
     assert msg["apps"] == apps
 
 
-def test_broadcast_layout_op_open() -> None:
+def test_broadcast_layout_op_refresh_of_a_window() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op("open", {"ref": "service:web"}, requester="app:chat?instance=agent-1")
+    broadcaster.broadcast_layout_op("refresh", {"window": "win-0000000000000001"}, requester="chat:agent-1")
 
     msg = json.loads(_get_message(q))
     assert msg == {
         "type": "layout_op",
-        "op": "open",
-        "args": {"ref": "service:web"},
-        "requester": "app:chat?instance=agent-1",
+        "op": "refresh",
+        "args": {"window": "win-0000000000000001"},
+        "requester": "chat:agent-1",
         "target_client_id": None,
     }
 
 
 def test_broadcast_layout_op_passes_args_through_unchanged() -> None:
-    """Each op gets a distinct ``args`` payload; the broadcaster should not interpret it."""
+    """Each op gets its own ``args`` payload; the broadcaster should not interpret it."""
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    payload = {
-        "ref": "service:web",
-        "relative_to": "chat:alice",
-        "direction": "right",
-        "ratio": 0.5,
-    }
-    broadcaster.broadcast_layout_op("split", payload, requester="app:chat?instance=agent-2")
+    payload = {"app": "files"}
+    broadcaster.broadcast_layout_op("refresh", payload, requester="chat:agent-2")
+    broadcaster.broadcast_layout_op("reload_system_interface", {}, requester="chat")
 
-    msg = json.loads(_get_message(q))
-    assert msg == {
+    assert json.loads(_get_message(q)) == {
         "type": "layout_op",
-        "op": "split",
+        "op": "refresh",
         "args": payload,
-        "requester": "app:chat?instance=agent-2",
+        "requester": "chat:agent-2",
+        "target_client_id": None,
+    }
+    assert json.loads(_get_message(q)) == {
+        "type": "layout_op",
+        "op": "reload_system_interface",
+        "args": {},
+        "requester": "chat",
         "target_client_id": None,
     }
 
@@ -110,7 +112,7 @@ def test_broadcast_layout_op_defaults_the_requester_to_an_empty_string() -> None
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op("restore", {})
+    broadcaster.broadcast_layout_op("refresh", {"app": "files"})
 
     msg = json.loads(_get_message(q))
     assert msg["requester"] == ""
@@ -315,7 +317,7 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     unregistered_queue = broadcaster.register()
     broadcaster.set_client_info(desktop_queue, "client-1", "home")
 
-    broadcaster.broadcast_layout_op("refresh", {"address": "app:files"}, "agent-1")
+    broadcaster.broadcast_layout_op("refresh", {"app": "files"}, "chat:agent-1")
 
     assert json.loads(_get_message(desktop_queue))["op"] == "refresh"
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
@@ -332,12 +334,12 @@ def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
     broadcaster.set_client_info(other_client, "client-2", "home")
 
     broadcaster.broadcast_layout_op(
-        "maximize", {"address": "app:files"}, "app:chat?instance=agent-1", target_client_id="client-1"
+        "refresh", {"window": "win-0000000000000001"}, "chat:agent-1", target_client_id="client-1"
     )
 
     for window in (first_window, second_window):
         message = json.loads(_get_message(window))
-        assert message["op"] == "maximize" and message["target_client_id"] == "client-1"
+        assert message["op"] == "refresh" and message["target_client_id"] == "client-1"
     assert other_client.empty()
     # A window that never registered its client is not targeted either.
     assert unregistered_queue.empty()
