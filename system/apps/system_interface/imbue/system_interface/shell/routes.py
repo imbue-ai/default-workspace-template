@@ -12,12 +12,12 @@ from loguru import logger
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import summarize_client_activity
-from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
+from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -165,9 +165,15 @@ def start_app(name: str) -> ResponseReturnValue:
 
 def list_clients() -> ResponseReturnValue:
     shell = _shell()
+    desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
     return jsonify(
-        {"clients": [client_wire_json(client, str(client.id) in connected) for client in shell.clients.list_clients()]}
+        {
+            "clients": [
+                resolved_client_wire_json(record, str(record.id) in connected, desktops)
+                for record in shell.clients.list_clients()
+            ]
+        }
     )
 
 

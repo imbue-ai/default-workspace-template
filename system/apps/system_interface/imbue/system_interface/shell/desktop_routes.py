@@ -2,6 +2,7 @@
 and the verbs of the op route."""
 
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
 from urllib.parse import urlencode
@@ -23,6 +24,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
@@ -64,6 +66,7 @@ from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
 from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.primitives import ClientId
+from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
@@ -292,6 +295,19 @@ def _shown_window_ids(desktop: Desktop, layout: DesktopLayout) -> list[str]:
     ]
 
 
+@pure
+def _client_wire_json_on(record: ClientRecord, is_connected: bool, active: DesktopId | None) -> dict[str, Any]:
+    return {**client_wire_json(record, is_connected), "active_desktop": str(active) if active is not None else None}
+
+
+@pure
+def resolved_client_wire_json(record: ClientRecord, is_connected: bool, desktops: Sequence[Desktop]) -> dict[str, Any]:
+    """The ``client`` object of desktop contracts.md section 5.5 with its desktop settled by the rule of section 4.3:
+    the stored one when a desktop of that id exists, else the first desktop (a stored id nothing holds any more,
+    or a view a version-1 clients file recorded, never reaches a reader)."""
+    return _client_wire_json_on(record, is_connected, resolve_active_desktop(record, desktops))
+
+
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
     """The one document of desktop contracts.md section 5.5: every desktop, every app, and every known client with
     ``shown``, the windows of its active desktop that its layout does not minimize."""
@@ -306,13 +322,7 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
             desktop = desktops_by_id[active]
             layout = shell.placements.read_layout(active, str(record.id), {window.id for window in desktop.windows})
             shown = _shown_window_ids(desktop, layout)
-        clients.append(
-            {
-                **client_wire_json(record, str(record.id) in connected),
-                "active_desktop": str(active) if active is not None else None,
-                "shown": shown,
-            }
-        )
+        clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
     return {
         "desktops": [desktop_wire_json(desktop) for desktop in desktops],
         "apps": shell.inventory.serialized(),
