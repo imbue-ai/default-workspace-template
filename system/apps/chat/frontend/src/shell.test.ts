@@ -39,7 +39,7 @@ let connection: ShellConnection | null = null;
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
-  openSubagentTab: typeof import("./shell").openSubagentTab;
+  openSubagentView: typeof import("./shell").openSubagentView;
   presence: { startPresenceReporting: ReturnType<typeof vi.fn>; reportPresence: ReturnType<typeof vi.fn> };
 }> {
   vi.resetModules();
@@ -51,7 +51,7 @@ async function loadShell(): Promise<{
   return {
     connectChatToShell: shell.connectChatToShell,
     startChatOnAccount: shell.startChatOnAccount,
-    openSubagentTab: shell.openSubagentTab,
+    openSubagentView: shell.openSubagentView,
     presence,
   };
 }
@@ -239,15 +239,15 @@ describe("startChatOnAccount", () => {
   });
 });
 
-describe("openSubagentTab", () => {
+describe("openSubagentView", () => {
   it("asks the shell to open the view keyed on the chat's active agent", async () => {
     const parent = framed();
-    const { connectChatToShell, openSubagentTab } = await loadShell();
+    const { connectChatToShell, openSubagentView } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { active_agent: { agent_id: "agent-9" } }));
 
-    openSubagentTab("agent-1", "sess-3");
+    openSubagentView("agent-1", "sess-3");
 
     expect(parent.postMessage).toHaveBeenCalledWith(
       { type: "shell:open", path: "/agent-1.agent-9.sess-3", ifPresent: "focus" },
@@ -257,11 +257,11 @@ describe("openSubagentTab", () => {
 
   it("keys the view on the chat's own id while the page does not list the chat yet", async () => {
     const parent = framed();
-    const { connectChatToShell, openSubagentTab } = await loadShell();
+    const { connectChatToShell, openSubagentView } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
 
-    openSubagentTab("agent-1", "sess-3");
+    openSubagentView("agent-1", "sess-3");
 
     expect(parent.postMessage).toHaveBeenCalledWith(
       { type: "shell:open", path: "/agent-1.agent-1.sess-3", ifPresent: "focus" },
