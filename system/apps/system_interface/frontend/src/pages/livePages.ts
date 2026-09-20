@@ -234,7 +234,9 @@ export class LivePagesLayer implements PageDriver {
 
   private create(window: WindowRecord, app: AppRecord): LivePage {
     const wrapper = document.createElement("div");
-    wrapper.className = "live-page absolute";
+    // A surface while the page loads, under the chrome (whose content box is transparent) and over the
+    // wallpaper; the bottom corners follow the chrome's rounding.
+    wrapper.className = "live-page absolute overflow-hidden rounded-b-(--desk-window-radius) bg-page";
     wrapper.style.display = "none";
     const frame = document.createElement("iframe");
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);

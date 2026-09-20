@@ -70,8 +70,8 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
         {
           "data-drag-handle": "",
           class:
-            "title-bar flex h-(--desk-title-bar-height) shrink-0 items-center gap-1 border-b border-default pr-1 pl-2 " +
-            "touch-none select-none " +
+            "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center gap-1 border-b " +
+            "border-default pr-1 pl-2 touch-none select-none " +
             (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
           ondblclick: (event: MouseEvent) => {
             if ((event.target as Element).closest("[data-window-control]") !== null) return;
