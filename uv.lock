@@ -3424,6 +3424,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
+    { name = "werkzeug" },
 ]
 
 [package.dev-dependencies]
@@ -3440,6 +3441,7 @@ requires-dist = [
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [package.metadata.requires-dev]
