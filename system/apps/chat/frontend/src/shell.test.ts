@@ -195,7 +195,6 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    // Started from Everything, the chat is filed in no project.
     expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
     expect(parent.postMessage).toHaveBeenCalledWith(
       { type: "shell:open", path: "/?chat=agent-2", ifPresent: "focus" },
@@ -203,16 +202,16 @@ describe("startChatOnAccount", () => {
     );
   });
 
-  it("files the new chat in the project this one is shown in", async () => {
+  it("files the new chat in no project: the desktop shell's view id is a desktop, not a project", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
-    deliver({ ...HANDSHAKE, viewId: "project-7" }, parent);
+    deliver({ ...HANDSHAKE, viewId: "home", desktopId: "home", windowId: "win-1", path: "/agent-1" }, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");
 
-    expect(createChat).toHaveBeenCalledWith("project-7", "account-1", "", null);
+    expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
   });
 
   it("passes a first message through and reports whether the chat opened", async () => {
