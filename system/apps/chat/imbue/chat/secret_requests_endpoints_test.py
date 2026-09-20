@@ -162,4 +162,6 @@ def test_malformed_bodies_are_400s_and_unknown_ids_are_404s(tmp_path: Path) -> N
     assert client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": "v"}).status_code == 400
     assert client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={"note": 3}).status_code == 400
     assert client.get("/api/secret-requests/secret-00000000000000000000000000000000").status_code == 404
-    assert client.post("/api/secret-requests/nope/submit", json={"values": {}}).status_code == 404
+    unknown = client.post("/api/secret-requests/nope/submit", json={"values": {}})
+    assert unknown.status_code == 404
+    assert unknown.get_json()["detail"] == "No secret request with id 'nope'"

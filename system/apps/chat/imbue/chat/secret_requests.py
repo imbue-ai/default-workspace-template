@@ -69,7 +69,7 @@ class InvalidSecretRequestError(SecretRequestError, ValueError):
     """Raised when a request's file name, variable names, or rationale are malformed."""
 
 
-class UnknownSecretRequestError(SecretRequestError, KeyError):
+class UnknownSecretRequestError(SecretRequestError, LookupError):
     """Raised when no request has the given id."""
 
     def __init__(self, request_id: str) -> None:
