@@ -108,15 +108,12 @@ def default_desktop(shortcuts: Sequence[DesktopShortcut]) -> Desktop:
 @pure
 def resolve_active_desktop(record: ClientRecord | None, desktops: Sequence[Desktop]) -> DesktopId | None:
     """The desktop a client is on (desktop contracts.md section 4.3): its stored active desktop when a desktop of
-    that id exists, else its tabbed-shell view when one does, else the first desktop; None with no desktops."""
+    that id exists, else the first desktop; None with no desktops."""
     if not desktops:
         return None
-    ids = {desktop.id for desktop in desktops}
-    if record is not None:
-        if record.active_desktop is not None and record.active_desktop in ids:
+    if record is not None and record.active_desktop is not None:
+        if any(desktop.id == record.active_desktop for desktop in desktops):
             return record.active_desktop
-        if record.active_view is not None and record.active_view in ids:
-            return DesktopId(str(record.active_view))
     return desktops[0].id
 
 

@@ -3,13 +3,11 @@
 name = "chat"
 display_name = "Chat"
 icon = "icon.svg"
-instances = true
 critical = true
 priority = "chat"
 launcher_rank = 10
 
 [default_shortcut]
-action = "new"
 launch = "new"
 mode = "new"
 
@@ -21,21 +19,4 @@ path = "/new"
 params = [
     {name = "account_id", label = "Provider account", required = false},
     {name = "message", label = "First message", required = false},
-]
-
-[[actions]]
-id = "new"
-label = "New Chat"
-params = [
-    {name = "account_id", label = "Provider account", required = false},
-    {name = "message", label = "First message", required = false},
-]
-
-[[actions]]
-id = "subagent"
-label = "Open subagent"
-params = [
-    {name = "parent", label = "Parent chat", required = true},
-    {name = "session", label = "Subagent session", required = true},
-    {name = "description", label = "Description", required = false},
 ]

@@ -1,9 +1,8 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, the workspace layout migration
-(warning-only), restart, health probes, the version-history ledger entry, and
-the environment converge. On any failure it
+worker's already-built bundle), pre-flight, restart, health probes, the
+version-history ledger entry, and the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
@@ -78,7 +77,6 @@ from update_layout import (
     FRONTEND_BUNDLES,
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
-    LAYOUT_MIGRATION_SCRIPT,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
@@ -110,7 +108,6 @@ from update_runtime import (
     diff_name_status,
     git_out,
     run_checked,
-    tail,
 )
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
@@ -129,10 +126,6 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
-
-# The layout migration reads and writes a handful of small JSON files; anything
-# past this is a hang.
-_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 
 
 def _restore_tree(
@@ -445,40 +438,6 @@ def _install_or_build_bundles(
         "npm run build",
         timeout=timeout,
     )
-
-
-def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
-    """Run the merged tree's layout migration; return why it failed, or ``None``.
-
-    Warning-only by design: the migration never overwrites an output that
-    holds anything (the app stores only gain records), leaves the old store
-    untouched, and runs again at every boot behind its own marker, so a
-    failure here is a retry later, never a reason to roll an otherwise healthy
-    update back. Never raises: a hang and a spawn failure both come back as
-    the reason.
-    """
-    argv = ["python3", LAYOUT_MIGRATION_SCRIPT, "run"]
-    try:
-        result = runner.run(
-            argv,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return (
-            f"python3 {LAYOUT_MIGRATION_SCRIPT} did not finish within "
-            f"{_LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
-        )
-    except OSError as exc:
-        return f"python3 {LAYOUT_MIGRATION_SCRIPT} could not be run ({exc})"
-    returncode = getattr(result, "returncode", 0)
-    if returncode == 0:
-        return None
-    stderr = tail((getattr(result, "stderr", "") or "").strip(), 20)
-    return f"python3 {LAYOUT_MIGRATION_SCRIPT} failed (exit {returncode}): {stderr}"
 
 
 class RecoveryOutcome(NamedTuple):
@@ -1100,17 +1059,6 @@ def apply_update(
                 repo_root, expected_bundle_hashes, live_service_restarted=False
             )
             _advance(PHASE_BUILT)
-
-        # The merged tree's layout migration runs before the restart, so the
-        # restarted shell reads migrated state at once rather than after the
-        # boot-time run; a failure is reported and left to that run.
-        migration_failure = _migrate_workspace_layouts(repo_root, runner)
-        if migration_failure is not None:
-            sys.stderr.write(
-                f"warning: {migration_failure}\nContinuing without rolling back: "
-                "the migration never overwrites an output that holds anything, "
-                "leaves the old store untouched, and runs again at the next boot.\n"
-            )
 
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and

@@ -232,27 +232,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal-pty"].critical is True
     assert by_name["terminal-pty"].program == "terminal-pty"
     assert by_name["terminal-pty"].priority == "terminal"
-    assert by_name["terminal-pty"].instances is False
     assert by_name["terminal-pty"].launch_paths == ()
     assert by_name["terminal-pty"].default_shortcut is None
     assert by_name["chat"].internal is False
     assert by_name["chat"].critical is True
     assert by_name["chat"].program == "chat"
     assert by_name["chat"].priority == "chat"
-    assert by_name["chat"].instances is True
-    assert by_name["chat"].instances_url is None
     assert by_name["chat"].default_shortcut is not None
-    assert by_name["chat"].default_shortcut.action == "new"
     assert by_name["chat"].default_shortcut.mode == "new"
-    assert [action.id for action in by_name["chat"].actions] == ["new", "subagent"]
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
     for name in ("terminal", "files", "browser"):
-        assert by_name[name].instances is True
         assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.action == "new"
-        assert [action.id for action in by_name[name].actions] == ["new"]
+        assert by_name[name].default_shortcut.mode == "focus"
     # The desktop interface's launch paths (desktop-interface contracts.md section 2).
     assert by_name["system_interface"].launch_paths == ()
     for name, launch_path in (("chat", "/new"), ("terminal", "/new"), ("files", "/"), ("browser", "/new")):
@@ -260,6 +253,6 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["account_id", "message"]
-    assert by_name["terminal"].instances_url == "http://127.0.0.1:7682"
-    assert by_name["files"].instances_url is None
-    assert by_name["browser"].instances_url is None
+    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
+    assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
+    assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]

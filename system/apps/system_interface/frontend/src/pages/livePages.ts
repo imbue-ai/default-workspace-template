@@ -392,9 +392,7 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     const path = payload.path;
     if (typeof path !== "string") {
-      console.warn(
-        `[si] shell:open ignored: a page names a path, not an address (${JSON.stringify(payload.address)})`,
-      );
+      console.warn(`[si] shell:open ignored: a page names a path (${JSON.stringify(payload)})`);
       return;
     }
     const ifPresent = payload.ifPresent === "new" ? "new" : "focus";

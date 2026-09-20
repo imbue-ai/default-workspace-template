@@ -4,14 +4,19 @@ settles on the one client it targets (contracts.md section 12, desktop contracts
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+from typing import TypeVar
 
+from app_manifest.manifest import describe_validation_error
 from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
+from pydantic import BaseModel
+from pydantic import ValidationError
 
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.client_activity import find_client_id_for_instance
 from imbue.system_interface.shell.errors import ClientNotFoundError
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.primitives import ClientId
@@ -32,11 +37,26 @@ HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 # The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
-TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"view", "client", "desktop"})
+TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"client", "desktop"})
+
+_RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
 
 def detail_response(message: str, status_code: int) -> ResponseReturnValue:
     return jsonify({"detail": message}), status_code
+
+
+def parse_request_body(model: type[_RequestModel]) -> _RequestModel:
+    """The current request's body as ``model``; a body that is not a JSON object or not the shape raises
+    InvalidShellValueError (a 400)."""
+    # force=True: a script and curl alike may post without a JSON content type.
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidShellValueError("the request body must be a JSON object")
+    try:
+        return model.model_validate(body)
+    except ValidationError as e:
+        raise InvalidShellValueError(describe_validation_error(e)) from e
 
 
 def require_loopback() -> ResponseReturnValue | None:
@@ -82,12 +102,7 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         return client_id
     connected_clients = shell.broadcaster.get_connected_client_infos()
     client_summary = (
-        ", ".join(
-            f"{info['client_id']} (view={info['active_view']}, desktop={info['active_desktop']}, "
-            f"device={info['device_kind']})"
-            for info in connected_clients
-        )
-        or "none"
+        ", ".join(f"{info['client_id']} (desktop={info['active_desktop']})" for info in connected_clients) or "none"
     )
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "

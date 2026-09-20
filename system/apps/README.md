@@ -7,32 +7,31 @@ points at this folder.
 
 Built-in apps:
 
-- `system_interface/` - The special one: the workspace UI itself. It hosts the
-  tabs the other apps render in, so it is an app that also serves as the
-  workspace chrome. Do not use it as a template for new apps.
+- `system_interface/` - The special one: the workspace UI itself, the desktop
+  the other apps' pages render in as windows, so it is an app that also serves
+  as the workspace chrome. Do not use it as a template for new apps.
 - `chat/` - The chat app: the agent harness UI, one page per chat, rendered
-  inside a tab's iframe at its own origin. The `chat` package (`chat-app`)
-  runs `mngr observe` over the workspace's agents, serves the chat pages,
-  their API, and the instances API on port 8010, and owns the provider
-  accounts. Its frontend and the shell's are two builds of one npm workspace
-  (`system/package.json`) sharing the `system/libs/workspace_ui` library.
-- `terminal/` - The terminal tab (ttyd over the web), including its named
+  inside a window's iframe at its own origin. The `chat` package (`chat-app`)
+  runs `mngr observe` over the workspace's agents, serves the chat pages and
+  their API on port 8010, and owns the provider accounts. Its frontend and the
+  shell's are two builds of one npm workspace (`system/package.json`) sharing
+  the `system/libs/workspace_ui` library.
+- `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
-  serves the wrapper pages (each frames one session's ttyd page) and the
-  instances API over the workspace's tmux sessions, and `terminal-pty` runs
-  ttyd itself on its own internal origin.
+  serves the wrapper pages (each frames one session's ttyd page) over the
+  workspace's tmux sessions, and `terminal-pty` runs ttyd itself on its own
+  internal origin.
 - `terminal_pty/` - Only the manifest of that ttyd origin (`terminal-pty`,
   internal); the program that registers it is the `terminal-pty` entry point of
   `terminal/`.
-- `files/` - The file viewer tab: the `files-app` package, the instances
-  library's sidecar around dufs over `data/`.
-- `browser/` - The live browser tab: a fleet of Chromium browsers streamed to
-  the UI, whose daemon (`browser-service`) also serves the instances API over
-  the fleet.
+- `files/` - The file viewer: dufs over `data/`, run from its program line with
+  a vendored, patched frontend.
+- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
+  UI by its daemon (`browser-service`).
 
 Every app describes itself in an `app.toml` manifest beside its code: its
-registered name, the display name users see, its icon, whether it serves
-instances, its memory-shedding `priority`, whether it is `critical`, and the
+registered name, the display name users see, its icon, the launch paths the
+desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest

@@ -15,7 +15,7 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 - `src/components/`: the shared Mithril recipes (Button, Modal, NoticeDialog,
   menus, icons, badges, tooltips, the modal backdrop); beside it at `src/`,
   `DestroyConfirmDialog.ts`, `portal.ts`, and `flyout-position.ts`.
-- `src/base-path.ts`, `src/origin.ts`, `src/addresses.ts`, `src/views.ts`, and
+- `src/base-path.ts`, `src/origin.ts`, and
   `src/models/` (`ClientIdentity`, `http`, `backoff`, `ws-json`,
   `request-error`): the base helpers every page shares.
 - `src/app_contract.ts`: an app page's side of the browser-side contract

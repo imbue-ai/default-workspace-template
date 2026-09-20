@@ -2,7 +2,7 @@
  * The hand-drawn "squiggle" glyphs that identify a project.
  *
  * Both the glyph paths and their bounding boxes are copied verbatim from the
- * minds-dockview design prototype's bundle -- each path is drawn in its own
+ * design prototype's bundle -- each path is drawn in its own
  * arbitrary coordinate space, so the box is the only thing that says where the
  * ink actually is. `squiggleMarkup` derives a square viewBox and a stroke width
  * from that box, and the constants in that math (the 0.9 fill fraction, the

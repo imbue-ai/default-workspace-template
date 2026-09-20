@@ -29,8 +29,7 @@ RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
 
-ACTION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = ACTION_ID_PATTERN
+LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 # A launch path is a path under the app's origin that the shell opens a window at: rooted
 # with one slash (``//`` would read as another host), no query string (the shell appends the
@@ -39,13 +38,6 @@ LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = ACTION_ID_PATTERN
 MAX_LAUNCH_PATH_LENGTH: Final[int] = 2048
 _LAUNCH_PATH_FORBIDDEN_CHARACTERS: Final[frozenset[str]] = frozenset({"?", "#"})
 _LAUNCH_PATH_SAFE_CHARACTERS: Final[str] = "/-._~!$&'()*+,;=:@"
-
-# Where the shell reaches an app's instances API: loopback only, one port a socket can listen on.
-INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^http://(?:127\.0\.0\.1|localhost):(?P<port>[0-9]{1,5})$"
-)
-MIN_PORT: Final[int] = 1
-MAX_PORT: Final[int] = 65535
 
 PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$"
@@ -139,25 +131,6 @@ class DisplayName(str):
         )
 
 
-class ActionId(str):
-    """The id of an action an app declares: lowercase, starts alphanumeric, at most 32 characters."""
-
-    def __new__(cls, value: str) -> Self:
-        if not ACTION_ID_PATTERN.fullmatch(value):
-            raise InvalidManifestValueError(
-                f"invalid action id {value!r}: ids match ^[a-z0-9][a-z0-9-]{{0,31}}$ (lowercase, no leading hyphen)"
-            )
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
-
-
 class LaunchPathId(str):
     """The id of a launch path an app declares: lowercase, starts alphanumeric, at most 32 characters."""
 
@@ -198,30 +171,6 @@ class LaunchPathValue(str):
         problem = _describe_launch_path_problem(value)
         if problem is not None:
             raise InvalidManifestValueError(problem)
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
-
-
-class InstancesUrl(str):
-    """Where the shell reaches an app's instances API: a loopback origin with a port."""
-
-    def __new__(cls, value: str) -> Self:
-        match = INSTANCES_URL_PATTERN.fullmatch(value)
-        if match is None:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: expected http://127.0.0.1:<port> or http://localhost:<port>"
-            )
-        if not MIN_PORT <= int(match.group("port")) <= MAX_PORT:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: the port must be between {MIN_PORT} and {MAX_PORT}"
-            )
         return super().__new__(cls, value)
 
     @classmethod

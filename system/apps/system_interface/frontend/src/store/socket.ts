@@ -4,8 +4,6 @@
  * with its ``client_state`` (which client it is, on which desktop) and re-sends it on every
  * switch. ``placements_updated``, ``active_desktop_changed``, and the transient ``layout_op`` are
  * how this client's other windows, the shell's own edits, and an agent's ops reach this one.
- * The tabbed shell's messages (``projects_updated``, ``layout_updated``, ``active_view_changed``,
- * ``tab_rebound``) still arrive until phase 6 deletes them, and are ignored.
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";

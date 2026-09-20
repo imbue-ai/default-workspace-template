@@ -234,7 +234,6 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.name == "inbox-status"
     assert manifest.display_name == "Inbox status"
     assert manifest.icon == "icon.svg"
-    assert manifest.instances is False
     assert manifest.priority == "user"
     assert manifest.program == "inbox-status"
     assert manifest.default_shortcut is None

@@ -1,16 +1,13 @@
 name = "terminal"
 display_name = "Terminal"
 icon = "icon.svg"
-instances = true
-# The instances API port; the terminal program serves the wrapper pages on 7681, and ttyd
-# runs on the terminal-pty origin (system/apps/terminal_pty/app.toml, port 7683).
-instances_url = "http://127.0.0.1:7682"
+# The terminal program serves the wrapper pages on 7681; ttyd runs on the terminal-pty origin
+# (system/apps/terminal_pty/app.toml, port 7683).
 critical = true
 priority = "terminal"
 launcher_rank = 40
 
 [default_shortcut]
-action = "new"
 launch = "new"
 mode = "focus"
 
@@ -18,9 +15,4 @@ mode = "focus"
 id = "new"
 label = "New Terminal"
 path = "/new"
-params = [{name = "workdir", label = "Working directory", required = false}]
-
-[[actions]]
-id = "new"
-label = "New Terminal"
 params = [{name = "workdir", label = "Working directory", required = false}]

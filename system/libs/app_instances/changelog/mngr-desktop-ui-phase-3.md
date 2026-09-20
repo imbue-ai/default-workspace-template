@@ -1,1 +1,0 @@
-The sidecar module's manifest loader is public (`load_instances_manifest`), and `wait_for_shutdown_signal` lets an app that serves only its own servers block on the main thread until supervisord stops it.

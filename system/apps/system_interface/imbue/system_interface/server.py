@@ -29,7 +29,6 @@ from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
@@ -479,10 +478,9 @@ def _handle_client_state_message(
     """Process one incoming WebSocket message; returns True for a well-formed ``client_state``.
 
     ``client_state`` is the only message type clients send: it registers the browser's client id and the
-    view (the tabbed shell, with its device kind) or the desktop (the desktop shell) it is on, on connect and
-    on every switch. Registration feeds the broadcaster's client registry (which targets layout ops), the
-    client record, and the client-activity log (a ``desktop_switch`` when the report names a different
-    previous desktop).
+    desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
+    (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
+    the report names a different previous desktop).
     """
     try:
         parsed = json.loads(raw_message)
@@ -497,13 +495,7 @@ def _handle_client_state_message(
     except ValidationError as e:
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
-    shell.broadcaster.set_client_info(
-        client_queue,
-        str(report.client_id),
-        str(report.active_view) if report.active_view is not None else "",
-        report.device_kind.value,
-        active_desktop=str(report.active_desktop) if report.active_desktop is not None else "",
-    )
+    shell.broadcaster.set_client_info(client_queue, str(report.client_id), str(report.active_desktop))
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
     try:
@@ -512,11 +504,9 @@ def _handle_client_state_message(
         _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
     if is_first_report:
         _loguru_logger.info(
-            "WS client registered: client_id={} view={} desktop={} device={} (conn {})",
+            "WS client registered: client_id={} desktop={} (conn {})",
             report.client_id,
-            report.active_view,
             report.active_desktop,
-            report.device_kind.value,
             id(client_queue),
         )
         return True
@@ -529,11 +519,7 @@ def _log_client_switches(
 ) -> None:
     """Log, and append to the activity log, the desktop switch a re-report names (a report whose previous desktop
     is empty or unchanged names none)."""
-    is_desktop_switch = (
-        report.active_desktop is not None
-        and bool(report.previous_desktop)
-        and report.previous_desktop != report.active_desktop
-    )
+    is_desktop_switch = bool(report.previous_desktop) and report.previous_desktop != report.active_desktop
     # A switch the log cannot take is a warning: the record already moved the client.
     if is_desktop_switch:
         _loguru_logger.info(
@@ -567,14 +553,6 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
     disconnect_reason = "handler exited"
     try:
         websocket.send(json.dumps({"type": "apps_updated", "apps": shell.inventory.serialized()}))
-        websocket.send(
-            json.dumps(
-                {
-                    "type": "projects_updated",
-                    "projects": [project_wire_json(project) for project in shell.projects.list_projects()],
-                }
-            )
-        )
         websocket.send(
             json.dumps(
                 {

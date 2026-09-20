@@ -76,8 +76,6 @@ export interface ShellConnection {
   focused(): void;
   /** Report where this page is now (a path under the app's origin) and what it is called. */
   location(path: string, title: string): void;
-  /** Ask the shell to dock an instance of this app beside this tab, by address. */
-  open(address: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Stop listening to the shell. */
@@ -165,7 +163,6 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
-    open: (address: string) => send(SHELL_OPEN, { address }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
