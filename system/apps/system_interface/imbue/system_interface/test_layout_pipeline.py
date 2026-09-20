@@ -35,8 +35,7 @@ from imbue.system_interface.testing import PipelineHarness
 
 pytestmark = pytest.mark.acceptance
 
-# The marker and title of the requester's own page of the seeded app.
-_SEEDED_KEY = "stub-1"
+# A chat title, for the retired ``chat:<title>`` spelling the script must refuse.
 _SEEDED_TITLE = "alice"
 # The requesting agent, which the script resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
