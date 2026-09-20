@@ -785,7 +785,10 @@ def running_workspace(
             is_critical=True,
             actions=(("new", "New Chat"), ("subagent", "Open subagent")),
             default_shortcut=("new", "new"),
+            default_shortcut_launch="new",
             display_name="Chat",
+            action_params={"new": ("account_id", "message")},
+            launch_paths=(("new", "New Chat", "/new"),),
         )
     ]
     stub_source: StubInstanceSource | None = None
