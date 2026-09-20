@@ -58,8 +58,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
         {
           "data-desktop-id": desktop.id,
           class:
-            "backdrop relative isolate h-full w-full overflow-hidden bg-(--desk-backdrop) bg-cover bg-center " +
-            "bg-(image:--desk-default-wallpaper)",
+            "backdrop relative isolate h-full w-full overflow-hidden select-none bg-(--desk-backdrop) bg-cover " +
+            "bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
         },
         [

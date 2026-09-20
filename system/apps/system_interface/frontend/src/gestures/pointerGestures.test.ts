@@ -119,6 +119,18 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
+  it("claims the default of a press on a handle and leaves a press elsewhere alone", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    const content = root.querySelector("#content") as Element;
+    const onHandle = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, buttons: 1 });
+    const onContent = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, buttons: 1 });
+    title.dispatchEvent(onHandle);
+    content.dispatchEvent(onContent);
+    expect(onHandle.defaultPrevented).toBe(true);
+    expect(onContent.defaultPrevented).toBe(false);
+  });
+
   it("a press that never travels is a click, not a gesture", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
