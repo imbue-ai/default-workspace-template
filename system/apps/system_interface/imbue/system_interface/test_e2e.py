@@ -357,13 +357,18 @@ def _stored_placements(
 
 
 def _wait_for_stored_placement(
-    server: E2EServer, client_id: str, window_id: str, predicate: Any, what: str, desktop_id: str = HOME_DESKTOP_ID
+    server: E2EServer,
+    client_id: str,
+    window_id: str,
+    predicate: Callable[[dict[str, Any]], bool],
+    what: str,
+    desktop_id: str = HOME_DESKTOP_ID,
 ) -> dict[str, Any]:
     """Wait until the client's placement file holds a placement of ``window_id`` satisfying ``predicate``."""
 
     def _saved() -> bool:
         placement = _stored_placements(server.state_dir, client_id, desktop_id).get(window_id)
-        return placement is not None and bool(predicate(placement))
+        return placement is not None and predicate(placement)
 
     wait_for(_saved, timeout=15.0, poll_interval=0.1, error_message=f"autosave never wrote {what} for {window_id}")
     return _stored_placements(server.state_dir, client_id, desktop_id)[window_id]
