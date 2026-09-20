@@ -201,7 +201,9 @@ stdlib `http.server` for the failure shapes. Run from the repo root.
   naming `main` twice are refused at parse time.
 - **B4 Preview shape with inner path.** Re-run B1 adding `--service-name tp-term-app
   --preview-service-name tp-term-preview --preview-title "tp" --inner-path /`. Pass:
-  stdout is `tp-term-preview`; the registry file has both rows; `instance.json` has two pids, `wrapper_port`, `inner_path`;
+  stdout is `tp-term-preview`; the registry file has both rows, the inner one carrying
+  `internal = true` and the `-preview` one `display_name = "tp"`, so only the frame is
+  offered as an app to open; `instance.json` has two pids, `wrapper_port`, `inner_path`;
   the wrapper page (`curl localhost:<wrapper_port>/`) embeds the inner service name and
   path as JS literals. `python3 system/scripts/layout.py open tp-term-preview` puts the
   tab on the user's screen and the terminal renders inside it.

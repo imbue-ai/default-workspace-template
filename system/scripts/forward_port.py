@@ -30,7 +30,9 @@ Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
 ``--name --url`` without a manifest registers rows for things with no app
-directory (owner-exec, the VM exec service, previews, isolated test servers).
+directory (owner-exec, the VM exec service, previews, isolated test servers);
+``--display-name`` gives such a row the label users read, since the raw service
+name is what the workspace falls back to.
 
 Icons
 -----
@@ -86,6 +88,13 @@ _LABEL_RANDOM_LENGTH = 8
 # Cap the service name so ``<name>-<rand>`` always fits a 63-char DNS label
 # (name + 1 hyphen + 8 random chars), with generous headroom.
 MAX_SERVICE_NAME_LENGTH = 32
+
+# Cap on a display name, mirroring ``app_manifest.primitives.DisplayName``
+# (this script is stdlib-only and cannot import the library). A row whose
+# display name breaks that rule fails validation on read and is skipped, which
+# hides the app entirely, so the rule is applied here at registration time; a
+# drift test in forward_port_test.py keeps the two copies identical.
+MAX_DISPLAY_NAME_LENGTH = 64
 
 # Service-name rule: lowercase alphanumeric/underscore runs separated by
 # single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
@@ -292,6 +301,15 @@ def mint_service_label(name: str) -> str:
         secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH)
     )
     return f"{name}-{suffix}"
+
+
+def validate_display_name(value: str) -> str | None:
+    """Return an error message when ``value`` cannot be a row's display name."""
+    if not value.strip():
+        return "display_name must not be empty"
+    if len(value) > MAX_DISPLAY_NAME_LENGTH:
+        return f"display_name must be at most {MAX_DISPLAY_NAME_LENGTH} characters, got {len(value)}"
+    return None
 
 
 def validate_service_name(name: str) -> str | None:
@@ -582,6 +600,7 @@ def _upsert(
     icon: str | None = None,
     internal: bool = False,
     program: str | None = None,
+    display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
@@ -602,13 +621,16 @@ def _upsert(
     passing it sets the field and omitting it clears it, so a registration
     that stops passing it cannot leave a stale capability behind.
 
+    ``display_name`` is what users read instead of the raw service name, for a
+    row with no manifest to carry one, and is authoritative the same way.
+
     ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
     every manifest-owned key the same way: each is set to the manifest's value
     or removed when the manifest omits it.
     """
     apps = _load_apps(path)
     manifest_owned = _manifest_owned_values(
-        manifest_fields, internal=internal, program=program
+        manifest_fields, internal=internal, program=program, display_name=display_name
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -648,7 +670,10 @@ def _upsert(
 
 
 def _manifest_owned_values(
-    manifest_fields: dict[str, object] | None, internal: bool, program: str | None
+    manifest_fields: dict[str, object] | None,
+    internal: bool,
+    program: str | None,
+    display_name: str | None,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -666,6 +691,8 @@ def _manifest_owned_values(
         values["internal"] = True
     if program is not None:
         values["program"] = program
+    if display_name is not None:
+        values["display_name"] = display_name
     return values
 
 
@@ -726,6 +753,15 @@ def main() -> None:
         help="Remove the named app instead of adding it",
     )
     parser.add_argument(
+        "--display-name",
+        help=(
+            "What users read for this app instead of its raw service name, for "
+            "a registration with no manifest to carry one. Authoritative per "
+            "call: passing it sets the field, omitting it clears any "
+            "previously-stored value."
+        ),
+    )
+    parser.add_argument(
         "--internal",
         action="store_true",
         help=(
@@ -753,19 +789,29 @@ def main() -> None:
     if args.remove and args.program is not None:
         parser.error("--program cannot be combined with --remove")
 
+    if args.remove and args.display_name is not None:
+        parser.error("--display-name cannot be combined with --remove")
+
     if args.manifest is not None and (
         args.remove
         or args.icon_file is not None
         or args.no_icon
         or args.program is not None
         or args.internal
+        or args.display_name is not None
     ):
         parser.error(
-            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, or --internal"
+            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, "
+            "--display-name, or --internal"
         )
 
     if args.program is not None and not args.program.strip():
         parser.error("--program must not be empty")
+
+    if args.display_name is not None:
+        display_name_error = validate_display_name(args.display_name)
+        if display_name_error is not None:
+            parser.error(display_name_error)
 
     manifest_fields: dict[str, object] | None = None
     icon_path: Path | None = (
@@ -827,6 +873,7 @@ def main() -> None:
                     icon,
                     internal=args.internal,
                     program=args.program.strip() if args.program is not None else None,
+                    display_name=args.display_name,
                     manifest_fields=manifest_fields,
                 )
         finally:

@@ -29,7 +29,11 @@ The two shapes:
 - **Preview (surface to the user).** Add ``--service-name`` to also register the
   instance as a service (served raw at its own browser origin), and
   ``--preview-service-name`` + ``--preview-title`` to wrap it in a labeled
-  "preview" frame (``preview_wrapper_server.py``) the user opens as a tab.
+  "preview" frame (``preview_wrapper_server.py``) the user opens as a tab. With
+  a wrapper, the inner service registers ``--internal`` -- only the frame is an
+  app to open, so one preview adds one row to the rail and the tab list rather
+  than two -- and the frame registers ``--preview-title`` as its display name,
+  so it reads as the app it previews rather than as its service name.
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
@@ -672,17 +676,29 @@ def _state_path(repo_root: Path, name: str) -> Path:
 
 
 def _register_service(
-    runner: Runner, repo_root: Path, service_name: str, port: int, what: str
+    runner: Runner,
+    repo_root: Path,
+    service_name: str,
+    port: int,
+    what: str,
+    *,
+    internal: bool = False,
+    display_name: str | None = None,
 ) -> None:
+    argv = [
+        *FORWARD_PORT_CMD,
+        "--name",
+        service_name,
+        "--url",
+        f"http://localhost:{port}",
+        "--no-icon",  # short-lived preview tabs; the generic monogram is fine
+    ]
+    if internal:
+        argv.append("--internal")
+    if display_name is not None:
+        argv.extend(["--display-name", display_name])
     result = runner.run(
-        [
-            *FORWARD_PORT_CMD,
-            "--name",
-            service_name,
-            "--url",
-            f"http://localhost:{port}",
-            "--no-icon",  # short-lived preview tabs; the generic monogram is fine
-        ],
+        argv,
         cwd=str(repo_root),
         capture_output=True,
         text=True,
@@ -869,7 +885,15 @@ def up(
         # 2. Register it as a service (own browser origin), if asked.
         if service_name is not None:
             _register_service(
-                runner, repo_root, service_name, inner_port, "forward_port register"
+                runner,
+                repo_root,
+                service_name,
+                inner_port,
+                "forward_port register",
+                # Wrapped, the inner app is plumbing: the user is meant to reach it
+                # through the labeled frame, and its bare origin shows the same page
+                # with nothing marking it as a preview. Unwrapped, it is the surface.
+                internal=preview_requested,
             )
             services.append(service_name)
 
@@ -926,6 +950,7 @@ def up(
                 preview_service_name,
                 wrapper_port,
                 "forward_port register (wrapper)",
+                display_name=preview_title,
             )
             services.append(preview_service_name)
 

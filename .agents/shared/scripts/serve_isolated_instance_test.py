@@ -439,6 +439,8 @@ def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
     registered = runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
     flat = [token for argv in registered for token in argv]
     assert "demo-app" in flat
+    # Unwrapped, the instance's own origin is the surface: it stays an app to open.
+    assert "--internal" not in flat
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["services"] == ["demo-app"]
 
@@ -494,6 +496,27 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     assert state["pids"] == spawner.detached_pids
     assert state["services"] == ["demo-app", "demo-preview"]
     assert isinstance(state["wrapper_port"], int)
+
+
+def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> None:
+    """One preview puts one row on the rail and the tab list, reading as the app
+    it previews. The inner service keeps its origin (the frame reaches it by
+    swapping the hostname label) but is not an app to open: its bare page is the
+    same app with nothing marking it as a preview."""
+    runner = _RecordingRunner()
+
+    code = _up_preview(tmp_path, runner=runner)
+
+    assert code == 0
+    by_name = {
+        argv[argv.index("--name") + 1]: argv
+        for argv in runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
+    }
+    assert "--internal" in by_name["demo-app"]
+    assert "--display-name" not in by_name["demo-app"]
+    assert "--internal" not in by_name["demo-preview"]
+    frame = by_name["demo-preview"]
+    assert frame[frame.index("--display-name") + 1] == "my change"
 
 
 def test_up_preview_requires_service_name(tmp_path: Path) -> None:

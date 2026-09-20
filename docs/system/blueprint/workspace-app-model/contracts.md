@@ -71,7 +71,7 @@ Each `[[apps]]` row:
 | Key | Source | Notes |
 |---|---|---|
 | `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `icon`, `internal`, and `program` from the manifest when one is given) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
-| `display_name` | manifest | Absent on manifest-less rows; the shell then uses `name`. |
+| `display_name` | manifest, or `--display-name` | Absent unless one was given; the shell then uses `name`. |
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
@@ -81,7 +81,7 @@ Each `[[apps]]` row:
 | `launcher_rank` | manifest | Integer; absent reads as none. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
-`--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way.
+`--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, `--display-name`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way. `--display-name` is refused when it breaks the rule the shell applies on read, since such a row is skipped rather than shown.
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 

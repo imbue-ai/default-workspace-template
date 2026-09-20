@@ -65,8 +65,9 @@ INSTANCE_STATE_FILENAME = "instance.json"
 PREVIEW_STATE_SUFFIX = ".preview.json"
 REGISTRY_COPY_SUFFIX = ".registry.toml"
 
-# The registrations a preview makes: the inner app at its own origin, and the labeled
-# wrapper frame the user opens.
+# The registrations a preview makes: the inner app at its own origin (internal, since
+# the frame is how it is meant to be reached), and the labeled wrapper frame the user
+# opens, which is the one row a preview puts on the rail and the tab list.
 INNER_SERVICE_SUFFIX = "-preview-app"
 PREVIEW_SERVICE_SUFFIX = "-preview"
 
