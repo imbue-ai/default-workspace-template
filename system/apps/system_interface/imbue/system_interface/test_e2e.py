@@ -882,7 +882,7 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
     page.locator('[data-menu-item="open-new"]').click()
     windows = _wait_for_window_count(e2e_server.base_url, 2)
-    (second,) = [window["id"] for window in windows if window != first and window["id"] != first]
+    (second,) = [window["id"] for window in windows if window["id"] != first]
     expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(1)
