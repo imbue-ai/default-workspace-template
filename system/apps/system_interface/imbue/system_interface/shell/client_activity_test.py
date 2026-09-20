@@ -3,7 +3,7 @@ from pathlib import Path
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
-from imbue.system_interface.shell.client_activity import find_client_id_for_instance
+from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 
 
@@ -83,9 +83,9 @@ def test_the_last_client_to_message_a_page_is_found(tmp_path: Path) -> None:
     log.append_message("c2", "home", "chat", "agent-1", "two")
     log.append_message("c3", "home", "chat", "agent-2", "three")
     events = log.read_events()
-    assert find_client_id_for_instance(events, "chat", "agent-1") == "c2"
-    assert find_client_id_for_instance(events, "chat", "agent-9") is None
-    assert find_client_id_for_instance(events, "chat", "") is None
+    assert find_client_id_for_page(events, "chat", "agent-1") == "c2"
+    assert find_client_id_for_page(events, "chat", "agent-9") is None
+    assert find_client_id_for_page(events, "chat", "") is None
 
 
 def test_unparsable_lines_are_skipped(tmp_path: Path) -> None:
