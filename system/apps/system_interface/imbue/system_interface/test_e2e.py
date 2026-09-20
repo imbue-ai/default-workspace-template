@@ -122,14 +122,6 @@ class E2EServer(FrozenModel):
     second_url: str | None = Field(description="The second stub app's loopback URL, when offered")
 
 
-def _post_json(url: str, body: dict[str, Any]) -> Any:
-    request = urllib.request.Request(
-        url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def _get_json(url: str) -> Any:
     with urllib.request.urlopen(url, timeout=5) as response:
         return json.loads(response.read())
