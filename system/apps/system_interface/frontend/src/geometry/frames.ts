@@ -87,18 +87,29 @@ export function frameForState(placementFrame: Frame, state: WindowState): Frame 
   }
 }
 
+/** The rectangle nudged into the backdrop: horizontally at least the minimum visible title width stays
+ *  inside, on either side; vertically the whole title bar stays inside, and the top edge is never above
+ *  the backdrop's. */
+function clampRectIntoBackdrop(
+  rect: PixelRect,
+  backdrop: PixelSize,
+  metrics: Pick<FitMetrics, "titleMinVisible" | "titleBarHeight">,
+): PixelRect {
+  const visible = Math.min(metrics.titleMinVisible, rect.width);
+  const x = Math.min(Math.max(rect.x, visible - rect.width), backdrop.width - visible);
+  const y = Math.max(Math.min(rect.y, backdrop.height - metrics.titleBarHeight), 0);
+  return { x, y, width: rect.width, height: rect.height };
+}
+
 /** The fit rule (render only): fractions to pixels, the minimum size enforced, the title bar nudged into view. */
 export function fitFrameToBackdrop(frame: Frame, backdrop: PixelSize, metrics: FitMetrics): PixelRect {
-  const width = Math.max(frame.width * backdrop.width, metrics.windowMinWidth);
-  const height = Math.max(frame.height * backdrop.height, metrics.windowMinHeight);
-  const scaledX = frame.x * backdrop.width;
-  const scaledY = frame.y * backdrop.height;
-  // Horizontally at least the minimum visible title width stays inside, on either side.
-  const visible = Math.min(metrics.titleMinVisible, width);
-  const x = Math.min(Math.max(scaledX, visible - width), backdrop.width - visible);
-  // Vertically the whole title bar stays inside, and the top edge is never above the backdrop's.
-  const y = Math.max(Math.min(scaledY, backdrop.height - metrics.titleBarHeight), 0);
-  return { x, y, width, height };
+  const scaled: PixelRect = {
+    x: frame.x * backdrop.width,
+    y: frame.y * backdrop.height,
+    width: Math.max(frame.width * backdrop.width, metrics.windowMinWidth),
+    height: Math.max(frame.height * backdrop.height, metrics.windowMinHeight),
+  };
+  return clampRectIntoBackdrop(scaled, backdrop, metrics);
 }
 
 /** The state a drag released at the pointer snaps to, or null outside every zone; the top edge wins a corner. */
@@ -182,8 +193,5 @@ export function movedRect(
   backdrop: PixelSize,
   metrics: Pick<FitMetrics, "titleMinVisible" | "titleBarHeight">,
 ): PixelRect {
-  const visible = Math.min(metrics.titleMinVisible, start.width);
-  const x = Math.min(Math.max(start.x + delta.x, visible - start.width), backdrop.width - visible);
-  const y = Math.max(Math.min(start.y + delta.y, backdrop.height - metrics.titleBarHeight), 0);
-  return { x, y, width: start.width, height: start.height };
+  return clampRectIntoBackdrop({ ...start, x: start.x + delta.x, y: start.y + delta.y }, backdrop, metrics);
 }
