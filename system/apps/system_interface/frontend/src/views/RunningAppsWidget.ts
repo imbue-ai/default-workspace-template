@@ -9,6 +9,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
+import { shortcutKey } from "../model/records";
 import { appGlyph, glyph } from "./glyphs";
 
 const TRAY_GLYPH_SIZE = 16;
@@ -89,7 +90,7 @@ export const RunningAppPopover: m.Component<RunningAppPopoverAttrs> = {
           ),
       m("div", { class: menuDividerClass() }),
       app.launch_paths.map((launchPath) => {
-        const key = `${app.name}:${launchPath.id}`;
+        const key = shortcutKey(app.name, launchPath.id);
         const isOnDesktop = desktopShortcutKeys.has(key);
         return m("div", { key: launchPath.id, class: "flex items-center gap-1 px-3 py-0.5" }, [
           m(
