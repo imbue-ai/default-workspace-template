@@ -112,6 +112,7 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
         body_length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(body_length) or b"{}")
         server.posted.append((self.path, body))
+        server.posted_content_types.append(self.headers.get("Content-Type"))
         if self.path == "/api/layout/broadcast":
             if body.get("op") == "context":
                 self._respond(200, {"ok": True, "clients": server.context_clients})
@@ -127,11 +128,13 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received; ``server.op_answer``
-    is what a desktop op answers (``server.op_refusal`` a ``(status, body)`` refusal instead), and the
-    ``inventory_*`` lists are the inventory document."""
+    """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received (``posted_content_types``
+    the matching ``Content-Type`` headers); ``server.op_answer`` is what a desktop op answers
+    (``server.op_refusal`` a ``(status, body)`` refusal instead), and the ``inventory_*`` lists are the
+    inventory document."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
     server.posted = []
+    server.posted_content_types = []
     server.context_clients = []
     server.inventory_apps = []
     server.inventory_desktops = []
