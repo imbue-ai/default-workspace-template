@@ -1,8 +1,8 @@
 import json
 
 import pytest
-from app_instances.errors import InstanceStoreError
 
+from terminal_app.errors import TerminalStoreError
 from terminal_app.primitives import TmuxSessionName
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import make_terminal_record
@@ -84,5 +84,5 @@ def test_store_refuses_a_document_of_another_version(
     session_store.store_path.parent.mkdir(parents=True)
     session_store.store_path.write_text('{"version": 2, "sessions": []}')
 
-    with pytest.raises(InstanceStoreError, match="is version 2"):
+    with pytest.raises(TerminalStoreError, match="is version 2"):
         session_store.list_records()

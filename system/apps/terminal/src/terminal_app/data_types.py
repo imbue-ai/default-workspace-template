@@ -1,35 +1,16 @@
-from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 
-from app_instances.primitives import InstanceTitle
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import AwareDatetime, Field, computed_field, field_validator
 
 from terminal_app.errors import InvalidTerminalValueError
-from terminal_app.primitives import ClientTty, TmuxSessionId, TmuxSessionName, Workdir
-
-
-class TmuxHookKind(StrEnum):
-    """Which tmux hook fired; the values are the wire strings the hook script posts."""
-
-    SESSION_CHANGED = "session-changed"
-    SESSION_RENAMED = "session-renamed"
-
-
-class TmuxHookEvent(FrozenModel):
-    """What the tmux hook script posts to the app's own ``/tmux-hook``.
-
-    Names and ids are plain strings here because a hand-made tmux session may carry any name;
-    each handler validates what it needs.
-    """
-
-    kind: TmuxHookKind = Field(description="Which hook fired")
-    client_tty: str = Field(
-        description="The switching client's pty for session-changed; empty for a rename"
-    )
-    session_name: str = Field(description="The session's (new) name")
-    session_id: str = Field(description="The session's immutable tmux id, such as $3")
+from terminal_app.primitives import (
+    TerminalTitle,
+    TmuxSessionId,
+    TmuxSessionName,
+    Workdir,
+)
 
 
 class TmuxSession(FrozenModel):
@@ -47,21 +28,11 @@ class TmuxSession(FrozenModel):
     )
 
 
-class TmuxClient(FrozenModel):
-    """One client attached to the default tmux server, as ``tmux list-clients`` reports it."""
-
-    client_tty: ClientTty = Field(description="The pty the client is attached through")
-    session_name: str = Field(description="The session the client currently shows")
-    session_id: str = Field(description="That session's immutable tmux id")
-
-
 class TerminalSessionRecord(FrozenModel):
     """What the app remembers about a terminal beyond tmux: that it exists, what the user named it, and where its shell starts."""
 
-    name: TmuxSessionName = Field(
-        description="The tmux session name, which is the instance key"
-    )
-    title: InstanceTitle | None = Field(
+    name: TmuxSessionName = Field(description="The tmux session name, which is the terminal's name")
+    title: TerminalTitle | None = Field(
         description="The title the user gave it; None when the title derives from the name"
     )
     workdir: Workdir | None = Field(
@@ -81,6 +52,17 @@ class TerminalSessionRecord(FrozenModel):
     )
 
 
+class TerminalListing(FrozenModel):
+    """One terminal as the app lists it: a live session, or a remembered one tmux no longer has."""
+
+    name: TmuxSessionName = Field(description="The terminal's name, which is its tmux session name")
+    title: TerminalTitle = Field(description="What its window is called")
+    is_stopped: bool = Field(description="Whether no live session backs it")
+    last_activity: AwareDatetime | None = Field(
+        description="When its session last saw activity, in UTC; None when stopped or unknown"
+    )
+
+
 class TerminalStoreDocument(FrozenModel):
     """The whole of the terminal's ``instances.json``."""
 
@@ -91,7 +73,7 @@ class TerminalStoreDocument(FrozenModel):
 
 
 class TerminalPaths(FrozenModel):
-    """Where the terminal app keeps its machine state (dispatch scripts, pty-to-tab records, session id files), all under one directory."""
+    """Where the terminal app keeps its machine state (dispatch scripts and session id files), all under one directory."""
 
     state_dir: Path = Field(
         description="The app's state directory (data/.state/terminal under the repo root), absolute so the dispatch scripts can embed it"
@@ -114,14 +96,8 @@ class TerminalPaths(FrozenModel):
 
     @computed_field
     @cached_property
-    def clients_dir(self) -> Path:
-        """One file per attached tab, named by tab id and holding the client's pty."""
-        return self.commands_dir / "clients"
-
-    @computed_field
-    @cached_property
     def sessions_dir(self) -> Path:
-        """One file per terminal the app created or adopted, named by key and holding the tmux session id and creation time the dispatch attaches by."""
+        """One file per terminal the app created or adopted, named by terminal and holding the tmux session id and creation time the dispatch attaches by."""
         return self.state_dir / "sessions"
 
     @computed_field

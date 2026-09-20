@@ -4,18 +4,7 @@ from pathlib import Path
 from typing import Final
 
 import click
-from app_instances.blueprint import build_instances_app
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.json_store import app_store_path
-from app_instances.nudge import ShellNudger, shell_base_url
-from app_instances.sidecar import (
-    app_url_port,
-    load_instances_manifest,
-    serve_in_background,
-    split_instances_url,
-    wait_for_shutdown_signal,
-)
-from app_manifest.primitives import AppName, AppUrl, InstancesUrl
+from app_manifest.primitives import AppName, AppUrl
 from app_manifest.registry import register_app, registry_path
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -28,22 +17,27 @@ from terminal_app.dispatch import (
     build_session_command,
     warn_if_oom_tag_script_is_missing,
 )
-from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.pages import build_pages_blueprint
 from terminal_app.primitives import Workdir
+from terminal_app.serving import (
+    app_url_port,
+    serve_in_background,
+    wait_for_shutdown_signal,
+)
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.tmux import SubprocessTmux
 from terminal_app.wiring import OOM_TAG_SCRIPT, STATE_DIR
 
 # The terminal's fixed wiring, all relative to the repo root every supervised program runs from.
-# The pages are the terminal origin (what a tab or window opens); ttyd is the sibling
-# ``terminal-pty`` program (``pty_main.py``) on an origin of its own.
+# The pages are the terminal origin (what a window opens); ttyd is the sibling ``terminal-pty``
+# program (``pty_main.py``) on an origin of its own.
 MANIFEST_PATH: Final[Path] = Path("system/apps/terminal/app.toml")
 APP_NAME: Final[AppName] = AppName("terminal")
 APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
-INSTANCES_URL: Final[InstancesUrl] = InstancesUrl("http://127.0.0.1:7682")
-STORE_PATH: Final[Path] = app_store_path(APP_NAME)
+# The store of remembered terminals keeps the file name it has always had, so an upgraded workspace
+# keeps its terminals.
+STORE_PATH: Final[Path] = Path("data/.apps") / APP_NAME / "instances.json"
 
 # The wrapper pages are reached through the forwarder, which connects over loopback.
 PAGES_HOST: Final[str] = "127.0.0.1"
@@ -59,7 +53,6 @@ class TerminalAppArguments(FrozenModel):
 
     manifest_path: Path = Field(description="The app.toml to register")
     app_url: AppUrl = Field(description="Where the wrapper pages are served")
-    instances_url: InstancesUrl = Field(description="Where the instances API is served")
     state_dir: Path = Field(description="The app's state directory")
     store_path: Path = Field(description="The instances.json of remembered terminals")
     oom_tag_script: Path = Field(
@@ -88,34 +81,18 @@ def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) 
     )
 
 
-def build_pages_app(source: TmuxSessionSource, nudger: InstanceNudgerInterface) -> Flask:
+def build_pages_app(source: TmuxSessionSource) -> Flask:
     app = Flask(__name__, static_folder=None)
-    app.register_blueprint(build_pages_blueprint(source=source, nudger=nudger, registry_path=registry_path()))
-    return app
-
-
-def build_instances_api_app(
-    source: TmuxSessionSource, nudger: InstanceNudgerInterface, paths: TerminalPaths, app_name: AppName
-) -> Flask:
-    app = build_instances_app(source, nudger)
-    app.register_blueprint(
-        build_tmux_hook_blueprint(
-            source=source,
-            paths=paths,
-            shell=HttpShellPoster(shell_url=shell_base_url()),
-            nudger=nudger,
-            app_name=app_name,
-        )
-    )
+    app.register_blueprint(build_pages_blueprint(source=source, registry_path=registry_path()))
     return app
 
 
 def run_terminal_app(arguments: TerminalAppArguments) -> int:
-    """Append the discovery event, recreate the remembered sessions, then serve the pages and the instances API until stopped.
+    """Append the discovery event, recreate the remembered sessions, then serve the pages until stopped.
 
-    In order: both servers start listening (so the shell's first fetch after registration
-    succeeds), the app is registered through ``forward_port.py --manifest``, and the process
-    waits for SIGTERM or SIGINT, returning the exit status for it.
+    In order: the pages start listening (so a window the shell opens right after the registration
+    finds them answering), the app is registered through ``forward_port.py --manifest``, and the
+    process waits for SIGTERM or SIGINT, returning the exit status for it.
     """
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     if arguments.agent_state_dir is not None:
@@ -124,16 +101,8 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     source = build_session_source(arguments, paths)
     with log_span("Recreating the remembered terminal sessions"):
         source.recreate_remembered_sessions()
-    manifest = load_instances_manifest(arguments.manifest_path, arguments.instances_url)
-    nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
-    instances_host, instances_port = split_instances_url(arguments.instances_url)
-    with (
-        serve_in_background(
-            instances_host, instances_port, build_instances_api_app(source, nudger, paths, manifest.name)
-        ),
-        serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source, nudger)),
-    ):
-        with log_span("Registering {} at {}", manifest.name, arguments.app_url):
+    with serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source)):
+        with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
             register_app(arguments.manifest_path, arguments.app_url)
         return wait_for_shutdown_signal()
 
@@ -154,17 +123,11 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     help="Where the wrapper pages are served",
 )
 @click.option(
-    "--instances-url",
-    default=INSTANCES_URL,
-    show_default=True,
-    help="Where the instances API is served",
-)
-@click.option(
     "--state-dir",
     type=click.Path(path_type=Path),
     default=STATE_DIR,
     show_default=True,
-    help="The app's state directory (dispatch scripts and pty records)",
+    help="The app's state directory (dispatch scripts and session id files)",
 )
 @click.option(
     "--store",
@@ -185,17 +148,15 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
 def main(
     manifest_path: Path,
     app_url: str,
-    instances_url: str,
     state_dir: Path,
     store_path: Path,
     oom_tag_script: Path,
 ) -> None:
-    """Run the workspace terminal: the wrapper pages plus the instances API over the workspace's tmux sessions."""
+    """Run the workspace terminal: the wrapper pages over the workspace's tmux sessions."""
     agent_state_dir = os.environ.get(ENV_AGENT_STATE_DIR, "")
     arguments = TerminalAppArguments(
         manifest_path=manifest_path,
         app_url=AppUrl(app_url),
-        instances_url=InstancesUrl(instances_url),
         state_dir=state_dir,
         store_path=store_path,
         oom_tag_script=oom_tag_script,

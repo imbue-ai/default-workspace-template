@@ -1,23 +1,33 @@
-"""Test doubles for the terminal app: a fake ``tmux`` and a fake ``ttyd`` installed as executables on PATH."""
+"""Test doubles for the terminal app: a fake ``tmux`` and a fake ``ttyd`` installed as executables on PATH, and the
+environment a process under test registers in."""
 
 import json
+import socket
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.primitives import InstanceTitle
+import pytest
+from app_manifest.registry import ENV_APPS_FILE
 from flask import Flask
 from flask.testing import FlaskClient
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
-from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
+from terminal_app.data_types import TerminalSessionRecord, TmuxSession
 from terminal_app.pages import build_pages_blueprint
-from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
+from terminal_app.primitives import (
+    TerminalTitle,
+    TmuxSessionId,
+    TmuxSessionName,
+    Workdir,
+)
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.tmux import parse_tmux_sessions
+
+LOOPBACK_HOST: Final[str] = "127.0.0.1"
 
 # Where the fake tmux keeps its canned answers and its call log.
 ENV_FAKE_TMUX_DIR: Final[str] = "FAKE_TMUX_DIR"
@@ -36,10 +46,10 @@ TEST_PTY_LABEL: Final[str] = "terminal-pty-c3d4"
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 
-# The fake tmux answers list-sessions and list-clients from two tab-separated files (in the
-# exact format the real app asks for, so the real parsers run), mutates the sessions file on
-# kill-session and rename-session, appends every argv to a call log, and refuses kills while a
-# marker file exists so the "session survived the kill" path can be exercised.
+# The fake tmux answers list-sessions from a tab-separated file (in the exact format the real
+# app asks for, so the real parser runs), mutates the sessions file on kill-session and
+# new-session, appends every argv to a call log, and refuses kills while a marker file exists
+# so the "session survived the kill" path can be exercised.
 _FAKE_TMUX_SCRIPT: Final[str] = f'''#!/usr/bin/env python3
 import json
 import os
@@ -51,7 +61,6 @@ with (state / "calls.log").open("a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 command = sys.argv[1]
 sessions_path = state / "sessions.tsv"
-clients_path = state / "clients.tsv"
 answer = ""
 error = ""
 
@@ -79,11 +88,6 @@ def next_session_id(lines: list[str]) -> str:
 if command == "list-sessions":
     if sessions_path.exists():
         answer = sessions_path.read_text()
-    else:
-        error = "no server running on /tmp/tmux-1000/default"
-elif command == "list-clients":
-    if clients_path.exists():
-        answer = clients_path.read_text()
     else:
         error = "no server running on /tmp/tmux-1000/default"
 elif command == "kill-session":
@@ -143,15 +147,6 @@ class FakeTmux(MutableModel):
             "".join(
                 f"{session.name}\t{session.session_id}\t{_activity_field(session)}\t{_created_field(session)}\n"
                 for session in sessions
-            )
-        )
-
-    def set_clients(self, clients: Sequence[TmuxClient]) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        (self.state_dir / "clients.tsv").write_text(
-            "".join(
-                f"{client.client_tty}\t{client.session_name}\t{client.session_id}\n"
-                for client in clients
             )
         )
 
@@ -269,7 +264,7 @@ def make_terminal_record(
         session_created = fake_created_epoch(session_id)
     return TerminalSessionRecord(
         name=TmuxSessionName(name),
-        title=InstanceTitle(title) if title is not None else None,
+        title=TerminalTitle(title) if title is not None else None,
         workdir=Workdir(workdir) if workdir is not None else None,
         session_id=TmuxSessionId(session_id) if session_id is not None else None,
         session_created=session_created,
@@ -319,12 +314,61 @@ def write_registry_labels(path: Path, label_by_app_name: Mapping[str, str]) -> P
     return path
 
 
-def build_pages_test_client(
-    source: TmuxSessionSource, nudger: InstanceNudgerInterface, registry_path: Path
-) -> FlaskClient:
+def build_pages_test_client(source: TmuxSessionSource, registry_path: Path) -> FlaskClient:
     """A test client over the wrapper pages alone, reading origin labels from ``registry_path``."""
     app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_pages_blueprint(source=source, nudger=nudger, registry_path=registry_path)
-    )
+    app.register_blueprint(build_pages_blueprint(source=source, registry_path=registry_path))
     return app.test_client()
+
+
+class TerminalEnvironment(FrozenModel):
+    """Where a terminal process under test keeps its files, and the registry it registers in."""
+
+    scratch_dir: Path = Field(description="The test's own directory for manifests, stores, and logs")
+    registry_path: Path = Field(description="The apps.toml registrations land in")
+
+
+def prepare_terminal_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo_root: Path
+) -> TerminalEnvironment:
+    """cwd at ``repo_root`` (the registration script is cwd-relative) and a scratch registry."""
+    monkeypatch.chdir(repo_root)
+    registry_path = tmp_path / "apps.toml"
+    monkeypatch.setenv(ENV_APPS_FILE, str(registry_path))
+    return TerminalEnvironment(scratch_dir=tmp_path, registry_path=registry_path)
+
+
+def free_port() -> int:
+    """A loopback port nothing is listening on right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind((LOOPBACK_HOST, 0))
+        return probe.getsockname()[1]
+
+
+def is_port_accepting(port: int) -> bool:
+    try:
+        with socket.create_connection((LOOPBACK_HOST, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def write_terminal_manifest(directory: Path, app_name: str) -> Path:
+    """Write a terminal-shaped app.toml (the ``new`` launch path and the icon it names) into ``directory``."""
+    (directory / "icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/></svg>'
+    )
+    manifest_path = directory / "app.toml"
+    manifest_path.write_text(
+        f'name = "{app_name}"\n'
+        f'display_name = "Terminal {app_name}"\n'
+        'icon = "icon.svg"\n'
+        "critical = true\n"
+        'priority = "terminal"\n'
+        "\n"
+        "[[launch_paths]]\n"
+        'id = "new"\n'
+        'label = "New Terminal"\n'
+        'path = "/new"\n'
+    )
+    return manifest_path

@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from app_instances.testing import RecordingNudger
 from flask.testing import FlaskClient
 
 from terminal_app.pages import (
@@ -34,19 +33,18 @@ def test_the_wrapper_page_frames_the_session_with_both_origin_labels(
     fake_tmux.set_sessions([make_tmux_session("terminal-2", "$5")])
     session_store.save_record(make_terminal_record("terminal-2", "Build", "/srv", session_id="$5"))
 
-    response = pages_client.get("/?session=terminal-2&tab=tab-0123")
+    response = pages_client.get("/?session=terminal-2")
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     assert "<title>Build</title>" in response.text
     assert _config_of(response.text) == {
         "session": "terminal-2",
-        "tab": "tab-0123",
         "shell_label": TEST_SHELL_LABEL,
         "page": {
             "name": "terminal-2",
             "title": "Build",
-            "pty_path": "/?arg=_&arg=session&arg=terminal-2&arg=tab-0123&arg=%2Fsrv",
+            "pty_path": "/?arg=_&arg=session&arg=terminal-2&arg=%2Fsrv",
             "pty_label": TEST_PTY_LABEL,
         },
     }
@@ -58,30 +56,27 @@ def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
     assert response.status_code == 200
     config = _config_of(response.text)
     assert config["session"] is None
-    assert config["tab"] is None
     assert config["page"] is None
     assert "<title>Terminal</title>" in response.text
 
 
-def test_an_unusable_tab_id_is_dropped_and_an_unregistered_pty_leaves_the_label_empty(
-    session_source: TmuxSessionSource, recording_nudger: RecordingNudger, fake_tmux: FakeTmux, tmp_path: Path
+def test_an_unregistered_pty_leaves_the_label_empty(
+    session_source: TmuxSessionSource, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
     registry_path = write_registry_labels(tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL})
-    client = build_pages_test_client(session_source, recording_nudger, registry_path)
+    client = build_pages_test_client(session_source, registry_path)
     fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
 
-    page = client.get("/?session=terminal-3&tab=not%20a%20tab")
-    session = client.get("/api/sessions/terminal-3?tab=not%20a%20tab")
+    page = client.get("/?session=terminal-3")
+    session = client.get("/api/sessions/terminal-3")
 
     assert page.status_code == 200
     config = _config_of(page.text)
-    assert config["tab"] is None
     assert config["shell_label"] == TEST_SHELL_LABEL
-    # The tab slot stays, empty, so a workdir would still be the argument session.sh reads.
     assert config["page"] == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
         "pty_label": "",
     }
     assert session.json == config["page"]
@@ -94,9 +89,7 @@ def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient)
     assert "no terminal has the name" in response.json["detail"]
 
 
-def test_new_allocates_a_terminal_and_redirects_to_its_page(
-    pages_client: FlaskClient, fake_tmux: FakeTmux, recording_nudger: RecordingNudger
-) -> None:
+def test_new_allocates_a_terminal_and_redirects_to_its_page(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1")])
 
     response = pages_client.get("/new?workdir=/srv")
@@ -105,14 +98,22 @@ def test_new_allocates_a_terminal_and_redirects_to_its_page(
     assert response.headers["Location"] == "/?session=terminal-2"
     assert fake_tmux.session_names() == ["terminal-1", "terminal-2"]
     assert fake_tmux.creates()[0][:6] == ["new-session", "-d", "-s", "terminal-2", "-c", "/srv"]
-    assert recording_nudger.nudge_count == 1
 
 
-def test_new_refuses_a_bad_workdir_with_the_instances_api_detail(pages_client: FlaskClient) -> None:
+def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient) -> None:
     response = pages_client.get("/new?workdir=" + "x" * 2000)
 
     assert response.status_code == 400
     assert "workdir" in response.json["detail"]
+
+
+def test_new_answers_a_detail_body_when_tmux_refuses(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
+    fake_tmux.refuse_creates()
+
+    response = pages_client.get("/new")
+
+    assert response.status_code == 500
+    assert "could not create session" in response.json["detail"]
 
 
 def test_the_session_api_answers_what_the_page_refreshes_from(
@@ -120,13 +121,13 @@ def test_the_session_api_answers_what_the_page_refreshes_from(
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
 
-    response = pages_client.get("/api/sessions/terminal-3?tab=tab-9")
+    response = pages_client.get("/api/sessions/terminal-3")
 
     assert response.status_code == 200
     assert response.json == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=tab-9",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
         "pty_label": TEST_PTY_LABEL,
     }
 
@@ -137,9 +138,9 @@ def test_health_answers(pages_client: FlaskClient) -> None:
 
 def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
     page = SessionPage(
-        name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1&arg=", pty_label="</script>"
+        name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1", pty_label="</script>"
     )
-    page_html = render_page(PageConfig(session="terminal-1", tab=None, shell_label="", page=page))
+    page_html = render_page(PageConfig(session="terminal-1", shell_label="", page=page))
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')

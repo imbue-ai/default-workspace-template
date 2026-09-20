@@ -13,11 +13,6 @@ import json
 from pathlib import Path
 from typing import Final
 
-from app_instances.blueprint import HTTP_FOUND, HTTP_NOT_FOUND, answer_typed_error
-from app_instances.errors import AppInstancesError
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.json_store import NEW_ACTION_ID
-from app_instances.primitives import InstanceTitle
 from app_manifest.primitives import AppName
 from app_manifest.registry import SHELL_APP_NAME, read_origin_label
 from flask import Blueprint, Response, jsonify, redirect, request
@@ -27,29 +22,41 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
-from terminal_app.errors import InvalidTerminalValueError, UnknownSessionPageError
+from terminal_app.errors import (
+    InvalidTerminalValueError,
+    TerminalAppError,
+    UnknownSessionPageError,
+)
 from terminal_app.primitives import (
     SESSION_QUERY_KEY,
-    TAB_QUERY_KEY,
-    TerminalTabId,
+    TerminalTitle,
     TmuxSessionName,
+    Workdir,
     derive_terminal_title,
     pty_path_for_session,
+    session_page_path,
 )
-from terminal_app.sessions import WORKDIR_PARAM, TmuxSessionSource
+from terminal_app.sessions import TmuxSessionSource
 
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
 HEALTH_PATH: Final[str] = "/api/health"
 SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
 
+# The one parameter the ``new`` launch path takes (system/apps/terminal/app.toml).
+WORKDIR_PARAM: Final[str] = "workdir"
+
+HTTP_FOUND: Final[int] = 302
+HTTP_BAD_REQUEST: Final[int] = 400
+HTTP_NOT_FOUND: Final[int] = 404
+HTTP_INTERNAL_ERROR: Final[int] = 500
+
 # The page derives two origins: the shell's (``SHELL_APP_NAME``), for the contract module it
 # imports, and the pty's, for the frame.
 PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 
-# The JSON script element the page reads off itself: the session it frames (or none), the tab
-# id the shell put in the URL, and the origin labels it derives the two origins from, as
-# ``PageConfig`` dumps them.
+# The JSON script element the page reads off itself: the session it frames (or none) and the
+# origin labels it derives the two origins from, as ``PageConfig`` dumps them.
 _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
@@ -123,11 +130,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 
   async function refresh(session) {
     if (session !== current) return;
-    const params = new URLSearchParams();
-    if (config.tab !== null) params.set("tab", config.tab);
     let response;
     try {
-      response = await fetch(`api/sessions/${encodeURIComponent(session)}?${params}`);
+      response = await fetch(`api/sessions/${encodeURIComponent(session)}`);
     } catch (error) {
       // The app is unreachable for the moment (a restart, a dropped connection): keep asking,
       // as the page does while it waits for the pty to register.
@@ -157,10 +162,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       showEmpty("Open a terminal from the launcher.");
       return;
     }
-    const params = new URLSearchParams();
-    params.set("session", session);
-    if (config.tab !== null) params.set("tab", config.tab);
-    history.replaceState(null, "", `/?${params}`);
+    history.replaceState(null, "", pathFor(session));
     current = session;
     void refresh(session);
   }
@@ -206,8 +208,8 @@ _EMPTY_TITLE: Final[str] = "Terminal"
 class SessionPage(FrozenModel):
     """What the wrapper needs to frame one session; ``model_dump`` is what the page and its API read."""
 
-    name: TmuxSessionName = Field(description="The session, which is the terminal's key")
-    title: InstanceTitle = Field(description="What the tab is called")
+    name: TmuxSessionName = Field(description="The session, which is the terminal's name")
+    title: TerminalTitle = Field(description="What the window is called")
     pty_path: str = Field(description="The path on the pty origin that attaches to the session")
     pty_label: str = Field(description="The pty's origin label, or \"\" while it is not registered")
 
@@ -216,7 +218,6 @@ class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
     session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
-    tab: TerminalTabId | None = Field(description="The tab id the shell put in the URL, or None for none")
     shell_label: str = Field(description="The shell's origin label, or \"\" when none is registered")
     page: SessionPage | None = Field(description="The session's page, when there is a session")
 
@@ -227,18 +228,6 @@ def _session_name(raw: str) -> TmuxSessionName:
         return TmuxSessionName(raw)
     except InvalidTerminalValueError as e:
         raise UnknownSessionPageError(f"no terminal has the name {raw!r}") from e
-
-
-def _tab_id(raw: str) -> TerminalTabId | None:
-    if raw == "":
-        return None
-    try:
-        return TerminalTabId(raw)
-    except InvalidTerminalValueError as e:
-        # A tab id the pty cannot record under is dropped rather than refused: the page still
-        # attaches, it just cannot be re-pointed on a tmux session switch.
-        logger.debug("Ignored the tab id in the wrapper URL: {}", e)
-        return None
 
 
 @pure
@@ -253,34 +242,38 @@ def render_page(config: PageConfig) -> str:
     )
 
 
-def build_pages_blueprint(
-    source: TmuxSessionSource,
-    nudger: InstanceNudgerInterface,
-    registry_path: Path,
-) -> Blueprint:
+def _workdir(raw: str) -> Workdir | None:
+    """The ``workdir`` a ``new`` request names, or None for the default; a bad one is a 400."""
+    if raw == "":
+        return None
+    try:
+        return Workdir(raw)
+    except InvalidTerminalValueError as e:
+        raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
+
+
+def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path) -> Blueprint:
     """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, and the health probe."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
-    def session_page(name: TmuxSessionName, tab_id: TerminalTabId | None) -> SessionPage:
-        listed = next((instance for instance in source.list_instances() if instance.key == name), None)
+    def session_page(name: TmuxSessionName) -> SessionPage:
+        listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)
         record = source.remembered_record(name)
         return SessionPage(
             name=name,
             title=listed.title if listed is not None else derive_terminal_title(name),
-            pty_path=pty_path_for_session(name, tab_id, record.workdir if record is not None else None),
+            pty_path=pty_path_for_session(name, record.workdir if record is not None else None),
             pty_label=read_origin_label(registry_path, PTY_APP_NAME),
         )
 
     @blueprint.get("/")
     def wrapper_page() -> ResponseReturnValue:
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
-        tab_id = _tab_id(request.args.get(TAB_QUERY_KEY, ""))
         session = _session_name(raw_session) if raw_session != "" else None
         config = PageConfig(
             session=session,
-            tab=tab_id,
             shell_label=read_origin_label(registry_path, SHELL_APP_NAME),
-            page=session_page(session, tab_id) if session is not None else None,
+            page=session_page(session) if session is not None else None,
         )
         response = Response(render_page(config), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
@@ -288,16 +281,12 @@ def build_pages_blueprint(
 
     @blueprint.get(NEW_PATH)
     def new_terminal() -> ResponseReturnValue:
-        workdir = request.args.get(WORKDIR_PARAM, "")
-        params = {WORKDIR_PARAM: workdir} if workdir != "" else {}
-        created = source.create_instance(NEW_ACTION_ID, params)
-        nudger.nudge()
-        return redirect(f"/?{SESSION_QUERY_KEY}={created.key}", code=HTTP_FOUND)
+        created = source.create_terminal(_workdir(request.args.get(WORKDIR_PARAM, "")))
+        return redirect(session_page_path(created.name), code=HTTP_FOUND)
 
     @blueprint.get(SESSION_API_PATH)
     def session_json(name: str) -> ResponseReturnValue:
-        page = session_page(_session_name(name), _tab_id(request.args.get(TAB_QUERY_KEY, "")))
-        return jsonify(page.model_dump(mode="json"))
+        return jsonify(session_page(_session_name(name)).model_dump(mode="json"))
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
@@ -307,5 +296,14 @@ def build_pages_blueprint(
     def answer_unknown_session(error: UnknownSessionPageError) -> ResponseReturnValue:
         return jsonify({"detail": str(error)}), HTTP_NOT_FOUND
 
-    blueprint.register_error_handler(AppInstancesError, answer_typed_error)
+    @blueprint.errorhandler(InvalidTerminalValueError)
+    def answer_invalid_value(error: InvalidTerminalValueError) -> ResponseReturnValue:
+        return jsonify({"detail": str(error)}), HTTP_BAD_REQUEST
+
+    @blueprint.errorhandler(TerminalAppError)
+    def answer_terminal_error(error: TerminalAppError) -> ResponseReturnValue:
+        # The app's own failures (tmux refusing, the store unreadable) answer a detail body rather than Flask's bare 500.
+        logger.opt(exception=error).error("Failed to serve a terminal page request")
+        return jsonify({"detail": str(error)}), HTTP_INTERNAL_ERROR
+
     return blueprint
