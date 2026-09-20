@@ -1,6 +1,6 @@
 """The daemon's pages as the workspace shell reaches them: the viewer page and the ``new``
 launch path, served by the real Flask app over the real manager and bridge (started once by
-the conftest), with fake in-memory browsers standing in for Chromium."""
+the conftest); the one create captures the launch it would spawn instead of starting Chromium."""
 
 from pathlib import Path
 
