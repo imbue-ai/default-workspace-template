@@ -71,6 +71,19 @@ describe("Escape", () => {
     expect(store.isLauncherOpen()).toBe(false);
     expect(document.querySelector("[data-launcher-overlay]")).toBeNull();
   });
+
+  it("closes a menu opened over the launcher (by keyboard, so the launcher stayed) before the launcher", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-floating="desktops-menu"]')).not.toBeNull();
+    pressEscape();
+    expect(document.querySelector('[data-floating="desktops-menu"]')).toBeNull();
+    expect(store.isLauncherOpen()).toBe(true);
+    pressEscape();
+    expect(store.isLauncherOpen()).toBe(false);
+  });
 });
 
 /** The shield over the focused window's content, which is there only while a menu or the launcher is open. */
