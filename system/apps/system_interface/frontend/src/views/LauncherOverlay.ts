@@ -387,6 +387,9 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
     const rows = searchWindowRows(attrs.windows, trimmed);
     const starts = searchStartOptions(START_OPTIONS, trimmed);
     const templates = attrs.catalog.kind === "loaded" ? searchTemplates(attrs.catalog.catalog.templates, trimmed) : [];
+    // No templates section to scroll to in these results: a pick of the template tile has nowhere to go,
+    // and must not be owed to the resting page later.
+    if (templates.length === 0) isScrollToTemplatesPending = false;
     if (foundTiles.length === 0 && rows.length === 0 && starts.length === 0 && templates.length === 0) {
       return m("p", { class: "launcher-no-matches mt-6 px-2 type-body text-secondary" }, [
         "Nothing matches “",
@@ -410,21 +413,30 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
       starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
       templates.length === 0
         ? null
-        : m("section", { "data-section": "templates", class: "launcher-templates mt-6" }, [
-            m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, SEARCH_TEMPLATES_TITLE),
-            m(
-              "div",
-              { class: "grid gap-6 px-2 " + (attrs.isCompact ? "grid-cols-2" : "grid-cols-4") },
-              templates.map((template) =>
-                m(TemplateCard, {
-                  key: template.slug,
-                  template,
-                  isFill: true,
-                  onPick: (picked) => (detailTemplate = picked),
-                }),
+        : m(
+            "section",
+            {
+              "data-section": "templates",
+              class: "launcher-templates mt-6",
+              oncreate: (created: m.VnodeDOM) => scrollToTemplatesIfPending(created.dom as HTMLElement),
+              onupdate: (updated: m.VnodeDOM) => scrollToTemplatesIfPending(updated.dom as HTMLElement),
+            },
+            [
+              m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, SEARCH_TEMPLATES_TITLE),
+              m(
+                "div",
+                { class: "grid gap-6 px-2 " + (attrs.isCompact ? "grid-cols-2" : "grid-cols-4") },
+                templates.map((template) =>
+                  m(TemplateCard, {
+                    key: template.slug,
+                    template,
+                    isFill: true,
+                    onPick: (picked) => (detailTemplate = picked),
+                  }),
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
     ];
   }
 
