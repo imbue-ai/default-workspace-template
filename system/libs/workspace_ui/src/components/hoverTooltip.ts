@@ -4,10 +4,11 @@
  * delay.
  *
  * The desktop's chrome can use neither of the usual tooltip mechanisms.
- * Native ``title`` is suppressed on anything draggable (a window's title bar,
- * a shortcut icon): Chromium hides ``title`` tooltips on draggable elements
- * and their descendants. A CSS ``::after`` bubble is clipped by the
- * ``overflow: hidden`` of the taskbar and of a window's body. A body-level,
+ * Native ``title`` cannot be timed or styled, and much of the chrome it would
+ * sit on is dragged by pointer (a window's title bar, a shortcut icon), where a
+ * native tooltip surfacing mid-gesture is noise. A CSS ``::after`` bubble is
+ * clipped by the container its trigger sits in: a window's body is
+ * ``overflow: hidden`` and the taskbar's entries strip scrolls. A body-level,
  * fixed-position element driven by our own listeners avoids both: it is not a
  * native tooltip, and it is not inside the clipping container.
  *
