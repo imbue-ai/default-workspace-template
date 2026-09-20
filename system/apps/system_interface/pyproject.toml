@@ -8,6 +8,8 @@ dependencies = [
     "app-manifest",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
+    # The avatar designs' validator parses registered SVG with DTDs and entities refused.
+    "defusedxml>=0.7",
     "flask>=3.0",
     "flask-sock>=0.7",
     "httpx>=0.27",

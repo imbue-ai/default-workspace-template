@@ -8,6 +8,7 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { HttpError, errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
+  parseAvatarCatalog,
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
@@ -17,6 +18,8 @@ import {
   parseWindow,
 } from "./records";
 import type {
+  AvatarCatalog,
+  AvatarMood,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -198,6 +201,27 @@ export async function fetchWallpapers(): Promise<WallpaperListing[]> {
 /** Where a wallpaper reference's image is served. */
 export function wallpaperImageUrl(wallpaper: Wallpaper): string {
   return apiUrl(`/wallpapers/${wallpaper.kind}/${encodeURIComponent(wallpaper.name)}`);
+}
+
+export async function fetchAvatars(): Promise<AvatarCatalog> {
+  return parseAvatarCatalog(await getJson(apiUrl("/api/avatars")));
+}
+
+/** Write the workspace's avatar design; the ``avatar_selection_changed`` push that follows reaches every window. */
+export async function selectAvatar(design: string): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/avatar-selection"), { design });
+}
+
+/** Where a design's image wearing ``mood`` is served; a preview holds the pose still. */
+export function avatarImageUrl(design: string, mood: AvatarMood, isPreview: boolean = false): string {
+  const query = new URLSearchParams({ mood });
+  if (isPreview) query.set("preview", "1");
+  return apiUrl(`/api/avatars/${encodeURIComponent(design)}/image.svg?${query.toString()}`);
+}
+
+/** Where a design's original SVG is served, as an attachment. */
+export function avatarSourceUrl(design: string): string {
+  return apiUrl(`/api/avatars/${encodeURIComponent(design)}/source.svg`);
 }
 
 export type AppLifecycleAction = "stop" | "start";

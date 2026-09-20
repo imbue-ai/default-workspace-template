@@ -20,6 +20,8 @@ from werkzeug.exceptions import NotFound
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.avatar.routes import register_avatar_routes
+from imbue.system_interface.avatar.status import avatar_status_wire_json
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
@@ -561,6 +563,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
                 }
             )
         )
+        websocket.send(json.dumps({"type": "avatar_status", **avatar_status_wire_json(shell.avatar_status.current())}))
 
         is_client_registered = False
         shutdown = False
@@ -615,6 +618,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
     register_shell_routes(application)
+    register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 
     # Registered unconditionally, even when the bundle is absent at startup: the directory can

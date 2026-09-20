@@ -422,17 +422,18 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """On connect the socket sends the shell's inventory and desktops."""
+    """On connect the socket sends the shell's inventory, desktops, and the avatar's status."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(2)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
         finally:
             close_ws(ws)
 
-    assert [message["type"] for message in messages] == ["apps_updated", "desktops_updated"]
+    assert [message["type"] for message in messages] == ["apps_updated", "desktops_updated", "avatar_status"]
     assert messages[0]["apps"] == []
     assert messages[1]["desktops"] == []
+    assert messages[2] == {"type": "avatar_status", "mood": "idle", "is_stale": True}
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:

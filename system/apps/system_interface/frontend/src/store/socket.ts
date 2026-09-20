@@ -9,8 +9,8 @@
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { parseAppRecords, parseDesktops, parseEntries } from "../model/records";
-import type { AppRecord, Desktop, EntryPresentation } from "../model/records";
+import { parseAppRecords, parseAvatarStatus, parseDesktops, parseEntries } from "../model/records";
+import type { AppRecord, AvatarStatus, Desktop, EntryPresentation } from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
 export type LayoutOpName = "refresh" | "reload_system_interface";
@@ -44,6 +44,8 @@ export interface SocketHandlers {
   onPlacementsUpdated(event: PlacementsUpdatedEvent): void;
   onActiveDesktopChanged(event: ActiveDesktopChangedEvent): void;
   onClientEntriesChanged(event: ClientEntriesChangedEvent): void;
+  onAvatarStatus(status: AvatarStatus): void;
+  onAvatarSelectionChanged(design: string): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
@@ -68,6 +70,7 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
+  design?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface"];
@@ -163,6 +166,12 @@ export class ShellSocket implements DesktopSocket {
           clientId: String(event.client_id ?? ""),
           entries: parseEntries(event.entries),
         });
+        return;
+      case "avatar_status":
+        handlers.onAvatarStatus(parseAvatarStatus(event));
+        return;
+      case "avatar_selection_changed":
+        if (typeof event.design === "string") handlers.onAvatarSelectionChanged(event.design);
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

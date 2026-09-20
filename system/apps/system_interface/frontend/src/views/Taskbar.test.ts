@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, desktopRecord, windowRecord } from "../testing/records";
+import { appRecord, avatarStateRecord, desktopRecord, windowRecord } from "../testing/records";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
@@ -12,6 +12,7 @@ afterEach(unmountViews);
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
   const attrs: TaskbarAttrs = {
+    avatar: avatarStateRecord(),
     entries: [
       {
         window: windowRecord("win-1", "docs", "/a", { title: "Plan" }),

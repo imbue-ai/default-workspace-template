@@ -1,0 +1,21 @@
+svg[data-mood="working"].sleepy-puddle .jelly-body{animation-name:shuffle}
+svg[data-mood="working"].shy-cube .jelly-body{animation-name:squish;animation-duration:1.2s}
+svg[data-mood="working"] .jelly-body{transform-origin:50px 84px;animation-duration:1.6s;animation-timing-function:ease-in-out;animation-iteration-count:infinite}.jelly-extra{transform-box:fill-box;transform-origin:center bottom}.jelly-eyes{transform-box:fill-box;transform-origin:center;animation:blink 4.8s infinite}
+svg[data-mood="working"].jelly-cat .jelly-body{animation-name:knead;animation-duration:.8s}svg[data-mood="working"].jelly-cat .jelly-extra{animation:tail 1.6s ease-in-out infinite}
+svg[data-mood="working"].bubble-snail .jelly-body{animation-name:breathe}svg[data-mood="working"].bubble-snail .jelly-extra{animation:feelers .8s ease-in-out infinite}
+svg[data-mood="working"].heart-bubble .jelly-body{animation-name:orbit;animation-duration:3.2s}svg[data-mood="working"].heart-bubble .jelly-extra{transform-origin:center;animation:pulse 1.6s ease-in-out infinite}
+svg[data-mood="working"].jelly-dragon .jelly-body{animation-name:hover;animation-duration:1.6s}svg[data-mood="working"].jelly-dragon .jelly-extra{transform-origin:center;animation:wings .4s ease-in-out infinite}
+@keyframes blink{0%,90%,100%{transform:scaleY(1)}95%{transform:scaleY(.12)}}
+@keyframes breathe{50%{transform:scale(1.025,.975)}}
+@keyframes shuffle{0%,100%{transform:translateX(-3px) skewX(-5deg)}50%{transform:translateX(3px) skewX(5deg)}}
+@keyframes squish{0%,100%{transform:scale(1,1)}50%{transform:scale(1.09,.88)}}
+@keyframes tail{0%,100%{transform:rotate(-9deg)}50%{transform:rotate(11deg)}}
+@keyframes knead{0%,100%{transform:rotate(-4deg) scale(1.025,.975)}50%{transform:rotate(4deg) scale(.98,1.02)}}
+@keyframes feelers{0%,100%{transform:rotate(-10deg)}50%{transform:rotate(10deg)}}
+@keyframes pulse{0%,100%{transform:scale(1)}30%{transform:scale(1.22)}60%{transform:scale(1.02)}75%{transform:scale(1.12)}}
+@keyframes orbit{0%,100%{transform:translate(-4px,-2px)}25%{transform:translate(4px,-8px)}50%{transform:translate(4px,-2px)}75%{transform:translate(-4px,-8px)}}
+@keyframes wings{0%,100%{transform:scaleX(.78) scaleY(.92)}50%{transform:scaleX(1.02) scaleY(1.06)}}
+@keyframes hover{0%,100%{transform:translateY(-2px) rotate(-2deg)}50%{transform:translateY(-8px) rotate(2deg)}}
+svg:not([data-mood="working"]) .jelly-body{animation:jelly-breathe 3.6s ease-in-out infinite}
+svg:not([data-mood="working"]) .jelly-eyes{animation:none}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}

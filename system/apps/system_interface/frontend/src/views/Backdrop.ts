@@ -142,6 +142,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           ),
           m(FloatingEntries, {
             entries: attrs.floatingEntries,
+            avatar: state.avatar,
             rectOf: (entry) => store.floatingEntryRect(entry.window.app, entry.look?.position ?? null),
             openMenuWindowId: attrs.openEntryMenuWindowId,
             onClick: attrs.onEntryClick,

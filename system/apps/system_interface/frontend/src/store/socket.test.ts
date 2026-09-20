@@ -62,6 +62,8 @@ beforeEach(() => {
     onPlacementsUpdated: vi.fn(),
     onActiveDesktopChanged: vi.fn(),
     onClientEntriesChanged: vi.fn(),
+    onAvatarStatus: vi.fn(),
+    onAvatarSelectionChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onConnected: vi.fn(),
   };
@@ -111,6 +113,10 @@ describe("ShellSocket", () => {
       saveId: "s-1",
     });
     expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({ clientId: "client-1", desktopId: "" });
+    current().receive({ type: "avatar_status", mood: "working", is_stale: false });
+    expect(handlers.onAvatarStatus).toHaveBeenCalledWith({ mood: "working", is_stale: false });
+    current().receive({ type: "avatar_selection_changed", design: "jelly-cat" });
+    expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledWith("jelly-cat");
   });
 
   it("delivers a layout op for this client or for everyone, and drops another client's or an unknown op", () => {

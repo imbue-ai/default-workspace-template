@@ -15,8 +15,9 @@ mode = "new"
 # every desktop, never closed, showing each viewer their own selected chat.
 [pin]
 path = "/"
-style = "plain"
+style = "avatar"
 scope = "independent"
+default_mode = "floating"
 
 # The desktop interface opens a window at a launch path; the params ride as query parameters.
 [[launch_paths]]

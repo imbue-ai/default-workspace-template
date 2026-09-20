@@ -179,6 +179,14 @@ class WebSocketBroadcaster(MutableModel):
             }
         )
 
+    def broadcast_avatar_status(self, status: Mapping[str, Any]) -> None:
+        """The avatar's mood or staleness changed (pinned-taskbar-entries plan section 4.6); every window redraws it."""
+        self.broadcast({"type": "avatar_status", **status})
+
+    def broadcast_avatar_selection_changed(self, design: str) -> None:
+        """The workspace's avatar design was written; every window draws it."""
+        self.broadcast({"type": "avatar_selection_changed", "design": design})
+
     def broadcast_client_entries_changed(self, client_id: str, entries: Mapping[str, Any]) -> None:
         """A client's presentation of its pinned entries was written; its own windows take it."""
         self.broadcast_to_client({"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id)

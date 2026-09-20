@@ -8,6 +8,7 @@
 
 import type {
   AppRecord,
+  AvatarStatus,
   Desktop,
   EntryMode,
   EntryPresentation,
@@ -53,7 +54,26 @@ export interface DesktopState {
   readonly modes: RenderModes;
   /** This client's presentation of each pinned entry, by app name (global across desktops). */
   readonly entries: Readonly<Record<string, EntryPresentation>>;
+  /** The avatar every window of the workspace draws (pinned-taskbar-entries plan section 4.6). */
+  readonly avatar: AvatarState;
 }
+
+/** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, and
+ *  the last status the shell pushed (stale and idle until one arrives). */
+export interface AvatarState {
+  readonly design: string;
+  readonly defaultDesign: string;
+  readonly status: AvatarStatus;
+}
+
+/** The design drawn until the shell says otherwise: the one the shell bundles as its default. */
+export const INITIAL_AVATAR_DESIGN = "gummy-seal";
+
+export const INITIAL_AVATAR_STATE: AvatarState = {
+  design: INITIAL_AVATAR_DESIGN,
+  defaultDesign: INITIAL_AVATAR_DESIGN,
+  status: { mood: "idle", is_stale: true },
+};
 
 export function initialDesktopState(clientId: string, modes: RenderModes): DesktopState {
   return {
@@ -69,6 +89,7 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     savedLayoutVersion: 0,
     modes,
     entries: {},
+    avatar: INITIAL_AVATAR_STATE,
   };
 }
 
@@ -103,7 +124,11 @@ export type DesktopEvent =
   | { readonly type: "window_location_reported"; readonly desktopId: string; readonly window: WindowRecord }
   | { readonly type: "render_modes_changed"; readonly modes: RenderModes }
   /** This client's entry presentations, as its record or a ``client_entries_changed`` says. */
-  | { readonly type: "entries_updated"; readonly entries: Readonly<Record<string, EntryPresentation>> };
+  | { readonly type: "entries_updated"; readonly entries: Readonly<Record<string, EntryPresentation>> }
+  /** The ``avatar_status`` the shell pushed. */
+  | { readonly type: "avatar_status_updated"; readonly status: AvatarStatus }
+  /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
+  | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
 export function isLayoutDirty(state: DesktopState): boolean {
@@ -238,6 +263,17 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return { ...state, modes: event.modes };
     case "entries_updated":
       return { ...state, entries: event.entries };
+    case "avatar_status_updated":
+      return { ...state, avatar: { ...state.avatar, status: event.status } };
+    case "avatar_selection_updated":
+      return {
+        ...state,
+        avatar: {
+          ...state.avatar,
+          design: event.design,
+          defaultDesign: event.defaultDesign ?? state.avatar.defaultDesign,
+        },
+      };
   }
 }
 

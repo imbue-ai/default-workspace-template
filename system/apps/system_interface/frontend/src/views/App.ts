@@ -8,9 +8,16 @@
 
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
-import { fetchWallpapers } from "../model/api";
-import { launchPathOf } from "../model/launch";
-import type { AppRecord, Desktop, DesktopShortcut, LaunchPath, WallpaperListing } from "../model/records";
+import { fetchAvatars, fetchWallpapers } from "../model/api";
+import { MESSAGE_PARAM, launchPathOf, launchTilesOf, promptTargetOfTiles } from "../model/launch";
+import type {
+  AppRecord,
+  AvatarDesign,
+  Desktop,
+  DesktopShortcut,
+  LaunchPath,
+  WallpaperListing,
+} from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -32,6 +39,7 @@ import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../mode
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
+import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
@@ -59,6 +67,12 @@ interface SettingsDialogState {
   readonly isDeleting: boolean;
 }
 
+interface AvatarChooserState {
+  /** The designs the chooser lists; null until the catalog answers. */
+  readonly designs: readonly AvatarDesign[] | null;
+  readonly loadError: string | null;
+}
+
 export interface AppAttrs {
   readonly store: DesktopStore;
   readonly gestures: GestureSource;
@@ -70,6 +84,7 @@ export interface AppAttrs {
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
   let settingsDialog: SettingsDialogState | null = null;
+  let avatarChooser: AvatarChooserState | null = null;
   let wallpapers: WallpaperListing[] | null = null;
   let launcherQuery = "";
   let selectedShortcutKey: string | null = null;
@@ -302,6 +317,7 @@ export function App(): m.Component<AppAttrs> {
                 look,
                 setMode: (mode) => void current.setEntryMode(window.app, mode),
                 setStyle: (style) => void current.setEntryStyle(window.app, style),
+                changeAvatar: openAvatarChooser,
               },
       },
       state.modes.isCompact,
@@ -472,6 +488,43 @@ export function App(): m.Component<AppAttrs> {
         wallpapers ??= [];
       })
       .finally(() => m.redraw());
+  }
+
+  /** Read the catalog on every open, so a design an agent registered meanwhile is listed. */
+  function openAvatarChooser(): void {
+    avatarChooser = { designs: null, loadError: null };
+    void fetchAvatars()
+      .then((catalog) => {
+        avatarChooser = { designs: catalog.designs, loadError: null };
+      })
+      .catch((error: unknown) => {
+        console.warn("[si] could not list the avatar designs", error);
+        avatarChooser = { designs: null, loadError: `Could not list the designs: ${(error as Error).message}` };
+      })
+      .finally(() => m.redraw());
+  }
+
+  function avatarChooserView(current: DesktopStore, chooser: AvatarChooserState): m.Children {
+    const state = current.getState();
+    const target = promptTargetOfTiles(launchTilesOf(openableApps(state)));
+    return m(AvatarChooserDialog, {
+      designs: chooser.designs,
+      loadError: chooser.loadError,
+      selected: state.avatar.design,
+      onSelect: (design) => void current.selectAvatar(design),
+      onDesignOwn:
+        target === null
+          ? null
+          : () => {
+              avatarChooser = null;
+              void current.openLaunchPath(target.app.name, target.launchPath.id, {
+                [MESSAGE_PARAM]: AVATAR_DESIGN_PROMPT,
+              });
+            },
+      onClose: () => {
+        avatarChooser = null;
+      },
+    });
   }
 
   function settingsDialogView(current: DesktopStore, dialog: SettingsDialogState): m.Children {
@@ -652,6 +705,7 @@ export function App(): m.Component<AppAttrs> {
         ),
         m(Taskbar, {
           entries: barEntries(state),
+          avatar: state.avatar,
           isCompact: state.modes.isCompact,
           openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
           launcher: {
@@ -696,6 +750,7 @@ export function App(): m.Component<AppAttrs> {
         openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
         openMenu?.kind === "running-app" ? runningAppPopover(current, openMenu.appName, openMenu.anchor) : null,
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+        avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
       ]);
     },
   };

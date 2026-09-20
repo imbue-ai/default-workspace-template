@@ -8,6 +8,7 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  AvatarCatalog,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -33,6 +34,14 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
+  avatars: AvatarCatalog = {
+    designs: [
+      { id: "gummy-seal", label: "Gummy seal", source_path: null },
+      { id: "jelly-cat", label: "Jelly cat", source_path: null },
+    ],
+    selected: "gummy-seal",
+    default: "gummy-seal",
+  };
   private stampCounter = 0;
   private windowCounter = 0;
 
@@ -277,6 +286,19 @@ export class FakeDesktopApi implements DesktopApi {
     const updated = { ...existing, entries: { ...existing.entries, [app]: presentation } };
     this.clients = [...this.clients.filter((client) => client.id !== clientId), updated];
     return updated;
+  }
+
+  async fetchAvatars(): Promise<AvatarCatalog> {
+    this.calls.push("fetchAvatars");
+    this.refuse();
+    return this.avatars;
+  }
+
+  async selectAvatar(design: string): Promise<void> {
+    this.calls.push(`selectAvatar:${design}`);
+    this.refuse();
+    if (!this.avatars.designs.some((candidate) => candidate.id === design)) throw new Error(`No design ${design}`);
+    this.avatars = { ...this.avatars, selected: design };
   }
 }
 

@@ -49,6 +49,8 @@ export interface EntryPresentationActions {
   readonly look: EntryLook;
   readonly setMode: (mode: "bar" | "floating") => void;
   readonly setStyle: (style: PinStyle) => void;
+  /** Open the avatar chooser; offered while the entry shows the avatar. */
+  readonly changeAvatar: () => void;
 }
 
 export interface TaskbarEntryMenuActions {
@@ -75,8 +77,8 @@ function styleLabel(style: PinStyle): string {
 }
 
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size, then for a pinned entry Float
- *  or Move to taskbar (not in compact mode, where every entry is in the bar) and the style to show it in, then
- *  Close for an ordinary entry. */
+ *  or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and the
+ *  avatar chooser while it shows the avatar, then Close for an ordinary entry. */
 export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuEntry[] {
   const entries: MenuEntry[] = [
     actions.isMinimized
@@ -92,7 +94,7 @@ export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isComp
   }
   const presentation = actions.presentation;
   if (presentation !== null) {
-    const { look, setMode, setStyle } = presentation;
+    const { look, setMode, setStyle, changeAvatar } = presentation;
     const rows: MenuEntry[] = [];
     if (!isCompact) {
       rows.push(
@@ -105,6 +107,7 @@ export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isComp
       const other: PinStyle = look.style === "plain" ? look.declaredStyle : "plain";
       rows.push({ key: `style-${other}`, label: styleLabel(other), run: () => setStyle(other) });
     }
+    if (look.style === "avatar") rows.push({ key: "change-avatar", label: "Change avatar...", run: changeAvatar });
     if (rows.length > 0) entries.push(MENU_DIVIDER, ...rows);
   }
   if (actions.close !== null) {

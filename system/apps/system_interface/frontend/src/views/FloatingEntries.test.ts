@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, windowRecord } from "../testing/records";
+import { appRecord, avatarStateRecord, windowRecord } from "../testing/records";
 import { FloatingEntries } from "./FloatingEntries";
 import type { FloatingEntriesAttrs } from "./FloatingEntries";
 
@@ -12,6 +12,7 @@ afterEach(unmountViews);
 function render(overrides: Partial<FloatingEntriesAttrs> = {}): HTMLElement {
   const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "floating" } });
   const attrs: FloatingEntriesAttrs = {
+    avatar: avatarStateRecord(),
     entries: [
       {
         window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
@@ -53,6 +54,34 @@ describe("FloatingEntries", () => {
     expect(onClick).toHaveBeenCalledWith("win-9");
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }));
     expect(onContextMenu).toHaveBeenCalledWith("win-9", 30, 40);
+  });
+
+  it("draws the avatar wearing the mood in the avatar style, marked stale when the status may be old", () => {
+    const layer = render({
+      entries: [
+        {
+          window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
+          app: appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "floating" } }),
+          title: "Buddy",
+          isMinimized: false,
+          isFocused: true,
+          isPinned: true,
+          look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: null },
+        },
+      ],
+      avatar: avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } }),
+    });
+    const entry = layer.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
+    expect(entry.getAttribute("data-entry-style")).toBe("avatar");
+    expect(entry.getAttribute("data-mood")).toBe("working");
+    expect(entry.getAttribute("data-stale")).toBe("true");
+    expect(entry.getAttribute("aria-label")).toBe("Buddy (status may be out of date)");
+    expect(entry.querySelector("svg")).toBeNull();
+    const image = entry.querySelector("img") as HTMLImageElement;
+    expect(image.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");
+    // A load that fails falls back to the default design at the same mood.
+    image.dispatchEvent(new Event("error"));
+    expect(image.getAttribute("src")).toBe("/api/avatars/gummy-seal/image.svg?mood=working");
   });
 
   it("draws nothing with no floating entries", () => {
