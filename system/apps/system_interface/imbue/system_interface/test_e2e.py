@@ -17,6 +17,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Generator
@@ -438,10 +439,21 @@ def _taskbar_entry(page: Page, window_id: str) -> Locator:
     return page.locator(f'[data-taskbar-entry="{window_id}"]')
 
 
-def _open_via_shortcut(page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY) -> str:
-    """Run a shortcut by double click and wait for the one new window it opens; answers the window id."""
+def _double_click(shortcut: Locator) -> None:
+    shortcut.dblclick()
+
+
+def _tap(shortcut: Locator) -> None:
+    shortcut.tap()
+
+
+def _open_via_shortcut(
+    page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY, run: Callable[[Locator], None] = _double_click
+) -> str:
+    """Run a shortcut (by double click unless ``run`` says otherwise) and wait for the one new window it opens;
+    answers the window id."""
     before = {window["id"] for window in _windows(server.base_url)}
-    page.locator(f'[data-shortcut="{key}"]').dblclick()
+    run(page.locator(f'[data-shortcut="{key}"]'))
     wait_for(
         lambda: len(set(window["id"] for window in _windows(server.base_url)) - before) == 1,
         timeout=15.0,
@@ -911,11 +923,7 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     client_id = _client_id(page)
 
     def _first_on_top() -> bool:
-        path = _placement_file(e2e_server.state_dir, client_id)
-        if not path.is_file():
-            return False
-        order = [placement["window_id"] for placement in json.loads(path.read_text())["placements"]]
-        return order[-1:] == [first]
+        return list(_stored_placements(e2e_server.state_dir, client_id))[-1:] == [first]
 
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
 
@@ -1170,17 +1178,8 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
 
-        before = {window["id"] for window in _windows(e2e_server.base_url)}
-        phone_page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').tap()
-        wait_for(
-            lambda: len(_windows(e2e_server.base_url)) == len(before) + 1,
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="the tap opened no window",
-        )
-        (window_id,) = {window["id"] for window in _windows(e2e_server.base_url)} - before
+        window_id = _open_via_shortcut(phone_page, e2e_server, run=_tap)
         window = _window(phone_page, window_id)
-        expect(window).to_be_visible(timeout=15000)
         expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
         expect(window.locator("[data-resize-edge]")).to_have_count(0)
         expect(window.locator('[data-window-control="maximize"]')).to_have_count(0)
