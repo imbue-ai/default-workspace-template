@@ -133,10 +133,8 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     Only git-tracked files count, for the same reason :func:`_live_prose_files`
     asks git: in a live workspace ``data/`` accumulates generated machine state,
     and the terminal app writes shell scripts into it. Those are not the
-    template's code and their style is not this ratchet's business, but a
-    filesystem walk cannot tell them from a committed script -- so this failed
-    inside a workspace and passed in CI, where ``data/`` is empty. Asking git
-    also drops the trees the walk had to prune by name (virtualenvs,
+    template's code and their style is not this ratchet's business. Asking git
+    also drops the non-source trees that hold no template code (virtualenvs,
     node_modules, git internals), all of which are gitignored.
     """
     tracked = subprocess.run(
