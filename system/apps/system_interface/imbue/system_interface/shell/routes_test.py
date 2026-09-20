@@ -196,6 +196,20 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     assert by_id["c2"]["is_connected"] is False
 
 
+def test_a_client_stored_on_a_desktop_that_does_not_exist_is_listed_on_the_first_one(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A record naming a desktop nothing holds (a deleted one, or a view a version-1 clients file recorded) reads
+    as the first desktop from both client listings, so neither names a desktop a reader cannot find."""
+    _record_client(app, "c-old", "everything")
+
+    (listed,) = client.get("/api/clients").get_json()["clients"]
+    (in_inventory,) = client.get("/api/inventory").get_json()["clients"]
+
+    assert (listed["id"], listed["active_desktop"]) == ("c-old", "home")
+    assert (in_inventory["id"], in_inventory["active_desktop"]) == ("c-old", "home")
+
+
 # Section 8: the op route
 
 
