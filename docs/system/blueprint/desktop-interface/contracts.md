@@ -296,6 +296,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-backdrop` | `var(--c-bg)` | | | no |
 | `--desk-default-wallpaper` | `url(/wallpapers/bundled/<name>)` | | | no |
 | `--desk-icon-size` | `48px` | `40px` | | no |
+| `--desk-shortcut-label-shadow` | `0 1px 2px rgb(0 0 0 / 0.6)` | | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
