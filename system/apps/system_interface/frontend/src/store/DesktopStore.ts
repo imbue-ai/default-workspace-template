@@ -14,7 +14,6 @@ import type {
   AppRecord,
   Desktop,
   DesktopShortcut,
-  Frame,
   GridCell,
   IfPresent,
   Layout,
@@ -543,10 +542,6 @@ export class DesktopStore {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.state === "MAXIMIZED") this.dispatch({ type: "window_restored", windowId });
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
-  }
-
-  setWindowFrame(windowId: string, frame: Frame): void {
-    this.dispatch({ type: "window_frame_set", windowId, frame });
   }
 
   /** A taskbar entry's click: restore and raise when minimized, minimize when focused, raise otherwise. */

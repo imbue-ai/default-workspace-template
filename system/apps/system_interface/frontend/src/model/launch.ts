@@ -45,16 +45,6 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
 }
 
-/** The launch path an app's default shortcut names, else its first; null for an app with none. */
-export function defaultLaunchPathOf(app: AppRecord): LaunchPath | null {
-  const declared = app.default_shortcut?.launch ?? null;
-  if (declared !== null) {
-    const named = launchPathOf(app, declared);
-    if (named !== null) return named;
-  }
-  return app.launch_paths[0] ?? null;
-}
-
 /** The path a launch path opens at, with ``params`` as its query string (``/new?message=...``). */
 export function launchPathWithParams(launchPath: LaunchPath, params: Readonly<Record<string, string>>): string {
   const query = new URLSearchParams();

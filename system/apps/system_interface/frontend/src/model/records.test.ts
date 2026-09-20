@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  WireShapeError,
-  parseAppRecord,
-  parseDesktop,
-  parseLayout,
-  parseClientRecord,
-  shortcutKey,
-  isSameFrame,
-} from "./records";
+import { WireShapeError, parseAppRecord, parseDesktop, parseLayout, parseClientRecord, shortcutKey } from "./records";
 
 const DESKTOP_WIRE = {
   id: "home",
@@ -119,7 +111,5 @@ describe("the small helpers", () => {
       is_connected: true,
     });
     expect(shortcutKey("docs", "new")).toBe("docs:new");
-    expect(isSameFrame({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 })).toBe(true);
-    expect(isSameFrame({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 0.5 })).toBe(false);
   });
 });

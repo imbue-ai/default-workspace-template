@@ -7,7 +7,6 @@ import {
   dropStalePlacements,
   effectivePlacements,
   focusedWindowId,
-  isSameLayout,
   mostRecentlyFocusedWindowOfApp,
   placementOf,
   withWindowFrame,
@@ -125,10 +124,5 @@ describe("the verbs", () => {
       state: "NORMAL",
       is_minimized: false,
     });
-  });
-
-  it("compares layouts by their placements alone", () => {
-    expect(isSameLayout(layout, { ...layout, updated_at: "later" })).toBe(true);
-    expect(isSameLayout(layout, withWindowMinimized(layout, "win-1"))).toBe(false);
   });
 });

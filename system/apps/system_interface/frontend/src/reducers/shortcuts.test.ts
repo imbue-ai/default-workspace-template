@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appRecord, desktopRecord, placementRecord, windowRecord } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
-import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveShortcutRun } from "./shortcuts";
+import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveLaunchRun } from "./shortcuts";
 
 const MODES = { isCompact: false, isTouch: false };
 const home = desktopRecord("home", {
@@ -22,7 +22,7 @@ function stateWith(...events: DesktopEvent[]): DesktopState {
   ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
 }
 
-describe("resolveShortcutRun", () => {
+describe("resolveLaunchRun", () => {
   it("a focus shortcut raises the app's most recently focused window when there is one", () => {
     const state = stateWith({
       type: "layout_loaded",
@@ -32,20 +32,18 @@ describe("resolveShortcutRun", () => {
         placements: [placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })],
       },
     });
-    expect(resolveShortcutRun(state, home.shortcuts[0])).toEqual({ kind: "raise", windowId: "win-1" });
+    expect(resolveLaunchRun(state, "docs", "new", "focus")).toEqual({ kind: "raise", windowId: "win-1" });
   });
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {
     const state = stateWith();
-    expect(
-      resolveShortcutRun(state, { ...home.shortcuts[0], target: { kind: "launch", app: "notes", launch: "new" } }),
-    ).toEqual({
+    expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({
       kind: "open",
       app: "notes",
       path: "/new",
       launch: "new",
     });
-    expect(resolveShortcutRun(state, { ...home.shortcuts[0], mode: "new" })).toEqual({
+    expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({
       kind: "open",
       app: "docs",
       path: "/new",
@@ -55,15 +53,11 @@ describe("resolveShortcutRun", () => {
 
   it("says why a shortcut cannot run", () => {
     const state = stateWith();
-    expect(
-      resolveShortcutRun(state, { ...home.shortcuts[0], target: { kind: "launch", app: "gone", launch: "new" } }),
-    ).toEqual({
+    expect(resolveLaunchRun(state, "gone", "new", "focus")).toEqual({
       kind: "unavailable",
       reason: "gone is not registered",
     });
-    expect(
-      resolveShortcutRun(state, { ...home.shortcuts[0], target: { kind: "launch", app: "docs", launch: "odd" } }),
-    ).toEqual({
+    expect(resolveLaunchRun(state, "docs", "odd", "focus")).toEqual({
       kind: "unavailable",
       reason: "Docs has no launch path odd",
     });

@@ -10,7 +10,7 @@ import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geom
 import type { GridDimensions } from "../geometry/grid";
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";
 import { launchPathOf } from "../model/launch";
-import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/records";
+import type { Desktop, GridCell, ShortcutMode } from "../model/records";
 import { activeDesktop, appByName } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -37,10 +37,6 @@ export function resolveLaunchRun(
     if (recent !== null) return { kind: "raise", windowId: recent.id };
   }
   return { kind: "open", app: app.name, path: launchPath.path, launch: launchPath.id };
-}
-
-export function resolveShortcutRun(state: DesktopState, shortcut: DesktopShortcut): ShortcutRun {
-  return resolveLaunchRun(state, shortcut.target.app, shortcut.target.launch, shortcut.mode);
 }
 
 /** The name a fresh desktop gets: the first "Desktop N" nobody is using, by name or by id. */
