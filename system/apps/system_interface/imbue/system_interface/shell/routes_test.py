@@ -241,14 +241,12 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     assert client.post("/api/apps/stub/instances/-not-a-key/rename", json={"title": "x"}).status_code == 400
 
 
-def test_a_preview_shell_refuses_every_verb_that_would_act_on_live_instances(
+def _preview_shell_over_a_stub(
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,
     stub_source: StubInstanceSource,
     stub_app_url: str,
-) -> None:
-    """A preview reads the live apps' instances but changes none of them: each verb is refused with
-    the same detail, and its document says it is a preview."""
+) -> Flask:
     stub_source.records.append(instance_record("stub-1"))
     stub_source.is_stoppable = True
     inventory = build_inventory(
@@ -260,11 +258,21 @@ def test_a_preview_shell_refuses_every_verb_that_would_act_on_live_instances(
         fetcher=HttpInstanceFetcher(),
     )
     inventory.refetch_now("stub")
-    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    return shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+
+
+def test_a_preview_shell_refuses_every_verb_that_would_act_on_an_instance_it_already_has(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    """A preview reads the live apps' instances but owns none of them: every verb that would change
+    one is refused with the same detail, and its document says it is a preview."""
+    application = _preview_shell_over_a_stub(tmp_path, broadcaster, stub_source, stub_app_url)
     client = application.test_client()
 
     refusals = [
-        client.post("/api/apps/stub/instances", json={"action": "new", "params": {}}),
         client.post("/api/apps/stub/instances/stub-1/rename", json={"title": "Renamed"}),
         client.post("/api/apps/stub/instances/stub-1/location", json={"path": "/deeper"}),
         client.post("/api/apps/stub/instances/stub-1/stop"),
@@ -275,14 +283,37 @@ def test_a_preview_shell_refuses_every_verb_that_would_act_on_live_instances(
     ]
     assert [refusal.status_code for refusal in refusals] == [403] * len(refusals)
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
-    # Nothing reached the app: its one instance is as it was, and no second one exists.
+    # Nothing reached the app: its one instance is as it was.
     assert [record.key for record in stub_source.records] == ["stub-1"]
     assert stub_source.records[0].title == "stub-1"
-    # A create through the op route (layout.py open of a bare app) is refused the same way.
+    assert client.get("/api/inventory").get_json()["is_preview"] is True
+
+
+def test_a_preview_shell_creates_through_to_the_live_app(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    """Creating is the one mutating verb a preview keeps: a preview of the shell whose New Tab page,
+    rail, and app picker were all inert could not be clicked around at all, and what a create makes
+    is a new instance the user can delete rather than a change to one they already have."""
+    application = _preview_shell_over_a_stub(tmp_path, broadcaster, stub_source, stub_app_url)
+    client = application.test_client()
+
+    # The relay answers with the app's own status, which for a create is 201.
+    created = client.post("/api/apps/stub/instances", json={"action": "new", "params": {}})
+    assert created.status_code == 201, created.get_json()
+
+    # The op route's create (``layout.py open`` of a bare app) reaches the app the same way, and
+    # docks what it made in the preview's own layout.
     _register_client(application, "c1", "everything")
     opened = _broadcast(client, "open", {"address": "app:stub", "client": "c1"})
-    assert opened.status_code == 403 and "preview" in opened.get_json()["detail"]
-    assert client.get("/api/inventory").get_json()["is_preview"] is True
+    assert opened.status_code == 200, opened.get_json()
+
+    # Both reached the app: two instances beside the one it started with.
+    assert len(stub_source.records) == 3
+    assert [record.key for record in stub_source.records][0] == "stub-1"
 
 
 def test_a_relayed_delete_drops_the_instance_from_every_tab_set_and_layout(

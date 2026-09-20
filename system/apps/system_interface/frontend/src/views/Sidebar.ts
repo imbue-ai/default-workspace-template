@@ -469,17 +469,15 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   function shortcutMenuEntries(resolved: ResolvedShortcut, attrs: SidebarAttrs): ShortcutMenuEntry[] {
     const isEverything = isEverythingView(attrs.activeViewId);
     const entries: ShortcutMenuEntry[] = [];
-    // A preview shell creates nothing and stops nothing: its backend refuses the verbs that
-    // would act on the live apps, so the menu does not offer them.
+    // A preview shell stops nothing: its backend refuses the verbs that would act on the live
+    // apps, so the menu does not offer them. Creating is not one of them.
     const canActOnLive = !isPreviewShell();
     if (resolved.mode === "focus") {
-      if (canActOnLive) {
-        entries.push({
-          label: resolved.action.label,
-          run: () => attrs.onRunShortcutAsNew(resolved.shortcut),
-          isReveal: true,
-        });
-      }
+      entries.push({
+        label: resolved.action.label,
+        run: () => attrs.onRunShortcutAsNew(resolved.shortcut),
+        isReveal: true,
+      });
     } else {
       entries.push({
         label: `Focus last ${resolved.app.display_name}`,
@@ -695,12 +693,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 : isStopped
                   ? "project-rail-shortcut-stopped text-faint opacity-60"
                   : "text-primary"),
-            // A "new" shortcut creates an instance, which a preview shell cannot; a "focus" one
-            // only finds a tab, which it can.
-            onclick:
-              isAwaiting || (resolved.mode === "new" && isPreviewShell())
-                ? undefined
-                : () => reveal(() => attrs.onRunShortcut(resolved.shortcut)),
+            onclick: isAwaiting ? undefined : () => reveal(() => attrs.onRunShortcut(resolved.shortcut)),
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(resolved.app, ROW_ICON_SIZE))), railLabel(label, "")],
         ),

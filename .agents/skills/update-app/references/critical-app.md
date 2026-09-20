@@ -99,11 +99,12 @@ worker's job at harden time (`type-app.md`, "Critical apps"). In the live loop
 you need a clean build, not the full gate.
 
 `update-app`'s step 4, **Verify**, carries over with its timing rule intact:
-*verify before the user can see it*, which here means the boot check below and
-nothing after the tab is open. The preview reads real state (the chat preview
-follows the real agents, the shell preview lists the real apps), so driving it
-is driving the user's real workspace; and the tab you open in the first round
-stays open for the whole pass.
+*verify before the user can see it*. Here that rule is per round, not just the
+first: the tab is closed while you edit and check, and re-opened when the round
+is ready. The preview reads real state (the chat preview follows the real
+agents, the shell preview lists the real apps), so driving it while the user is
+looking at it is driving their workspace under them; with the tab closed you
+can drive it freely on its own port.
 
 **First round: boot the preview, confirm it came up, then hand it over.** Boot
 it first, on its own:
@@ -135,7 +136,7 @@ python3 system/scripts/layout.py open <name>-preview
 **That `open` is the hand-off, not setup.** It puts the tab on the user's screen
 the moment it returns, so from here the pass is interactive: every round ends by
 telling the user what changed and waiting. Do not drive the preview yourself
-after this point, and never tell the user to open a tab you already opened.
+while the tab is open, and never tell the user to open a tab you already opened.
 
 What to point the user at: for the chat, the conversation the preview opened on
 (the one that motivated the change, when one did; sends from the preview are
@@ -143,6 +144,13 @@ real, so a change about what happens when a message is sent can be tried for
 real); for the shell, their real projects and tabs, with the previewed app in
 place of the live one and every live app's instances beside it; for the
 terminal, a session the preview creates (a real tmux session).
+
+A preview shell creates for real: its New Tab page, rail, and All apps popover
+all work, and what they make is a real instance of whatever app the copied
+registry names -- a sibling booted with `--with` gets the instance, and an app
+that was not previewed gets a live one the user can delete afterwards. What a
+preview refuses is every verb that would change an instance the user already
+has: rename, stop, start, delete, and stopping or starting an app.
 
 **If the `open` was refused** (no connected client: `has no client to apply it
 (HTTP 412)`), the hand-off did not happen. Drive the preview privately
@@ -152,27 +160,40 @@ rather than the surface. Keep trying the `open`; the moment one lands, that is
 the delivered preview. Approval given on a screenshot is not approval of the
 live surface; name that gap when you report the pass.
 
-**Each subsequent round: refresh in place; the tab never goes blank.** The tab
-points at the wrapper page, which never moves. The script's `refresh` restarts
-the *process*; `layout.py refresh` reloads the *iframe*. After editing:
+**Each subsequent round: close the tab, refresh in place, re-open it.** The
+preview itself stays up the whole pass -- same process record, same ports, same
+registrations, same wrapper page -- and only the tab comes and goes. Close it
+first, so the user is not watching a half-built round land:
 
-- **Frontend-only round:** rebuild at the npm root, then reload the iframe:
+```bash
+python3 system/scripts/layout.py close <name>-preview
+```
+
+(A `close` with no connected client answers the same `HTTP 412` an `open` does;
+there was no tab on screen to take away, so carry on.)
+
+Then edit, and refresh the preview in place:
+
+- **Frontend-only round:** rebuild at the npm root.
 
   ```bash
   (cd "data/.tasks/critical-live/update-$SLUG/system" && npm run build)
-  python3 system/scripts/layout.py refresh <name>-preview
   ```
 
 - **Backend round:** additionally re-boot the preview's process on its existing
-  ports, then reload the iframe:
+  ports.
 
   ```bash
   uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>
-  python3 system/scripts/layout.py refresh <name>-preview
   ```
 
-  If `refresh` exits non-zero the new build did not boot: the tab shows an error
-  until you fix it and refresh again, and the live app is unaffected either way.
+  If `refresh` exits non-zero the new build did not boot. Fix it and refresh
+  again; the live app is unaffected either way, and with the tab closed the user
+  never sees the broken round.
+
+Check the round on the preview's own port while the tab is still closed, then
+`layout.py open <name>-preview` again. That re-open is the round's hand-off,
+exactly as the first one was.
 
 **Commit before each surface**, so branch `HEAD` always equals what the user is
 looking at:

@@ -86,13 +86,13 @@ describe("AllAppsPicker", () => {
     );
   });
 
-  it("in a preview shell, a row runs nothing but still pins", () => {
+  it("in a preview shell, a row still runs and still pins", () => {
     const restore = markPageAsPreviewShell();
     try {
       applyApps([appRecord("terminal")]);
       const attrs = mount({});
       root.querySelector<HTMLElement>("[data-app]")!.click();
-      expect(attrs.onRunAction).not.toHaveBeenCalled();
+      expect(attrs.onRunAction).toHaveBeenCalled();
       root.querySelector<HTMLElement>(".project-rail-pin")!.click();
       expect(attrs.onPin).toHaveBeenCalled();
     } finally {

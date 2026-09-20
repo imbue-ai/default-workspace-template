@@ -287,26 +287,43 @@ describe("Sidebar", () => {
     expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
   });
 
-  it("in a preview shell, offers no verb that acts on a live instance or app, and creates nothing", () => {
+  it("in a preview shell, still creates but offers no verb that acts on a live instance or app", () => {
     const restore = markPageAsPreviewShell();
     try {
       const attrs = mount({});
       expand();
-      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
-      expect(attrs.onRunShortcut).not.toHaveBeenCalled();
       root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
       m.redraw.sync();
       const shortcutItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
         el.textContent?.trim(),
       );
       expect(shortcutItems).not.toContain("Stop Terminal");
-      expect(shortcutItems).not.toContain("New terminal");
       root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
       m.redraw.sync();
       const rowItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
         el.textContent?.trim(),
       );
       expect(rowItems).toEqual(["Refresh", "Share Terminal", "Add to project...", "Remove from project"]);
+      // Last: running the row collapses the rail, so nothing can be read from it afterwards.
+      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
+      expect(attrs.onRunShortcut).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("in a preview shell, a focus-mode row's menu still offers its complementary create", () => {
+    const restore = markPageAsPreviewShell();
+    try {
+      mount({ projects: [project("alpha", { shortcuts: [{ app: "terminal", action: "new", mode: "focus" }] })] });
+      expand();
+      root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
+      m.redraw.sync();
+      const items = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+        el.textContent?.trim(),
+      );
+      expect(items).toContain("New terminal");
+      expect(items).not.toContain("Stop Terminal");
     } finally {
       restore();
     }
