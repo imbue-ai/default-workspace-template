@@ -26,7 +26,6 @@ import {
   SHELL_SHOWN,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
-import { WINDOW_ID_ATTRIBUTE } from "../gestures/pointerGestures";
 import { windowPageUrl } from "../model/pageUrl";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
@@ -45,6 +44,8 @@ import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
 export const WINDOW_CONTENT_ATTRIBUTE = "data-window-content";
+/** The element of a window's chrome that carries its id; the gestures bind by it too. */
+export const WINDOW_ID_ATTRIBUTE = "data-window-id";
 
 // App pages are cross-origin iframes (each app owns its own origin), so allow-same-origin only
 // lets the framed app be a normal page on ITS origin; it grants nothing on the shell's. An app
