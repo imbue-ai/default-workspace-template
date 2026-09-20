@@ -62,7 +62,7 @@ describe("Window", () => {
     const shield = unfocused.querySelector("[data-window-shield]") as HTMLElement;
     expect(shield).not.toBeNull();
     shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    expect(onRaise).toHaveBeenCalled();
+    expect(onRaise).toHaveBeenCalledTimes(1);
     m.mount(root as HTMLElement, null);
     expect(render({ isFocused: true }).querySelector("[data-window-shield]")).toBeNull();
   });

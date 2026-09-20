@@ -117,16 +117,14 @@ export function Window(): m.Component<WindowAttrs> {
                     "Starting on another screen…",
                   )
                 : null,
-            // The shield: the press that raises the window lands here rather than in the page.
+            // The shield: the press that raises the window lands here rather than in the page, and
+            // bubbles to the window's own handler, which raises.
             isFocused
               ? null
               : m("div", {
                   "data-window-shield": "",
                   class: "absolute inset-0 cursor-default",
-                  onpointerdown: (event: PointerEvent) => {
-                    event.preventDefault();
-                    attrs.onRaise();
-                  },
+                  onpointerdown: (event: PointerEvent) => event.preventDefault(),
                 }),
           ]),
           ...(isResizable
