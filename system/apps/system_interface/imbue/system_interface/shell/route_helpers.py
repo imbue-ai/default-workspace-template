@@ -1,5 +1,5 @@
 """The request helpers the shell's route modules share: status codes, the loopback gate, error bodies, and how an op
-settles on the one client it targets (contracts.md section 12, desktop contracts.md section 8)."""
+settles on the one client it targets (desktop contracts.md section 8)."""
 
 from collections.abc import Mapping
 from typing import Any
