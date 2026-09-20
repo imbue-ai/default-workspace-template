@@ -2,11 +2,13 @@
  * A window's chrome (desktop-interface plan sections 4.2 and 4.3): the title bar, the content
  * box the live page is laid over (``data-window-content``), the transparent shield over the
  * content of every window but the focused one (a press on it raises the window and is consumed,
- * since a click into a cross-origin page cannot reach the shell), and the eight resize edges
- * (``data-resize-edge``). The chrome is stacked over its own live page, so the root and the content
- * box are inert (``pointer-events: none``, inherited from the windows layer) and only the title bar,
- * the edges, the shield, and the placeholders take a press. The window is positioned by the pixels
- * the store hands it; it reads no metric from the DOM and attaches no gesture listener.
+ * since a click into a cross-origin page cannot reach the shell) and over every window while a
+ * menu or the launcher is open (the press that closes them has to reach the shell), and the eight
+ * resize edges (``data-resize-edge``). The chrome is stacked over its own live page, so the root
+ * and the content box are inert (``pointer-events: none``, inherited from the windows layer) and
+ * only the title bar, the edges, the shield, and the placeholders take a press. The window is
+ * positioned by the pixels the store hands it; it reads no metric from the DOM and attaches no
+ * gesture listener.
  */
 
 import m from "mithril";
@@ -39,6 +41,9 @@ export interface WindowAttrs {
   readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
+  /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
+   *  launcher is open. */
+  readonly isShielded: boolean;
   /** Whether this client's layout places the window; a window settling on another client's open is not
    *  placed here and shows a placeholder instead of a page. */
   readonly isPlacedHere: boolean;
@@ -129,15 +134,15 @@ export function Window(): m.Component<WindowAttrs> {
                       "Starting on another screen…",
                     )
                   : null,
-              // The shield: the press that raises the window lands here rather than in the page, and
-              // bubbles to the window's own handler, which raises.
-              isFocused
-                ? null
-                : m("div", {
+              // The shield: the press that raises the window (or closes an open menu or the launcher) lands
+              // here rather than in the page, and bubbles to the window's own handler and on to the document.
+              attrs.isShielded
+                ? m("div", {
                     "data-window-shield": "",
                     class: "absolute inset-0 cursor-default",
                     onpointerdown: (event: PointerEvent) => event.preventDefault(),
-                  }),
+                  })
+                : null,
             ],
           ),
           ...(isResizable

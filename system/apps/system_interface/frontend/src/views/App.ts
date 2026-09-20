@@ -569,6 +569,7 @@ export function App(): m.Component<AppAttrs> {
                   focusedWindowId: focused,
                   selectedShortcutKey,
                   openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
+                  isOverlayOpen: openMenu !== null || isLauncherOpen,
                   onSelectShortcut: (key) => {
                     selectedShortcutKey = key;
                   },

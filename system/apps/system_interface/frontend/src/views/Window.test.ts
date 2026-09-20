@@ -21,6 +21,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isCompact: false,
     isTouch: false,
     isMenuOpen: false,
+    isShielded: false,
     isPlacedHere: true,
     onStartApp: null,
     onRaise: vi.fn(),
@@ -47,15 +48,21 @@ describe("Window", () => {
     expect(element.querySelector(".window-title")?.textContent).toBe("Plan");
   });
 
-  it("lays a shield over an unfocused window's content whose press raises it, and none over the focused one", () => {
+  it("lays a shield over the content when asked, whose press raises an unfocused window and not a focused one", () => {
     const onRaise = vi.fn();
-    const unfocused = render({ isFocused: false, onRaise });
+    const unfocused = render({ isFocused: false, isShielded: true, onRaise });
     const shield = unfocused.querySelector("[data-window-shield]") as HTMLElement;
     expect(shield).not.toBeNull();
     shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     expect(onRaise).toHaveBeenCalledTimes(1);
     unmountViews();
-    expect(render({ isFocused: true }).querySelector("[data-window-shield]")).toBeNull();
+    expect(render({ isFocused: true, isShielded: false }).querySelector("[data-window-shield]")).toBeNull();
+    unmountViews();
+    const focusedUnderMenu = render({ isFocused: true, isShielded: true, onRaise });
+    const focusedShield = focusedUnderMenu.querySelector("[data-window-shield]") as HTMLElement;
+    expect(focusedShield).not.toBeNull();
+    focusedShield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(onRaise).toHaveBeenCalledTimes(1);
   });
 
   it("offers the controls in the title bar's order and reports each", () => {

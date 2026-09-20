@@ -160,6 +160,7 @@ The top non-minimized window is focused.
 Raising moves a placement to the end of the list and saves.
 A click on a window's chrome raises it.
 A click into a page cannot reach the shell across origins, so the pages of every window but the focused one are inert (`pointer-events: none` on their iframes), the press lands on a transparent shield over the window, and the shell raises it and makes its page interactive; the first press is consumed.
+While a menu or the launcher is open the shield covers the focused window too, so the click that dismisses them reaches the shell.
 A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window.
 
 ### 4.3 Moving, resizing, snapping, maximizing, minimizing

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * The desktop's root over the fake shell: what the App owns beyond the views it composes, the
- * document-level keyboard handling around the launcher.
+ * document-level keyboard and pointer handling around the launcher and the menus.
  */
 import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { appRecord, desktopRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
 import { App } from "./App";
 
 const CLIENT = "client-1";
@@ -33,6 +33,7 @@ beforeEach(async () => {
   const api = new FakeDesktopApi();
   const socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+  api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
   store = new DesktopStore({
     clientId: CLIENT,
     api,
@@ -69,5 +70,39 @@ describe("Escape", () => {
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
     expect(document.querySelector("[data-launcher-overlay]")).toBeNull();
+  });
+});
+
+/** The shield over the focused window's content, which is there only while a menu or the launcher is open. */
+function focusedShield(): HTMLElement | null {
+  return document.querySelector('[data-window-id="win-1"][data-focused="true"] [data-window-shield]');
+}
+
+function pressOn(element: HTMLElement): void {
+  element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  m.redraw.sync();
+}
+
+describe("a press into the focused page", () => {
+  it("closes an open menu: the page is shielded while the menu is up, so the press reaches the shell", () => {
+    expect(focusedShield()).toBeNull();
+    (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-floating="window-menu"]')).not.toBeNull();
+    const shield = focusedShield();
+    expect(shield).not.toBeNull();
+    pressOn(shield as HTMLElement);
+    expect(document.querySelector('[data-floating="window-menu"]')).toBeNull();
+    expect(focusedShield()).toBeNull();
+  });
+
+  it("closes the launcher the same way", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const shield = focusedShield();
+    expect(shield).not.toBeNull();
+    pressOn(shield as HTMLElement);
+    expect(store.isLauncherOpen()).toBe(false);
+    expect(focusedShield()).toBeNull();
   });
 });
