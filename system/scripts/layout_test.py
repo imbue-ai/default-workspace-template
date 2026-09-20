@@ -201,6 +201,15 @@ def test_the_window_verbs_post_the_window_and_the_target(fake_shell: Any, capsys
     assert "pointed window" in err and "at /?chat=agent-2" in err
 
 
+def test_close_names_a_window_the_answer_no_longer_lists_by_its_id_alone(
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The desktop the shell answers a close with has the window gone, so the summary has only its id to give.
+    fake_shell.op_answer = desktop_answer(windows=[], window_id=_CHAT_WINDOW["id"])
+    assert layout.main(["close", _CHAT_WINDOW["id"]]) == 0
+    assert capsys.readouterr().err == f"closed window {_CHAT_WINDOW['id']} on desktop home for client c1\n"
+
+
 def test_place_and_navigate_check_their_arguments(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         layout.main(["place", "self"])
@@ -342,12 +351,14 @@ def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(fake_shell: 
         ((404, {"detail": "No window win-x"}), layout.EXIT_ERROR, "not found"),
         ((400, {"detail": "bad"}), layout.EXIT_ERROR, "400"),
         ((412, {"detail": "no client"}), layout.EXIT_ERROR, "412"),
+        # A proxy's error page rather than the shell's JSON: reported as it came.
+        ((500, "<html>boom</html>"), layout.EXIT_ERROR, "failed (HTTP 500): <html>boom</html>"),
     ],
 )
 def test_refusals_map_to_exit_codes(
     fake_shell: Any,
     capsys: pytest.CaptureFixture[str],
-    response: tuple[int, dict[str, Any]],
+    response: tuple[int, dict[str, Any] | str],
     exit_code: int,
     fragment: str,
 ) -> None:
