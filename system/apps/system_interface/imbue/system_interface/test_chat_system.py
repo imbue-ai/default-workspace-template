@@ -50,9 +50,14 @@ def _chat_app(shell_url: str) -> dict[str, Any] | None:
     return next((app for app in _inventory(shell_url)["apps"] if app["name"] == "chat"), None)
 
 
+def _is_chat_app_running(shell_url: str) -> bool:
+    listed = _chat_app(shell_url)
+    return listed is not None and listed["is_running"] is True
+
+
 def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
     wait_for(
-        lambda: _chat_app(shell_url) is not None and _chat_app(shell_url)["is_running"] is True,
+        lambda: _is_chat_app_running(shell_url),
         timeout=15.0,
         poll_interval=0.2,
         error_message="the shell never listed the chat app as running",
