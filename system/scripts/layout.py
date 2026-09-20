@@ -63,8 +63,8 @@ after a ``shortcut`` write.
 
 Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
 ``replace-url``, ``inspect``, ``where``, ``views``) and the old ``app:``, ``chat:``,
-``terminal:``, ``service:``, ``url:``, and ``subagent:`` spellings are refused with the verb or
-form to use instead.
+``chat-terminal:``, ``terminal:``, ``service:``, ``url:``, and ``subagent:`` spellings are
+refused with the verb or form to use instead.
 """
 
 import argparse
