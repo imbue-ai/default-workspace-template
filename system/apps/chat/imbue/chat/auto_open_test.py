@@ -203,7 +203,11 @@ def test_the_shell_client_posts_the_open_op_and_reads_the_shell_s_answer() -> No
 
     def _broadcast() -> Any:
         posted.append(request.get_json())
-        return (jsonify({"detail": "no client"}), 412) if posted[-1]["args"]["client"] == "nobody" else jsonify({"ok": True})
+        return (
+            (jsonify({"detail": "no client"}), 412)
+            if posted[-1]["args"]["client"] == "nobody"
+            else jsonify({"ok": True})
+        )
 
     application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
     port = free_port()

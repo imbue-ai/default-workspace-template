@@ -807,8 +807,9 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
         e2e_server,
         client_id,
         window_id,
-        lambda placement: abs(placement["frame"]["width"] * backdrop["width"] - resized["width"])
-        <= _GEOMETRY_TOLERANCE_PX,
+        lambda placement: (
+            abs(placement["frame"]["width"] * backdrop["width"] - resized["width"]) <= _GEOMETRY_TOLERANCE_PX
+        ),
         "the resized frame",
     )
     assert stored["state"] == "NORMAL" and stored["is_minimized"] is False

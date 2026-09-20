@@ -211,7 +211,9 @@ def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
     chunks = [
         chunk
         for directory in _DESKTOP_METRIC_FREE_DIRECTORIES
-        for chunk in check_regex_ratchet(_FRONTEND_SRC / directory, FileExtension(".ts"), _PIXEL_METRIC_PATTERN, ("*.test.ts",))
+        for chunk in check_regex_ratchet(
+            _FRONTEND_SRC / directory, FileExtension(".ts"), _PIXEL_METRIC_PATTERN, ("*.test.ts",)
+        )
     ]
     assert len(chunks) <= snapshot(0), _PIXEL_METRIC_RULE.format_failure(chunks)
 
@@ -225,7 +227,7 @@ def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
         ('class: "@max-[620px]:w-1/2 h-9",', False),
         ("// the bar is 36px tall", False),
         (" * 24px would not be visible", False),
-        ('style: { left: `${rect.x}px` },', False),
+        ("style: { left: `${rect.x}px` },", False),
         ('class: "h-(--desk-title-bar-height)",', False),
         ('const x = "a"; // 36px tall', False),
         ('m("div", { class: "h-9" }), // pad 12px', False),
@@ -234,7 +236,9 @@ def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
         ('class: "[text-shadow:var(--desk-shortcut-label-shadow)]",', False),
     ],
 )
-def test_the_pixel_metric_pattern_catches_a_literal_and_not_a_breakpoint_or_a_comment(line: str, is_metric: bool) -> None:
+def test_the_pixel_metric_pattern_catches_a_literal_and_not_a_breakpoint_or_a_comment(
+    line: str, is_metric: bool
+) -> None:
     assert (_PIXEL_METRIC_PATTERN.compiled.search(line) is not None) is is_metric
 
 
