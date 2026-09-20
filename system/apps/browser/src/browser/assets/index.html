@@ -146,11 +146,11 @@
     </div>
     <div id="crashoverlay">
       <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
-      <div class="sub">Open a new browser from the + menu.</div>
+      <div class="sub">Open a new browser from the launcher.</div>
     </div>
     <div id="terminatedoverlay">
       <div class="msg">This browser has been terminated by an agent.</div>
-      <div class="sub">Open a new browser from the + menu.</div>
+      <div class="sub">Open a new browser from the launcher.</div>
     </div>
     <div id="stoppedoverlay">
       <div class="msg">This browser is stopped.</div>
@@ -429,7 +429,7 @@
     closedForGood = true;
     stopIdleTimer();
     initOverlay.classList.add("show", "static");
-    initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
+    initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the launcher.";
   }
 
   // ---- pixel plane: per-stripe H.264 decoder over /stream ----
@@ -1093,7 +1093,7 @@ registerProcessor('pb', PB);`;
         returnBar.classList.remove("show");
         initOverlay.classList.add("show");
         initOverlay.classList.add("static");
-        initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the + menu.";
+        initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the launcher.";
         return;
       }
       if (ev.code === 1013) { setLifecycle("init"); initOverlay.classList.add("show"); scheduleReconnect(); return; }
@@ -1111,7 +1111,7 @@ registerProcessor('pb', PB);`;
   function boot() {
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
-    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the + menu."; return; }
+    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the launcher."; return; }
     initOverlay.classList.add("show");
     if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
     setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
