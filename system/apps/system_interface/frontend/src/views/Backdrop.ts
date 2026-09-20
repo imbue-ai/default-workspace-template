@@ -133,7 +133,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               ];
             }),
           ),
-          snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
+          m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
             ? shortcutGhost(gesture.iconPosition, cellRect(gesture.targetCell, metrics), appByName(state, gesture.app))
             : null,

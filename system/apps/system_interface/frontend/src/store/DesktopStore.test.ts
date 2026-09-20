@@ -19,14 +19,14 @@ let socket: FakeDesktopSocket;
 let notices: string[];
 let reloads: number;
 
-function makeStore(): DesktopStore {
+function makeStore(redraw: () => void = () => undefined): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
     api,
     socket,
     metrics: METRICS,
     modes: MODES,
-    redraw: () => undefined,
+    redraw,
     notify: (message) => void notices.push(message),
     reloadInterface: () => void (reloads += 1),
   });
@@ -34,8 +34,8 @@ function makeStore(): DesktopStore {
   return store;
 }
 
-async function startedStore(): Promise<DesktopStore> {
-  const store = makeStore();
+async function startedStore(redraw: () => void = () => undefined): Promise<DesktopStore> {
+  const store = makeStore(redraw);
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
   return store;
@@ -574,6 +574,32 @@ describe("gestures", () => {
     store.setWindowState("win-1", "SNAPPED_RIGHT");
     store.beginWindowResize("win-1", "w");
     expect(last(activePlacements(store.getState()))).toMatchObject({ state: "NORMAL", frame: { x: 0.5, width: 0.5 } });
+  });
+
+  it("a move or resize in progress schedules no redraw; its start and end do", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    const afterBegin = redraws;
+    expect(afterBegin).toBeGreaterThan(0);
+    store.updateWindowMove({ x: 150, y: 90 });
+    store.updateWindowMove({ x: 5, y: 400 });
+    expect(store.gestureRectFor("win-1")).not.toBeNull();
+    expect(store.snapPreviewRect()).not.toBeNull();
+    expect(redraws).toBe(afterBegin);
+    store.endWindowMove({ x: 200, y: 200 });
+    expect(redraws).toBeGreaterThan(afterBegin);
+
+    const beforeResize = redraws;
+    store.beginWindowResize("win-1", "se");
+    expect(redraws).toBeGreaterThan(beforeResize);
+    const afterResizeBegin = redraws;
+    store.updateWindowResize({ x: 20, y: 20 });
+    store.updateWindowResize({ x: 40, y: 40 });
+    expect(store.gestureRectFor("win-1")?.width).toBeCloseTo(640, 6);
+    expect(redraws).toBe(afterResizeBegin);
+    store.endWindowResize({ x: 40, y: 40 });
+    expect(redraws).toBeGreaterThan(afterResizeBegin);
   });
 
   it("in compact mode window gestures do nothing", async () => {

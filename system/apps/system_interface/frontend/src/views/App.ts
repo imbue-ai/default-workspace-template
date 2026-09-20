@@ -28,7 +28,7 @@ import {
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
 import type { GestureBinding, GestureListener, GestureSource } from "../gestures/pointerGestures";
-import { LivePagesLayer } from "../pages/livePages";
+import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
@@ -36,7 +36,9 @@ import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
 import { FloatingCard, Menu, anchorForEvent, anchorForPoint } from "./Menu";
 import type { MenuAnchor, MenuEntry } from "./Menu";
+import { applyRectStyle } from "./pixelStyle";
 import { RunningAppPopover } from "./RunningAppsWidget";
+import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
@@ -111,6 +113,21 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
+  /** Paint a window drag or resize as it stands: the live rectangle straight onto the window's element,
+   *  its page over the content box that just moved, and the snap preview. No redraw: one per pointer
+   *  event would re-render the whole desktop and reposition every page. The store keeps the same
+   *  rectangle and zone, so a redraw from any other cause mid-gesture renders what was painted. */
+  function paintWindowGesture(current: DesktopStore, windowId: string): void {
+    const area = backdropArea;
+    if (area === null) return;
+    const rect = current.gestureRectFor(windowId);
+    const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    if (rect !== null && element !== null) applyRectStyle(element, rect);
+    pages?.placePage(windowId);
+    const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
+    if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
+  }
+
   /** The gesture source measures points against ``root`` (the whole layout, so the taskbar's long presses
    *  count too); the store wants the backdrop's pixels, which differ by whatever sits above the backdrop. */
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
@@ -162,9 +179,11 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
             current.updateWindowMove(point);
+            paintWindowGesture(current, binding.windowId);
             return;
           case "window-resize":
             current.updateWindowResize(delta);
+            paintWindowGesture(current, binding.windowId);
             return;
           case "shortcut":
             current.updateShortcutDrag(point);
