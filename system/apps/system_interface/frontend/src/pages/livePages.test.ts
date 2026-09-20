@@ -323,6 +323,13 @@ describe("the contract", () => {
     expect(frameOf("win-1").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
   });
 
+  it("cuts a reported title to the shell's limit rather than having the whole report refused", async () => {
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: ` ${"t".repeat(300)} ` });
+    await settle();
+    expect(api.calls).toContain(`reportWindowLocation:home:win-1:/?doc=2:${"t".repeat(256)}`);
+  });
+
   it("a local edit between a page's report and the broadcast does not point the page back", async () => {
     const urls = spyOnSrc("win-1");
     load("win-1");
