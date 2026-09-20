@@ -370,7 +370,7 @@ def _toml_inline_table(table: dict[str, object]) -> str:
 
 
 def _toml_inline_table_value(value: object) -> str:
-    """A value inside an inline table: a scalar, or an array of strings (an action's or a launch path's param names)."""
+    """A value inside an inline table: a scalar, or an array of strings (a launch path's param names)."""
     if isinstance(value, list):
         for item in value:
             if not isinstance(item, str):
