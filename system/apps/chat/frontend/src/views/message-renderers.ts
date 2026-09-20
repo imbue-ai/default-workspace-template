@@ -179,6 +179,15 @@ function resolvedResultSignature(
     .join("|");
 }
 
+/** The Chats-store input the auth-error note renders from: whether the chat is known yet, and
+ *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
+ *  the chat list can land after the transcript, and the switch link is only offered once it has. */
+function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
+  if (!event.is_auth_error) return "";
+  const chat = getChatById(chatId);
+  return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
+}
+
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
@@ -188,6 +197,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
+  let renderedReauthSignature = "";
   let renderedDetailVersion = -1;
   return {
     onbeforeupdate(vnode) {
@@ -209,6 +219,9 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
+        // The auth-error note reads the chat, which the chat list can deliver after this
+        // message first painted; without this the note keeps its chat-less shape for good.
+        reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion
       );
     },
@@ -220,6 +233,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
+      renderedReauthSignature = reauthNoteSignature(event, chatId);
       renderedDetailVersion = getEventDetailVersion(chatId);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
