@@ -211,8 +211,8 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
     return (
         f"<{SEED_CONTEXT_TAG}>\n"
         "This chat did not begin here. Before this workspace existed the user had the "
-        "conversation below, and the chat shows it above your first turn; you are the first "
-        "agent to join it. Treat it as the conversation so far: what follows this block is the "
+        "conversation this block carries, and the chat shows it above your first turn; you are "
+        "the first agent to join it. Treat it as the conversation so far: what follows this block is the "
         "user's next turn in it and may lean on it entirely (a bare number, for instance, picks "
         "one of the options the last turn offered). Answer that turn, not this block.\n\n"
         f"{conversation}\n"
