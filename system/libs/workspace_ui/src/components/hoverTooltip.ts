@@ -30,12 +30,11 @@
  * leaves the document takes the bubble with it. A trigger must be IN the
  * document to be heard -- a detached tree never reaches the listeners.
  *
- * The one deliberate exception is the project rail: a rail row sits directly
- * above the row it is being compared against (e.g. the shortcut a hover is
- * about to reveal versus the one below it), so a centered-below bubble covers
- * exactly the row the tooltip is meant to help someone choose. ``placeTooltip``
- * takes an optional ``placement`` for that one case, defaulting to the shared
- * centered-below behavior everywhere else.
+ * The one deliberate exception is the chat app's collapsed chat rail: a rail
+ * row sits directly above the next chat someone is choosing between, so a
+ * centered-below bubble covers exactly the row the tooltip is meant to help
+ * them choose. ``placeTooltip`` takes an optional ``placement`` for that one
+ * case, defaulting to the shared centered-below behavior everywhere else.
  */
 
 import type m from "mithril";
