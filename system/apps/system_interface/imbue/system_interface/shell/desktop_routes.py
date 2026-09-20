@@ -267,7 +267,7 @@ def save_placements(desktop_id: str) -> ResponseReturnValue:
     return jsonify({"updated_at": desktop_layout_wire_json(saved)["updated_at"] if saved is not None else None})
 
 
-# Section 5.5: wallpapers, and the inventory's desktop fields
+# Section 5.5: wallpapers, and the inventory document
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
