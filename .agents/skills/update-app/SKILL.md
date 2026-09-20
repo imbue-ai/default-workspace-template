@@ -27,7 +27,7 @@ If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
+  desktop: its windows, taskbar, and launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
