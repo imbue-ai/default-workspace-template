@@ -1,12 +1,12 @@
 /**
- * The template catalog behind the New Tab page's "Start from a template" section, as the shell
+ * The template catalog behind the launcher's "Start from a template" section, as the shell
  * serves it at ``GET /api/templates-catalog`` (see ``imbue/system_interface/template_catalog.py``
  * and ``catalog/README.md`` for the document itself).
  *
- * One fetch per page load, shared by every launcher panel: the page shows "Loading templates..."
- * until it answers, the shelves when it does, and "Failed to load templates." when the shell has
- * nothing to give (a failed fetch is retried the next time a launcher mounts). A shell with no
- * catalog URL configured answers a null catalog, and the page omits the section.
+ * One fetch per page load, shared by every opening of the launcher: it shows "Loading templates..."
+ * until the fetch answers, the shelves when it does, and "Failed to load templates." when the shell
+ * has nothing to give (a failed fetch is retried the next time the desktop mounts). A shell with no
+ * catalog URL configured answers a null catalog, and the launcher omits the section.
  *
  * The pure helpers below (shelf resolution, the "All templates" row, the template search, the
  * write-up's paragraphs) are exported so they can be tested without a DOM or a socket.

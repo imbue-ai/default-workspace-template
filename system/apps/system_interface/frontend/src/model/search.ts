@@ -1,6 +1,6 @@
 /**
- * The text match behind the New Tab page's search field, shared by everything that field finds:
- * the machine's instances and "Open new" actions, the "Start something" intents, and the templates.
+ * The text match behind the launcher's field, shared by everything that field finds: the windows
+ * across every desktop, the "Open new" launch paths, the "Start something" intents, and the templates.
  */
 
 /**

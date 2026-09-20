@@ -1,5 +1,5 @@
 /**
- * The "Start from a template" cards and rails of the New Tab page: a card is a template's drawing
+ * The "Start from a template" cards and rails of the launcher: a card is a template's drawing
  * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
  * cards that shows three and a half at a time, pages one visible width with an arrow in the gutter
  * at each end, and scrolls freely with the trackpad. The arrows sit outside the scrolling area, so
