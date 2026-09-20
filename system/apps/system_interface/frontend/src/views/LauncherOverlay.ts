@@ -395,11 +395,16 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
       ]);
     }
     return [
-      foundTiles.length === 0 && rows.length === 0
+      foundTiles.length === 0
         ? null
-        : m("section", { "data-section": "windows", class: "launcher-section" }, [
-            m("h2", { class: `${SECTION_HEADING_CLASS} mb-1 px-2` }, WINDOWS_TITLE),
+        : m("section", { "data-section": "open-new", class: "launcher-section" }, [
+            m("h2", { class: `${SECTION_HEADING_CLASS} mb-1 px-2` }, OPEN_NEW_TITLE),
             foundTiles.map((tile) => launchRow(tile, attrs)),
+          ]),
+      rows.length === 0
+        ? null
+        : m("section", { "data-section": "windows", class: "launcher-section mt-6 first:mt-0" }, [
+            m("h2", { class: `${SECTION_HEADING_CLASS} mb-1 px-2` }, WINDOWS_TITLE),
             rows.map((row) => windowRow(row, attrs, true)),
           ]),
       starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
