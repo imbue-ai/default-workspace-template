@@ -79,7 +79,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 import tomlkit
 import yaml
@@ -195,7 +195,7 @@ def _apps_file() -> Path:
 # ---------- Names ----------
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     sys.stderr.write(f"error: {message}\n")
     raise SystemExit(EXIT_ERROR)
 
@@ -768,7 +768,6 @@ def _cmd_wallpaper(args: argparse.Namespace) -> int:
 
 def _cmd_retired(args: argparse.Namespace) -> int:
     _fail(f"'{args.verb}' is not a desktop verb: {_RETIRED_VERBS[args.verb]}")
-    return EXIT_ERROR
 
 
 # ---------- The parser ----------
