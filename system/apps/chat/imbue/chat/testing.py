@@ -87,6 +87,7 @@ from imbue.system_interface.server import create_application as create_shell_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
@@ -515,16 +516,6 @@ class FakePexpectProcess:
         self.close_calls += 1
 
 
-LOOPBACK_HOST: Final[str] = "127.0.0.1"
-
-
-def free_port() -> int:
-    """A loopback port nothing is listening on right now."""
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
-        probe.bind((LOOPBACK_HOST, 0))
-        return probe.getsockname()[1]
-
-
 def wait_until_true(predicate: Callable[[], bool], timeout_seconds: float, what: str) -> None:
     """Poll ``predicate`` every 50ms until it holds; raises naming ``what`` never happened when the timeout passes."""
     wait_for(predicate, timeout=timeout_seconds, poll_interval=0.05, error_message=f"{what} never happened")
@@ -567,7 +558,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = free_port()
+    port = find_free_port()
     server = make_threaded_server(host, port, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -42,13 +42,13 @@ from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
-from imbue.chat.testing import free_port
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
 from imbue.system_interface.shell.desktops import slugify_desktop_name
+from imbue.system_interface.testing import find_free_port
 
 
 def _playwright_browsers_installed() -> bool:
@@ -121,8 +121,8 @@ def _running_e2e_server(
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
         tmp_path,
-        free_port(),
-        free_port(),
+        find_free_port(),
+        find_free_port(),
         session_events=session_events,
         is_account_signed_in=is_account_signed_in,
     )
@@ -774,8 +774,8 @@ def _switched_workspace(
 ) -> AbstractContextManager[RunningWorkspace]:
     return running_workspace(
         tmp_path,
-        free_port(),
-        free_port(),
+        find_free_port(),
+        find_free_port(),
         session_events=session_events,
         additional_accounts=additional_accounts,
         messenger=messenger,
