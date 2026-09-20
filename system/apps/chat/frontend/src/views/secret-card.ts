@@ -83,15 +83,22 @@ export function isFiledSecretRequest(toolCall: ToolCall, toolResult: ToolResultE
 // The transcript's resolution notice is the primary signal, and a submit from this
 // page flips the card at once. A page rebuilt after either has neither, so the
 // card asks the backend once for the request's status; only a definitive answer
-// is cached, so a transient failure is asked again on the next render.
+// is cached. A transient failure is asked again once its retry delay passes, not
+// on the very next render: the failure's own redraw would otherwise be that
+// render, and the card would fetch back to back for as long as the backend is down.
 
-type StatusEntry = { state: "loading" } | { state: "ready"; resolution: SecretResolution | null };
+type StatusEntry =
+  | { state: "loading" }
+  | { state: "ready"; resolution: SecretResolution | null }
+  | { state: "failed"; retryAtMs: number };
+
+export const SECRET_STATUS_RETRY_DELAY_MS = 15_000;
 
 const statusCache = new Map<string, StatusEntry>();
 
 export function knownSecretResolution(requestId: string): SecretResolution | null {
   const cached = statusCache.get(requestId);
-  if (cached === undefined) {
+  if (cached === undefined || (cached.state === "failed" && Date.now() >= cached.retryAtMs)) {
     statusCache.set(requestId, { state: "loading" });
     void hydrateStatus(requestId);
     return null;
@@ -103,19 +110,29 @@ function resolutionFromStatus(status: unknown): SecretResolution | null {
   return status === "stored" || status === "declined" || status === "superseded" ? status : null;
 }
 
-async function hydrateStatus(requestId: string): Promise<void> {
+async function fetchStatusEntry(requestId: string): Promise<StatusEntry> {
   try {
     const response = await fetch(apiUrl(`/api/secret-requests/${encodeURIComponent(requestId)}`));
     if (response.ok) {
       const body = (await response.json()) as { status?: unknown };
-      statusCache.set(requestId, { state: "ready", resolution: resolutionFromStatus(body.status) });
-    } else if (response.status === 404) {
-      statusCache.set(requestId, { state: "ready", resolution: null });
-    } else {
-      statusCache.delete(requestId);
+      return { state: "ready", resolution: resolutionFromStatus(body.status) };
+    }
+    if (response.status === 404) {
+      return { state: "ready", resolution: null };
     }
   } catch {
-    statusCache.delete(requestId);
+    // Network-level failure: fall through to the transient-failure entry.
+  }
+  return { state: "failed", retryAtMs: Date.now() + SECRET_STATUS_RETRY_DELAY_MS };
+}
+
+async function hydrateStatus(requestId: string): Promise<void> {
+  const entry = await fetchStatusEntry(requestId);
+  statusCache.set(requestId, entry);
+  if (entry.state === "failed") {
+    // An idle page may not render again on its own; wake one render at the
+    // retry time so the refetch actually happens.
+    setTimeout(() => m.redraw(), SECRET_STATUS_RETRY_DELAY_MS);
   }
   m.redraw();
 }

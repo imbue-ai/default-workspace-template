@@ -5,6 +5,7 @@ import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
 import {
+  SECRET_STATUS_RETRY_DELAY_MS,
   isFiledSecretRequest,
   knownSecretResolution,
   noteSecretResolution,
@@ -76,7 +77,15 @@ function renderToDom(
 afterEach(() => {
   resetSecretStatusCacheForTesting();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
+
+/** Let the fire-and-forget fetch chain inside knownSecretResolution settle. */
+async function flushFetches(): Promise<void> {
+  for (let hop = 0; hop < 6; hop += 1) {
+    await Promise.resolve();
+  }
+}
 
 describe("parseSecretRequest", () => {
   it("reads the filed request off the backend's structured field", () => {
@@ -207,5 +216,28 @@ describe("status hydration", () => {
     noteSecretResolution("secret-2", "declined");
     expect(knownSecretResolution("secret-2")).toBe("declined");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch a failed lookup on the next render, only once the retry delay passes", async () => {
+    // The failure's own redraw is the next render: without a delay the card would
+    // fetch back to back for as long as the chat app answers 5xx.
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 502 }))
+      .mockResolvedValue(new Response(JSON.stringify({ status: "stored" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+
+    expect(knownSecretResolution("secret-3")).toBeNull();
+    await flushFetches();
+    expect(knownSecretResolution("secret-3")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(SECRET_STATUS_RETRY_DELAY_MS);
+    expect(knownSecretResolution("secret-3")).toBeNull();
+    await flushFetches();
+    expect(knownSecretResolution("secret-3")).toBe("stored");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
