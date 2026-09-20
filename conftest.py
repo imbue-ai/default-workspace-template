@@ -1,7 +1,6 @@
-import os
-import subprocess
-import tempfile
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -10,9 +9,16 @@ import pytest
 # provisioned by env-converge before any agent starts. Playwright's browser-cache
 # lookup only auto-discovers builds Playwright downloaded itself, so a launch has
 # to name this binary explicitly. Every suite collected under the repo root
-# (each app's tests included) inherits this override, so pytest-playwright's
-# `page` fixture drives Fortress with no per-app setup.
+# inherits this override, so pytest-playwright's `page` fixture drives Fortress
+# with no per-app setup. The `chat` and `system_interface` apps are NOT under it:
+# the root pytest config ignores them and each runs from its own directory.
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+# Stdlib-only and loaded by path: this file is a conftest, not a package, and the
+# module is shared with the two app suites that root elsewhere.
+_EXEC_TEMP_ROOT_PATH = (
+    Path(__file__).resolve().parent / "system/scripts/exec_temp_root.py"
+)
 
 
 @pytest.fixture(scope="session")
@@ -27,40 +33,14 @@ def browser_type_launch_args(
     return {**browser_type_launch_args, "executable_path": str(FORTRESS_CHROMIUM_PATH)}
 
 
-def _fallback_temp_roots() -> tuple[Path, ...]:
-    """Where to put pytest's temp tree when the default root cannot execute, in order tried.
-
-    `/var/tmp` is the alternate the FHS already guarantees; the cache dir is the
-    workspace's own writable space, for an image that hardens `/var/tmp` the same way.
-    Read at call time rather than at import, since `Path.home()` depends on the
-    environment the run was launched with.
-    """
-    return (Path("/var/tmp"), Path.home() / ".cache" / "pytest-temp")
-
-
-def _can_execute_a_file_in(directory: Path) -> bool:
-    """Whether a file written into `directory` can then be run.
-
-    Answered by running one, not by reading the mount's flags: `noexec` is the usual
-    reason a directory refuses, but a `noexec`-free mount can still refuse (a `fs.suid`
-    style LSM, a filesystem with no execute bit at all), and what a test planting a stub
-    binary on PATH needs to know is the outcome.
-    """
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        handle, name = tempfile.mkstemp(dir=directory, suffix=".sh")
-    except OSError:
-        return False
-    probe = Path(name)
-    try:
-        with os.fdopen(handle, "w") as fh:
-            fh.write("#!/bin/sh\nexit 0\n")
-        probe.chmod(0o700)
-        return subprocess.run([str(probe)], capture_output=True).returncode == 0
-    except OSError:
-        return False
-    finally:
-        probe.unlink(missing_ok=True)
+def _load_exec_temp_root() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "_exec_temp_root", _EXEC_TEMP_ROOT_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -78,21 +58,8 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     if config.getoption("basetemp") is not None:
         return
-    if _can_execute_a_file_in(Path(tempfile.gettempdir())):
-        return
-    for candidate in _fallback_temp_roots():
-        if _can_execute_a_file_in(candidate):
-            # `tempfile.tempdir` is what pytest's own `tmp_path` root resolves through,
-            # and it caches, so setting the variable alone would be too late for an
-            # already-resolved default. TMPDIR is for the subprocesses the tests spawn.
-            tempfile.tempdir = str(candidate)
-            os.environ["TMPDIR"] = str(candidate)
-            return
-    tried = ", ".join(
-        str(root) for root in (Path(tempfile.gettempdir()), *_fallback_temp_roots())
-    )
-    raise pytest.UsageError(
-        f"no temp directory here can execute a file it holds (tried {tried}). Suites in "
-        "this repo run stub binaries they write to one, so they cannot pass as-is; pass "
-        "--basetemp naming a directory on a filesystem mounted without noexec."
-    )
+    exec_temp_root = _load_exec_temp_root()
+    try:
+        exec_temp_root.relocate_temp_root_if_needed()
+    except exec_temp_root.NoExecutableTempRootError as e:
+        raise pytest.UsageError(str(e)) from e
