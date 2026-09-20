@@ -77,7 +77,6 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.instances import build_chat_instance_source
 from imbue.chat.instances import parse_subagent_key
 from imbue.chat.models import AgentCreationError
@@ -124,6 +123,7 @@ from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
+from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import handle_unhandled_exception
