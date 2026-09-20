@@ -254,11 +254,13 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   An app that needs a credential (an API key the user supplied through the
   `connect-external-service` skill's secret card) declares it in `app.toml` and
-  runs under the wrapper. Pass `--secrets-file <name>` to the scaffold, or edit
-  the two by hand: `[[secrets]]` in the manifest names the file, its variables,
-  and a one-line note (`publish-template` reads it), and the program command
-  wraps the entry point so the file's variables reach the process and nothing
-  else does:
+  runs under the wrapper. `--secrets-file <name>` makes the scaffold write the
+  wrapped program command; the `[[secrets]]` block you add to the manifest by
+  hand either way, since only you know the variables. The block names the file,
+  its variables, and a one-line note (`publish-template` reads it, and refuses
+  to assemble a program that runs under a file no block declares), and the
+  program command wraps the entry point so the file's variables reach the
+  process and nothing else does:
 
   ```toml
   [[secrets]]
