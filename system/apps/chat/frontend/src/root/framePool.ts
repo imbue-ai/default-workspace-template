@@ -14,8 +14,8 @@ import type { ChatPageEmbedApi } from "../embedApi";
 
 export const MAX_HELD_FRAMES = 4;
 
-// What the shell grants an app page's frame (its IframePanel's APP_FRAME_SANDBOX); a nested
-// frame can hold no more than its parent, so this asks for the same.
+// What the shell grants an app page's frame (the PAGE_FRAME_SANDBOX of its live pages layer); a
+// nested frame can hold no more than its parent, so this asks for the same.
 const FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
 const FRAME_ALLOW = "clipboard-read; clipboard-write";

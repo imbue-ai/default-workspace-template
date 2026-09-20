@@ -14,8 +14,9 @@
 /* The color swatches, the squiggle cells, and the wallpaper thumbnails of the desktop settings
    dialog. They are the only toggles a modal carries, so ``aria-pressed`` is what tells them apart
    from its Cancel/Save row.
-   Their size, fill and selection ring are set inline (the ring is the desktop's own color),
-   leaving the grids' shared feedback here. */
+   Their size and selection ring are utilities; a swatch's fill and a thumbnail's image are inline
+   (so is a selected squiggle cell's ring, in the desktop's own color), leaving the grids' shared
+   feedback here. */
 .modal-card button[aria-pressed] {
   transition: transform var(--dur-fast) ease-out;
 }

@@ -16,8 +16,8 @@
  *
  * The random suffix is the one hostname component that never leaks via CT, so
  * a share cannot be enumerated from the public cert name. Callers resolve an
- * app's NAME to its LABEL via ``labelForApp`` (models/Inventory) before
- * calling this.
+ * app's NAME to its LABEL via ``labelForApp`` (the shell's model/pageUrl)
+ * before calling this.
  *
  * The base is the workspace host COORDINATE -- the ``host-<hex>`` label and
  * everything after it -- NOT ``window.location.host`` verbatim. The shell does
