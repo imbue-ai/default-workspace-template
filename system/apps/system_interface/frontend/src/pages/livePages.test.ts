@@ -299,7 +299,7 @@ describe("the contract", () => {
     layer.reconcile();
     expect(spy).not.toHaveBeenCalled();
     await settle();
-    expect(api.calls).toContain("reportWindowLocation:home:win-1:/?doc=2:Second");
+    expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Second");
     // The broadcast that follows carries the path the page already reported: no navigation either.
     socket.deliver().onDesktopsUpdated(api.desktops);
     layer.reconcile();
@@ -360,7 +360,7 @@ describe("the contract", () => {
     load("win-1");
     messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: ` ${"t".repeat(300)} ` });
     await settle();
-    expect(api.calls).toContain(`reportWindowLocation:home:win-1:/?doc=2:${"t".repeat(256)}`);
+    expect(api.calls).toContain(`reportWindowLocation:home:win-1:client-1:/?doc=2:${"t".repeat(256)}`);
   });
 
   it("a local edit between a page's report and the broadcast does not point the page back", async () => {
@@ -408,6 +408,53 @@ describe("the contract", () => {
     docsSpy.mockClear();
     layer.reconcile();
     expect(docsSpy).not.toHaveBeenCalled();
+  });
+
+  it("an independent window's page opens at this client's own path, and follows only that path", async () => {
+    const [home, work] = api.desktops;
+    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [
+        placementRecord("win-2", { is_minimized: true }),
+        placementRecord("win-1"),
+        placementRecord("win-4"),
+      ],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    renderChrome();
+    windows.appendChild(windows.lastElementChild!.cloneNode(true));
+    (windows.lastElementChild as HTMLElement).setAttribute("data-window-id", "win-4");
+    (windows.lastElementChild!.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    layer.reconcile();
+    expect(frameOf("win-4").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    expect(frameOf("win-4").title).toBe("Seven");
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-4", path: "/?doc=7" });
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // Its own report is stored for this client and never bounces, whatever the shared record says.
+    messageFromPage("win-4", { type: SHELL_LOCATION, path: "/?doc=8", title: "Eight" });
+    await settle();
+    expect(api.calls).toContain("reportWindowLocation:home:win-4:client-1:/?doc=8:Eight");
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-2" });
+    await settle();
+    layer.reconcile();
+    expect(spy).not.toHaveBeenCalled();
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-4")?.path).toBe("/");
+    // An agent's navigate for this client arrives as a stored path with the layout, and the page follows it.
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=9", title: "Eight" });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-3" });
+    await settle();
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
   });
 
   it("raises the window of a page that says it took focus", () => {

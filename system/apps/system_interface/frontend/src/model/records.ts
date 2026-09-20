@@ -88,13 +88,25 @@ export interface Placement {
   readonly is_minimized: boolean;
 }
 
-/** One client's layout of one desktop: the placements, back to front, and the stamp of the last save. */
+/** One client's path and title for an independent window (pinned-taskbar-entries plan section 5.1). */
+export interface StoredWindowPath {
+  readonly path: string;
+  readonly title: string;
+}
+
+/** One client's layout of one desktop: the placements, back to front, the stamp of the last save, and the
+ *  client's stored paths for the desktop's independent windows, by window id. */
 export interface Layout {
   readonly updated_at: string | null;
   readonly placements: readonly Placement[];
+  readonly window_paths: Readonly<Record<string, StoredWindowPath>>;
 }
 
-export const EMPTY_LAYOUT: Layout = Object.freeze({ updated_at: null, placements: Object.freeze([]) });
+export const EMPTY_LAYOUT: Layout = Object.freeze({
+  updated_at: null,
+  placements: Object.freeze([]),
+  window_paths: Object.freeze({}),
+});
 
 export interface LaunchPath {
   readonly id: string;
@@ -277,11 +289,25 @@ export function parsePlacement(raw: unknown): Placement {
   };
 }
 
+function parseStoredWindowPath(raw: unknown): StoredWindowPath {
+  const record = asObject(raw, "window path");
+  return { path: asString(record.path, "window_path.path"), title: asString(record.title, "window_path.title") };
+}
+
+function parseWindowPaths(raw: unknown): Record<string, StoredWindowPath> {
+  if (raw === undefined) return {};
+  const record = asObject(raw, "layout.window_paths");
+  return Object.fromEntries(
+    Object.entries(record).map(([windowId, stored]) => [windowId, parseStoredWindowPath(stored)]),
+  );
+}
+
 export function parseLayout(raw: unknown): Layout {
   const record = asObject(raw, "layout");
   return {
     updated_at: asOptionalString(record.updated_at, "layout.updated_at"),
     placements: asArray(record.placements, "layout.placements").map(parsePlacement),
+    window_paths: parseWindowPaths(record.window_paths),
   };
 }
 
@@ -382,6 +408,18 @@ export function isSamePlacement(first: Placement, second: Placement): boolean {
     first.frame.height === second.frame.height &&
     first.state === second.state &&
     first.is_minimized === second.is_minimized
+  );
+}
+
+/** Whether two layouts hold the same stored paths and titles for the same windows. */
+export function isSameWindowPaths(
+  first: Readonly<Record<string, StoredWindowPath>>,
+  second: Readonly<Record<string, StoredWindowPath>>,
+): boolean {
+  const firstIds = Object.keys(first);
+  if (firstIds.length !== Object.keys(second).length) return false;
+  return firstIds.every(
+    (windowId) => second[windowId]?.path === first[windowId].path && second[windowId]?.title === first[windowId].title,
   );
 }
 

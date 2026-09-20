@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WireShapeError,
+  isSameWindowPaths,
   parseAppRecord,
   parseClientRecords,
   parseDesktop,
@@ -77,10 +78,29 @@ describe("parseLayout", () => {
     });
     expect(layout.updated_at).toBe("2026-09-19T14:12:40.001Z");
     expect(layout.placements[0].state).toBe("NORMAL");
+    // A layout with no ``window_paths`` (the save route's echo) reads as one with none.
     expect(parseLayout({ version: 1, updated_at: null, placements: [] })).toEqual({
       updated_at: null,
       placements: [],
+      window_paths: {},
     });
+  });
+
+  it("reads the client's stored paths for independent windows, and tells two sets apart", () => {
+    const layout = parseLayout({
+      version: 1,
+      updated_at: null,
+      placements: [],
+      window_paths: { "win-1": { path: "/?doc=2", title: "Second" } },
+    });
+    expect(layout.window_paths).toEqual({ "win-1": { path: "/?doc=2", title: "Second" } });
+    expect(() => parseLayout({ updated_at: null, placements: [], window_paths: { "win-1": { path: 3 } } })).toThrow(
+      WireShapeError,
+    );
+    expect(isSameWindowPaths(layout.window_paths, { "win-1": { path: "/?doc=2", title: "Second" } })).toBe(true);
+    expect(isSameWindowPaths(layout.window_paths, { "win-1": { path: "/?doc=2", title: "Other" } })).toBe(false);
+    expect(isSameWindowPaths(layout.window_paths, {})).toBe(false);
+    expect(isSameWindowPaths({}, {})).toBe(true);
   });
 
   it("refuses a placement in an unknown state", () => {

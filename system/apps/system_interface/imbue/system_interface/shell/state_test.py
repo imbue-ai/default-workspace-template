@@ -7,9 +7,12 @@ from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPath
+from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
@@ -32,11 +35,15 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at
     )
     shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
+    shell.window_paths.set_path(
+        ClientId("old"), window_id, StoredWindowPath(path=WindowPath("/x"), title=WindowTitle("")), {window_id}
+    )
     shell.start()
     try:
-        # The prune at start took the stale client and its layout file.
+        # The prune at start took the stale client, its layout file, and its window paths.
         assert shell.clients.get_client("old") is None
         assert shell.placements.read_layout(home.id, "old", {window_id}).placements == ()
+        assert shell.window_paths.read_paths("old", {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
             ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")), stale_at

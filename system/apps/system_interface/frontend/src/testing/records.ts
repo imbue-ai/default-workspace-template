@@ -4,7 +4,7 @@
  * overrides so a test spells only what it is about.
  */
 
-import type { AppRecord, Desktop, LaunchPath, Placement, WindowRecord } from "../model/records";
+import type { AppRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
 import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
@@ -71,6 +71,11 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     windows: [],
     ...overrides,
   };
+}
+
+/** A layout of ``placements`` with the stamp ``updatedAt`` and no stored window paths. */
+export function layoutRecord(placements: readonly Placement[], updatedAt: string | null = null): Layout {
+  return { updated_at: updatedAt, placements, window_paths: {} };
 }
 
 /** A shown, normal placement at the first cascade frame. */

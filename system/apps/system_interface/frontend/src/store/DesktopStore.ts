@@ -24,6 +24,7 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
+import { isSameWindowPaths } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
 import type { DeepLink } from "../model/deepLinks";
 import {
@@ -45,6 +46,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  effectiveWindow,
   findWindow,
   initialDesktopState,
   isAppStoppable,
@@ -79,7 +81,13 @@ export interface DesktopApi {
   removeDesktopShortcut(desktopId: string, app: string, launch: string): Promise<Desktop>;
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
-  reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord>;
+  reportWindowLocation(
+    desktopId: string,
+    windowId: string,
+    clientId: string,
+    path: string,
+    title: string,
+  ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   fetchClients(): Promise<{ id: string; active_desktop: string | null }[]>;
@@ -164,6 +172,8 @@ export class DesktopStore {
   // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast), and
   // not by a local edit: the live pages follow their windows' stored paths after the shell speaks.
   private desktopsRevision = 0;
+  // Bumped by every layout the shell hands over: an independent window's stored path arrives with the layout.
+  private layoutLoadsRevision = 0;
   // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
@@ -199,6 +209,11 @@ export class DesktopStore {
   /** How many times the shell has said what the desktops are; changes only with a ``desktops_updated``. */
   getDesktopsRevision(): number {
     return this.desktopsRevision;
+  }
+
+  /** How many times the shell has handed over a layout, which carries this client's paths for independent windows. */
+  getLayoutLoadsRevision(): number {
+    return this.layoutLoadsRevision;
   }
 
   /** Whether this client's layout holds a placement for the window. While a window settles, only the
@@ -647,18 +662,20 @@ export class DesktopStore {
   }
 
   /** A page reported where it is; posted to the window's location route when it differs from the stored
-   *  record, and the record the route answers is taken at once, so the stored path is the reported one
-   *  before the broadcast lands (a broadcast from another cause meanwhile must not read the report as a
-   *  move to follow). A settling window's first report ends the settling, so it always goes. Answers
-   *  whether the shell took the report (or had nothing to take); false when it refused. */
+   *  record (this client's own for an independent window), and the record the route answers is taken at once,
+   *  so the stored path is the reported one before the broadcast lands (a broadcast from another cause
+   *  meanwhile must not read the report as a move to follow). A settling window's first report ends the
+   *  settling, so it always goes. Answers whether the shell took the report (or had nothing to take); false
+   *  when it refused. */
   async reportLocation(windowId: string, path: string, title: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
-    if (!found.window.is_settling && found.window.path === path && found.window.title === title) return true;
+    const seen = effectiveWindow(this.state, found.window);
+    if (!seen.is_settling && seen.path === path && seen.title === title) return true;
     this.latestReportedPaths.set(windowId, path);
     let reported: WindowRecord;
     try {
-      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, path, title);
+      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
       console.warn(`[si] the shell did not take the location of ${windowId}`, error);
       return false;
@@ -895,9 +912,16 @@ export class DesktopStore {
       return;
     }
     if (sequence !== this.layoutFetchSequence || desktopId !== this.state.activeDesktopId) return;
-    // Already applied (this window's own save, or a broadcast that carried nothing new).
-    if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at && !isLayoutDirty(this.state))
+    // An unchanged stamp says the placements file did not move (this window's own save, or a broadcast that
+    // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
+    // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.
+    if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
+      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) return;
+      this.layoutLoadsRevision += 1;
+      this.dispatch({ type: "window_paths_loaded", desktopId, windowPaths: layout.window_paths });
       return;
+    }
+    this.layoutLoadsRevision += 1;
     this.dispatch({ type: "layout_loaded", desktopId, layout });
   }
 

@@ -6,7 +6,16 @@
  * step marked the layout dirty; nothing here reads the DOM or the network.
  */
 
-import type { AppRecord, Desktop, Frame, Layout, Placement, WindowRecord, WindowState } from "../model/records";
+import type {
+  AppRecord,
+  Desktop,
+  Frame,
+  Layout,
+  Placement,
+  StoredWindowPath,
+  WindowRecord,
+  WindowState,
+} from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import {
   effectivePlacements,
@@ -61,6 +70,11 @@ export type DesktopEvent =
   | { readonly type: "desktops_updated"; readonly desktops: readonly Desktop[] }
   | { readonly type: "desktop_activated"; readonly desktopId: string }
   | { readonly type: "layout_loaded"; readonly desktopId: string; readonly layout: Layout }
+  | {
+      readonly type: "window_paths_loaded";
+      readonly desktopId: string;
+      readonly windowPaths: Readonly<Record<string, StoredWindowPath>>;
+    }
   | {
       readonly type: "layout_saved";
       readonly desktopId: string;
@@ -145,10 +159,19 @@ function withWindowClosedHere(state: DesktopState, desktopId: string, windowId: 
   return { ...state, desktops, layout };
 }
 
-/** The window's record as the location route answered it, in place; nothing for a window since gone. */
+/** The window's record as the location route answered it, in place; nothing for a window since gone. An
+ *  independent window's answer is this client's own path and title, which live beside the layout rather than on
+ *  the shared record (not a gesture: the layout's version is untouched). */
 function withWindowLocationReported(state: DesktopState, desktopId: string, window: WindowRecord): DesktopState {
   const desktop = state.desktops.find((candidate) => candidate.id === desktopId);
   if (desktop === undefined || !desktop.windows.some((candidate) => candidate.id === window.id)) return state;
+  if (window.scope === "independent") {
+    if (desktopId !== state.activeDesktopId) return state;
+    const stored = state.layout.window_paths[window.id];
+    if (stored?.path === window.path && stored.title === window.title) return state;
+    const window_paths = { ...state.layout.window_paths, [window.id]: { path: window.path, title: window.title } };
+    return { ...state, layout: { ...state.layout, window_paths } };
+  }
   const desktops = state.desktops.map((candidate) =>
     candidate.id === desktopId
       ? { ...candidate, windows: candidate.windows.map((current) => (current.id === window.id ? window : current)) }
@@ -174,6 +197,11 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
         layoutVersion: state.layoutVersion + 1,
         savedLayoutVersion: state.layoutVersion + 1,
       };
+    case "window_paths_loaded":
+      // The client's stored paths alone: the placements file did not move, so the local placements (a gesture
+      // still waiting to be saved among them) stay as they are.
+      if (event.desktopId !== state.activeDesktopId) return state;
+      return { ...state, layout: { ...state.layout, window_paths: event.windowPaths } };
     case "layout_saved": {
       if (event.desktopId !== state.activeDesktopId) return state;
       // A save answered after a newer layout was loaded says nothing about the layout now held.
@@ -249,6 +277,24 @@ export function windowTitle(window: WindowRecord, app: AppRecord | undefined): s
   return app?.display_name ?? window.app;
 }
 
+/** The window as this client sees it: an independent window on the active desktop wears the client's stored path
+ *  and title (the home path with no title when it has none); a linked window is the shared record. */
+export function effectiveWindow(state: DesktopState, window: WindowRecord): WindowRecord {
+  if (window.scope === "linked") return window;
+  const stored = state.layout.window_paths[window.id];
+  return stored === undefined ? window : { ...window, path: stored.path, title: stored.title };
+}
+
+/** The path this client's page of the window is at, or opens at. */
+export function effectiveWindowPath(state: DesktopState, window: WindowRecord): string {
+  return effectiveWindow(state, window).path;
+}
+
+/** The title this client shows for the window. */
+export function effectiveWindowTitle(state: DesktopState, window: WindowRecord, app: AppRecord | undefined): string {
+  return windowTitle(effectiveWindow(state, window), app);
+}
+
 /** Whether the workspace can stop and start this app: supervised, not critical to the workspace,
  *  and not running inside a critical app's program (the shell refuses those the same way). */
 export function isAppStoppable(state: DesktopState, app: AppRecord): boolean {
@@ -282,7 +328,7 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
     return {
       window,
       app,
-      title: windowTitle(window, app),
+      title: effectiveWindowTitle(state, window, app),
       isMinimized: isWindowMinimized(placements, window.id),
       isFocused: window.id === focused,
       isPinned: window.is_pinned,

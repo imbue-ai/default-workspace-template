@@ -9,9 +9,11 @@
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
- * of plan section 4.6 after every desktops update (``shell:navigate`` for a page that declared
- * navigation, a ``src`` reassignment otherwise), and the pages' own ``shell:capabilities``, ``shell:location``,
- * ``shell:focused``, and ``shell:open``. Messages cross through ``relay.ts``.
+ * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
+ * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
+ * this client's own stored path, which arrives with the layout), and the pages' own
+ * ``shell:capabilities``, ``shell:location``, ``shell:focused``, and ``shell:open``. Messages cross
+ * through ``relay.ts``.
  */
 
 import {
@@ -35,8 +37,9 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  effectiveWindow,
+  effectiveWindowTitle,
   findWindow,
-  windowTitle,
 } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
@@ -96,8 +99,10 @@ export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
   private lastFocusedWindowId: string | null = null;
-  /** The shell's desktops revision the pages last followed: a stored path changes only with it. */
+  /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
+  /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
+  private followedLayoutLoadsRevision = 0;
 
   constructor(
     private readonly host: HTMLElement,
@@ -143,7 +148,7 @@ export class LivePagesLayer implements PageDriver {
     const found = findWindow(state, page.windowId);
     const app = found === null ? undefined : appByName(state, found.window.app);
     if (found === null || app === undefined) return;
-    this.pointPageAt(page, app, found.window.path);
+    this.pointPageAt(page, app, effectiveWindow(state, found.window).path);
   }
 
   /** Point the frame at the app's page for ``path`` (cross-origin, so a reload is a ``src`` reassignment). */
@@ -208,12 +213,17 @@ export class LivePagesLayer implements PageDriver {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
 
-    // Only after the shell's own desktops update, never on a redraw or a local edit (an open, a close, a
-    // settings answer): between a page's own location report and the broadcast that stores it, the
+    // Only after the shell's own desktops update or layout load, never on a redraw or a local edit (an open, a
+    // close, a settings answer): between a page's own location report and the broadcast that stores it, the
     // stored path is still the old one, and nothing must send the page back there.
-    const revision = this.store.getDesktopsRevision();
-    if (revision !== this.followedDesktopsRevision) {
-      this.followedDesktopsRevision = revision;
+    const desktopsRevision = this.store.getDesktopsRevision();
+    const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
+    if (
+      desktopsRevision !== this.followedDesktopsRevision ||
+      layoutLoadsRevision !== this.followedLayoutLoadsRevision
+    ) {
+      this.followedDesktopsRevision = desktopsRevision;
+      this.followedLayoutLoadsRevision = layoutLoadsRevision;
       this.follow(windowsById);
     }
 
@@ -225,18 +235,21 @@ export class LivePagesLayer implements PageDriver {
   }
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
+    const state = this.store.getState();
     const reports = new Map<string, PageReport>();
     const windows: WindowRecord[] = [];
     for (const page of this.pages.values()) {
       const found = windowsById.get(page.windowId);
       if (found === undefined) continue;
+      // The window as this client sees it: an independent window at this client's own stored path.
+      const seen = effectiveWindow(state, found.window);
       // A stored record still naming the path a page reported leaving is a snapshot from before the shell
       // took the report (a broadcast from another cause meanwhile): it must not send the page back.
       if (page.pendingReport !== null) {
-        if (found.window.path === page.pendingReport.fromPath) continue;
+        if (seen.path === page.pendingReport.fromPath) continue;
         page.pendingReport = null;
       }
-      windows.push(found.window);
+      windows.push(seen);
       reports.set(page.windowId, {
         lastReportedPath: page.lastReportedPath,
         isNavigationCapable: page.isNavigationCapable,
@@ -278,15 +291,17 @@ export class LivePagesLayer implements PageDriver {
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);
     frame.setAttribute("allow", PAGE_FRAME_ALLOW);
-    frame.title = windowTitle(window, app);
+    const state = this.store.getState();
+    frame.title = effectiveWindowTitle(state, window, app);
     frame.className = "block h-full w-full border-0";
     wrapper.appendChild(frame);
+    const openingPath = effectiveWindow(state, window).path;
     const page: LivePage = {
       windowId: window.id,
       app: window.app,
       wrapper,
       frame,
-      lastReportedPath: window.path,
+      lastReportedPath: openingPath,
       pendingReport: null,
       isNavigationCapable: false,
       greetedDesktopId: null,
@@ -303,7 +318,7 @@ export class LivePagesLayer implements PageDriver {
     });
     this.pages.set(window.id, page);
     this.host.appendChild(wrapper);
-    this.pointPageAt(page, app, window.path);
+    this.pointPageAt(page, app, openingPath);
     return page;
   }
 
@@ -337,7 +352,7 @@ export class LivePagesLayer implements PageDriver {
     const state = this.store.getState();
     const found = findWindow(state, page.windowId);
     const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
-    const path = found?.window.path ?? "";
+    const path = found === null ? "" : effectiveWindow(state, found.window).path;
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
@@ -371,9 +386,11 @@ export class LivePagesLayer implements PageDriver {
     const title = typeof payload.title === "string" ? payload.title.trim().slice(0, MAX_WINDOW_TITLE_LENGTH) : "";
     // Remembered before the post, so this client's own report never navigates the page.
     page.lastReportedPath = path;
-    const stored = findWindow(this.store.getState(), page.windowId);
-    if (stored !== null && stored.window.path !== path) {
-      page.pendingReport = { fromPath: stored.window.path, path };
+    const state = this.store.getState();
+    const stored = findWindow(state, page.windowId);
+    if (stored !== null) {
+      const seenPath = effectiveWindow(state, stored.window).path;
+      if (seenPath !== path) page.pendingReport = { fromPath: seenPath, path };
     }
     if (title !== "") page.frame.title = title;
     void this.store.reportLocation(page.windowId, path, title).then((isTaken) => {

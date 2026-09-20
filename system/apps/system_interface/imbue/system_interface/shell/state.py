@@ -8,6 +8,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Final
 
+from app_manifest.manifest import LocationScope
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
@@ -28,13 +29,16 @@ from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
+from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
+from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
@@ -57,6 +61,7 @@ from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
+from imbue.system_interface.shell.window_paths import WindowPathStore
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 CLIENT_ACTIVITY_EVENTS_PATH: Final[str] = "events/client_activity/events.jsonl"
@@ -75,6 +80,9 @@ class ShellState(MutableModel):
     inventory: AppInventory = Field(frozen=True, description="The registry and each app's liveness")
     desktops: DesktopStore = Field(frozen=True, description="desktops.json")
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
+    window_paths: WindowPathStore = Field(
+        frozen=True, description="The per-client paths and titles of independent windows"
+    )
     wallpaper_files_directory: Path = Field(
         frozen=True, description="Where the workspace's own wallpaper files are read from"
     )
@@ -108,6 +116,7 @@ class ShellState(MutableModel):
         now = datetime.now(timezone.utc)
         for client_id in self.clients.prune_unseen(now):
             removed = self.placements.delete_client_layouts(client_id)
+            self.window_paths.delete_client_paths(client_id)
             logger.info(
                 "Pruned client {} unseen for {} days ({} layout file(s))", client_id, CLIENT_RETENTION.days, removed
             )
@@ -175,6 +184,15 @@ class ShellState(MutableModel):
         """The client's layout of the desktop as it reads: its own file with stale placements dropped, else empty."""
         desktop = self.get_desktop(desktop_id)
         return self.placements.read_layout(desktop_id, client_id, {window.id for window in desktop.windows})
+
+    def read_window_paths(self, desktop: Desktop, client_id: str) -> dict[WindowId, StoredWindowPath]:
+        """The client's stored paths and titles for the desktop's independent windows, by window id."""
+        independent = {window.id for window in desktop.windows if window.scope is LocationScope.INDEPENDENT}
+        return self.window_paths.read_paths(client_id, independent)
+
+    def effective_window_for_client(self, desktop: Desktop, window: Window, client_id: str) -> Window:
+        """The window as ``client_id`` sees it: an independent window at the client's own path and title."""
+        return effective_window(window, self.read_window_paths(desktop, client_id).get(window.id))
 
     def _broadcast_placements_written(self, rewritten: Sequence[StoredDesktopLayout]) -> None:
         for stored in rewritten:
@@ -273,14 +291,24 @@ class ShellState(MutableModel):
         return True
 
     def report_window_location(
-        self, desktop_id: str, window_id: WindowId, path: WindowPath, title: WindowTitle
+        self, desktop_id: str, window_id: WindowId, client_id: ClientId, path: WindowPath, title: WindowTitle
     ) -> Window:
-        """Store what a page reported for its window and tell every client; a report that changes nothing is silent."""
-        outcome = self.desktops.set_window_location(desktop_id, window_id, path, title)
-        if outcome.is_written:
-            self.broadcast_desktops_updated()
-        window = next(candidate for candidate in outcome.desktop.windows if candidate.id == window_id)
-        return window
+        """Store what a page reported for its window and tell whoever follows it: a linked window's record for
+        everyone, an independent window's path for the reporting client alone (its other windows refetch the
+        layout, announced with a save id the shell minted). Answers the window as the client sees it; a report that
+        changes nothing is silent."""
+        desktop = self.get_desktop(desktop_id)
+        window = require_window(desktop, window_id)
+        if window.scope is LocationScope.LINKED:
+            outcome = self.desktops.set_window_location(desktop_id, window_id, path, title)
+            if outcome.is_written:
+                self.broadcast_desktops_updated()
+            return next(candidate for candidate in outcome.desktop.windows if candidate.id == window_id)
+        stored = StoredWindowPath(path=path, title=title)
+        independent = {candidate.id for candidate in desktop.windows if candidate.scope is LocationScope.INDEPENDENT}
+        if self.window_paths.set_path(client_id, window_id, stored, independent):
+            self.broadcaster.broadcast_placements_updated(str(desktop.id), str(client_id), mint_save_id())
+        return effective_window(window, stored)
 
     def delete_desktop(self, desktop_id: str) -> DesktopDeleteOutcome:
         """Delete a desktop with its windows and every client's layout of it, and move the clients on it to the
@@ -339,6 +367,7 @@ def build_shell_state(
         else AppInventory(registry_path=registry_path, broadcaster=broadcaster),
         desktops=DesktopStore(state_directory=state_directory),
         placements=PlacementStore(state_directory=state_directory),
+        window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=wallpaper_files_directory,
         clients=ClientStore(state_directory=state_directory),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),

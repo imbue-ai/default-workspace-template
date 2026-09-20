@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { Layout } from "../model/records";
-import { desktopRecord, placementRecord, windowRecord } from "../testing/records";
+import { desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
 import { cascadeFrame } from "./frames";
 import {
   dropStalePlacements,
@@ -27,7 +27,10 @@ const desktop = desktopRecord("home", {
 });
 
 function layoutOf(...ids: string[]): Layout {
-  return { updated_at: "2026-09-19T00:00:00Z", placements: ids.map((id) => placementRecord(id)) };
+  return layoutRecord(
+    ids.map((id) => placementRecord(id)),
+    "2026-09-19T00:00:00Z",
+  );
 }
 
 describe("effectivePlacements", () => {
@@ -53,14 +56,11 @@ describe("focus", () => {
   });
 
   it("finds the app's window nearest the top of the stack, minimized or not", () => {
-    const layout: Layout = {
-      updated_at: null,
-      placements: [
-        placementRecord("win-3"),
-        placementRecord("win-1", { is_minimized: true }),
-        placementRecord("win-2"),
-      ],
-    };
+    const layout: Layout = layoutRecord([
+      placementRecord("win-3"),
+      placementRecord("win-1", { is_minimized: true }),
+      placementRecord("win-2"),
+    ]);
     expect(mostRecentlyFocusedWindowOfApp(layout, desktop, "docs")?.id).toBe("win-1");
     expect(mostRecentlyFocusedWindowOfApp(layout, desktop, "notes")?.id).toBe("win-2");
     expect(mostRecentlyFocusedWindowOfApp(layout, desktop, "files")).toBeNull();

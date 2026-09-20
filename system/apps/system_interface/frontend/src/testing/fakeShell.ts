@@ -13,6 +13,7 @@ import type {
   GridCell,
   Layout,
   SharingMode,
+  StoredWindowPath,
   Wallpaper,
   WindowRecord,
 } from "../model/records";
@@ -22,8 +23,10 @@ import type { DesktopSocket, SocketHandlers } from "../store/socket";
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
   clients: { id: string; active_desktop: string | null }[] = [];
-  /** ``<desktop>/<client>`` -> the stored layout. */
-  readonly layouts = new Map<string, Layout>();
+  /** ``<desktop>/<client>`` -> the stored placements and their stamp. */
+  readonly layouts = new Map<string, Pick<Layout, "updated_at" | "placements">>();
+  /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
+  readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
@@ -50,14 +53,21 @@ export class FakeDesktopApi implements DesktopApi {
     return desktop;
   }
 
+  /** The client's stored layout of the desktop, with its paths for the desktop's independent windows. */
   layoutOf(desktopId: string, clientId: string): Layout {
-    return this.layouts.get(`${desktopId}/${clientId}`) ?? { updated_at: null, placements: [] };
+    const stored = this.layouts.get(`${desktopId}/${clientId}`) ?? { updated_at: null, placements: [] };
+    const window_paths: Record<string, StoredWindowPath> = {};
+    for (const window of this.desktops.find((desktop) => desktop.id === desktopId)?.windows ?? []) {
+      const path = this.windowPaths.get(`${clientId}/${window.id}`);
+      if (window.scope === "independent" && path !== undefined) window_paths[window.id] = path;
+    }
+    return { ...stored, window_paths };
   }
 
-  writeLayout(desktopId: string, clientId: string, layout: Layout): Layout {
+  writeLayout(desktopId: string, clientId: string, layout: Pick<Layout, "updated_at" | "placements">): Layout {
     const stamped = { ...layout, updated_at: this.stamp() };
     this.layouts.set(`${desktopId}/${clientId}`, stamped);
-    return stamped;
+    return this.layoutOf(desktopId, clientId);
   }
 
   async fetchDesktops(): Promise<Desktop[]> {
@@ -193,17 +203,29 @@ export class FakeDesktopApi implements DesktopApi {
     // As the shell does: the window leaves every client's layout of the desktop, each rewrite stamped.
     for (const [key, layout] of [...this.layouts]) {
       const [layoutDesktopId, clientId] = key.split("/");
-      const dropped = withoutPlacement(layout, windowId);
-      if (layoutDesktopId === desktopId && dropped !== layout) this.writeLayout(desktopId, clientId, dropped);
+      const before = { ...layout, window_paths: {} };
+      const dropped = withoutPlacement(before, windowId);
+      if (layoutDesktopId === desktopId && dropped !== before) this.writeLayout(desktopId, clientId, dropped);
     }
   }
 
-  async reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord> {
-    this.calls.push(`reportWindowLocation:${desktopId}:${windowId}:${path}:${title}`);
+  async reportWindowLocation(
+    desktopId: string,
+    windowId: string,
+    clientId: string,
+    path: string,
+    title: string,
+  ): Promise<WindowRecord> {
+    this.calls.push(`reportWindowLocation:${desktopId}:${windowId}:${clientId}:${path}:${title}`);
     this.refuse();
     const desktop = this.desktop(desktopId);
     const window = desktop.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) throw new Error(`No window ${windowId}`);
+    // As the shell does: an independent window's report is the reporting client's alone; the record keeps its home path.
+    if (window.scope === "independent") {
+      this.windowPaths.set(`${clientId}/${windowId}`, { path, title });
+      return { ...window, path, title };
+    }
     const updated = { ...window, path, title, is_settling: false };
     this.replace({
       ...desktop,

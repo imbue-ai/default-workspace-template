@@ -227,13 +227,61 @@ describe("location reports", () => {
     expect(await store.reportLocation("win-1", "/a", "Plan")).toBe(true);
     expect(await store.reportLocation("win-3", "/new", "")).toBe(true);
     expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([
-      "reportWindowLocation:home:win-1:/a:Plan",
-      "reportWindowLocation:home:win-3:/new:",
+      "reportWindowLocation:home:win-1:client-1:/a:Plan",
+      "reportWindowLocation:home:win-3:client-1:/new:",
     ]);
     // The answers are taken at once, ahead of the broadcast.
     const windows = store.getState().desktops[0].windows;
     expect(windows.find((window) => window.id === "win-1")?.title).toBe("Plan");
     expect(windows.find((window) => window.id === "win-3")?.is_settling).toBe(false);
+  });
+
+  it("an independent window's report is this client's own: kept beside the layout, never on the shared record", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/", { is_pinned: true, scope: "independent" })],
+      }),
+      desktopRecord("work"),
+    ];
+    const store = await startedStore();
+    expect(await store.reportLocation("win-1", "/?doc=2", "Second")).toBe(true);
+    expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Second");
+    expect(store.getState().desktops[0].windows[0].path).toBe("/");
+    expect(store.getState().layout.window_paths).toEqual({ "win-1": { path: "/?doc=2", title: "Second" } });
+    expect(isLayoutDirty(store.getState())).toBe(false);
+    // The same report again is not posted: the client's own path already says so.
+    expect(await store.reportLocation("win-1", "/?doc=2", "Second")).toBe(true);
+    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toHaveLength(1);
+    // The shell's announcement of the write refetches the layout, whose stamp is unchanged but whose paths moved.
+    api.windowPaths.set("client-1/win-1", { path: "/?doc=3", title: "Third" });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    expect(store.getState().layout.window_paths).toEqual({ "win-1": { path: "/?doc=3", title: "Third" } });
+    expect(store.getLayoutLoadsRevision()).toBe(2);
+  });
+
+  it("a stored path announced while a gesture waits to be saved does not throw the gesture away", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/", { is_pinned: true, scope: "independent" })],
+      }),
+      desktopRecord("work"),
+    ];
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [] });
+    const store = await startedStore();
+    // The entry click restores the window; its page then reports where it is before the debounce has saved.
+    store.restoreWindow("win-1");
+    expect(isLayoutDirty(store.getState())).toBe(true);
+    await store.reportLocation("win-1", "/?doc=2", "Second");
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(isLayoutDirty(store.getState())).toBe(true);
+    expect(store.getState().layout.window_paths).toEqual({ "win-1": { path: "/?doc=2", title: "Second" } });
+    await vi.advanceTimersByTimeAsync(300);
+    await settle();
+    expect(api.layoutOf("home", CLIENT).placements.map((placement) => placement.window_id)).toEqual(["win-1"]);
+    expect(isLayoutDirty(store.getState())).toBe(false);
   });
 
   it("a refused report answers false and changes nothing", async () => {
@@ -651,7 +699,7 @@ describe("desktops and shortcuts", () => {
   it("reports a page's location and a lifecycle refusal", async () => {
     const store = await startedStore();
     await store.reportLocation("win-1", "/?doc=2", "Plan");
-    expect(api.calls).toContain("reportWindowLocation:home:win-1:/?doc=2:Plan");
+    expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Plan");
     api.refusal = "critical";
     await store.setAppLifecycle("docs", "stop");
     expect(notices).toEqual(["Failed to stop docs: critical"]);
