@@ -273,7 +273,6 @@ band, just above the shell.
 It also keeps its own footprint down. Folding the agent stream is a continuous
 churn of short-lived allocations, and glibc keeps the freed pages in the
 per-thread arena they came from, so a long-lived chat app's RSS tracks the
-high-water mark of every arena at once rather than what it holds. A `heap-trim`
-thread hands that memory back to the OS once a minute (`heap_trim.py`; a no-op
-on a platform with no `malloc_trim`, i.e. macOS and musl), and the program's
-supervisord entry caps the arena count with `MALLOC_ARENA_MAX`.
+high-water mark of every arena at once rather than what it holds. The program's
+supervisord entry caps the arena count with `MALLOC_ARENA_MAX` so that
+high-water mark is summed over fewer arenas.
