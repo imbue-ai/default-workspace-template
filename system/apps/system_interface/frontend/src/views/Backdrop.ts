@@ -97,7 +97,9 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           }),
           m(
             "div",
-            { class: "windows absolute inset-0 pointer-events-none [&>*]:pointer-events-auto" },
+            // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
+            // window's chrome sits over its own page in the stacking order, and the page must get the rest.
+            { class: "windows absolute inset-0 pointer-events-none" },
             // A keyed list tolerates no holes: a minimized or unknown window contributes nothing.
             placements.flatMap((placement, index) => {
               const window = windowsById.get(placement.window_id);

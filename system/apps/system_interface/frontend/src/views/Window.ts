@@ -3,8 +3,10 @@
  * box the live page is laid over (``data-window-content``), the transparent shield over the
  * content of every window but the focused one (a press on it raises the window and is consumed,
  * since a click into a cross-origin page cannot reach the shell), and the eight resize edges
- * (``data-resize-edge``). The window is positioned by the pixels the store hands it; it reads no
- * metric from the DOM and attaches no gesture listener.
+ * (``data-resize-edge``). The chrome is stacked over its own live page, so the root and the content
+ * box are inert (``pointer-events: none``, inherited from the windows layer) and only the title bar,
+ * the edges, the shield, and the placeholders take a press. The window is positioned by the pixels
+ * the store hands it; it reads no metric from the DOM and attaches no gesture listener.
  */
 
 import m from "mithril";
@@ -78,7 +80,7 @@ export function Window(): m.Component<WindowAttrs> {
           "data-minimized": "false",
           "data-focused": isFocused ? "true" : "false",
           class:
-            "window absolute flex flex-col overflow-hidden rounded-(--desk-window-radius) border bg-surface " +
+            "window absolute flex flex-col overflow-hidden rounded-(--desk-window-radius) border " +
             "shadow-(--desk-window-shadow) " +
             (isFocused ? "border-default" : "border-subtle"),
           style: {
@@ -104,34 +106,44 @@ export function Window(): m.Component<WindowAttrs> {
             onControl: attrs.onControl,
             onDoubleClick: attrs.onToggleMaximize,
           }),
-          m("div", { "data-window-content": "", class: "window-content relative min-h-0 flex-1 bg-page" }, [
-            isStopped
-              ? stoppedPlaceholder(app, attrs.onStartApp)
-              : isSettlingElsewhere
-                ? m(
-                    "div",
-                    {
-                      "data-settling": "",
-                      class: "flex h-full w-full items-center justify-center text-(length:--font-size-row) text-faint",
-                    },
-                    "Starting on another screen…",
-                  )
-                : null,
-            // The shield: the press that raises the window lands here rather than in the page, and
-            // bubbles to the window's own handler, which raises.
-            isFocused
-              ? null
-              : m("div", {
-                  "data-window-shield": "",
-                  class: "absolute inset-0 cursor-default",
-                  onpointerdown: (event: PointerEvent) => event.preventDefault(),
-                }),
-          ]),
+          // Transparent and inert like the root: the live page sits under this chrome in the stacking order,
+          // shows through here, and takes the pointer; only the shield and the placeholders catch a press.
+          m(
+            "div",
+            {
+              "data-window-content": "",
+              class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
+            },
+            [
+              isStopped
+                ? stoppedPlaceholder(app, attrs.onStartApp)
+                : isSettlingElsewhere
+                  ? m(
+                      "div",
+                      {
+                        "data-settling": "",
+                        class:
+                          "flex h-full w-full items-center justify-center bg-page text-(length:--font-size-row) text-faint",
+                      },
+                      "Starting on another screen…",
+                    )
+                  : null,
+              // The shield: the press that raises the window lands here rather than in the page, and
+              // bubbles to the window's own handler, which raises.
+              isFocused
+                ? null
+                : m("div", {
+                    "data-window-shield": "",
+                    class: "absolute inset-0 cursor-default",
+                    onpointerdown: (event: PointerEvent) => event.preventDefault(),
+                  }),
+            ],
+          ),
           ...(isResizable
             ? RESIZE_EDGES.map((edge) =>
                 m("div", {
                   "data-resize-edge": edge,
-                  class: `resize-edge absolute touch-none ${EDGE_CLASS[edge]}`,
+                  class: `resize-edge pointer-events-auto absolute touch-none ${EDGE_CLASS[edge]}`,
                 }),
               )
             : []),

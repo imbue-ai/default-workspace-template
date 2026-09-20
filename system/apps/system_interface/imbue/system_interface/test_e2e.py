@@ -262,6 +262,8 @@ const here = () => location.pathname + location.search;
 const show = (path) => { where.textContent = path; document.title = titleOf(path); };
 show(here());
 window.__navigations = [];
+window.__presses = 0;
+window.addEventListener("pointerdown", () => { window.__presses += 1; });
 const handlers = {
   onHandshake(handshake) {
     window.__handshake = handshake;
@@ -908,7 +910,8 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     e2e_server: E2EServer, page: Page
 ) -> None:
     """Two windows: the later one is focused and its page takes the pointer; a press on the earlier one's content
-    raises it (the shield takes the press), and the stack order is what the placement file says."""
+    raises it (the shield takes the press), after which a real click into its content reaches its page through the
+    transparent chrome, and the stack order is what the placement file says."""
     _land(page, e2e_server)
     first = _open_via_shortcut(page, e2e_server)
     _move_window_off_the_shortcuts(page, first)
@@ -925,6 +928,13 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
     expect(_window(page, first)).to_have_attribute("data-focused", "true")
     expect(_window(page, second)).to_have_attribute("data-focused", "false")
+    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
+
+    content_box = _box(_window(page, first).locator("[data-window-content]"))
+    first_frame = _page_frame(page, first)
+    assert first_frame.evaluate("() => window.__presses") == 0
+    page.mouse.click(content_box["x"] + content_box["width"] / 2, content_box["y"] + content_box["height"] / 2)
+    first_frame.wait_for_function("() => window.__presses === 1", timeout=15000)
     client_id = _client_id(page)
 
     def _first_on_top() -> bool:
