@@ -1,1 +1,5 @@
 - The app contract module (`/_static/app_contract.js`) is now served by every app from its own origin, out of this app's build output; the shell keeps serving its own copy (with the permissive CORS header) for the e2e stub pages. The docstrings and the contract build's comment say so.
+
+- A window's resize handles are bigger and overhang its border: edges are 8px strips reaching 3px outside the frame and corners are 16px squares (theme tokens `--desk-resize-edge`, `--desk-resize-corner`, `--desk-resize-overhang`), so a press just outside the window still grabs an edge instead of landing on the backdrop. The window's root no longer clips; an inner frame carries the rounded corners, the title bar, and the content.
+
+- Dragging or resizing a window no longer redraws the whole desktop per pointer event. The live rectangle is written straight onto the window's element, its page is placed over the content box that moved, and the snap preview is shown and moved the same way; the desktop renders once when the gesture starts (raising the window) and once when it ends (saving the frame or the snapped state).

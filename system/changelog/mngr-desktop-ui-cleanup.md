@@ -3,3 +3,5 @@
 - A new test in `system/scripts/` (`stdlib_only_scripts_test.py`) parses the imports of every script the documentation runs with a bare `python3` and fails on anything outside the standard library, so this cannot recur.
 
 - The desktop-interface contracts (section 7) and plan (section 7), the shell's README, and the `workspace_ui` README and `app_contract.ts` docstring record that every app serves the app contract module from its own origin: a cross-origin module import carries no cookie, and the desktop client's forwarder and the share gateway refuse it.
+
+- The desktop-interface contracts (section 11) list the resize handle tokens (`--desk-resize-edge`, `--desk-resize-corner`, `--desk-resize-overhang`, `--desk-resize-edge-inset`) and how the handles overhang the window's border.

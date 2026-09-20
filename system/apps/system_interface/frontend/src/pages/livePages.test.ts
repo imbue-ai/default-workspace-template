@@ -199,6 +199,29 @@ describe("creating and positioning", () => {
     expect(frameOf("win-3").getAttribute("src")).toBe("http://127.0.0.1:7001/new");
   });
 
+  it("places one page over its content box as it stands, keeping its stacking and interactivity", () => {
+    const content = windows.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 250, top: 90, width: 640, height: 480 }) as DOMRect;
+    layer.placePage("win-1");
+    const wrapper = wrapperOf("win-1");
+    expect([wrapper.style.left, wrapper.style.top, wrapper.style.width, wrapper.style.height]).toEqual([
+      "250px",
+      "90px",
+      "640px",
+      "480px",
+    ]);
+    expect(wrapper.style.zIndex).toBe("5");
+    expect(wrapper.style.pointerEvents).toBe("auto");
+    // A hidden page and an unknown window are left alone.
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    content.getBoundingClientRect = () => ({ left: 1, top: 2, width: 3, height: 4 }) as DOMRect;
+    layer.placePage("win-1");
+    layer.placePage("win-9");
+    expect(wrapper.style.display).toBe("none");
+    expect(wrapper.style.left).toBe("250px");
+  });
+
   it("makes every page but the focused one inert, and all of them during a gesture", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
