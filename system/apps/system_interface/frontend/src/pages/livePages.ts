@@ -27,7 +27,7 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageUrl } from "../model/pageUrl";
-import type { Desktop, WindowRecord } from "../model/records";
+import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
 import {
@@ -36,6 +36,7 @@ import {
   activePlacements,
   appByName,
   findWindow,
+  windowTitle,
 } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
@@ -231,7 +232,7 @@ export class LivePagesLayer implements PageDriver {
     return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
   }
 
-  private create(window: WindowRecord, app: { name: string; label: string; url: string }): LivePage {
+  private create(window: WindowRecord, app: AppRecord): LivePage {
     const wrapper = document.createElement("div");
     wrapper.className = "live-page absolute";
     wrapper.style.display = "none";
@@ -239,7 +240,7 @@ export class LivePagesLayer implements PageDriver {
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);
     frame.setAttribute("allow", PAGE_FRAME_ALLOW);
-    frame.title = window.title === "" ? app.name : window.title;
+    frame.title = windowTitle(window, app);
     frame.className = "block h-full w-full border-0";
     wrapper.appendChild(frame);
     const page: LivePage = {
