@@ -1,24 +1,15 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, windowRecord } from "../testing/records";
 import { Window } from "./Window";
 import type { WindowAttrs } from "./Window";
 
-let root: HTMLElement | null = null;
-
-afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
-});
+afterEach(unmountViews);
 
 function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
-  root = document.createElement("div");
-  document.body.appendChild(root);
   const attrs: WindowAttrs = {
     window: windowRecord("win-1", "docs", "/?doc=1", { title: "Plan" }),
     app: appRecord("docs"),
@@ -37,7 +28,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     onToggleMaximize: vi.fn(),
     ...overrides,
   };
-  m.mount(root, { view: () => m(Window, attrs) });
+  const root = mountView(() => m(Window, attrs));
   return root.querySelector('[data-window-id="win-1"]') as HTMLElement;
 }
 
@@ -63,7 +54,7 @@ describe("Window", () => {
     expect(shield).not.toBeNull();
     shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     expect(onRaise).toHaveBeenCalledTimes(1);
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     expect(render({ isFocused: true }).querySelector("[data-window-shield]")).toBeNull();
   });
 
@@ -81,12 +72,12 @@ describe("Window", () => {
   it("shows Restore when maximized, and hides the maximize controls and resize edges in compact mode", () => {
     const maximized = render({ state: "MAXIMIZED" });
     expect(maximized.querySelector('[data-window-control="restore"]')).not.toBeNull();
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     const compact = render({ isCompact: true, state: "MAXIMIZED" });
     expect(compact.querySelector('[data-window-control="restore"]')).toBeNull();
     expect(compact.querySelector('[data-window-control="maximize"]')).toBeNull();
     expect(compact.querySelectorAll("[data-resize-edge]")).toHaveLength(0);
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     expect(render({ isTouch: true }).querySelectorAll("[data-resize-edge]")).toHaveLength(0);
   });
 
@@ -97,7 +88,7 @@ describe("Window", () => {
     expect(placeholder.textContent).toContain("Docs");
     (placeholder.querySelector("button") as HTMLElement).click();
     expect(onStartApp).toHaveBeenCalled();
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     expect(
       render({ app: appRecord("docs", { is_running: false }), onStartApp: null }).querySelector(
         "[data-stopped-app] button",
@@ -108,7 +99,7 @@ describe("Window", () => {
   it("says a window settling on another client's open is starting elsewhere", () => {
     const element = render({ window: windowRecord("win-1", "docs", "/new", { is_settling: true }), hasPage: false });
     expect(element.querySelector("[data-settling]")).not.toBeNull();
-    m.mount(root as HTMLElement, null);
+    unmountViews();
     expect(
       render({ window: windowRecord("win-1", "docs", "/new", { is_settling: true }), hasPage: true }).querySelector(
         "[data-settling]",

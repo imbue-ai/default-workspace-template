@@ -1,24 +1,15 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, desktopRecord, windowRecord } from "../testing/records";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
-let root: HTMLElement | null = null;
-
-afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
-});
+afterEach(unmountViews);
 
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
-  root = document.createElement("div");
-  document.body.appendChild(root);
   const docs = appRecord("docs");
   const attrs: TaskbarAttrs = {
     entries: [
@@ -56,7 +47,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     onEntryContextMenu: vi.fn(),
     ...overrides,
   };
-  m.mount(root, { view: () => m(Taskbar, attrs) });
+  const root = mountView(() => m(Taskbar, attrs));
   return root.querySelector("[data-taskbar]") as HTMLElement;
 }
 
