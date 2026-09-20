@@ -14,13 +14,11 @@ import type { Desktop, DesktopShortcut, Placement, WindowRecord } from "../model
 import { shortcutKey } from "../model/records";
 import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
-import { ShortcutIcon } from "./ShortcutIcon";
+import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
 import { appGlyph } from "./glyphs";
-
-const GHOST_GLYPH_SIZE = 48;
 
 export interface BackdropAttrs {
   readonly store: DesktopStore;
@@ -163,10 +161,10 @@ function shortcutGhost(
         "data-shortcut-ghost": "",
         class:
           "pointer-events-none absolute z-(--z-sticky) flex h-(--desk-icon-size) w-(--desk-icon-size) items-center " +
-          "justify-center rounded-xl bg-surface opacity-80 shadow-overlay",
+          "justify-center rounded-xl bg-surface opacity-80 shadow-overlay [&>svg]:size-full",
         style: { left: `${position.x}px`, top: `${position.y}px` },
       },
-      m.trust(appGlyph(app, GHOST_GLYPH_SIZE)),
+      m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
   ];
 }
