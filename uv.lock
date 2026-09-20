@@ -24,7 +24,6 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "app-instances",
     "app-manifest",
     "app-watcher",
     "automations",
@@ -34,7 +33,6 @@ members = [
     "chat",
     "default-workspace-template",
     "env-converge",
-    "files-app",
     "github-sync",
     "host-backup",
     "mngr-cli-contract",
@@ -200,33 +198,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/96/f0/5eb65b2bb0d09ac6776f2eb54adee6abe8228ea05b20a5ad0e4945de8aac/anyio-4.12.1.tar.gz", hash = "sha256:41cfcc3a4c85d3f05c932da7c26d0201ac36f72abd4435ba90d0464a3ffed703", size = 228685, upload-time = "2026-01-06T11:45:21.246Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/0e/27be9fdef66e72d64c0cdc3cc2823101b80585f8119b5c112c2e8f5f7dab/anyio-4.12.1-py3-none-any.whl", hash = "sha256:d405828884fc140aa80a3c667b8beed277f1dfedec42ba031bd6ac3db606ab6c", size = 113592, upload-time = "2026-01-06T11:45:19.497Z" },
-]
-
-[[package]]
-name = "app-instances"
-version = "0.1.0"
-source = { editable = "system/libs/app_instances" }
-dependencies = [
-    { name = "app-manifest" },
-    { name = "click" },
-    { name = "flask" },
-    { name = "httpx" },
-    { name = "imbue-common" },
-    { name = "loguru" },
-    { name = "pydantic" },
-    { name = "werkzeug" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "click", specifier = ">=8.1" },
-    { name = "flask", specifier = ">=3.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
-    { name = "loguru", specifier = ">=0.7" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [[package]]
@@ -457,7 +428,6 @@ name = "browser"
 version = "0.1.0"
 source = { editable = "system/apps/browser" }
 dependencies = [
-    { name = "app-instances" },
     { name = "app-manifest" },
     { name = "flask" },
     { name = "flask-sock" },
@@ -473,7 +443,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
@@ -668,7 +637,6 @@ name = "chat"
 version = "0.1.0"
 source = { editable = "system/apps/chat" }
 dependencies = [
-    { name = "app-instances" },
     { name = "app-manifest" },
     { name = "concurrency-group" },
     { name = "flask" },
@@ -709,7 +677,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "flask", specifier = ">=3.0" },
@@ -1116,27 +1083,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c0/80/8232b582c4b318b817cf1274ba74976b07b34d35ef439b3eb948f98645a1/filelock-3.32.0.tar.gz", hash = "sha256:7be2ad23a14607ccc71808e68fe30848aeace7058ace17852f68e2a68e310402", size = 213757, upload-time = "2026-07-21T13:17:42.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/06/79/b4c714bef36bc4ec2beeae1e0c124f0223888cd8c6feb1cdc56038116920/filelock-3.32.0-py3-none-any.whl", hash = "sha256:d396bea984af47333ef05e50eae7eff88c84256de6112aea0ec48a233c064fe3", size = 97732, upload-time = "2026-07-21T13:17:41.55Z" },
-]
-
-[[package]]
-name = "files-app"
-version = "0.1.0"
-source = { editable = "system/apps/files" }
-dependencies = [
-    { name = "app-instances" },
-    { name = "app-manifest" },
-    { name = "click" },
-    { name = "imbue-common" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "app-instances", editable = "system/libs/app_instances" },
-    { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
-    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -3391,7 +3337,6 @@ name = "system-interface"
 version = "0.1.0"
 source = { editable = "system/apps/system_interface" }
 dependencies = [
-    { name = "app-instances" },
     { name = "app-manifest" },
     { name = "concurrency-group" },
     { name = "flask" },
@@ -3422,7 +3367,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "flask", specifier = ">=3.0" },
@@ -3474,26 +3418,34 @@ name = "terminal-app"
 version = "0.1.0"
 source = { editable = "system/apps/terminal" }
 dependencies = [
-    { name = "app-instances" },
     { name = "app-manifest" },
     { name = "click" },
     { name = "flask" },
-    { name = "httpx" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "imbue-mngr" },
+]
+
 [package.metadata]
 requires-dist = [
-    { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
 ]
 
 [[package]]

@@ -1,13 +1,11 @@
 name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
-instances = true
 critical = false
 priority = "files"
 launcher_rank = 20
 
 [default_shortcut]
-action = "new"
 launch = "new"
 mode = "focus"
 
@@ -15,9 +13,4 @@ mode = "focus"
 id = "new"
 label = "New File Viewer"
 path = "/"
-params = [{name = "path", label = "Path", required = false}]
-
-[[actions]]
-id = "new"
-label = "New File Viewer"
 params = [{name = "path", label = "Path", required = false}]

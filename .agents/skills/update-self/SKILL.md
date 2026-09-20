@@ -427,9 +427,7 @@ affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, runs the workspace layout migration
-(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
-there is reported and left to the next boot's run), restarts the services
+bundle, restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
 route and the instances API of every critical app that serves one (the chat, the

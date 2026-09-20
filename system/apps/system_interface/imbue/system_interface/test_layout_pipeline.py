@@ -6,10 +6,10 @@ Exercises the full backend path the agent-facing helper depends on:
 ``desktops_updated`` and ``placements_updated`` messages. The WS-to-DOM step is
 ``test_e2e.py``'s.
 
-The machine the script sees is a registry with two rows, both stub apps served
-by ``app_instances``' in-memory source over loopback: one seeded with an
-instance, one empty. Broadcaster output is observed via the broadcaster's own
-queue-registration API rather than a live WebSocket.
+The machine the script sees is a registry with two rows, both stand-in apps
+served over loopback so the liveness probe finds them running. Broadcaster
+output is observed via the broadcaster's own queue-registration API rather than
+a live WebSocket.
 """
 
 from __future__ import annotations
@@ -27,12 +27,7 @@ from typing import Any
 from typing import Generator
 
 import pytest
-from app_instances.blueprint import build_instances_app
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import RecordingNudger
-from app_instances.testing import StubInstanceSource
-from app_instances.testing import free_port
+from flask import Flask
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -40,10 +35,10 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.testing import drain_messages
-from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -51,11 +46,10 @@ pytestmark = pytest.mark.acceptance
 
 _PORT = 18766
 _BASE_URL = f"http://127.0.0.1:{_PORT}"
-# The seeded app: one instance the script can open, close, and rename.
+# The app that declares launch paths, and the marker of the requester's own page of it.
 _SEEDED_APP_NAME = "chat"
 _SEEDED_KEY = "stub-1"
 _SEEDED_TITLE = "alice"
-_SEEDED_ADDRESS = f"app:{_SEEDED_APP_NAME}?instance={_SEEDED_KEY}"
 # The requesting agent, which the script resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
 _STUB_APP_NAME = "docs"
@@ -68,9 +62,9 @@ _LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
 
 
 def _server_is_up(url: str) -> bool:
-    """Any HTTP answer from ``/api/projects`` means the app is serving."""
+    """Any HTTP answer from ``/api/desktops`` means the app is serving."""
     try:
-        urllib.request.urlopen(f"{url}/api/projects", timeout=0.5)
+        urllib.request.urlopen(f"{url}/api/desktops", timeout=0.5)
         return True
     except urllib.error.HTTPError:
         return True
@@ -79,55 +73,51 @@ def _server_is_up(url: str) -> bool:
 
 
 class PipelineHarness(FrozenModel):
-    """What one test gets: the shell's URL, its broadcaster, the registry file, and the stub apps' sources."""
+    """What one test gets: the shell's URL, its broadcaster, and the registry file."""
 
     model_config = {"arbitrary_types_allowed": True}
 
     base_url: str = Field(description="The shell's loopback URL")
     broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
     registry_path: Path = Field(description="The registry file the shell and the script read")
-    seeded_source: StubInstanceSource = Field(description="The seeded app's in-memory instances")
-    stub_source: StubInstanceSource = Field(description="The empty stub app's in-memory instances")
+
+
+def _stand_in_app() -> Flask:
+    """An app that answers every path, so the liveness probe finds it running."""
+    app = Flask("stand-in")
+    app.add_url_rule("/", view_func=lambda: "ok", endpoint="root")
+    app.add_url_rule("/<path:path>", view_func=lambda path: "ok", endpoint="page")
+    return app
 
 
 @pytest.fixture
 def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[PipelineHarness, None, None]:
-    """A workspace server over a registry of two stub apps, one seeded with an instance, and a started shell."""
+    """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell."""
     registry_path = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", _BASE_URL)
 
-    seeded_source = StubInstanceSource()
-    seeded_source.records.append(instance_record(_SEEDED_KEY, _SEEDED_TITLE))
-    seeded_port = free_port()
-    stub_source = StubInstanceSource()
-    stub_port = free_port()
-    stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
-    write_registry(
-        registry_path,
-        registry_row_toml(
-            _SEEDED_APP_NAME,
-            f"http://{LOOPBACK_HOST}:{seeded_port}",
-            is_multi_instance=True,
-            is_critical=True,
-            actions=(("new", "New Chat"), ("subagent", "Open subagent")),
-            default_shortcut=("new", "new"),
-        ),
-        registry_row_toml(_STUB_APP_NAME, stub_url, is_multi_instance=True, actions=(("new", "New docs"),)),
-    )
+    with serve_app(_stand_in_app()) as seeded, serve_app(_stand_in_app()) as stub:
+        write_registry(
+            registry_path,
+            registry_row_toml(
+                _SEEDED_APP_NAME,
+                seeded.http_url,
+                is_critical=True,
+                default_shortcut=("new", "new"),
+                launch_paths=(("new", "New Chat", "/new"), ("subagent", "Open subagent", "/subagent")),
+            ),
+            registry_row_toml(_STUB_APP_NAME, stub.http_url),
+        )
 
-    broadcaster = WebSocketBroadcaster()
-    config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
-    state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
-    app = create_application(state)
+        broadcaster = WebSocketBroadcaster()
+        config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
+        state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
+        app = create_application(state)
 
-    server = make_threaded_server("127.0.0.1", _PORT, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    with (
-        serve_in_background(LOOPBACK_HOST, seeded_port, build_instances_app(seeded_source, RecordingNudger())),
-        serve_in_background(LOOPBACK_HOST, stub_port, build_instances_app(stub_source, RecordingNudger())),
-    ):
+        server = make_threaded_server("127.0.0.1", _PORT, app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
             wait_for(
                 lambda: _server_is_up(_BASE_URL),
@@ -137,13 +127,7 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
             )
             state.shell.start()
             try:
-                yield PipelineHarness(
-                    base_url=_BASE_URL,
-                    broadcaster=broadcaster,
-                    registry_path=registry_path,
-                    seeded_source=seeded_source,
-                    stub_source=stub_source,
-                )
+                yield PipelineHarness(base_url=_BASE_URL, broadcaster=broadcaster, registry_path=registry_path)
             finally:
                 state.shell.stop()
         finally:
@@ -197,8 +181,7 @@ def _sandbox(tmp_path: Path) -> Path:
 def connected_client(layout_server: PipelineHarness) -> Generator["queue.Queue[str | None]", None, None]:
     """One connected browser client on the default desktop: the client every op with no ``--client`` targets."""
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(
-        client_queue, _CLIENT_ID, "", "desktop", active_desktop=_DEFAULT_DESKTOP_ID
+    layout_server.broadcaster.set_client_info(client_queue, _CLIENT_ID, _DEFAULT_DESKTOP_ID
     )
     try:
         yield client_queue
@@ -218,7 +201,7 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
     assert json.loads(context.stdout) == []
 
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "", "desktop", active_desktop="home")
+    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "home")
     try:
         connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
         assert connected.returncode == 0, f"stderr={connected.stderr!r}"
@@ -249,6 +232,7 @@ def test_list_shows_every_app_with_its_launch_paths(layout_server: PipelineHarne
     assert set(listing) == {_SEEDED_APP_NAME, _STUB_APP_NAME}
     # An app declaring no launch path offers the synthesized ``open`` at its root.
     assert [(launch["id"], launch["path"]) for launch in listing[_STUB_APP_NAME]["launch_paths"]] == [("open", "/")]
+    assert [launch["id"] for launch in listing[_SEEDED_APP_NAME]["launch_paths"]] == ["new", "subagent"]
     assert listing[_STUB_APP_NAME]["is_running"] is True
     assert listing[_STUB_APP_NAME]["windows"] == []
 
@@ -465,7 +449,7 @@ def test_desktop_verbs_open_and_close_a_window_in_the_clients_layout_with_no_bro
     window is open; the writes are announced to that client."""
     requester = {"app": _SEEDED_APP_NAME, "marker": _SEEDED_KEY}
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "", "desktop", active_desktop="home")
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "home")
     try:
         status, listed = _post_op(layout_server, "desktops", {}, requester)
         assert status == 200 and [desktop["id"] for desktop in listed["desktops"]] == ["home"]

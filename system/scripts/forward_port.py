@@ -20,10 +20,9 @@ Manifests
 ---------
 An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
-and copies its static fields onto the row: ``display_name``, ``instances``,
-``instances_url``, ``critical``, ``priority``, ``program`` (default: the name),
-``internal``, ``launcher_rank``, ``default_shortcut``, ``actions`` (id,
-label, and the names of the params), and ``launch_paths`` (id, label, path,
+and copies its static fields onto the row: ``display_name``, ``critical``,
+``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
+``default_shortcut`` (launch and mode), and ``launch_paths`` (id, label, path,
 and the names of the params); the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
@@ -142,18 +141,21 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``actions``, ``launch_paths``) are
-# handled on their own. ``program`` defaults to the name when the manifest
-# omits it.
-_MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
-_MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
+# structured keys (``default_shortcut``, ``launch_paths``) are handled on their
+# own. ``program`` defaults to the name when the manifest omits it.
+_MANIFEST_STRING_KEYS = ("display_name", "priority", "program")
+_MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
 _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
 
 # The registry keys a manifest owns. A manifest registration rewrites every one
 # of them (absent in the manifest means absent on the row), so a stale value
-# from an earlier manifest never lingers.
+# from an earlier manifest never lingers. ``instances``, ``instances_url``, and
+# ``actions`` are keys no manifest declares any more (the tabbed shell's); they
+# stay here so a registration clears them off a row an older release wrote.
+# CLEANUP: drop the three retired keys around late October 2026, once every
+# workspace has re-registered its apps under this release.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
     "instances",
@@ -533,7 +535,7 @@ def _read_manifest(
 def _copied_tables(
     entries: Any, path: Path, key: str, copy_entry: _TableCopier
 ) -> tuple[list[dict[str, object]] | None, str | None]:
-    """A manifest array of tables (``actions`` or ``launch_paths``) as the registry row
+    """A manifest array of tables (``launch_paths``) as the registry row
     carries it, each entry copied by ``copy_entry``. Returns ``(copied, None)``, or
     ``(None, error)`` when the value is not an array or an entry is not shaped as the
     manifest requires."""
@@ -552,51 +554,19 @@ def _copied_default_shortcut(
     shortcut: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
     """The manifest's ``default_shortcut`` (any TOML value) as the registry row carries
-    it: ``action``, ``launch`` when the manifest names one, and ``mode``, in the order the
-    contract spells the inline table. Returns ``(copied, None)``, or ``(None, error)`` when
-    the value is not shaped as the manifest requires."""
+    it: ``launch`` and ``mode``, in the order the contract spells the inline table. Returns
+    ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
+    requires."""
     if not (
         isinstance(shortcut, dict)
-        and isinstance(shortcut.get("action"), str)
+        and isinstance(shortcut.get("launch"), str)
         and isinstance(shortcut.get("mode"), str)
     ):
         return (
             None,
-            f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
+            f"manifest {str(path)!r}: default_shortcut must be a table with string 'launch' and 'mode'",
         )
-    copied: dict[str, object] = {"action": shortcut["action"]}
-    launch = shortcut.get("launch")
-    if launch is not None:
-        if not isinstance(launch, str):
-            return None, f"manifest {str(path)!r}: default_shortcut.launch must be a string"
-        copied["launch"] = launch
-    copied["mode"] = shortcut["mode"]
-    return copied, None
-
-
-def _copied_action(
-    action: Any, path: Path
-) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest action (any value a TOML array can hold) as the registry row
-    carries it: ``id``, ``label``, and ``params`` (the param names) when it declares
-    any. Returns ``(copied, None)``, or ``(None, error)`` when the action is not
-    shaped as the manifest requires."""
-    if not (
-        isinstance(action, dict)
-        and isinstance(action.get("id"), str)
-        and isinstance(action.get("label"), str)
-    ):
-        return (
-            None,
-            f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
-        )
-    copied: dict[str, object] = {"id": action["id"], "label": action["label"]}
-    param_names, params_error = _copied_param_names(action.get("params"), path, "action")
-    if param_names is None:
-        return None, params_error
-    if param_names:
-        copied["params"] = param_names
-    return copied, None
+    return {"launch": shortcut["launch"], "mode": shortcut["mode"]}, None
 
 
 def _copied_launch_path(
@@ -631,7 +601,7 @@ def _copied_launch_path(
 def _copied_param_names(
     params: Any, path: Path, owner: str
 ) -> tuple[list[str] | None, str | None]:
-    """The names of a manifest ``params`` array (an action's or a launch path's) as the
+    """The names of a manifest ``params`` array (a launch path's) as the
     registry row carries them; an absent array reads as no names. Returns ``(names, None)``,
     or ``(None, error)`` when an entry lacks a string ``name``; ``owner`` names the entry's
     kind in that error."""
@@ -649,10 +619,7 @@ def _copied_param_names(
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
-_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
-    ("actions", _copied_action),
-    ("launch_paths", _copied_launch_path),
-)
+_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (("launch_paths", _copied_launch_path),)
 
 
 def _upsert(

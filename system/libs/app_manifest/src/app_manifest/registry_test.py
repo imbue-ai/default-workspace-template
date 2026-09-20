@@ -42,12 +42,10 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.internal is False
     assert row.program is None
     assert row.display_name is None
-    assert row.instances is False
-    assert row.instances_url is None
     assert row.critical is False
     assert row.priority == "user"
     assert row.default_shortcut is None
-    assert row.actions == ()
+    assert row.launch_paths == ()
     assert row.launcher_rank is None
 
 
@@ -61,12 +59,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         f'icon = "{_ICON.replace(chr(34), chr(92) + chr(34))}"\n'
         'program = "files"\n'
         'display_name = "File Viewer"\n'
-        "instances = true\n"
-        'instances_url = "http://127.0.0.1:8301"\n'
         "critical = false\n"
         'priority = "files"\n'
-        'default_shortcut = {action = "new", launch = "new", mode = "focus"}\n'
-        'actions = [{id = "new", label = "New File Viewer", params = ["path"]}, {id = "recent", label = "Recent"}]\n'
+        'default_shortcut = {launch = "new", mode = "focus"}\n'
         'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
     )
@@ -77,16 +72,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     row = rows[0]
     assert row.icon == _ICON
     assert row.display_name == "File Viewer"
-    assert row.instances is True
-    assert row.instances_url == "http://127.0.0.1:8301"
     assert row.priority == "files"
     assert row.default_shortcut is not None
-    assert row.default_shortcut.action == "new"
     assert row.default_shortcut.launch == "new"
-    assert [(action.id, action.label, action.params) for action in row.actions] == [
-        ("new", "New File Viewer", ("path",)),
-        ("recent", "Recent", ()),
-    ]
     assert [
         (launch_path.id, launch_path.label, launch_path.path, launch_path.params)
         for launch_path in row.launch_paths
@@ -101,7 +89,7 @@ def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> No
     registry = tmp_path / "apps.toml"
     registry.write_text(
         '[[apps]]\nname = "good"\nurl = "http://localhost:5000"\n'
-        '[[apps]]\nname = "bad"\nurl = "http://localhost:5001"\ninstances = "maybe"\n'
+        '[[apps]]\nname = "bad"\nurl = "http://localhost:5001"\ncritical = "maybe"\n'
         '[[apps]]\nname = "Bad Name"\nurl = "http://localhost:5002"\n'
     )
     captured: list[str] = []
@@ -113,7 +101,7 @@ def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> No
 
     assert [row.name for row in rows] == ["good"]
     assert len(captured) == 2
-    assert "bad" in captured[0] and "instances" in captured[0]
+    assert "bad" in captured[0] and "critical" in captured[0]
     assert "name" in captured[1]
 
 

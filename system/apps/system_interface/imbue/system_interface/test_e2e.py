@@ -1,7 +1,7 @@
 """End-to-end tests for the desktop shell using Playwright.
 
 These tests start a real Flask server (threaded Werkzeug) over a registry of stub apps served by
-``app_instances``' in-memory source over loopback, then use Playwright to drive the shell exactly
+stand-in pages over loopback, then use Playwright to drive the shell exactly
 as a user would: every open goes through a shortcut, a launcher tile, a page's own ``shell:open``,
 an agent op, or a deep link; every gesture through the pointer; and every assertion on state reads
 the shell's own API or its files. The framed pages are static stand-ins that import the shell's
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -23,13 +24,6 @@ from typing import Any
 from typing import Generator
 
 import pytest
-from app_instances.blueprint import build_instances_app
-from app_instances.nudge import ShellNudger
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import StubInstanceSource
-from app_instances.testing import free_port
-from app_manifest.primitives import AppName
 from flask import Flask
 from flask import Response
 from flask import request
@@ -46,7 +40,6 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
-from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
@@ -54,6 +47,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
 from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import is_e2e_browser_installed
+from imbue.system_interface.testing import serve_app
 from imbue.system_interface.wsgi import make_threaded_server
 
 
@@ -137,52 +131,40 @@ def _running_e2e_server(
     is_stub_taking_message: bool = False,
     is_catalog_offered: bool = False,
 ) -> Generator[E2EServer, None, None]:
-    """Run the shell on a free port over the stub app (and the second one when asked), each seeded with one instance.
+    """Run the shell on a free port over the stub app (and the second one when asked).
 
     ``is_stub_taking_message`` declares a ``message`` param on the stub's ``new`` launch path, which is what makes
     it the app the launcher's seeded prompts go to. With ``is_catalog_offered`` the shell has a template catalog.
     """
-    port = free_port()
+    port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     registry_path = tmp_path / "registry" / "apps.toml"
-    stub_source = StubInstanceSource()
-    stub_source.records.append(instance_record("stub-1", title="Stub 1"))
-    stub_port = free_port()
-    stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
-    rows = [
-        registry_row_toml(
-            _STUB_APP_NAME,
-            stub_url,
-            is_multi_instance=True,
-            actions=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL),),
-            default_shortcut=(_STUB_LAUNCH_ID, "focus"),
-            default_shortcut_launch=_STUB_LAUNCH_ID,
-            display_name=_STUB_APP_DISPLAY_NAME,
-            action_params={_STUB_LAUNCH_ID: ("message",)} if is_stub_taking_message else None,
-            launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
-        )
-    ]
-    second_source: StubInstanceSource | None = None
-    second_port = free_port()
-    second_url = f"http://{LOOPBACK_HOST}:{second_port}"
-    if is_second_app_offered:
-        second_source = StubInstanceSource()
-        second_source.records.append(instance_record("stub-1", title="Note 1"))
-        rows.append(
-            registry_row_toml(
-                _SECOND_APP_NAME,
-                second_url,
-                is_multi_instance=True,
-                actions=((_STUB_LAUNCH_ID, "New notes"),),
-                default_shortcut=(_STUB_LAUNCH_ID, "focus"),
-                default_shortcut_launch=_STUB_LAUNCH_ID,
-                display_name=_SECOND_APP_DISPLAY_NAME,
-                launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
-            )
-        )
-    write_registry(registry_path, *rows)
 
-    with pytest.MonkeyPatch.context() as monkeypatch:
+    # The stubs serve first, so the registry can name where their pages are framed from.
+    second_serving = serve_app(_stub_app(base_url)) if is_second_app_offered else contextlib.nullcontext()
+    with pytest.MonkeyPatch.context() as monkeypatch, serve_app(_stub_app(base_url)) as stub_served, second_serving as second_served:
+        stub_url = stub_served.http_url
+        rows = [
+            registry_row_toml(
+                _STUB_APP_NAME,
+                stub_url,
+                default_shortcut=(_STUB_LAUNCH_ID, "focus"),
+                display_name=_STUB_APP_DISPLAY_NAME,
+                launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
+                launch_params={_STUB_LAUNCH_ID: ("message",)} if is_stub_taking_message else None,
+            )
+        ]
+        if second_served is not None:
+            rows.append(
+                registry_row_toml(
+                    _SECOND_APP_NAME,
+                    second_served.http_url,
+                    default_shortcut=(_STUB_LAUNCH_ID, "focus"),
+                    display_name=_SECOND_APP_DISPLAY_NAME,
+                    launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
+                )
+            )
+        write_registry(registry_path, *rows)
         monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
@@ -195,18 +177,7 @@ def _running_e2e_server(
             config=config, shell_state_directory=state_dir, template_catalog_fetcher=catalog_fetcher
         )
         app = create_application(state)
-
-        stub_server = serve_in_background(
-            LOOPBACK_HOST, stub_port, _stub_app(stub_source, AppName(_STUB_APP_NAME), base_url)
-        )
-        second_server = (
-            serve_in_background(
-                LOOPBACK_HOST, second_port, _stub_app(second_source, AppName(_SECOND_APP_NAME), base_url)
-            )
-            if second_source is not None
-            else contextlib.nullcontext()
-        )
-        with stub_server, second_server:
+        if True:
             # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
             # first (a stub whose port is taken never leaves a bound shell socket behind).
             server = make_threaded_server("127.0.0.1", port, app)
@@ -219,7 +190,7 @@ def _running_e2e_server(
                     poll_interval=0.1,
                     error_message=f"workspace server did not come up at {base_url}",
                 )
-                # Started only once the apps are serving: the first instance fetch must find them answering.
+                # Started only once the apps are serving: the first liveness probe must find them answering.
                 state.shell.start()
                 try:
                     yield E2EServer(base_url=base_url, state_dir=state_dir, stub_url=stub_url)
@@ -229,6 +200,12 @@ def _running_e2e_server(
                 server.shutdown()
                 thread.join(timeout=5.0)
                 server.server_close()
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 def _server_is_up(base_url: str) -> bool:
@@ -301,9 +278,9 @@ def _stub_page_html(base_url: str, is_navigable: bool) -> str:
     )
 
 
-def _stub_app(source: StubInstanceSource, app_name: AppName, base_url: str) -> Flask:
-    """The stub app: the instances API, plus the stand-in page at every other path."""
-    app = build_instances_app(source, ShellNudger(app_name=app_name, shell_url=base_url))
+def _stub_app(base_url: str) -> Flask:
+    """The stub app: the stand-in page at every path."""
+    app = Flask("stub")
 
     def _page(path: str = "") -> Response:
         is_navigable = request.cookies.get(_PLAIN_PAGE_COOKIE) != _PLAIN_PAGE_COOKIE_VALUE

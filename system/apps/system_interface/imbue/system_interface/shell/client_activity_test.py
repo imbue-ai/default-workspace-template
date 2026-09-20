@@ -43,7 +43,7 @@ def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
     assert [message["text"] for message in first["recent_messages"]] == [
         f"m{index}" for index in range(2, RECENT_MESSAGES_PER_CLIENT + 2)
     ]
-    assert first["recent_messages"][0]["address"] == "app:chat?instance=agent-1"
+    assert (first["recent_messages"][0]["app"], first["recent_messages"][0]["key"]) == ("chat", "agent-1")
     # The live registration outranks the log for the desktop a connected client is on.
     assert second["is_connected"] is True and second["active_desktop"] == "notes"
 
@@ -70,11 +70,11 @@ def test_a_connected_client_with_no_activity_is_still_listed(tmp_path: Path) -> 
     assert silent["recent_messages"] == [] and silent["last_seen"] == ""
 
 
-def test_a_message_to_a_page_without_a_marker_is_summarized_with_the_bare_address(tmp_path: Path) -> None:
+def test_a_message_to_a_page_without_a_marker_is_summarized_with_an_empty_key(tmp_path: Path) -> None:
     log = _log(tmp_path)
     log.append_message("c1", "home", "files", "", "open the notes")
     (summary,) = summarize_client_activity(log.read_events(), [])
-    assert summary["recent_messages"][0]["address"] == "app:files"
+    assert (summary["recent_messages"][0]["app"], summary["recent_messages"][0]["key"]) == ("files", "")
 
 
 def test_the_last_client_to_message_a_page_is_found(tmp_path: Path) -> None:

@@ -23,7 +23,6 @@ from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import SharingMode
-from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -135,7 +134,7 @@ def test_shortcuts_are_set_moved_and_removed(tmp_path: Path) -> None:
     assert [str(shortcut.target.app) for shortcut in removed.shortcuts] == ["files"]
 
 
-def test_a_clients_active_desktop_falls_back_from_its_desktop_to_its_view_to_the_first(tmp_path: Path) -> None:
+def test_a_clients_active_desktop_falls_back_from_its_desktop_to_the_first(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, ())
     desktops = [home, alpha]
@@ -143,9 +142,7 @@ def test_a_clients_active_desktop_falls_back_from_its_desktop_to_its_view_to_the
     assert resolve_active_desktop(None, []) is None
     on_alpha = ClientRecord(id=ClientId("c1"), active_desktop=DesktopId("alpha"), last_seen=TEST_NOW)
     assert resolve_active_desktop(on_alpha, desktops) == alpha.id
-    stale = ClientRecord(
-        id=ClientId("c1"), active_desktop=DesktopId("gone"), active_view=ViewId("alpha"), last_seen=TEST_NOW
-    )
-    assert resolve_active_desktop(stale, desktops) == alpha.id
-    everything = ClientRecord(id=ClientId("c1"), active_view=ViewId("everything"), last_seen=TEST_NOW)
-    assert resolve_active_desktop(everything, desktops) == home.id
+    stale = ClientRecord(id=ClientId("c1"), active_desktop=DesktopId("gone"), last_seen=TEST_NOW)
+    assert resolve_active_desktop(stale, desktops) == home.id
+    unplaced = ClientRecord(id=ClientId("c1"), last_seen=TEST_NOW)
+    assert resolve_active_desktop(unplaced, desktops) == home.id

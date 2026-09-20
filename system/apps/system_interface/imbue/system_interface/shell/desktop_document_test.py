@@ -284,19 +284,14 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
             registry_row_toml(
                 "chat",
                 "http://localhost:1",
-                True,
-                actions=[("new", "New Chat")],
                 launch_paths=[("new", "New Chat", "/new")],
                 default_shortcut=("new", "new"),
-                default_shortcut_launch="new",
             ),
             registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
             registry_row_toml("plain", "http://localhost:3"),
-            # A manifest written for the tabbed shell alone: its action id doubles as the launch path id.
             registry_row_toml("files", "http://localhost:4", default_shortcut=("open", "focus")),
-            registry_row_toml(
-                "odd", "http://localhost:5", True, actions=[("make", "Make")], default_shortcut=("make", "focus")
-            ),
+            # A default shortcut naming a launch path the row does not declare seeds nothing.
+            registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
         )
     )
     seeded = seed_desktop_shortcuts(rows)
@@ -305,8 +300,8 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         ("files", "open", "focus"),
     ]
     assert [shortcut.cell for shortcut in seeded] == [GridCell(column=0, row=0), GridCell(column=0, row=1)]
-    # The same rule answers what a bare ``open`` op runs: the declared launch, the action that doubles as one,
-    # or nothing for an action no launch path matches and for an app with no default shortcut.
+    # The same rule answers what a bare ``open`` op runs: the declared launch, or nothing for a launch path the
+    # app does not offer and for an app with no default shortcut.
     assert {str(row.name): default_launch_path_id(row) for row in rows} == {
         "chat": "new",
         "hidden": "open",

@@ -1,8 +1,7 @@
-"""Test helpers for the shell subpackage: registry rows and files, a fake instance fetcher, and an inventory over them."""
+"""Test helpers for the shell subpackage: registry rows and files, an inventory over them, and desktop records."""
 
 import json
 import queue
-import time
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -12,33 +11,17 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
-from app_instances.data_types import InstanceLifetime
-from app_instances.data_types import InstanceRecord
-from app_instances.data_types import InstanceStatus
-from app_instances.primitives import InstanceKey
-from app_instances.primitives import InstanceTitle
-from app_instances.primitives import InstanceUrl
 from app_manifest.primitives import AppName
 from flask import Flask
-from pydantic import Field
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import Desktop
-from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
-from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.inventory import AppInventory
-from imbue.system_interface.shell.inventory import FetchOutcomeKind
-from imbue.system_interface.shell.inventory import InstanceFetchOutcome
-from imbue.system_interface.shell.inventory import InstanceFetcherInterface
-from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import SharingMode
-from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -48,38 +31,34 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The one clock the shell tests stamp records with.
 TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
-# The instances URL of the supervised multi-instance app of ``write_two_app_registry``.
+# The URL of the supervised ``terminal`` row of ``write_two_app_registry``, which declares a launch path.
 TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
-# The URL of the single-instance app of ``write_two_app_registry``.
+# The URL of the ``files`` row of ``write_two_app_registry``, which declares none.
 TEST_FILES_URL: Final[str] = "http://localhost:7000"
 
 
 def registry_row_toml(
     name: str,
     url: str,
-    is_multi_instance: bool = False,
     program: str | None = None,
     is_critical: bool = False,
     is_internal: bool = False,
-    actions: Sequence[tuple[str, str]] = (),
     default_shortcut: tuple[str, str] | None = None,
     display_name: str | None = None,
     label: str = "",
-    action_params: Mapping[str, Sequence[str]] | None = None,
     launcher_rank: int | None = None,
-    # Each launch path as ``(id, label, path)``; its params are the action of the same id's.
+    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id.
     launch_paths: Sequence[tuple[str, str, str]] = (),
-    default_shortcut_launch: str | None = None,
+    launch_params: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
-    ``action_params`` names each action's params by action id."""
+    ``default_shortcut`` is ``(launch, mode)``."""
     lines = [
         "[[apps]]",
         f'name = "{name}"',
         f'url = "{url}"',
         f'label = "{label}"',
         f'display_name = "{display_name if display_name is not None else name.capitalize()}"',
-        f"instances = {'true' if is_multi_instance else 'false'}",
         f"critical = {'true' if is_critical else 'false'}",
         f"internal = {'true' if is_internal else 'false'}",
     ]
@@ -88,23 +67,13 @@ def registry_row_toml(
     if launcher_rank is not None:
         lines.append(f"launcher_rank = {launcher_rank}")
     if default_shortcut is not None:
-        launch_key = f', launch = "{default_shortcut_launch}"' if default_shortcut_launch is not None else ""
-        lines.append(
-            f'default_shortcut = {{ action = "{default_shortcut[0]}"{launch_key}, mode = "{default_shortcut[1]}" }}'
-        )
-    for action_id, label_text in actions:
-        lines.append("[[apps.actions]]")
-        lines.append(f'id = "{action_id}"')
-        lines.append(f'label = "{label_text}"')
-        params = (action_params or {}).get(action_id, ())
-        if params:
-            lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
+        lines.append(f'default_shortcut = {{ launch = "{default_shortcut[0]}", mode = "{default_shortcut[1]}" }}')
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')
         lines.append(f'label = "{launch_label}"')
         lines.append(f'path = "{launch_path}"')
-        params = (action_params or {}).get(launch_id, ())
+        params = (launch_params or {}).get(launch_id, ())
         if params:
             lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
     return "\n".join(lines) + "\n"
@@ -117,18 +86,16 @@ def write_registry(path: Path, *rows: str) -> Path:
 
 
 def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
-    """``apps.toml`` under ``tmp_path`` with a supervised multi-instance ``terminal`` row, a single-instance ``files`` row, and ``extra_rows``."""
+    """``apps.toml`` under ``tmp_path`` with a supervised ``terminal`` row declaring a ``new`` launch path, a
+    ``files`` row declaring none, and ``extra_rows``."""
     return write_registry(
         tmp_path / "apps.toml",
         registry_row_toml(
             "terminal",
             TEST_TERMINAL_URL,
-            True,
             program="terminal",
-            actions=[("new", "New terminal")],
             default_shortcut=("new", "new"),
             launch_paths=[("new", "New terminal", "/new")],
-            default_shortcut_launch="new",
         ),
         registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
         *extra_rows,
@@ -150,47 +117,6 @@ def shell_application(tmp_path: Path, inventory: AppInventory, broadcaster: WebS
     return create_application(state)
 
 
-def instance_record(
-    key: str,
-    title: str | None = None,
-    status: InstanceStatus = InstanceStatus.IDLE,
-    lifetime: InstanceLifetime = InstanceLifetime.EXPLICIT,
-    url: str = "/",
-) -> InstanceRecord:
-    return InstanceRecord(
-        key=InstanceKey(key),
-        url=InstanceUrl(url),
-        title=InstanceTitle(title if title is not None else key),
-        status=status,
-        lifetime=lifetime,
-        last_active=datetime(2026, 9, 4, tzinfo=timezone.utc),
-        renameable=True,
-    )
-
-
-class FakeInstanceFetcher(InstanceFetcherInterface):
-    """Answers each instances URL from a table and records every fetch."""
-
-    outcome_by_url: dict[str, InstanceFetchOutcome] = Field(default_factory=dict, description="What each URL answers")
-    fetched_urls: list[str] = Field(default_factory=list, description="Every URL fetched, in order")
-
-    def fetch(self, instances_url: str) -> InstanceFetchOutcome:
-        self.fetched_urls.append(instances_url)
-        outcome = self.outcome_by_url.get(instances_url)
-        if outcome is None:
-            return InstanceFetchOutcome(kind=FetchOutcomeKind.FAILED, records=())
-        return outcome
-
-    def list(self, instances_url: str, *records: InstanceRecord) -> None:
-        self.outcome_by_url[instances_url] = InstanceFetchOutcome(kind=FetchOutcomeKind.LISTED, records=records)
-
-    def not_ready(self, instances_url: str) -> None:
-        self.outcome_by_url[instances_url] = InstanceFetchOutcome(kind=FetchOutcomeKind.NOT_READY, records=())
-
-    def fail(self, instances_url: str) -> None:
-        self.outcome_by_url[instances_url] = InstanceFetchOutcome(kind=FetchOutcomeKind.FAILED, records=())
-
-
 class FakeLivenessProber:
     """Answers the liveness sweep from a table; every app not in it counts as running."""
 
@@ -206,18 +132,13 @@ class FakeLivenessProber:
 def build_inventory(
     registry_path: Path,
     broadcaster: WebSocketBroadcaster,
-    fetcher: InstanceFetcherInterface | None = None,
     prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] | None = None,
-    clock: Callable[[], float] | None = None,
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
         registry_path=registry_path,
         broadcaster=broadcaster,
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
-        fetcher=fetcher if fetcher is not None else FakeInstanceFetcher(),
-        coalesce_seconds=0.01,
-        clock=clock if clock is not None else time.monotonic,
     )
     inventory.reload_registry()
     inventory.refresh_liveness()
@@ -232,41 +153,6 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
         if raw is not None:
             messages.append(json.loads(raw))
     return messages
-
-
-def addresses_by_panel_id(dockview: dict[str, Any] | None) -> dict[str, Address]:
-    """Each instance panel's address, keyed by dockview panel id: how the layout assertions read a document."""
-    return {panel_id: params.address for panel_id, params in instance_panel_params_by_id(dockview).items()}
-
-
-def layout_showing(*addresses: Address) -> LayoutRecord:
-    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each panel's params carrying a fixed tab id."""
-    panels = {
-        f"p{index}": {"id": f"p{index}", "params": instance_panel_params_json(address, TabId(f"tab-{index:016x}"), 0)}
-        for index, address in enumerate(addresses)
-    }
-    return LayoutRecord(
-        dockview={
-            "grid": {
-                "root": {
-                    "type": "branch",
-                    "data": [
-                        {"type": "leaf", "data": {"views": list(panels), "activeView": "p0", "id": "g0"}, "size": 1200}
-                    ],
-                    "size": 800,
-                },
-                "width": 1200,
-                "height": 800,
-                "orientation": "HORIZONTAL",
-            },
-            "panels": panels,
-            "activeGroup": "g0",
-        }
-        if addresses
-        else None,
-        device_kind=DeviceKind.DESKTOP,
-        updated_at=None,
-    )
 
 
 def window_record(window_id: WindowId, app: str, path: str, is_settling: bool = False) -> Window:

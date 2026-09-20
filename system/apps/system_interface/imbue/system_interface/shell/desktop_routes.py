@@ -1,5 +1,5 @@
-"""The desktop interface's routes (desktop-interface contracts.md sections 5 and 8): desktops, windows, placements,
-wallpapers, and the desktop verbs of the op route, served beside the tabbed shell's routes until it is deleted."""
+"""The desktop's routes (desktop-interface contracts.md sections 5 and 8): desktops, windows, placements, wallpapers,
+and the verbs of the op route."""
 
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -7,7 +7,6 @@ from typing import Any
 from typing import Final
 from urllib.parse import urlencode
 
-from app_instances.blueprint import parse_request_body
 from app_manifest.manifest import ShortcutMode
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -58,12 +57,12 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.layout_ops import DESKTOP_READ_OPS
-from imbue.system_interface.shell.layout_ops import DESKTOP_SHORTCUT_OPS
 from imbue.system_interface.shell.layout_ops import DesktopOpArguments
+from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.layout_ops import SELF_ADDRESS
+from imbue.system_interface.shell.layout_ops import SELF_WINDOW
+from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WallpaperKind
@@ -77,6 +76,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import op_only_args
+from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
@@ -94,6 +94,7 @@ _ZONE_STATES: Final[dict[str, WindowState]] = {
 }
 _FRAME_COMPONENT_COUNT: Final[int] = 4
 _CELL_COMPONENT_COUNT: Final[int] = 2
+RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
 
 
 class DesktopMetadataRequest(FrozenModel):
@@ -442,7 +443,7 @@ def _resolve_window(desktop: Desktop, layout: DesktopLayout, raw: str, requester
     or an app name (that app's most recently focused window in this client's layout)."""
     if not raw:
         raise LayoutOpError("this op needs a window: a window id, 'self', or an app name")
-    if raw == SELF_ADDRESS:
+    if raw == SELF_WINDOW:
         if requester is None or not requester.marker:
             raise LayoutOpError(
                 "'self' names the requester's own window, but this op carried no requester with a marker"
@@ -640,10 +641,10 @@ def _op_window(
 def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
-    """Apply one desktop verb (desktop contracts.md section 8): the read-only ones answer the desktops, a
-    whole-app ``refresh`` reaches every client; the rest resolve their client and desktop, edit the files, and
-    answer the resulting state."""
-    if op in DESKTOP_READ_OPS:
+    """Apply one verb of the op route (desktop contracts.md section 8): the inventory ops answer the desktops, a
+    whole-app ``refresh`` and the interface reload reach every client; the rest resolve their client and desktop,
+    edit the files, and answer the resulting state."""
+    if op in INVENTORY_OPS:
         desktops = [desktop_wire_json(desktop) for desktop in shell.list_desktops()]
         logger.info("layout op={} requester={} desktops={}", op, requester, len(desktops))
         return jsonify({"ok": True, "desktops": desktops})
@@ -654,6 +655,8 @@ def dispatch_desktop_op(
         raise LayoutOpError("'load' requires a desktop name in args.desktop")
     if op == "refresh" and arguments.app:
         return _refresh_app(shell, arguments.app, requester)
+    if op == RELOAD_SYSTEM_INTERFACE_OP:
+        return _reload_system_interface(shell, requester)
     target = _resolve_target(shell, args_raw, requester)
     window_id: WindowId | None = None
     match op:
@@ -666,7 +669,7 @@ def dispatch_desktop_op(
             ).window.id
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)
-        case _ if op in DESKTOP_SHORTCUT_OPS:
+        case _ if op in SHORTCUT_OPS:
             _op_shortcuts(shell, op, arguments, target)
         case _:
             window_id = _op_window(shell, op, arguments, target, requester)
@@ -687,6 +690,15 @@ def _requester_wire(requester: OpRequester | None) -> str:
     if requester is None:
         return ""
     return str(requester.app) + (f":{requester.marker}" if requester.marker else "")
+
+
+def _reload_system_interface(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
+    """The transient interface reload: every window of the shell, on every client."""
+    shell.broadcaster.broadcast_layout_op(
+        RELOAD_SYSTEM_INTERFACE_OP, {}, requester=_requester_wire(requester), target_client_id=None
+    )
+    logger.info("layout op={} requester={} (every client)", RELOAD_SYSTEM_INTERFACE_OP, requester)
+    return jsonify({"ok": True, "target_client_id": None})
 
 
 def _refresh_app(shell: ShellState, app_raw: str, requester: OpRequester | None) -> ResponseReturnValue:

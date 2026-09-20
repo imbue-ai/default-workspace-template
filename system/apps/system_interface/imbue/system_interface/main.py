@@ -36,7 +36,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--state-dir",
         type=Path,
         default=DEFAULT_STATE_DIRECTORY,
-        help="Where the shell keeps its projects, layouts, and client records (contracts.md section 7)",
+        help="Where the shell keeps its desktops, placements, and client records (desktop contracts.md section 4)",
     )
     return parser.parse_args(argv)
 

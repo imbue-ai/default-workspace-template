@@ -437,16 +437,12 @@ def next_shortcut_cell(desktop: Desktop) -> GridCell:
 
 @pure
 def default_launch_path_id(row: RegistryRow) -> LaunchPathId | None:
-    """The launch path an app's ``default_shortcut`` names, when the app offers it: its ``launch``, else (for a
-    manifest written for the tabbed shell alone) its ``action`` when a launch path has that id; None otherwise."""
+    """The launch path an app's ``default_shortcut`` names, when the app offers it; None otherwise."""
     if row.default_shortcut is None:
         return None
     offered = {launch_path.id for launch_path in effective_launch_paths(row)}
     declared = row.default_shortcut.launch
-    if declared is not None:
-        return declared if declared in offered else None
-    action = str(row.default_shortcut.action)
-    return LaunchPathId(action) if action in offered else None
+    return declared if declared in offered else None
 
 
 @pure

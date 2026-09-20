@@ -18,11 +18,9 @@ from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import describe_validation_error
-from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
-from app_manifest.primitives import InstancesUrl
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
@@ -44,16 +42,6 @@ FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
 # second it is broken.
 REGISTRATION_SLOW_SECONDS: Final[float] = 2.0
 REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
-
-
-class RegistryAction(FrozenModel):
-    """An action as copied onto a registry row: the id, the label, and the names of its params."""
-
-    id: ActionId = Field(description="The declared action id")
-    label: NonEmptyStr = Field(description="The action's user-facing label")
-    params: tuple[NonEmptyStr, ...] = Field(
-        default=(), description="The names of the create body's documented params, in manifest order"
-    )
 
 
 class RegistryLaunchPath(FrozenModel):
@@ -83,17 +71,14 @@ class RegistryRow(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
-    instances: bool = Field(default=False, description="Whether the app serves the instances API")
-    instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served; absent reads as url")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new project (or desktop) is seeded with")
-    actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
     )
     launcher_rank: int | None = Field(
-        default=None, description="The app's place among the New Tab page's leading tiles; absent reads as none"
+        default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
     )
 
 

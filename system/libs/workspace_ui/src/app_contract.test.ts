@@ -128,20 +128,18 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, open, and openPath to the parent with the contract shapes", () => {
+  it("posts focused, location, and openPath to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
     connection.focused();
     connection.location("/docs", "Docs");
-    connection.open("app:chat?instance=agent-2");
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
-      [{ type: SHELL_OPEN, address: "app:chat?instance=agent-2" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
     ]);

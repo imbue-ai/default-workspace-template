@@ -3,14 +3,14 @@
 The models behind a workspace app's two descriptions:
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
-  declarations (name, display name, icon, whether it serves instances, its
-  memory-shedding priority, whether it is critical, its supervisord program, the
-  actions it declares, the launch paths the desktop interface opens windows at,
-  the shortcut a new project or desktop is seeded with, and what it owns outside
-  its own directory). The schema is `contracts.md` section 2 of the workspace
-  app model (`docs/system/blueprint/workspace-app-model/`), with the launch
-  paths added by `contracts.md` section 2 of the desktop interface
-  (`docs/system/blueprint/desktop-interface/`).
+  declarations (name, display name, icon, its memory-shedding priority, whether
+  it is critical, its supervisord program, the launch paths the desktop opens
+  windows at, the shortcut a new desktop is seeded with, and what it owns
+  outside its own directory). The schema is `contracts.md` section 2 of the
+  desktop interface (`docs/system/blueprint/desktop-interface/`), which carries
+  section 2 of the workspace app model
+  (`docs/system/blueprint/workspace-app-model/`) forward without its instance
+  fields.
 - **The registry**, `data/.state/apps.toml`: the runtime record of registered
   apps, written only by `system/scripts/forward_port.py` (which copies the
   manifest's fields onto the row at registration and adds the URL and the

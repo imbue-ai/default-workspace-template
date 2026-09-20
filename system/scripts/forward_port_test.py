@@ -603,25 +603,13 @@ _FULL_MANIFEST = """
 name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
-instances = true
-instances_url = "http://127.0.0.1:8301"
 critical = false
 priority = "files"
 launcher_rank = 20
 
 [default_shortcut]
-action = "new"
 launch = "new"
 mode = "focus"
-
-[[actions]]
-id = "new"
-label = "New File Viewer"
-params = [{name = "path", label = "Path", required = false}]
-
-[[actions]]
-id = "recent"
-label = "Recent files"
 
 [[launch_paths]]
 id = "new"
@@ -653,22 +641,18 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert _LABEL_RE.match(row["label"])
     assert row["icon"] == _ICON
     assert row["display_name"] == "File Viewer"
-    assert row["instances"] is True
-    assert row["instances_url"] == "http://127.0.0.1:8301"
+    assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
-    assert row["default_shortcut"] == {"action": "new", "launch": "new", "mode": "focus"}
+    assert row["default_shortcut"] == {"launch": "new", "mode": "focus"}
     # Written in the order the contract spells the inline table (tomllib keeps file order).
-    assert list(row["default_shortcut"]) == ["action", "launch", "mode"]
+    assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
-    # The row carries each action's param NAMES (the New Tab page reads them), and no ``params``
-    # key at all for an action that declares none.
-    assert row["actions"] == [
-        {"id": "new", "label": "New File Viewer", "params": ["path"]},
-        {"id": "recent", "label": "Recent files"},
-    ]
+    # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
+    # key at all for a launch path that declares none.
+    assert "actions" not in row
     assert row["launch_paths"] == [
         {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
@@ -694,8 +678,8 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             id="launch-path-param-without-a-name",
         ),
         pytest.param(
-            '[default_shortcut]\naction = "open"\nlaunch = 3\nmode = "focus"\n',
-            "default_shortcut.launch must be a string",
+            '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
+            "default_shortcut must be a table with string 'launch' and 'mode'",
             id="default-shortcut-launch-not-a-string",
         ),
     ],
@@ -839,7 +823,7 @@ def test_a_manifest_with_a_wrongly_typed_field_is_refused(tmp_path: Path) -> Non
     apps_file = tmp_path / "apps.toml"
     manifest = _write_manifest(
         tmp_path,
-        'name = "web"\ndisplay_name = "Web"\nicon = "icon.svg"\ninstances = "yes"\n',
+        'name = "web"\ndisplay_name = "Web"\nicon = "icon.svg"\ncritical = "yes"\n',
     )
 
     result = _run(
@@ -847,7 +831,7 @@ def test_a_manifest_with_a_wrongly_typed_field_is_refused(tmp_path: Path) -> Non
     )
 
     assert result.returncode != 0
-    assert "instances must be a boolean" in result.stderr
+    assert "critical must be a boolean" in result.stderr
 
 
 def test_a_manifest_registration_cannot_combine_the_per_flag_forms(
@@ -975,7 +959,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
             "url": "http://localhost:8300",
             "label": "files-abcd1234",
             "icon": real_icon,
-            "instances": True,
+            "critical": True,
         },
         {
             "name": "web",
@@ -983,11 +967,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
             "label": "web-abcd1234",
             "icon": awkward_icon,
             "internal": True,
-            "default_shortcut": {"action": "new", "launch": "new", "mode": "focus"},
-            "actions": [
-                {"id": "new", "label": 'Say "hi"', "params": ["message", "account_id"]},
-                {"id": "other", "label": "Other"},
-            ],
+            "default_shortcut": {"launch": "new", "mode": "focus"},
             "launch_paths": [
                 {"id": "new", "label": 'Say "hi"', "path": "/new", "params": ["message", "account_id"]},
                 {"id": "other", "label": "Other", "path": "/other"},
@@ -1020,11 +1000,11 @@ def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
     assert isinstance(excinfo.value, forward_port.RegistryError)
     # An array holds inline tables only; a bare string in one is refused the same way.
     with pytest.raises(TypeError, match="cannot hold an array element"):
-        forward_port.dump_registry([{"name": "web", "actions": ["new"]}])
-    # An inline table's array holds strings only (an action's param names).
+        forward_port.dump_registry([{"name": "web", "launch_paths": ["new"]}])
+    # An inline table's array holds strings only (a launch path's param names).
     with pytest.raises(TypeError, match="cannot hold an inline-table array element"):
         forward_port.dump_registry(
-            [{"name": "web", "actions": [{"id": "new", "label": "New", "params": [1]}]}]
+            [{"name": "web", "launch_paths": [{"id": "new", "label": "New", "path": "/new", "params": [1]}]}]
         )
 
 

@@ -177,11 +177,6 @@ to the page at `GET /api/templates-catalog`; the design is
 `docs/system/blueprint/new-tab-page/plan-new-tab-page.md`. A fresh install lands
 there with no project.
 
-A workspace that predates the app model is carried over once by
-`system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at every
-boot behind its marker and the update apply runs before its restart; `plan
---json` shows what a run would write.
-
 ## Running and developing
 
 ```bash

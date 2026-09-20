@@ -422,18 +422,17 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """On connect the socket sends the shell's inventory and projects."""
+    """On connect the socket sends the shell's inventory and desktops."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(2)]
         finally:
             close_ws(ws)
 
-    assert [message["type"] for message in messages] == ["apps_updated", "projects_updated", "desktops_updated"]
+    assert [message["type"] for message in messages] == ["apps_updated", "desktops_updated"]
     assert messages[0]["apps"] == []
-    assert messages[1]["projects"] == []
-    assert messages[2]["desktops"] == []
+    assert messages[1]["desktops"] == []
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:
@@ -443,16 +442,11 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
     (shell.activity.events_path).mkdir(parents=True)
     client_queue = shell.broadcaster.register()
     try:
-        report = {"type": "client_state", "client_id": "c1", "device_kind": "desktop", "active_view": "everything"}
+        report = {"type": "client_state", "client_id": "c1", "active_desktop": "home"}
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
-        switched = {**report, "active_view": "alpha", "previous_view": "everything"}
+        switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "alpha",
-            "device_kind": "desktop",
-            "active_desktop": "",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "alpha"}
     finally:
         shell.broadcaster.unregister(client_queue)
 
@@ -465,12 +459,7 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
     try:
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "",
-            "device_kind": "desktop",
-            "active_desktop": "home",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
         recorded = shell.clients.get_client("c1")
         assert recorded is not None
         assert recorded.active_desktop == "home"
@@ -491,12 +480,7 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
 
         for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "",
-            "device_kind": "desktop",
-            "active_desktop": "home",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
     finally:
         shell.broadcaster.unregister(client_queue)
 
@@ -557,14 +541,9 @@ def test_a_desktop_client_state_report_registers_the_desktop_and_logs_only_real_
     try:
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "",
-            "device_kind": "desktop",
-            "active_desktop": "home",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
         recorded = shell.clients.get_client("c1")
-        assert recorded is not None and recorded.active_desktop == "home" and recorded.active_view is None
+        assert recorded is not None and recorded.active_desktop == "home"
         assert [message["type"] for message in drain_messages(client_queue)] == ["active_desktop_changed"]
 
         stale = json.dumps(
