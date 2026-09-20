@@ -23,6 +23,7 @@ from imbue.system_interface.shell.primitives import IfPresent
 # The ops the endpoint dispatches on. Anything else is a 400.
 CONTEXT_OP: Final[str] = "context"
 LOAD_OP: Final[str] = "load"
+RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
 # Read-only: answered with the desktops.
 INVENTORY_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
 WINDOW_OPS: Final[frozenset[str]] = frozenset(
@@ -33,7 +34,7 @@ SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
 )
 # Ops that change what is on screen without changing the files: they alone reach the browser as a
 # ``layout_op`` message.
-TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"refresh", "reload_system_interface"})
+TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"refresh", RELOAD_SYSTEM_INTERFACE_OP})
 KNOWN_OPS: Final[frozenset[str]] = (
     frozenset({CONTEXT_OP, LOAD_OP, "open"}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS
 )
