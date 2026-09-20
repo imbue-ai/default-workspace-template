@@ -341,7 +341,7 @@ No metric is a literal in TypeScript, and the compact breakpoint is the one exce
 ## 7. The app contract (v2)
 
 The module stays `system/libs/workspace_ui/src/app_contract.ts`, served at `/_static/app_contract.js`, imported by every app page.
-Trust is unchanged: a page accepts only `window.parent`, the shell accepts only frames it created within the workspace origin family.
+Trust: a page accepts only `window.parent`; the shell accepts only frames it created, and from those only messages whose origin is in the workspace origin family or is the origin the shell itself pointed the frame at (an app on its own loopback port, outside the family).
 The messages, exactly, are contracts.md section 7; in brief:
 
 Shell to page: `shell:handshake {clientId, windowId, desktopId, path}` after every load and when the window's desktop changes; `shell:shown`, `shell:hidden`; `shell:close-request`; `shell:navigate {path}`.
@@ -352,7 +352,7 @@ The `connectToShell` signature gains `onNavigate` and a `capabilities` argument,
 A page that gives no `onNavigate` is reloaded by `src` when it must follow.
 A page that reports no title is titled by the app's display name.
 
-The embedder relay (`relay.ts`) is unchanged: `minds:` messages from any frame the shell created go up, and messages from the chrome go to every such frame.
+The embedder relay (`relay.ts`) forwards as before: `minds:` messages from any frame the shell created go up, and messages from the chrome go to every such frame.
 A page that nests a further frame of its own (the chat root, section 9.1) relays for it, in one declared module the embed ratchet allows.
 
 ## 8. The manifest
