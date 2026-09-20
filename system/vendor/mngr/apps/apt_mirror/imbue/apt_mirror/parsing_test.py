@@ -2,6 +2,7 @@ import lzma
 
 import pytest
 
+from imbue.apt_mirror.data_types import DockerfileBaseImage
 from imbue.apt_mirror.data_types import InstalledPackage
 from imbue.apt_mirror.data_types import PackagesIndexEntry
 from imbue.apt_mirror.data_types import ReleaseFileEntry
@@ -17,7 +18,9 @@ from imbue.apt_mirror.parsing import filter_index_entries_for_components
 from imbue.apt_mirror.parsing import find_packages_newer_than_or_absent_from_index
 from imbue.apt_mirror.parsing import package_file_object_key
 from imbue.apt_mirror.parsing import parse_dockerfile_base_image
+from imbue.apt_mirror.parsing import parse_dockerfile_from_image
 from imbue.apt_mirror.parsing import parse_dpkg_status_installed_packages
+from imbue.apt_mirror.parsing import parse_image_reference
 from imbue.apt_mirror.parsing import parse_packages_index_entries
 from imbue.apt_mirror.parsing import parse_release_sha256_entries
 from imbue.apt_mirror.parsing import select_newest_entry
@@ -263,3 +266,49 @@ def test_parse_dockerfile_base_image_returns_the_first_from_reference(from_line:
 def test_parse_dockerfile_base_image_rejects_floating_or_missing_bases(dockerfile_text: str, message: str) -> None:
     with pytest.raises(AptMirrorTemplateBaseImageError, match=message):
         parse_dockerfile_base_image(dockerfile_text)
+
+
+@pytest.mark.parametrize(
+    ("dockerfile_text", "expected"),
+    [
+        (
+            "FROM python:3.12-slim-trixie\nRUN true\n",
+            DockerfileBaseImage(image_name="python:3.12-slim-trixie", digest=None),
+        ),
+        (
+            f"FROM --platform=linux/amd64 {_PINNED_BASE_IMAGE_REF} AS base\n",
+            DockerfileBaseImage(
+                image_name="python:3.12-slim-trixie",
+                digest="sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
+            ),
+        ),
+        ("# FROM in a comment\nfrom alpine\n", DockerfileBaseImage(image_name="alpine", digest=None)),
+    ],
+    ids=["floating", "pinned-with-options", "lowercase-bare-name"],
+)
+def test_parse_dockerfile_from_image_reads_floating_and_pinned_bases(
+    dockerfile_text: str, expected: DockerfileBaseImage
+) -> None:
+    base_image = parse_dockerfile_from_image(dockerfile_text)
+
+    assert base_image == expected
+    assert base_image.is_digest_pinned is (expected.digest is not None)
+
+
+def test_parse_image_reference_round_trips_the_reference() -> None:
+    assert parse_image_reference(_PINNED_BASE_IMAGE_REF).image_ref == _PINNED_BASE_IMAGE_REF
+    assert parse_image_reference("python:3.12-slim-trixie").image_ref == "python:3.12-slim-trixie"
+
+
+@pytest.mark.parametrize(
+    "image_ref",
+    [
+        "",
+        "python:3.12-slim-trixie@sha256:57cd7c3a",
+        "python:3.12-slim-trixie@sha256:${BASE_DIGEST}",
+        "@sha256:" + "0" * 64,
+    ],
+)
+def test_parse_image_reference_rejects_malformed_references(image_ref: str) -> None:
+    with pytest.raises(AptMirrorTemplateBaseImageError):
+        parse_image_reference(image_ref)

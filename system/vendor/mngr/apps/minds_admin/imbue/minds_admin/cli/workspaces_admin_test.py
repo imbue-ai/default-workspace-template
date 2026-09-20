@@ -25,5 +25,15 @@ def test_stop_and_set_stop_kind_accept_only_the_operator_kinds() -> None:
         assert "Invalid value" in set_kind.output
     for args in (["stop", "--help"], ["set-stop-kind", "--help"]):
         help_output = CliRunner().invoke(workspaces_admin, args).output
-        for kind in ("maintenance", "idle", "suspension"):
+        for kind in ("maintenance", "idle", "suspension", "retired"):
             assert kind in help_output
+
+
+def test_retire_is_its_own_command_that_takes_only_the_row() -> None:
+    # Retiring is deliberate and final, so besides the generic stop's --kind it
+    # gets a dedicated command with no kind to pick, whose help names the
+    # archive step it must follow.
+    help_output = CliRunner().invoke(workspaces_admin, ["retire", "--help"]).output
+    assert "HOST_DB_ID" in help_output
+    assert "archives create" in help_output
+    assert "--kind" not in help_output
