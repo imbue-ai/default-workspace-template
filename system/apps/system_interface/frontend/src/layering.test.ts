@@ -65,7 +65,10 @@ describe("the frontend's layers", () => {
           continue;
         }
         const targetLayer = layerOf(target);
-        if (targetLayer > layer) violations.push(`${relativePath} (${LAYERS[layer] ?? "root"}) imports ${target} (${LAYERS[targetLayer] ?? "root"})`);
+        if (targetLayer > layer)
+          violations.push(
+            `${relativePath} (${LAYERS[layer] ?? "root"}) imports ${target} (${LAYERS[targetLayer] ?? "root"})`,
+          );
       }
     }
     expect(violations).toEqual([]);

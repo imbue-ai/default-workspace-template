@@ -125,14 +125,16 @@ export function FloatingCard(): m.Component<FloatingCardAttrs> {
     m.redraw();
   };
 
-  const place = (vnode: m.VnodeDOM<FloatingCardAttrs>): void => {
+  const place = (vnode: m.VnodeDOM): void => {
+    const attrs = currentAttrs;
+    if (attrs === null) return;
     const card = vnode.dom as HTMLElement;
     const rect = card.getBoundingClientRect();
     const position = placeMenu(
-      vnode.attrs.anchor,
+      attrs.anchor,
       { width: rect.width, height: rect.height },
       { width: window.innerWidth, height: window.innerHeight },
-      vnode.attrs.placement,
+      attrs.placement,
     );
     card.style.left = `${position.left}px`;
     card.style.top = `${position.top}px`;
@@ -157,7 +159,7 @@ export function FloatingCard(): m.Component<FloatingCardAttrs> {
             role: vnode.attrs.role,
             "data-floating": vnode.attrs.marker,
             style: "left: 0; top: 0;",
-            oncreate: (created: m.VnodeDOM<FloatingCardAttrs>) => {
+            oncreate: (created: m.VnodeDOM) => {
               element = created.dom as HTMLElement;
               place(created);
             },
