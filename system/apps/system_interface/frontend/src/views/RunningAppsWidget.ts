@@ -5,7 +5,7 @@
  */
 
 import m from "mithril";
-import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
@@ -30,20 +30,18 @@ export const RunningAppsWidget: m.Component<RunningAppsWidgetAttrs> = {
         .filter((app) => app.is_running && !app.internal)
         .map((app) =>
           m(
-            "button",
+            Button,
             {
               key: app.name,
-              type: "button",
+              variant: "ghost",
+              icon: true,
+              sm: true,
+              selected: openAppName === app.name,
+              extra: "running-app min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
               "data-running-app": app.name,
               "aria-label": app.display_name,
               "aria-haspopup": "dialog",
               "aria-expanded": openAppName === app.name ? "true" : "false",
-              class: buttonClass("ghost", {
-                icon: true,
-                sm: true,
-                selected: openAppName === app.name,
-                extra: "running-app min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
-              }),
               ...hoverTooltipAttrs(app.display_name),
               onclick: (event: MouseEvent) => onOpenApp(app, event),
             },

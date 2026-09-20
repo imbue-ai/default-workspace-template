@@ -7,7 +7,7 @@
  */
 
 import m from "mithril";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { AppRecord, WindowState } from "../model/records";
@@ -37,18 +37,16 @@ function control(
   onControl: TitleBarAttrs["onControl"],
 ): m.Vnode {
   return m(
-    "button",
+    Button,
     {
-      type: "button",
+      variant: "ghost",
+      icon: true,
+      sm: true,
+      extra: "window-control shrink-0 min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
       "data-window-control": name,
       "data-no-drag": "",
       "aria-label": label,
       "aria-expanded": name === "menu" ? (isOpen ? "true" : "false") : undefined,
-      class: buttonClass("ghost", {
-        icon: true,
-        sm: true,
-        extra: "window-control shrink-0 min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
-      }),
       ...hoverTooltipAttrs(label),
       onclick: (event: MouseEvent) => {
         event.stopPropagation();
