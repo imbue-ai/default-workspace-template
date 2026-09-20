@@ -99,14 +99,19 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
     view(vnode) {
       const event = vnode.attrs.event;
       renderedEventId = event.event_id;
-      const content = event.content || "";
+      const cls = classifyUserMessage(event);
+      // Every branch below draws the classification's body, never the raw content: for a
+      // message the backend wrapped (a seeded chat's first send, whose `<chat-seed-context>`
+      // block is the agent's to read and not the user's to see) the two differ, and the
+      // bubble owes the user their own words.
+      //
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
       // images show inline and other files as download links. The backend classifier
       // strips the block before its detectors run (harnesses/message_display.py),
-      // so an appended attachment never changes the kind here either.
-      const { visibleText, attachmentBlock } = parseMessageAttachments(content);
-      const cls = classifyUserMessage(event);
+      // so an appended attachment never changes the kind here either -- and puts it back on
+      // the body it hands a prompt, so splitting it off here still finds it.
+      const { visibleText, attachmentBlock } = parseMessageAttachments(cls.body);
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
