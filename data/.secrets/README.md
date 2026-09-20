@@ -33,5 +33,6 @@ The guard is a backstop against a slip, not a boundary: it judges the text of a
 tool call, so it cannot see what a program run under the wrapper does with its
 environment (the command after the wrapper's `--` is held to the same rule, so
 it cannot be `cat`, but it can be a program that prints its own environment), and
-a command that reaches the file by a path the checker does not recognise passes. The rule that the value stays out of the transcript is the
-agent's to keep; the guard catches the ordinary ways of breaking it.
+a command that reaches the file by a path the checker does not recognise passes.
+The rule that the value stays out of the transcript is the agent's to keep; the
+guard catches the ordinary ways of breaking it.
