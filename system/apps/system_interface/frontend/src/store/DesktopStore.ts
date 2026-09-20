@@ -435,10 +435,12 @@ export class DesktopStore {
     this.dispatch({ type: "desktops_updated", desktops });
   }
 
-  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid. */
+  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid;
+   *  nothing when it is already there (the shell would move the shortcut and reset its mode). */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    if (desktop.shortcuts.some((shortcut) => shortcut.target.app === app && shortcut.target.launch === launch)) return;
     const cell = cellForAddedShortcut(desktop, this.gridDimensions());
     await this.setShortcut(desktop.id, { target: { kind: "launch", app, launch }, mode, cell });
   }

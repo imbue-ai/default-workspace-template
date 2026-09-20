@@ -11,6 +11,7 @@ import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/emb
 import { fetchWallpapers } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import type { AppRecord, Desktop, DesktopShortcut, LaunchPath, WallpaperListing } from "../model/records";
+import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -398,6 +399,9 @@ export function App(): m.Component<AppAttrs> {
       m(RunningAppPopover, {
         app,
         windows,
+        desktopShortcutKeys: new Set(
+          desktop.shortcuts.map((shortcut) => shortcutKey(shortcut.target.app, shortcut.target.launch)),
+        ),
         onPickWindow: (windowId) => {
           closeMenu();
           current.restoreWindow(windowId);

@@ -544,12 +544,16 @@ describe("desktops and shortcuts", () => {
     expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "desktop-1"]);
   });
 
-  it("adds a shortcut at the first free cell over the current grid", async () => {
+  it("adds a shortcut at the first free cell over the current grid, and not a second time", async () => {
     const store = await startedStore();
     await store.addShortcut("notes", "new", "focus");
     expect(api.calls).toContain("setDesktopShortcut:home:notes:new:0,0");
     await store.addShortcut("docs", "new", "new");
     expect(api.calls).toContain("setDesktopShortcut:home:docs:new:1,0");
+    // Already on the desktop: the shell would move it and reset its mode, so nothing is posted.
+    await store.addShortcut("docs", "new", "focus");
+    expect(api.calls.filter((call) => call.startsWith("setDesktopShortcut"))).toHaveLength(2);
+    expect(store.getState().desktops[0].shortcuts.map((shortcut) => shortcut.mode)).toEqual(["focus", "new"]);
     await store.removeShortcut("notes", "new");
     expect(store.getState().desktops[0].shortcuts.map((shortcut) => shortcut.target.app)).toEqual(["docs"]);
   });
