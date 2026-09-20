@@ -60,6 +60,20 @@ def test_a_context_block_with_nothing_after_it_is_left_to_render_whole() -> None
     so one standing alone is not this app's message and is shown as it arrived."""
     block = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
     assert classify_user_message(block) is None
+    assert classify_user_message(f"{block}\n   ") is None
+
+
+def test_a_first_send_that_is_only_an_attachment_still_shows_the_attachment() -> None:
+    """The user's words can be whitespace and the message still theirs: the attachment block is
+    stripped before the detectors run, so judging "nothing after the block" on what they see
+    would leave the whole machine block rendering as the user's bubble."""
+    block = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
+    attachment = "See attachment here: ![a](/uploads/1/a.png)"
+    decision = classify_user_message(f"{block}\n  \n\n{attachment}")
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body is not None and decision.display_body.endswith(attachment)
+    assert SEED_CONTEXT_TAG not in decision.display_body
 
 
 def test_bare_task_notification_is_a_chip() -> None:

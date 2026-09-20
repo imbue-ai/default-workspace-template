@@ -167,16 +167,15 @@ def _match_welcome(content: str) -> MessageDisplay | None:
 def _match_seed_context(content: str) -> MessageDisplay | None:
     """A seeded chat's first send: the context block the chat app prefixed, then the user's words.
 
-    The words alone are what the page shows, so they travel as ``display_body``; a block with
-    nothing after it is not one of ours and is left to render whole.
+    The words alone are what the page shows, so they travel as ``display_body``. They can come
+    out empty here and still be there in the whole message -- an attachment block was stripped
+    before the detectors ran -- so whether this is one of ours is settled in
+    :func:`classify_user_message`, once that block is back on.
     """
     match = _SEED_CONTEXT_RE.match(content)
     if match is None:
         return None
-    spoken = content[match.end() :].strip()
-    if not spoken:
-        return None
-    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
+    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
 
 
 def _match_skill_expansion(content: str) -> MessageDisplay | None:
@@ -329,9 +328,14 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
     # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble
     # (an inline image, a download link) and is the user's own. The detectors never saw it, so
-    # put back what ``_visible_text`` took off the end.
-    if decision.display is DisplayKind.PROMPT_WITH_CONTEXT and visible != content:
-        spoken = f"{decision.display_body}{content[len(visible) :]}"
+    # put back what ``_visible_text`` took off the end -- and only then judge whether anything
+    # of the user's is left. A context block with NOTHING after it is not one this app built
+    # (a launch always carries the user's message), so it renders whole rather than as a bubble
+    # of nothing.
+    if decision.display is DisplayKind.PROMPT_WITH_CONTEXT:
+        spoken = f"{decision.display_body}{content[len(visible) :]}" if visible != content else decision.display_body
+        if not spoken or not spoken.strip():
+            return None
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, spoken))
     return decision
 
