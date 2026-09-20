@@ -16,6 +16,7 @@ from app_manifest.registry import register_app
 from app_manifest.registry import registry_path
 from app_manifest.testing import APP_ICON_MARKUP
 
+
 def test_a_missing_registry_is_empty(tmp_path: Path) -> None:
     assert read_registry(tmp_path / "apps.toml") == []
 
