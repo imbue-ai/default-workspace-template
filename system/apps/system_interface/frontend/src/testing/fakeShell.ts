@@ -8,8 +8,10 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  ClientRecord,
   Desktop,
   DesktopShortcut,
+  EntryPresentation,
   GridCell,
   Layout,
   SharingMode,
@@ -19,10 +21,11 @@ import type {
 } from "../model/records";
 import { withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
+import { clientRecord } from "./records";
 
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
-  clients: { id: string; active_desktop: string | null }[] = [];
+  clients: ClientRecord[] = [];
   /** ``<desktop>/<client>`` -> the stored placements and their stamp. */
   readonly layouts = new Map<string, Pick<Layout, "updated_at" | "placements">>();
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
@@ -255,7 +258,7 @@ export class FakeDesktopApi implements DesktopApi {
       .updated_at;
   }
 
-  async fetchClients(): Promise<{ id: string; active_desktop: string | null }[]> {
+  async fetchClients(): Promise<ClientRecord[]> {
     this.calls.push("fetchClients");
     this.refuse();
     return [...this.clients];
@@ -264,6 +267,16 @@ export class FakeDesktopApi implements DesktopApi {
   async setAppLifecycle(appName: string, action: "stop" | "start"): Promise<void> {
     this.calls.push(`setAppLifecycle:${appName}:${action}`);
     this.refuse();
+  }
+
+  async setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord> {
+    const position = presentation.position === null ? "-" : `${presentation.position.x},${presentation.position.y}`;
+    this.calls.push(`setEntryPresentation:${clientId}:${app}:${presentation.mode}:${presentation.style}:${position}`);
+    this.refuse();
+    const existing = this.clients.find((client) => client.id === clientId) ?? clientRecord(clientId);
+    const updated = { ...existing, entries: { ...existing.entries, [app]: presentation } };
+    this.clients = [...this.clients.filter((client) => client.id !== clientId), updated];
+    return updated;
   }
 }
 

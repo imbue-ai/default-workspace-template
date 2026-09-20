@@ -4,8 +4,11 @@ import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord }
 import {
   activeFocusedWindowId,
   activePlacements,
+  barEntries,
   effectiveWindowPath,
   effectiveWindowTitle,
+  entryLook,
+  floatingEntries,
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
@@ -251,6 +254,63 @@ describe("opens and closes this client made", () => {
     const state = reduceDesktopState(loaded(), { type: "window_closed_here", desktopId: "home", windowId: "win-1" });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-2"]);
     expect(state.layout.placements).toEqual([]);
+  });
+});
+
+describe("pinned entries", () => {
+  const pinnedApp = appRecord("buddy", {
+    pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+  });
+  const pinned = windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" });
+
+  function withPinned(): DesktopState {
+    return reduceAll(
+      loaded(),
+      { type: "apps_updated", apps: [appRecord("docs"), appRecord("notes"), pinnedApp] },
+      { type: "desktops_updated", desktops: [{ ...home, windows: [...home.windows, pinned] }, work] },
+    );
+  }
+
+  it("give a pinned entry the pin's defaults until the client chooses, and split the bar from the floating", () => {
+    const state = withPinned();
+    expect(entryLook(state, pinned, pinnedApp)).toEqual({
+      mode: "floating",
+      style: "avatar",
+      declaredStyle: "avatar",
+      position: null,
+    });
+    expect(entryLook(state, home.windows[0], appRecord("docs"))).toBeNull();
+    expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
+    expect(floatingEntries(state).map((entry) => entry.window.id)).toEqual(["win-9"]);
+    const chosen = reduceDesktopState(state, {
+      type: "entries_updated",
+      entries: { buddy: { mode: "bar", style: "plain", position: { x: 0.1, y: 0.2 } } },
+    });
+    expect(entryLook(chosen, pinned, pinnedApp)).toEqual({
+      mode: "bar",
+      style: "plain",
+      declaredStyle: "avatar",
+      position: { x: 0.1, y: 0.2 },
+    });
+    expect(barEntries(chosen).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
+    expect(floatingEntries(chosen)).toEqual([]);
+    // An app the shell no longer lists, or one with no pin, reads as a plain bar entry.
+    expect(entryLook(state, pinned, undefined)).toEqual({
+      mode: "bar",
+      style: "plain",
+      declaredStyle: "plain",
+      position: null,
+    });
+  });
+
+  it("render every entry in the bar while compact without rewriting the mode", () => {
+    const compact = reduceDesktopState(withPinned(), {
+      type: "render_modes_changed",
+      modes: { isCompact: true, isTouch: true },
+    });
+    expect(floatingEntries(compact)).toEqual([]);
+    expect(barEntries(compact).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
+    expect(entryLook(compact, pinned, pinnedApp)?.mode).toBe("floating");
   });
 });
 

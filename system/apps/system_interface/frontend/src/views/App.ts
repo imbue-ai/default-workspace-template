@@ -19,15 +19,17 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  barEntries,
   desktopById,
   effectiveWindowTitle,
+  entryLook,
+  floatingEntries,
   isWindowMinimized,
   openableApps,
-  taskbarEntries,
 } from "../reducers/desktopState";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
-import type { GestureBinding, GestureListener, GestureSource } from "../gestures/pointerGestures";
+import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { Backdrop } from "./Backdrop";
@@ -120,14 +122,14 @@ export function App(): m.Component<AppAttrs> {
       const origin = backdropOrigin();
       return { x: point.x - (origin.left - rootBox.left), y: point.y - (origin.top - rootBox.top) };
     };
-    const shortcutGrabOffset = (
-      binding: Extract<GestureBinding, { kind: "shortcut" }>,
-      press: PixelPoint,
-    ): PixelPoint => {
-      const iconRect = binding.element.getBoundingClientRect();
+    const grabOffsetInside = (element: HTMLElement, press: PixelPoint): PixelPoint => {
+      const box = element.getBoundingClientRect();
       const origin = backdropOrigin();
-      return { x: press.x - (iconRect.left - origin.left), y: press.y - (iconRect.top - origin.top) };
+      return { x: press.x - (box.left - origin.left), y: press.y - (box.top - origin.top) };
     };
+    /** The pinned window of ``app`` on the active desktop, whose entry a floating-entry press names. */
+    const pinnedWindowIdOf = (app: string): string | null =>
+      activeDesktop(current.getState())?.windows.find((window) => window.app === app && window.is_pinned)?.id ?? null;
     return {
       thresholdPx: () => current.getMetrics().dragThreshold,
       isDraggable: (binding) => {
@@ -150,9 +152,27 @@ export function App(): m.Component<AppAttrs> {
               binding.app,
               binding.launch,
               point,
-              shortcutGrabOffset(binding, toBackdrop(rootPress)),
+              grabOffsetInside(binding.element, toBackdrop(rootPress)),
             );
             return;
+          case "floating-entry": {
+            const windowId = pinnedWindowIdOf(binding.app);
+            const window =
+              windowId === null
+                ? undefined
+                : activeDesktop(current.getState())?.windows.find((candidate) => candidate.id === windowId);
+            const look =
+              window === undefined
+                ? null
+                : entryLook(current.getState(), window, appByName(current.getState(), binding.app));
+            current.beginFloatingEntryDrag(
+              binding.app,
+              point,
+              grabOffsetInside(binding.element, toBackdrop(rootPress)),
+              look?.position ?? null,
+            );
+            return;
+          }
           case "taskbar-entry":
             return;
         }
@@ -169,6 +189,9 @@ export function App(): m.Component<AppAttrs> {
           case "shortcut":
             current.updateShortcutDrag(point);
             return;
+          case "floating-entry":
+            current.updateFloatingEntryDrag(point);
+            return;
           case "taskbar-entry":
             return;
         }
@@ -184,6 +207,9 @@ export function App(): m.Component<AppAttrs> {
             break;
           case "shortcut":
             current.endShortcutDrag(point);
+            break;
+          case "floating-entry":
+            current.endFloatingEntryDrag(point);
             break;
           case "taskbar-entry":
             break;
@@ -211,6 +237,11 @@ export function App(): m.Component<AppAttrs> {
           case "taskbar-entry":
             openMenu = { kind: "entry", windowId: binding.windowId, anchor };
             break;
+          case "floating-entry": {
+            const windowId = pinnedWindowIdOf(binding.app);
+            if (windowId !== null) openMenu = { kind: "entry", windowId, anchor };
+            break;
+          }
         }
         m.redraw();
       },
@@ -254,6 +285,7 @@ export function App(): m.Component<AppAttrs> {
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const placement = placementOf(state.layout, windowId);
+    const look = entryLook(state, window, appByName(state, window.app));
     const entries = taskbarEntryMenuEntries(
       {
         isMinimized: placement.is_minimized,
@@ -263,6 +295,14 @@ export function App(): m.Component<AppAttrs> {
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
         unmaximize: () => current.toggleMaximized(windowId),
         close: window.is_pinned ? null : () => void current.closeWindow(windowId),
+        presentation:
+          look === null
+            ? null
+            : {
+                look,
+                setMode: (mode) => void current.setEntryMode(window.app, mode),
+                setStyle: (style) => void current.setEntryStyle(window.app, style),
+              },
       },
       state.modes.isCompact,
     );
@@ -570,6 +610,12 @@ export function App(): m.Component<AppAttrs> {
                   focusedWindowId: focused,
                   selectedShortcutKey,
                   openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
+                  floatingEntries: floatingEntries(state),
+                  openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
+                  onEntryClick: (windowId) => current.toggleTaskbarEntry(windowId),
+                  onEntryContextMenu: (windowId, x, y) => {
+                    openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
+                  },
                   isOverlayOpen: openMenu !== null || isLauncherOpen,
                   onSelectShortcut: (key) => {
                     selectedShortcutKey = key;
@@ -605,7 +651,7 @@ export function App(): m.Component<AppAttrs> {
           ],
         ),
         m(Taskbar, {
-          entries: taskbarEntries(state),
+          entries: barEntries(state),
           isCompact: state.modes.isCompact,
           openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
           launcher: {

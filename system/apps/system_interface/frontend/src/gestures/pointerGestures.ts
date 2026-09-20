@@ -17,6 +17,8 @@ export const DRAG_HANDLE_ATTRIBUTE = "data-drag-handle";
 export const RESIZE_EDGE_ATTRIBUTE = "data-resize-edge";
 export const SHORTCUT_ATTRIBUTE = "data-shortcut";
 export const TASKBAR_ENTRY_ATTRIBUTE = "data-taskbar-entry";
+/** A pinned entry, in the bar or floating; only the floating one (which is no taskbar entry) drags. */
+export const PINNED_ENTRY_ATTRIBUTE = "data-pinned-entry";
 /** Marks an element (a menu button) whose press must not start a drag. */
 export const NO_DRAG_ATTRIBUTE = "data-no-drag";
 
@@ -29,7 +31,9 @@ export type GestureBinding =
   | { readonly kind: "window-resize"; readonly windowId: string; readonly edge: ResizeEdge }
   | { readonly kind: "shortcut"; readonly app: string; readonly launch: string; readonly element: HTMLElement }
   /** A taskbar entry never drags, but a long press on it asks for its menu. */
-  | { readonly kind: "taskbar-entry"; readonly windowId: string };
+  | { readonly kind: "taskbar-entry"; readonly windowId: string }
+  /** A floating pinned entry: a drag moves it, a long press asks for its menu. */
+  | { readonly kind: "floating-entry"; readonly app: string; readonly element: HTMLElement };
 
 export interface GestureListener {
   /** The distance a press travels before it is a drag, in pixels. */
@@ -58,6 +62,11 @@ export function bindingForTarget(target: Element): GestureBinding | null {
   if (entry !== null) {
     const windowId = entry.getAttribute(TASKBAR_ENTRY_ATTRIBUTE) ?? "";
     return windowId === "" ? null : { kind: "taskbar-entry", windowId };
+  }
+  const floating = target.closest<HTMLElement>(`[${PINNED_ENTRY_ATTRIBUTE}]`);
+  if (floating !== null) {
+    const app = floating.getAttribute(PINNED_ENTRY_ATTRIBUTE) ?? "";
+    return app === "" ? null : { kind: "floating-entry", app, element: floating };
   }
   const shortcut = target.closest<HTMLElement>(`[${SHORTCUT_ATTRIBUTE}]`);
   if (shortcut !== null) {

@@ -61,6 +61,7 @@ beforeEach(() => {
     onDesktopsUpdated: vi.fn(),
     onPlacementsUpdated: vi.fn(),
     onActiveDesktopChanged: vi.fn(),
+    onClientEntriesChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onConnected: vi.fn(),
   };
@@ -93,6 +94,15 @@ describe("ShellSocket", () => {
     current().receive({ type: "desktops_updated", desktops: [] });
     current().receive({ type: "placements_updated", desktop_id: "home", client_id: "client-1", save_id: "s-1" });
     current().receive({ type: "active_desktop_changed", client_id: "client-1" });
+    current().receive({
+      type: "client_entries_changed",
+      client_id: "client-1",
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+    });
+    expect(handlers.onClientEntriesChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+    });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({

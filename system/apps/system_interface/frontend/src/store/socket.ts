@@ -9,8 +9,8 @@
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { parseAppRecords, parseDesktops } from "../model/records";
-import type { AppRecord, Desktop } from "../model/records";
+import { parseAppRecords, parseDesktops, parseEntries } from "../model/records";
+import type { AppRecord, Desktop, EntryPresentation } from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
 export type LayoutOpName = "refresh" | "reload_system_interface";
@@ -33,11 +33,17 @@ export interface ActiveDesktopChangedEvent {
   readonly desktopId: string;
 }
 
+export interface ClientEntriesChangedEvent {
+  readonly clientId: string;
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
+}
+
 export interface SocketHandlers {
   onAppsUpdated(apps: AppRecord[]): void;
   onDesktopsUpdated(desktops: Desktop[]): void;
   onPlacementsUpdated(event: PlacementsUpdatedEvent): void;
   onActiveDesktopChanged(event: ActiveDesktopChangedEvent): void;
+  onClientEntriesChanged(event: ClientEntriesChangedEvent): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
@@ -61,6 +67,7 @@ interface RawSocketEvent {
   desktop_id?: unknown;
   client_id?: unknown;
   save_id?: unknown;
+  entries?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface"];
@@ -149,6 +156,12 @@ export class ShellSocket implements DesktopSocket {
         handlers.onActiveDesktopChanged({
           clientId: String(event.client_id ?? ""),
           desktopId: String(event.desktop_id ?? ""),
+        });
+        return;
+      case "client_entries_changed":
+        handlers.onClientEntriesChanged({
+          clientId: String(event.client_id ?? ""),
+          entries: parseEntries(event.entries),
         });
         return;
       case "layout_op": {

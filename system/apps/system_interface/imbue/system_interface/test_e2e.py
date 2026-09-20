@@ -1333,6 +1333,113 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}/?doc=3"
 
 
+def _client_entries(base_url: str, client_id: str) -> dict[str, Any]:
+    (record,) = [client for client in _get_json(f"{base_url}/api/clients")["clients"] if client["id"] == client_id]
+    return record["entries"]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a_reload_and_returns_to_the_bar(
+    tmp_path: Path, page: Page
+) -> None:
+    """A pin whose default mode is floating draws its entry above the windows: a click restores the window and
+    another minimizes it, a drag moves the entry and writes the position once to the client record so a reload
+    puts it back, and its menu moves it into the taskbar (and out again)."""
+    with _running_e2e_server(tmp_path, pin=("plain", "linked", "floating")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        entry = _pinned_entry(page)
+        expect(entry).to_be_visible(timeout=15000)
+        expect(entry).to_have_attribute("data-entry-mode", "floating")
+        expect(entry).to_have_attribute("data-entry-style", "plain")
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
+        expect(page.locator("[data-floating-entries]")).to_have_count(1)
+
+        entry.click()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        expect(entry).to_have_attribute("aria-pressed", "true")
+        entry.click()
+        expect(_shown_windows(page)).to_have_count(0)
+        expect(entry).to_have_attribute("data-minimized", "true")
+
+        backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
+        before = _box(entry)
+        # The default corner: bottom right of the backdrop, inset by the theme's tokens.
+        _assert_close(before["x"] + before["width"], backdrop["x"] + backdrop["width"] - 16, "default x")
+        _assert_close(before["y"] + before["height"], backdrop["y"] + backdrop["height"] - 12, "default y")
+        _drag(page, _center(before), (_center(before)[0] - 300, _center(before)[1] - 200))
+        moved = _box(entry)
+        _assert_close(moved["x"], before["x"] - 300, "dragged x")
+        _assert_close(moved["y"], before["y"] - 200, "dragged y")
+        wait_for(
+            lambda: _client_entries(server.base_url, client_id).get(_PINNED_APP_NAME, {}).get("position") is not None,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the drag never wrote the position",
+        )
+        stored = _client_entries(server.base_url, client_id)[_PINNED_APP_NAME]
+        assert stored["mode"] == "floating" and stored["style"] == "plain"
+        _assert_close(stored["position"]["x"] * backdrop["width"], moved["x"] - backdrop["x"], "stored x")
+        _assert_close(stored["position"]["y"] * backdrop["height"], moved["y"] - backdrop["y"], "stored y")
+        # The drag fired no click: the window stayed minimized.
+        expect(_shown_windows(page)).to_have_count(0)
+
+        page.reload()
+        expect(_pinned_entry(page)).to_be_visible(timeout=15000)
+        _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
+
+        _pinned_entry(page).click(button="right")
+        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+        expect(page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
+        page.locator('[data-menu-item="move-to-taskbar"]').click()
+        expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
+        expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
+        expect(page.locator('[data-floating-entries] [data-pinned-entry]')).to_have_count(0)
+        wait_for(
+            lambda: _client_entries(server.base_url, client_id)[_PINNED_APP_NAME]["mode"] == "bar",
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the mode never reached the client record",
+        )
+        _taskbar_entry(page, pinned["id"]).click(button="right")
+        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+        page.locator('[data-menu-item="float"]').click()
+        expect(page.locator('[data-floating-entries] [data-pinned-entry]')).to_have_count(1, timeout=10000)
+        # The position it was dragged to is kept across the trip through the bar.
+        _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tmp_path: Path, page: Page) -> None:
+    """Compact mode renders every pinned entry in the bar whatever its mode says, and offers no float verb; the
+    client record's mode is untouched, so a laptop still draws it floating."""
+    with _running_e2e_server(tmp_path, pin=("plain", "linked", "floating")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating", timeout=15000)
+        with _second_client(page, server, **_MOBILE_CONTEXT_ARGS) as phone_page:
+            phone_entry = _taskbar_entry(phone_page, pinned["id"])
+            expect(phone_entry).to_be_visible(timeout=15000)
+            expect(phone_entry).to_have_attribute("data-entry-mode", "bar")
+            expect(phone_page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
+            phone_entry.tap()
+            expect(_window(phone_page, pinned["id"])).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
+            phone_entry.tap()
+            expect(_shown_windows(phone_page)).to_have_count(0)
+            # A long press (a touch press held still) opens the entry's menu, which offers no Float and no Close
+            # on a phone.
+            phone_entry.dispatch_event(
+                "pointerdown", {"pointerType": "touch", "button": 0, "buttons": 1, "pointerId": 3, "bubbles": True}
+            )
+            expect(phone_page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="float"]')).to_have_count(0)
+            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
+            phone_page.keyboard.press("Escape")
+            assert _client_entries(server.base_url, _client_id(phone_page)) == {}
+        expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating")
+
+
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting with the Playwright
 # version. The shell reads compactness off the viewport width and touch off the coarse pointer.
 _MOBILE_CONTEXT_ARGS: dict[str, Any] = {

@@ -2,8 +2,12 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
+from datetime import datetime
+from datetime import timezone
 from typing import assert_never
 
+from app_manifest.manifest import PinStyle
+from app_manifest.primitives import AppName
 from flask import Flask
 from flask import jsonify
 from flask import request
@@ -12,8 +16,11 @@ from loguru import logger
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import summarize_client_activity
+from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.clients import entries_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
+from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
@@ -43,6 +50,7 @@ from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.primitives import ClientActivityKind
+from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
 from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
@@ -182,6 +190,22 @@ def inventory_document() -> ResponseReturnValue:
     return jsonify(inventory_document_json(_shell()))
 
 
+def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
+    """How one client shows one pinned entry (pinned-taskbar-entries plan section 5.3): the app must be pinned, and
+    the style plain or the one its pin declares."""
+    body = parse_request_body(EntryPresentation)
+    shell = _shell()
+    entry = _entry_or_raise(app)
+    pin = entry.row.pin
+    if pin is None or entry.row.internal:
+        raise InvalidShellValueError(f"App {app!r} declares no pinned entry")
+    if body.style is not PinStyle.PLAIN and body.style is not pin.style:
+        raise InvalidShellValueError(f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}")
+    record = shell.clients.set_entry_presentation(ClientId(client_id), str(AppName(app)), body, datetime.now(timezone.utc))
+    shell.broadcaster.broadcast_client_entries_changed(str(record.id), entries_wire_json(record.entries))
+    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+
+
 # Section 8: the agent-facing op route
 
 
@@ -237,6 +261,12 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="start_app",
     )
     application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
+    application.add_url_rule(
+        "/api/clients/<client_id>/entries/<app>",
+        view_func=set_client_entry,
+        methods=["POST"],
+        endpoint="set_client_entry",
+    )
     application.add_url_rule(
         "/api/inventory",
         view_func=inventory_document,

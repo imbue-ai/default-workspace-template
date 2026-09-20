@@ -151,11 +151,26 @@ export interface AppRecord {
   readonly is_running: boolean;
 }
 
+/** Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop. */
+export interface FloatingPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** How one client shows one pinned entry (pinned-taskbar-entries plan section 3.4). */
+export interface EntryPresentation {
+  readonly mode: EntryMode;
+  readonly style: PinStyle;
+  readonly position: FloatingPosition | null;
+}
+
 export interface ClientRecord {
   readonly id: string;
   readonly active_desktop: string | null;
   readonly last_seen: string;
   readonly is_connected: boolean;
+  /** The client's presentation of each pinned entry, by app name. */
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
 }
 
 export interface WallpaperListing {
@@ -370,6 +385,28 @@ export function parseClientRecords(raw: unknown): ClientRecord[] {
   return asArray(raw, "clients").map(parseClientRecord);
 }
 
+function parseFloatingPosition(raw: unknown): FloatingPosition | null {
+  if (raw === null || raw === undefined) return null;
+  const record = asObject(raw, "position");
+  return { x: asNumber(record.x, "position.x"), y: asNumber(record.y, "position.y") };
+}
+
+export function parseEntryPresentation(raw: unknown): EntryPresentation {
+  const record = asObject(raw, "entry");
+  return {
+    mode: asOneOf(record.mode, ["bar", "floating"], "entry.mode"),
+    style: asOneOf(record.style, ["plain", "avatar"], "entry.style"),
+    position: parseFloatingPosition(record.position),
+  };
+}
+
+/** The ``entries`` map of a client record or a ``client_entries_changed`` message; absent reads as none. */
+export function parseEntries(raw: unknown): Record<string, EntryPresentation> {
+  if (raw === undefined) return {};
+  const record = asObject(raw, "entries");
+  return Object.fromEntries(Object.entries(record).map(([app, entry]) => [app, parseEntryPresentation(entry)]));
+}
+
 export function parseClientRecord(raw: unknown): ClientRecord {
   const record = asObject(raw, "client");
   return {
@@ -377,6 +414,7 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     active_desktop: asOptionalString(record.active_desktop, "client.active_desktop"),
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
+    entries: parseEntries(record.entries),
   };
 }
 

@@ -31,6 +31,8 @@ function describe_(binding: GestureBinding): string {
       return `shortcut(${binding.app}:${binding.launch})`;
     case "taskbar-entry":
       return `entry(${binding.windowId})`;
+    case "floating-entry":
+      return `floating(${binding.app})`;
   }
 }
 
@@ -57,7 +59,8 @@ beforeEach(() => {
     '<div data-window-id="win-1"><div data-drag-handle><span id="title">T</span><button data-no-drag id="menu">m</button></div>' +
     '<div data-resize-edge="se" id="edge"></div><div id="content"></div></div>' +
     '<div data-shortcut="docs:new" id="shortcut"><span id="icon"></span></div>' +
-    '<button data-taskbar-entry="win-1" id="entry">E</button>';
+    '<button data-taskbar-entry="win-1" data-pinned-entry="docs" id="entry">E</button>' +
+    '<button data-pinned-entry="docs" data-entry-mode="floating" id="floating"><span id="creature"></span></button>';
   root.getBoundingClientRect = () => ({ left: 10, top: 20, width: 1000, height: 800 }) as DOMRect;
   root.setPointerCapture = () => undefined;
   document.body.appendChild(root);
@@ -89,6 +92,33 @@ describe("bindingForTarget", () => {
       kind: "taskbar-entry",
       windowId: "win-1",
     });
+    // A pinned entry in the bar is a taskbar entry (never dragged); the floating one is the draggable binding.
+    expect(bindingForTarget(root.querySelector("#creature") as Element)).toMatchObject({
+      kind: "floating-entry",
+      app: "docs",
+    });
+  });
+
+  it("drags a floating entry past the threshold and asks for its menu on a long press", () => {
+    vi.useFakeTimers();
+    try {
+      detach = new PointerGestureSource().attach(root, listener());
+      const creature = root.querySelector("#creature") as Element;
+      pointer("pointerdown", creature, 110, 70);
+      pointer("pointermove", creature, 150, 90);
+      pointer("pointerup", creature, 150, 90);
+      expect(events).toEqual([
+        "begin:floating(docs):140,70",
+        "move:floating(docs):140,70:40,20",
+        "end:floating(docs):140,70:40,20",
+      ]);
+      events = [];
+      pointer("pointerdown", creature, 110, 70, { pointerType: "touch" });
+      vi.advanceTimersByTime(600);
+      expect(events).toEqual(["long:floating(docs):110,70"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names nothing for a window's content, a no-drag control, or a bad edge", () => {
