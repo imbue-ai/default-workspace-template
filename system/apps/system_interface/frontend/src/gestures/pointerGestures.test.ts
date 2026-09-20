@@ -185,4 +185,18 @@ describe("PointerGestureSource", () => {
     title.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(clicks).toEqual([1]);
   });
+
+  it("does not hold a drag's click suppression over a later press when no click followed the drag", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    const clicks: number[] = [];
+    title.addEventListener("click", () => clicks.push(1));
+    pointer("pointerdown", title, 110, 70);
+    pointer("pointermove", title, 150, 70);
+    pointer("pointerup", title, 150, 70);
+    pointer("pointerdown", title, 150, 70);
+    pointer("pointerup", title, 150, 70);
+    title.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(clicks).toEqual([1]);
+  });
 });
