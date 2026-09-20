@@ -1,17 +1,19 @@
 """Surfacing the tab of a chat created from outside the workspace, once, where the user is.
 
 A chat the Mind app starts -- the update run behind "Update now", the help chat behind "Ask
-an agent" -- carries a label asking for its tab to be opened when it appears. The app cannot
-dock a tab itself: it is outside the workspace, and the user may not be looking yet. So the
-chat app reacts to the label on a newly observed agent and asks the shell to open the chat's
-address in every connected client, which files it into whatever view each client is on.
+an agent" -- carries a label asking for its window to be opened when it appears. The app cannot
+open a window itself: it is outside the workspace, and the user may not be looking yet. So the
+chat app reacts to the label on a newly observed agent and asks the shell to open a chat root
+window showing the chat (the desktop op route's ``open`` with the app's name and the root's path
+for the chat, desktop-interface plan section 9.1) for every connected client, on whatever
+desktop each client is on.
 
-A chat is owed its tab exactly once. Delivery is remembered on disk, so a restart of this app
-(the update run itself restarts it) neither re-pops a tab the user has since closed nor loses
+A chat is owed its window exactly once. Delivery is remembered on disk, so a restart of this app
+(the update run itself restarts it) neither re-pops a window the user has since closed nor loses
 one nobody was there to take: with no client connected the open is held and retried until a
 client connects, for as long as the chat exists. Only a chat the ledger already names is left
 to the saved layout -- along with the chats a workspace already had the first time this app
-kept a ledger at all, which are adopted as shown rather than each popping a tab.
+kept a ledger at all, which are adopted as shown rather than each popping a window.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import threading
 from collections.abc import Iterable
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from typing import Final
 from typing import Protocol
 from typing import runtime_checkable
@@ -56,8 +59,22 @@ def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
 
 
-def chat_address(chat_id: ChatId) -> str:
-    return f"app:chat?instance={chat_id}"
+# The chat app's registered name: the one app that may name itself to the shell.
+CHAT_APP_NAME: Final[str] = "chat"
+
+
+def chat_root_path(chat_id: ChatId) -> str:
+    """The chat root's path with the chat selected (plan section 9.1): where the auto-opened window lands."""
+    return f"/?chat={chat_id}"
+
+
+def open_chat_op_body(chat_id: ChatId, client_id: str) -> dict[str, Any]:
+    """The desktop ``open`` op that shows the chat to one client (desktop-interface contracts.md section 8)."""
+    return {
+        "op": "open",
+        "args": {"app": CHAT_APP_NAME, "path": chat_root_path(chat_id), "client": client_id},
+        "requester": None,
+    }
 
 
 class AutoOpenLedger(MutableModel):
@@ -163,7 +180,7 @@ class ShellLayoutInterface(Protocol):
 
 
 class ShellLayoutClient(FrozenModel):
-    """The shell over loopback: its client list, and its agent-facing op route (contracts.md section 12).
+    """The shell over loopback: its client list, and its agent-facing op route (desktop-interface contracts.md section 8).
 
     Unlike ``post_to_shell`` this reports whether the shell accepted the op, because the
     reactor holds an open the shell refused and tries again.
@@ -198,10 +215,11 @@ class ShellLayoutClient(FrozenModel):
         ]
 
     def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
-        body = {"op": "open", "args": {"address": chat_address(chat_id), "client": client_id}, "requester": ""}
         try:
             response = httpx.post(
-                f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS
+                f"{self.shell_url}/api/layout/broadcast",
+                json=open_chat_op_body(chat_id, client_id),
+                timeout=SHELL_POST_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as e:
             logger.debug("Could not ask the shell at {} to open chat {}: {}", self.shell_url, chat_id, e)
