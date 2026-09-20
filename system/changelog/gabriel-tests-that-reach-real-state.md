@@ -1,0 +1,3 @@
+Fixed the suites that fail inside a real workspace but pass in CI, because they read live machine state instead of isolating it.
+
+Pytest's temp tree now moves to a filesystem that can execute what tests write there. A workspace container mounts `/tmp` `noexec`, and several suites test a script the way it is really used -- plant a stub binary in a temp dir, put that dir on `PATH`, run the real thing against it. Every one of those stubs died with "Permission denied", which surfaced as 34 unrelated-looking assertion failures about empty listings, in the very workspace this template builds. Whether a directory can execute a file is now asked by running one, since `noexec` is the usual reason it cannot but not the only one.
