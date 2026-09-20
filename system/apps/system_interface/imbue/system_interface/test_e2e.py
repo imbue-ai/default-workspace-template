@@ -538,11 +538,7 @@ def _launch_message(path: str) -> str:
 
 
 def _open_launcher(page: Page) -> Locator:
-    field = page.locator("[data-launcher-field]")
-    if field.locator("input").count() > 0:
-        field.locator("input").click()
-    else:
-        field.click()
+    page.locator("[data-launcher-field] input").click()
     overlay = page.locator("[data-launcher-overlay]")
     expect(overlay).to_be_visible(timeout=10000)
     return overlay
