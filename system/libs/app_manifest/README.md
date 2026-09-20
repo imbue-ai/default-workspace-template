@@ -19,10 +19,10 @@ The models behind a workspace app's two descriptions:
 ## API
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
-  cross-field rule of the contract is a validator), `AppAction`, `LaunchPath`
+  cross-field rule of the contract is a validator), `LaunchPath`
   (`id`, `label`, `path`, `params`; `open` is reserved for the root launch path
   the shell synthesizes for an app that declares none), `DefaultShortcut`
-  (`action`, optional `launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
+  (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `load_manifest(path, repo_root=None)` (reads,
   validates, checks the icon file exists beside the manifest, and -- against the
   repo root, given or derived from a `system/apps/<package>/app.toml` layout --
@@ -36,7 +36,10 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`). `read_origin_label(path, name)` answers
+  `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
+  what `forward_port.py` calls to write an app's row from its manifest, refusing
+  (with `AppRegistrationError`) a manifest that fails to load or a name another
+  row already holds. `read_origin_label(path, name)` answers
   one app's origin label, or `""` when no such app is registered or the registry
   cannot be read (logged as a warning), for a page that derives another app's
   origin; `SHELL_APP_NAME` is the shell's registered name, the row such a page
@@ -56,13 +59,16 @@ The models behind a workspace app's two descriptions:
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `ActionId`, `LaunchPathId`, `LaunchPathValue` (rooted with one
+  `DisplayName`, `LaunchPathId`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape),
-  `InstancesUrl`, `PriorityName`, `ProgramName`,
+  `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/forward_port_test.py` keeps them identical).
+  `system/scripts/forward_port_test.py` keeps them identical), with
+  `canonical_name_from_title(title)` (the name a user-facing title registers
+  as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
+  would collide with a name already taken) for apps that mint names from titles.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
   build-app scaffold and tests. Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout
