@@ -412,17 +412,17 @@ export function App(): m.Component<AppAttrs> {
   function openSettings(desktopId: string | null, isDeleting: boolean): void {
     if (desktopId === null) return;
     settingsDialog = { desktopId, isDeleting };
-    if (wallpapers === null) {
-      void fetchWallpapers()
-        .then((listed) => {
-          wallpapers = listed;
-        })
-        .catch((error: unknown) => {
-          console.warn("[si] could not list the wallpapers", error);
-          wallpapers = [];
-        })
-        .finally(() => m.redraw());
-    }
+    // Read on every open: a file dropped into the wallpapers directory shows up, and a read that failed
+    // last time is tried again; the last list stays on screen meanwhile.
+    void fetchWallpapers()
+      .then((listed) => {
+        wallpapers = listed;
+      })
+      .catch((error: unknown) => {
+        console.warn("[si] could not list the wallpapers", error);
+        wallpapers ??= [];
+      })
+      .finally(() => m.redraw());
   }
 
   function settingsDialogView(current: DesktopStore, dialog: SettingsDialogState): m.Children {
