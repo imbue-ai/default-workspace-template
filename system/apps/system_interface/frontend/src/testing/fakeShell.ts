@@ -236,14 +236,14 @@ export class FakeDesktopApi implements DesktopApi {
 
 export class FakeDesktopSocket implements DesktopSocket {
   handlers: SocketHandlers | null = null;
-  readonly reports: { clientId: string; activeDesktop: string; previousDesktop: string }[] = [];
+  readonly reports: { activeDesktop: string; previousDesktop: string }[] = [];
 
   connect(handlers: SocketHandlers): void {
     this.handlers = handlers;
   }
 
-  reportClientState(clientId: string, activeDesktop: string, previousDesktop: string): void {
-    this.reports.push({ clientId, activeDesktop, previousDesktop });
+  reportClientState(activeDesktop: string, previousDesktop: string): void {
+    this.reports.push({ activeDesktop, previousDesktop });
   }
 
   /** The handlers the store registered; a test delivers events through them. */

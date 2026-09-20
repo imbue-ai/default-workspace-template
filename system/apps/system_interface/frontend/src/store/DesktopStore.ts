@@ -301,7 +301,7 @@ export class DesktopStore {
   private reportClientState(previousDesktop: string): void {
     const active = this.state.activeDesktopId;
     if (active === null) return;
-    this.deps.socket.reportClientState(this.deps.clientId, active, previousDesktop);
+    this.deps.socket.reportClientState(active, previousDesktop);
   }
 
   private takeDesktops(desktops: Desktop[]): void {
