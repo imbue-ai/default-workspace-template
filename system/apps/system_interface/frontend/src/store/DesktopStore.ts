@@ -297,13 +297,37 @@ export class DesktopStore {
     await this.applyDeepLink(deepLink);
   }
 
-  /** The socket (re)opened: the shell hears which desktop this client is on, and after a reconnect the
-   *  layout is read again, since the ``placements_updated`` of the time apart are gone with the socket
-   *  (the shell resends the apps and desktops itself). The first connect leaves the fetch to ``start``. */
+  /** The socket (re)opened: the shell hears which desktop this client is on. The first connect leaves
+   *  the rest to ``start``; a reconnect resynchronises, since the messages of the time apart are gone
+   *  with the socket (the shell resends the apps and desktops itself). */
   private takeConnected(): void {
-    this.reportClientState("");
-    if (this.hasSocketConnected) void this.refetchLayout();
+    if (this.hasSocketConnected) {
+      void this.resyncAfterReconnect();
+      return;
+    }
     this.hasSocketConnected = true;
+    this.reportClientState("");
+  }
+
+  /** The client record is the shell's word after a reconnect: another window of this client may have
+   *  switched desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's
+   *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
+   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed. */
+  private async resyncAfterReconnect(): Promise<void> {
+    let recorded: string | null = null;
+    try {
+      const clients = await this.deps.api.fetchClients();
+      recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
+    } catch (error) {
+      console.warn("[si] could not read the client records after reconnecting", error);
+    }
+    const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
+    if (recorded !== null && isRecordedKnown && recorded !== this.state.activeDesktopId) {
+      await this.switchDesktop(recorded, { isFollowingPush: true });
+      return;
+    }
+    this.reportClientState("");
+    await this.refetchLayout();
   }
 
   private takeApps(apps: AppRecord[]): void {
