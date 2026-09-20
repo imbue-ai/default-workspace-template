@@ -1,8 +1,8 @@
 /**
  * The small glyphs the desktop's chrome draws that the shared icon set does not carry: the
- * window controls (minimize, maximize, restore), the kebab, the launcher's plus and app
- * fallback, and the compact launcher's search. Same Feather-style 24x24 frame as ``icons.ts``,
- * produced as SVG strings for ``m.trust``.
+ * window controls (minimize, maximize, restore), the kebab, and the launcher's plus and app
+ * fallback. Same Feather-style 24x24 frame as ``icons.ts``, produced as SVG strings for
+ * ``m.trust``.
  */
 
 import { appIconMarkupForApp } from "./components/appIcon";
@@ -21,7 +21,6 @@ const GLYPH_PATHS = {
     '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
-  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 } as const;
 
 export type GlyphName = keyof typeof GLYPH_PATHS;

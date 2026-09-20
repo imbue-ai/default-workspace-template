@@ -104,11 +104,6 @@ export class LivePagesLayer implements PageDriver {
     this.store.setPageDriver(this);
   }
 
-  /** Every window id that has a page right now. */
-  pageWindowIds(): string[] {
-    return [...this.pages.keys()];
-  }
-
   /** Whether a window's page has been created in this client. */
   hasPage(windowId: string): boolean {
     return this.pages.has(windowId);

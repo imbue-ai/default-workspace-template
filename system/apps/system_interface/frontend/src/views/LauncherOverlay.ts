@@ -129,7 +129,6 @@ export interface LauncherOverlayAttrs {
   /** Run a launch path (a new window), with the params of a seeded prompt. */
   readonly onRunLaunch: (app: AppRecord, launchPath: LaunchPath, params: Readonly<Record<string, string>>) => void;
   readonly onPickWindow: (row: LauncherWindowRow) => void;
-  readonly onClose: () => void;
 }
 
 const ROW_CLASS =
