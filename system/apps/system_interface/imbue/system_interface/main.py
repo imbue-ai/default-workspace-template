@@ -23,7 +23,7 @@ from imbue.system_interface.wsgi import make_threaded_server
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
     """Turn SIGTERM/SIGINT into a clean exit so the ``atexit`` teardown runs.
 
-    The shutdown itself (broadcaster, the inventory, the relay's http client) is registered
+    The shutdown itself (the broadcaster and the shell's inventory) is registered
     via ``atexit`` in ``main``; raising ``SystemExit`` here ensures that interpreter-exit
     path runs instead of the default abrupt termination.
     """
@@ -72,8 +72,8 @@ def main() -> None:
     with application.app_context():
         state = get_state()
 
-    # Start the shell now that the app is assembled: the registry watch, the liveness sweep,
-    # and the instance fetches. This is the one place it is started; ``build_application``
+    # Start the shell now that the app is assembled: the stale-client prune, the registry
+    # watch, and the liveness sweep. This is the one place it is started; ``build_application``
     # only constructs, so tests that build an app never start it.
     state.shell.start()
 

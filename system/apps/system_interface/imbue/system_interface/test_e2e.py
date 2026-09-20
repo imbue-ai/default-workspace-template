@@ -74,7 +74,7 @@ _HOME_DESKTOP_ID = "home"
 # How long a negative assertion ("nothing more opened") gives the shell before reading its state.
 _NEGATIVE_SETTLE_MS = 1000
 
-# The stub app the machine offers: a multi-instance app with one launch path, ``new`` at ``/new``, and a
+# The stub app the machine offers: an app with one launch path, ``new`` at ``/new``, and a
 # focus-mode default shortcut for it. Its pages are the stand-ins the stub serves at every other path.
 _STUB_APP_NAME = "docs"
 _STUB_APP_DISPLAY_NAME = "Docs"
