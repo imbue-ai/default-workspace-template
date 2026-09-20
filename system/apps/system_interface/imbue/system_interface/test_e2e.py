@@ -118,8 +118,6 @@ _CATALOG_DOCUMENT = catalog_document(
 class E2EServer(FrozenModel):
     """Handle to a running e2e server and its fixtures."""
 
-    model_config = {"arbitrary_types_allowed": True}
-
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
