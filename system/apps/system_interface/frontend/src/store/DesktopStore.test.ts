@@ -218,19 +218,29 @@ describe("location reports", () => {
   it("posts a report that differs from the stored record, and a settling window's even when it does not", async () => {
     const store = await startedStore();
     const home = store.getState().desktops[0];
-    socket
-      .deliver()
-      .onDesktopsUpdated([
-        { ...home, windows: [...home.windows, windowRecord("win-3", "docs", "/new", { is_settling: true })] },
-        store.getState().desktops[1],
-      ]);
-    await store.reportLocation("win-1", "/a", "");
-    await store.reportLocation("win-1", "/a", "Plan");
-    await store.reportLocation("win-3", "/new", "");
+    api.desktops = [
+      { ...home, windows: [...home.windows, windowRecord("win-3", "docs", "/new", { is_settling: true })] },
+      store.getState().desktops[1],
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    expect(await store.reportLocation("win-1", "/a", "")).toBe(true);
+    expect(await store.reportLocation("win-1", "/a", "Plan")).toBe(true);
+    expect(await store.reportLocation("win-3", "/new", "")).toBe(true);
     expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([
       "reportWindowLocation:home:win-1:/a:Plan",
       "reportWindowLocation:home:win-3:/new:",
     ]);
+    // The answers are taken at once, ahead of the broadcast.
+    const windows = store.getState().desktops[0].windows;
+    expect(windows.find((window) => window.id === "win-1")?.title).toBe("Plan");
+    expect(windows.find((window) => window.id === "win-3")?.is_settling).toBe(false);
+  });
+
+  it("a refused report answers false and changes nothing", async () => {
+    const store = await startedStore();
+    api.refusal = "no such window";
+    expect(await store.reportLocation("win-1", "/?doc=2", "")).toBe(false);
+    expect(store.getState().desktops[0].windows[0].path).toBe("/a");
   });
 });
 

@@ -21,6 +21,7 @@ import type {
   SharingMode,
   ShortcutMode,
   Wallpaper,
+  WindowRecord,
   WindowState,
 } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
@@ -78,7 +79,7 @@ export interface DesktopApi {
   removeDesktopShortcut(desktopId: string, app: string, launch: string): Promise<Desktop>;
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
-  reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<unknown>;
+  reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   fetchClients(): Promise<{ id: string; active_desktop: string | null }[]>;
@@ -158,6 +159,8 @@ export class DesktopStore {
   private layoutFetchSequence = 0;
   private pageDriver: PageDriver | null = null;
   private hasSocketConnected = false;
+  // The path each window's page reported last, so a report answered out of order is not applied.
+  private readonly latestReportedPaths = new Map<string, string>();
   // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast), and
   // not by a local edit: the live pages follow their windows' stored paths after the shell speaks.
   private desktopsRevision = 0;
@@ -635,16 +638,26 @@ export class DesktopStore {
   }
 
   /** A page reported where it is; posted to the window's location route when it differs from the stored
-   *  record (the broadcast follows). A settling window's first report ends the settling, so it always goes. */
-  async reportLocation(windowId: string, path: string, title: string): Promise<void> {
+   *  record, and the record the route answers is taken at once, so the stored path is the reported one
+   *  before the broadcast lands (a broadcast from another cause meanwhile must not read the report as a
+   *  move to follow). A settling window's first report ends the settling, so it always goes. Answers
+   *  whether the shell took the report (or had nothing to take); false when it refused. */
+  async reportLocation(windowId: string, path: string, title: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
-    if (found === null) return;
-    if (!found.window.is_settling && found.window.path === path && found.window.title === title) return;
+    if (found === null) return false;
+    if (!found.window.is_settling && found.window.path === path && found.window.title === title) return true;
+    this.latestReportedPaths.set(windowId, path);
+    let reported: WindowRecord;
     try {
-      await this.deps.api.reportWindowLocation(found.desktop.id, windowId, path, title);
+      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, path, title);
     } catch (error) {
       console.warn(`[si] the shell did not take the location of ${windowId}`, error);
+      return false;
     }
+    if (this.latestReportedPaths.get(windowId) !== path) return true;
+    this.latestReportedPaths.delete(windowId);
+    this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
+    return true;
   }
 
   async setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void> {
