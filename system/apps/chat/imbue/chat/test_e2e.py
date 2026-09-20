@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_instances.testing import free_port
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
@@ -39,6 +38,7 @@ from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
+from imbue.chat.testing import free_port
 from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace

@@ -1,8 +1,8 @@
-"""The chat app's Flask app: the chat pages, their API, the chat's WebSocket, and the instances API.
+"""The chat app's Flask app: the chat pages, their API, and the chat's WebSocket.
 
-Every chat renders inside an iframe at the registered ``chat`` origin (the workspace app model,
-``docs/system/blueprint/workspace-app-model/``), served by this process at its own port; the shell
-reaches it only through the instances API and the browser-side contract.
+Every chat renders inside an iframe at the registered ``chat`` origin (the desktop interface,
+``docs/system/blueprint/desktop-interface/``), served by this process at its own port; the shell
+knows the chat only as an app with pages, and reaches it only through the browser-side contract.
 """
 
 import json
@@ -17,12 +17,6 @@ from typing import Any
 from typing import Final
 from uuid import uuid4
 
-from app_instances.blueprint import answer_typed_error
-from app_instances.blueprint import build_instances_blueprint
-from app_instances.blueprint import parse_request_body
-from app_instances.errors import AppInstancesError
-from app_instances.nudge import post_to_shell
-from app_instances.nudge import shell_base_url
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry import registry_path
@@ -60,6 +54,7 @@ from imbue.chat.documents import inject_hostname_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
+from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.claude import auth_endpoints
@@ -77,8 +72,6 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
-from imbue.chat.instances import build_chat_instance_source
-from imbue.chat.instances import parse_subagent_key
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -119,6 +112,7 @@ from imbue.chat.models import SetModelChoiceRequest
 from imbue.chat.models import ShoulderTapAtomicResponse
 from imbue.chat.models import StartAgentResponse
 from imbue.chat.models import StopAgentResponse
+from imbue.chat.models import parse_subagent_key
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.presence import PresenceReport
@@ -126,8 +120,12 @@ from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
+from imbue.chat.request_helpers import parse_request_body
+from imbue.chat.shell_client import post_to_shell
+from imbue.chat.shell_client import shell_base_url
 from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
@@ -1363,7 +1361,7 @@ def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: s
 
 
 def _destroy_chat(chat_id: str) -> Response:
-    """Destroy a chat by running ``mngr destroy --force`` on every agent of it (the instances API's delete does the same)."""
+    """Destroy a chat by running ``mngr destroy --force`` on every agent of it."""
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
@@ -1379,7 +1377,7 @@ def _destroy_chat(chat_id: str) -> Response:
 
 
 def _rename_chat(chat_id: str) -> Response:
-    """Rename a chat (the ``display_name`` label and the matching canonical name), as the instances API's rename does.
+    """Rename a chat: the ``display_name`` label and the matching canonical name.
 
     409 while the chat converges or when the name collides with another agent's, 400 for a
     name mngr cannot take.
@@ -1408,7 +1406,7 @@ def _rename_chat(chat_id: str) -> Response:
 
 
 def _stop_chat(chat_id: str) -> Response:
-    """Stop a chat's agent with ``mngr stop``, the reversible counterpart to a destroy (the instances API's stop does the same)."""
+    """Stop a chat's agent with ``mngr stop``, the reversible counterpart to a destroy."""
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
@@ -1664,10 +1662,7 @@ def _add_chat_route(
 def create_application(state: ChatAppState) -> Flask:
     """Assemble the chat app around an already-built ``ChatAppState``.
 
-    A pure assembler: routes and error handling only, no collaborators built, nothing
-    started. The instances blueprint is mounted here over the agent manager; its nudger
-    fires whatever nudger the manager holds (``main`` installs the real one), so a test that
-    builds the app posts nothing to the workspace shell.
+    A pure assembler: routes and error handling only, no collaborators built, nothing started.
     """
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
@@ -1676,13 +1671,8 @@ def create_application(state: ChatAppState) -> Flask:
     # are, so a manager built by a test that never assembles the app refuses to hand off.
     state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))
     application.register_error_handler(Exception, handle_unhandled_exception)
-    # The presence route reads its body through the library's parser, so its errors answer
-    # like the blueprint's: a status from the contract with a ``{"detail"}`` body.
-    application.register_error_handler(AppInstancesError, answer_typed_error)
+    application.register_error_handler(ChatAppError, answer_chat_app_error)
     sock = build_sock(application)
-
-    source, nudger = build_chat_instance_source(state.agent_manager, start_agent)
-    application.register_blueprint(build_instances_blueprint(source, nudger))
 
     application.add_url_rule("/", view_func=_root_document, methods=["GET"])
     application.add_url_rule(NEW_CHAT_PATH, view_func=_root_document, methods=["GET"], endpoint="new_chat_root")

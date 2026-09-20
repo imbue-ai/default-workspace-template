@@ -30,13 +30,13 @@ from typing import Protocol
 from typing import runtime_checkable
 
 import httpx
-from app_instances.nudge import SHELL_POST_TIMEOUT_SECONDS
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.shell_client import SHELL_POST_TIMEOUT_SECONDS
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 

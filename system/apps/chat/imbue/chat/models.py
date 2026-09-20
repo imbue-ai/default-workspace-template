@@ -1,7 +1,6 @@
 from datetime import datetime
 from enum import auto
 
-from app_instances.data_types import InstanceStatus
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -15,7 +14,10 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
+from imbue.chat.primitives import AGENT_ID_PATTERN
+from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -485,7 +487,7 @@ class ChatSnapshot(FrozenModel):
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: InstanceStatus = Field(description="The chat's status, as its instance record reports it")
+    status: ChatStatus = Field(description="The chat's status: working, idle, attention, stopped, or error")
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(
@@ -734,3 +736,22 @@ class LatchkeyScopeInfo(FrozenModel):
     permissions: tuple[LatchkeyPermissionInfo, ...] = Field(
         default=(), description="Permissions grantable under the scope"
     )
+
+
+class SubagentKey(FrozenModel):
+    """The three parts of a subagent view's key, ``<chat-id>.<agent-id>.<session-id>``."""
+
+    chat_id: ChatId = Field(description="The chat the subagent view belongs to")
+    agent_id: str = Field(description="The agent whose harness session the subagent is a session of")
+    session_id: str = Field(description="The subagent's own session id")
+
+
+def parse_subagent_key(key: str) -> SubagentKey | None:
+    """The three parts of a subagent key, or None for a key of any other shape (a chat's own key included)."""
+    parts = key.split(SUBAGENT_KEY_SEPARATOR)
+    if len(parts) != 3:
+        return None
+    chat_id, agent_id, session_id = parts
+    if not AGENT_ID_PATTERN.fullmatch(chat_id) or not AGENT_ID_PATTERN.fullmatch(agent_id) or not session_id:
+        return None
+    return SubagentKey(chat_id=ChatId(chat_id), agent_id=agent_id, session_id=session_id)

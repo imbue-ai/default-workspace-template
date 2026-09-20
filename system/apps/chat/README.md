@@ -1,11 +1,11 @@
 # The chat app
 
 The agent harness UI: live conversations with mngr-managed agents, one page per
-chat, rendered inside a tab's iframe at the chat's own registered origin. It is
-an app of the workspace like the terminal or the file viewer (the workspace app
-model, `docs/system/blueprint/workspace-app-model/`): the shell knows it only
-through its manifest (`app.toml`), its registry row, its instances API, and the
-browser-side contract.
+chat, rendered inside a window's iframe at the chat's own registered origin. It
+is an app of the workspace like the terminal or the file viewer (the desktop
+interface, `docs/system/blueprint/desktop-interface/`): the shell knows it only
+through its manifest (`app.toml`), its registry row, and the browser-side
+contract; everything about chats lives in this app's own pages and routes.
 
 ## What it serves
 
@@ -32,17 +32,6 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   hostname, and the origin label of the terminal's pty (the terminal app's while
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
-- `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
-  manager (`instances.py`): every chat (a non-primary agent, today) is an
-  explicit, renameable, stoppable instance keyed by its chat id (stop is `mngr
-  stop`, start the same ensure-started path a send takes); a chat that is not an
-  agent yet is a referenced provisional instance under the id mngr will give its
-  first agent, whether it is waiting for an account (`attention`), being created
-  (`working`), or failed (`error`); a subagent view is a referenced instance
-  keyed `<chat-id>.<agent-id>.<session-id>`. A chat's status comes from its
-  active agent's activity state, a pending permission request, and the
-  lifecycle. The API answers `503` until the agent list has been read from mngr
-  once.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
@@ -57,15 +46,18 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls on the `--preflight` boot (after the restart it polls `/_instances`, the
-  route that answers only once the agent manager has its first list).
+  polls on the `--preflight` boot and on every critical app after the restart.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake) and the shell reaches the chat
-only over loopback (the instances API, the relay). Sends are reported to the
-shell's client-activity route so agents can attribute a request to a client.
+(`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
+Sends are reported to the shell's client-activity route (`shell_client.py`) so
+agents can attribute a request to a client. A chat's status (`ChatStatus` in
+`primitives.py`: working, idle, attention, stopped, or error) comes from its
+active agent's activity state, a pending permission request, and the lifecycle,
+and rides the `chats_updated` snapshots the chat root's list draws its status
+dots from.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
@@ -73,9 +65,9 @@ A chat is a sequence of agent transcripts run by one agent at a time
 as `MINDS_CHAT_ID` in its environment. A chat that has run on several agents
 has a record under `data/.apps/chat/chats/<chat-id>/record.json`
 (`chat_records.py`) naming its agents in order; every other agent is a chat of
-its own. The agent manager resolves every chat through the records: the
-instance list shows one chat per record, from its active agent, and never an
-archived member; stop, start, rename, and status act on the active agent, and
+its own. The agent manager resolves every chat through the records: the chat
+list shows one chat per record, from its active agent, and never an archived
+member; stop, start, rename, and status act on the active agent, and
 destroy names every member. The read routes go through `chat_transcript.py`,
 the chat's transcript as its agents' segments in order with an `agent_switch`
 marker between them: an archived segment is read through its harness's
@@ -97,7 +89,7 @@ prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
 told to read before anything else. Every step is recorded on the chat record's `handoff` entry and
 re-checked against mngr's state, so a restart of the app resumes an unfinished
-handoff where it stopped. While a chat converges its instance stays listed as
+handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
@@ -158,7 +150,7 @@ the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
 chat instead". The verbs the app refuses meanwhile answer 409 with a detail
-written for the user, which the page and the shell's tab menu show as is.
+written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
@@ -174,9 +166,8 @@ wake-ups, a lead's replies to a worker, the automation runner) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id`, `device_kind`, or
 `active_layout`) posts no client-activity report. The route answers 503 until
-the agent list has been read from mngr once, like the instances API, so a send
-during the app's first seconds is retried rather than mistaken for an unknown
-chat. See `docs/system/blueprint/chat-agent-split/`.
+the agent list has been read from mngr once, so a send during the app's first
+seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
@@ -240,16 +231,16 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Mind app's update and help chats) has its tab surfaced by this app
-(`auto_open.py`): when the agent appears, the app asks the shell to open the
-chat's address in every connected client, holds the open until a client is
-connected if none is, and records the delivery under
-`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. The
-open is held for as long as the chat exists, so a chat started while nobody was
-connected still gets its tab whenever someone finally connects. The one
+(the Mind app's update and help chats) has its window surfaced by this app
+(`auto_open.py`): when the agent appears, the app asks the shell to open a chat
+root window on the chat in every connected client, holds the open until a
+client is connected if none is, and records the delivery under
+`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a window.
+The open is held for as long as the chat exists, so a chat started while nobody
+was connected still gets its window whenever someone finally connects. The one
 exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
-as shown, since a tab for each is worse than missing one.
+as shown, since a window for each is worse than missing one.
 
 ## Development
 
@@ -268,7 +259,7 @@ registry, for a throwaway boot on another port (`CHAT_PORT`).
 `--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
 the app imports, builds, and serves `/api/health` but reconciles no accounts (the
 boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
-session sweep, memory prioritizer, or nudges to the shell), and registers nothing.
+session sweep, or memory prioritizer), and registers nothing.
 The apply boots the merged chat this way on a free port before restarting the live
 services, since this is the process that imports mngr and the harness plugins, and
 refuses the update when it cannot come up.

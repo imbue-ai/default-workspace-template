@@ -312,7 +312,7 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
               onclick(e: Event) {
                 e.preventDefault();
                 e.stopPropagation();
-                openSubagentTab(chatId, sessionId, description);
+                openSubagentTab(chatId, sessionId);
               },
             },
             "View conversation",

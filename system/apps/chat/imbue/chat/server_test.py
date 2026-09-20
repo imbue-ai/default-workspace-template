@@ -3022,8 +3022,6 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
         {"message_id": "trigger-1", "text": "Carry on in Codex"},
         {"message_id": "m-2", "text": "and this"},
     ]
-    instances = client.get("/_instances").get_json()
-    assert [(record["key"], record["status"]) for record in instances["instances"]] == [(first, "working")]
     # The chat still reads from the agent it is leaving.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 

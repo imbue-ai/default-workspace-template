@@ -1,14 +1,9 @@
-"""The chat document over the chat app's real Flask app: the page, its probe route, and the instances API."""
+"""The chat document over the chat app's real Flask app: the page, its probe route, and the client-activity report."""
 
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import RecordingNudger
-from app_instances.testing import free_port
-from app_instances.testing import wait_until
 from flask.testing import FlaskClient
 
 from imbue.chat.agent_manager import AgentManager
@@ -27,7 +22,9 @@ from imbue.chat.state import ChatAppState
 from imbue.chat.testing import RecordingClientActivityShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import serve_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.mngr.utils.polling import wait_for
 
 
 def _agent_id() -> str:
@@ -126,59 +123,6 @@ def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
 
 
-def test_the_instances_api_lists_the_chat(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, _ = _client(tmp_path, chat_id)
-
-    response = client.get("/_instances")
-
-    assert response.status_code == 200
-    (record,) = response.get_json()["instances"]
-    assert record["key"] == chat_id
-    assert record["url"] == f"/{chat_id}"
-    assert record["title"] == "Chat 1"
-    assert record["status"] == "idle"
-    assert record["lifetime"] == "explicit"
-    assert record["renameable"] is True
-
-
-def test_the_instances_api_is_not_ready_before_the_first_discovery(tmp_path: Path) -> None:
-    _write_bundle(tmp_path)
-    state = build_test_state()
-    state.static_directory = tmp_path
-    client = create_application(state).test_client()
-
-    response = client.get("/_instances")
-
-    assert response.status_code == 503
-    assert "detail" in response.get_json()
-
-
-def test_a_subagent_create_answers_the_record_and_nudges(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, manager = _client(tmp_path, chat_id)
-    nudger = RecordingNudger()
-    manager.set_nudger(nudger)
-    session_id = uuid4().hex
-
-    response = client.post(
-        "/_instances",
-        json={"action": "subagent", "params": {"parent": chat_id, "session": session_id, "description": "Docs"}},
-    )
-
-    assert response.status_code == 201
-    assert response.get_json()["instance"]["key"] == f"{chat_id}.{chat_id}.{session_id}"
-    assert response.get_json()["instance"]["title"] == "Subagent: Docs"
-    assert nudger.nudge_count == 1
-    listed = client.get("/_instances").get_json()["instances"]
-    assert [record["key"] for record in listed] == [chat_id, f"{chat_id}.{chat_id}.{session_id}"]
-
-
-def test_a_location_report_is_refused_for_the_chat(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, _ = _client(tmp_path, chat_id)
-    response = client.post(f"/_instances/{chat_id}/location", json={"path": "/elsewhere"})
-    assert response.status_code == 400
 
 
 def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None:
@@ -206,12 +150,11 @@ def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch
     chat_id = ChatId("agent-1")
     framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
     shell = RecordingClientActivityShell()
-    port = free_port()
-    with serve_in_background(LOOPBACK_HOST, port, shell.application):
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", f"http://{LOOPBACK_HOST}:{port}")
+    with serve_app(shell.application) as served:
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
         _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
         _record_client_message_activity(chat_id, framed)
-        assert wait_until(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout_seconds=5.0)
+        wait_for(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout=5.0, poll_interval=0.05, error_message="the condition never held")
 
 
 def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

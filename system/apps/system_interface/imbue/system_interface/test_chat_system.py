@@ -1,10 +1,10 @@
 """The shell and the chat app running together, as a workspace runs them.
 
-The chat is an ordinary app to the shell: registered at its own URL, listed through its
-instances API, verbed through the relay. These tests serve both apps side by side (the chat
-package's ``running_workspace``, in-process on two ports) and read the shell's inventory to
-check the seam between them; this is also the one module that may import both packages, so
-the invariants that span them are pinned here.
+The chat is an ordinary app to the shell: registered at its own URL, listed in the inventory with
+its launch paths and liveness, opened as windows of its pages. These tests serve both apps side by
+side (the chat package's ``running_workspace``, in-process on two ports) and read the shell's
+inventory and op route to check the seam between them; this is also the one module that may
+import both packages, so the invariants that span them are pinned here.
 """
 
 from __future__ import annotations
@@ -16,31 +16,26 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_instances.testing import free_port
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
-from imbue.chat.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_create_command
+from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
-from imbue.chat.testing import FIXTURE_AGENT_NAME
-from imbue.chat.testing import FIXTURE_CHAT_ADDRESS
+from imbue.chat.testing import free_port
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
-from imbue.system_interface.shell.instance_relay import RELAY_TIMEOUT_SECONDS
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
+
+# The default desktop every shell starts with (``shell/desktops.py``).
+_HOME_DESKTOP_ID = "home"
 
 
 def _inventory(shell_url: str) -> dict[str, Any]:
     with urllib.request.urlopen(f"{shell_url}/api/inventory", timeout=5) as response:
         return json.loads(response.read())
-
-
-def _chat_instances(shell_url: str) -> list[dict[str, Any]]:
-    apps = {app["name"]: app for app in _inventory(shell_url)["apps"]}
-    return list(apps["chat"]["instances"]) if "chat" in apps and apps["chat"]["is_listed"] else []
 
 
 def _post_json(url: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -51,60 +46,66 @@ def _post_json(url: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         return response.status, json.loads(response.read())
 
 
-def _wait_for_fixture_chat(shell_url: str) -> None:
+def _chat_app(shell_url: str) -> dict[str, Any] | None:
+    return next((app for app in _inventory(shell_url)["apps"] if app["name"] == "chat"), None)
+
+
+def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
     wait_for(
-        lambda: any(instance["key"] == FIXTURE_AGENT_ID for instance in _chat_instances(shell_url)),
+        lambda: _chat_app(shell_url) is not None and _chat_app(shell_url)["is_running"] is True,
         timeout=15.0,
         poll_interval=0.2,
-        error_message="the shell never listed the fixture chat",
+        error_message="the shell never listed the chat app as running",
     )
+    listed = _chat_app(shell_url)
+    assert listed is not None
+    return listed
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_the_shells_inventory_lists_the_chats_instances_with_status(tmp_path: Path) -> None:
-    """The chat's agents reach the shell's inventory as instances, with the status the chat reports."""
-    with running_workspace(tmp_path, free_port(), free_port(), project_names=()) as workspace:
-        _wait_for_fixture_chat(workspace.shell_url)
-        (instance,) = [
-            instance for instance in _chat_instances(workspace.shell_url) if instance["key"] == FIXTURE_AGENT_ID
-        ]
-        assert instance["title"] == FIXTURE_AGENT_NAME
-        assert instance["status"] == "idle"
-        assert instance["lifetime"] == "explicit"
-        assert instance["renameable"] is True
-        assert instance["url"] == f"/{FIXTURE_AGENT_ID}"
-        assert FIXTURE_CHAT_ADDRESS in _inventory(workspace.shell_url)["everything"]["tabs"]
+def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
+    """The chat reaches the shell's inventory as an app: running, with the ``new`` launch path of its manifest and
+    its default shortcut, and nothing about the chats inside it."""
+    with running_workspace(tmp_path, free_port(), free_port()) as workspace:
+        listed = _wait_for_the_chat_app(workspace.shell_url)
+        assert listed["display_name"] == "Chat"
+        assert listed["critical"] is True
+        assert [(launch["id"], launch["path"]) for launch in listed["launch_paths"]] == [("new", "/new")]
+        assert listed["default_shortcut"]["launch"] == "new"
+        assert listed["default_shortcut"]["mode"] == "new"
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_a_rename_through_the_shells_relay_reaches_the_chat_and_relists(tmp_path: Path) -> None:
-    """The shell's relay verbs land on the chat's own server, and the shell's inventory follows."""
-    with running_workspace(tmp_path, free_port(), free_port(), project_names=()) as workspace:
-        _wait_for_fixture_chat(workspace.shell_url)
-        status, body = _post_json(
-            f"{workspace.shell_url}/api/apps/chat/instances/{FIXTURE_AGENT_ID}/rename", {"title": "Design notes"}
+def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: Path) -> None:
+    """The desktop ``open`` op with the chat's name and a chat page's path puts a window on the desktop for the
+    target client, and the path it names is one the chat app answers with the chat document."""
+    with running_workspace(tmp_path, free_port(), free_port()) as workspace:
+        _wait_for_the_chat_app(workspace.shell_url)
+        # A client the shell knows, registered through the socket's own bookkeeping.
+        client_queue = workspace.shell_state.shell.broadcaster.register()
+        workspace.shell_state.shell.broadcaster.set_client_info(
+            client_queue, "client-1", "", "desktop", active_desktop=_HOME_DESKTOP_ID
         )
+        try:
+            status, answer = _post_json(
+                f"{workspace.shell_url}/api/layout/broadcast",
+                {
+                    "op": "open",
+                    "args": {"app": "chat", "path": f"/{FIXTURE_AGENT_ID}", "client": "client-1"},
+                    "requester": None,
+                },
+            )
+        finally:
+            workspace.shell_state.shell.broadcaster.unregister(client_queue)
         assert status == 200
-        assert body["instance"]["title"] == "Design notes"
-        wait_for(
-            lambda: (
-                [
-                    instance["title"]
-                    for instance in _chat_instances(workspace.shell_url)
-                    if instance["key"] == FIXTURE_AGENT_ID
-                ]
-                == ["Design notes"]
-            ),
-            timeout=15.0,
-            poll_interval=0.2,
-            error_message="the shell's inventory never picked up the rename",
-        )
-
-
-def test_the_relay_outlives_the_chats_destroy() -> None:
-    """A chat delete runs ``mngr destroy`` for up to its own timeout inside the relayed request, so the
-    shell's relay must wait at least that long before giving up on the app."""
-    assert RELAY_TIMEOUT_SECONDS > DESTROY_TIMEOUT_SECONDS
+        (window,) = answer["desktop"]["windows"]
+        assert window["app"] == "chat" and window["path"] == f"/{FIXTURE_AGENT_ID}"
+        assert [placement["window_id"] for placement in answer["layout"]["placements"]] == [window["id"]]
+        # The chat serves the page at that path (the document, or its not-built placeholder in a checkout with no
+        # bundle; both carry the header), so the window's frame lands on the chat's own origin.
+        with urllib.request.urlopen(f"{workspace.chat_url}{window['path']}", timeout=5) as response:
+            assert response.status == 200
+            assert response.headers[FRONTEND_BUILT_HEADER] in ("true", "false")
 
 
 def _chat_create_template() -> dict[str, object]:

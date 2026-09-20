@@ -8,8 +8,6 @@
  */
 
 import m from "mithril";
-import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
@@ -151,27 +149,11 @@ export async function startChatOnAccount(
 }
 
 /**
- * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
- * created first through the chat app's own instances API (its `subagent` action, on this
- * page's origin), which is what the tabbed shell listed; the desktop shell opens the view's
- * page by path and needs no instance.
- * The session belongs to the chat's active agent, which is what the app keys the view on.
+ * Open the subagent view for `sessionId` of this page's chat beside it, by its path alone: the
+ * view's key names the chat, the agent whose harness session it is (the chat's active agent,
+ * else the chat's own id), and the session.
  */
-export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
-  // The app keys the view on the chat's active agent and answers the key it made; the page's
-  // own guess (the listed active agent, else the chat's own id) stands in only when the create
-  // failed, so the open still names the view the app would have made.
-  let key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
-  try {
-    // CLEANUP: drop this create once the instances API leaves the chat app (desktop-interface plan,
-    // phase 6); the desktop shell opens the view by its path alone.
-    const record = await postJson<{ key?: string }>(apiUrl("/_instances"), {
-      action: "subagent",
-      params: { parent: chatId, session: sessionId, description },
-    });
-    if (record?.key) key = record.key;
-  } catch (error) {
-    console.warn(`[chat] could not create the subagent instance ${key}`, error);
-  }
+export function openSubagentTab(chatId: string, sessionId: string): void {
+  const key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
   connection?.openPath(subagentViewPath(key), "focus");
 }
