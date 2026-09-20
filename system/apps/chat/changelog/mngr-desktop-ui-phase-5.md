@@ -9,3 +9,5 @@ The chat app follows the desktop shell (phase 5 of `docs/system/blueprint/deskto
 - The shell handshake test fixtures carry the desktop's window, desktop, and path fields.
 
 - A chat started from inside a chat page is filed in no project: the shell's handshake now names a desktop where the tabbed shell named a project, and the desktop has no projects to file into.
+
+- The chat's Playwright suite drives the desktop: chats open from the launcher's New Chat tile, through a link into the workspace, or through the agent's open op; a minimized window stands in for a hidden tab, and a second desktop for a second view.
