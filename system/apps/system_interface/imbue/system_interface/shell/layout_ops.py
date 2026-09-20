@@ -25,7 +25,9 @@ CONTEXT_OP: Final[str] = "context"
 LOAD_OP: Final[str] = "load"
 # Read-only: answered with the desktops.
 INVENTORY_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
-WINDOW_OPS: Final[frozenset[str]] = frozenset({"focus", "minimize", "restore", "maximize", "place", "close", "navigate"})
+WINDOW_OPS: Final[frozenset[str]] = frozenset(
+    {"focus", "minimize", "restore", "maximize", "place", "close", "navigate"}
+)
 SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
     {"shortcuts", "shortcut_set", "shortcut_move", "shortcut_remove", "wallpaper"}
 )
@@ -63,7 +65,11 @@ def parse_op_requester(raw: Any) -> OpRequester | None:
         marker = "" if raw_marker is None else raw_marker
         if not isinstance(marker, str):
             raise LayoutOpError("``requester.marker`` must be a string")
-        return OpRequester(app=AppName(raw["app"]), marker=marker)
+        try:
+            app = AppName(raw["app"])
+        except ValueError as e:
+            raise LayoutOpError(f"``requester.app`` {raw['app']!r} is not an app name: {e}") from e
+        return OpRequester(app=app, marker=marker)
     raise LayoutOpError("``requester`` must be null or an object with ``app`` and ``marker``")
 
 

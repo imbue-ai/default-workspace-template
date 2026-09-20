@@ -76,7 +76,14 @@ def _op(client: FlaskClient, op: str, args: dict[str, Any], requester: dict[str,
 
 
 def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: Flask) -> None:
-    message = {"client_id": "c1", "desktop_id": "home", "kind": "message", "app": "chat", "key": "agent-1", "text": "hi"}
+    message = {
+        "client_id": "c1",
+        "desktop_id": "home",
+        "kind": "message",
+        "app": "chat",
+        "key": "agent-1",
+        "text": "hi",
+    }
     assert client.post("/api/client-activity", json=message).status_code == 204
     assert client.post("/api/client-activity", json={**message, "kind": "view_switch"}).status_code == 400
     # A report is what the desktop shell's pages send; the tabbed shell's view and device kind are refused.
@@ -96,7 +103,9 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
     )
     assert client.post("/api/client-activity", json=message, environ_base=_NOT_LOOPBACK).status_code == 403
     events = _shell(app).activity.read_events()
-    assert [(event["type"], event["client_id"], event["desktop_id"]) for event in events] == [("message", "c1", "home")]
+    assert [(event["type"], event["client_id"], event["desktop_id"]) for event in events] == [
+        ("message", "c1", "home")
+    ]
     assert events[0]["key"] == "agent-1" and events[0]["text"] == "hi"
 
 
@@ -200,7 +209,7 @@ def test_the_op_route_validates_its_input(client: FlaskClient) -> None:
     assert client.post("/api/layout/broadcast", data="{", content_type="application/json").status_code == 400
     # A requester that is not ``{app, marker}`` is refused, not dropped: dropped, the op would lose its
     # attribution and ``self`` would be reported as unset although the caller sent one.
-    for malformed in ("app:chat?instance=agent-1", "chat:agent-1", 7, 0, False, []):
+    for malformed in ("app:chat?instance=agent-1", "chat:agent-1", 7, 0, False, [], {"app": "Bad Name"}):
         refused = client.post("/api/layout/broadcast", json={"op": "context", "requester": malformed})
         assert refused.status_code == 400, malformed
         assert "requester" in refused.get_json()["detail"]
