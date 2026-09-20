@@ -526,6 +526,9 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
 
     listed = _op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
+    # The read ops answer the whole inventory document, apps and clients included.
+    assert set(listed.get_json()) == {"ok", "desktops", "apps", "clients"}
+    assert [entry["id"] for entry in listed.get_json()["clients"]] == ["c1"]
 
     # An open at a launch path with params, and one at an explicit path.
     opened = _op(client, "open", {"app": "terminal", "params": {"workdir": "/tmp"}}, requester)

@@ -97,7 +97,8 @@ reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
   shortcut and wallpaper edits) are applied to the files and announced as
   `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
-  socket registrations, and `desktops` and `list` answer the desktops; only
+  socket registrations, and `desktops` and `list` answer the inventory
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
   `refresh` and `reload_system_interface` reach the browser as `layout_op`
   messages.
 

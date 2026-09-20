@@ -232,7 +232,8 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 
 | Op | Args | Effect |
 |---|---|---|
-| `context`, `desktops`, `list` | | read-only; the inventory document, printed |
+| `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
+| `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
 | `open` | `app`, `path?`, `launch?`, `params?`, `if_present?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; answers the window id |
 | `focus` | `window` | restore and raise |
