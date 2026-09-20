@@ -1,10 +1,9 @@
 # system/libs/
 
 Support libraries: workspace packages that are neither apps (no window of
-their own) nor
-background services (no supervised program of their own). Each is a uv
-workspace member with its own `pyproject.toml`; see each package's README for
-details.
+their own) nor background services (no supervised program of their own). Each
+is a uv workspace member with its own `pyproject.toml`; see each package's
+README for details.
 
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
