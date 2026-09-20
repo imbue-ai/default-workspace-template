@@ -128,8 +128,7 @@ function reportChatLocation(chatId: string, path: string): void {
  * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
  * given and ``pick`` as the model it runs on (null for the harness's default). The switch
  * dialog's "Start a new chat" calls this with the draft and the pick, and the failed-switch
- * notice with neither. The chat is filed in no project: the desktop has none, and the view id the
- * handshake still carries is the desktop's.
+ * notice with neither. The chat is filed in no project: the desktop has none.
  */
 export async function startChatOnAccount(
   accountId: string,

@@ -89,7 +89,7 @@ export interface ChatSnapshot {
   // The mngr ``project`` label: the project this chat was created in, which mngr propagates to
   // the agent's own children. Null when the agent carries no label.
   project: string | null;
-  // The chat's status, as its instance record reports it.
+  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries.
   status: string;
   // The active agent's mngr labels.
   labels: Record<string, string>;

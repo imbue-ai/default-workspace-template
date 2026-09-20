@@ -3,10 +3,10 @@
  *
  * Each browser gets a stable uuid (minted once, kept in localStorage). The active desktop is
  * module state only: the shell's client record is its source (desktop-interface contracts.md
- * section 4.3), read on boot, so two windows of one browser land on the same desktop. The
- * identity travels with every chat message and with the WebSocket `client_state` registration,
- * so the server (and agents, via `layout.py context`) can attribute requests to a client and
- * its desktop.
+ * section 4.3), and a framed page takes both from the shell's handshake, so two windows of one
+ * browser land on the same desktop. The identity travels with every chat message and with the
+ * WebSocket `client_state` registration, so the server (and agents, via `layout.py context`)
+ * can attribute requests to a client and its desktop.
  */
 
 const CLIENT_ID_STORAGE_KEY = "si-client-id";
@@ -37,10 +37,6 @@ let activeDesktopId = "";
 
 export function getActiveDesktopId(): string {
   return activeDesktopId;
-}
-
-export function setActiveDesktopId(desktopId: string): void {
-  activeDesktopId = desktopId;
 }
 
 export interface AdoptedClientIdentity {

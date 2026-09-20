@@ -250,7 +250,7 @@ describe("creating and positioning", () => {
 });
 
 describe("the contract", () => {
-  it("greets a page after every load with the window, desktop, path, and the desktop as the view, then says shown", () => {
+  it("greets a page after every load with the window, desktop, and path, then says shown", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls.map((call) => call[0])).toEqual([

@@ -109,7 +109,7 @@ describe("connectChatToShell", () => {
     expect(presence.reportPresence).not.toHaveBeenCalled();
   });
 
-  it("still tells the shell where its tab is from a subagent view", async () => {
+  it("still tells the shell where its window is from a subagent view", async () => {
     const parent = framed();
     const { connectChatToShell } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
@@ -197,7 +197,7 @@ describe("startChatOnAccount", () => {
     );
   });
 
-  it("files the new chat in no project: the desktop shell's view id is a desktop, not a project", async () => {
+  it("files the new chat in no project: the desktop has none", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
