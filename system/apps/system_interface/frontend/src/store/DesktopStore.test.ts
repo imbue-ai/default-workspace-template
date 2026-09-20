@@ -103,6 +103,20 @@ describe("bootstrap", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
+  it("adopts the desktop the shell recorded for the client while the socket was down, rather than asserting its own", async () => {
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    // Another window of this client switched to work meanwhile; the push never reached this one.
+    api.clients = [{ id: CLIENT, active_desktop: "work" }];
+    api.writeLayout("work", CLIENT, { updated_at: null, placements: [] });
+    socket.deliver().onConnected();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
+    expect(api.calls).toContain("fetchPlacements:work");
+    expect(store.getState().isLayoutLoaded).toBe(true);
+  });
+
   it("tells the user when the desktops cannot be read, instead of failing silently", async () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
@@ -140,7 +154,7 @@ describe("saving", () => {
     store.minimizeWindow("win-1");
     for (let round = 0; round < 5; round += 1) {
       await vi.advanceTimersByTimeAsync(100);
-      socket.deliver().onDesktopsUpdated(store.getState().desktops);
+      socket.deliver().onDesktopsUpdated([...store.getState().desktops]);
       socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
     }
     await settle();
