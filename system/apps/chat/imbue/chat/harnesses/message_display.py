@@ -54,9 +54,8 @@ _TASK_NOTIFICATION_PREAMBLE = "[SYSTEM NOTIFICATION"
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
-# Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own
-# words follow it). Non-greedy: the block is built here and never nests, so the first close
-# ends it.
+# Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
+# follow it). Non-greedy, since the block never nests.
 _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
@@ -168,9 +167,9 @@ def _match_seed_context(content: str) -> MessageDisplay | None:
     """A seeded chat's first send: the context block the chat app prefixed, then the user's words.
 
     The words alone are what the page shows, so they travel as ``display_body``. They can come
-    out empty here and still be there in the whole message -- an attachment block was stripped
-    before the detectors ran -- so whether this is one of ours is settled in
-    :func:`classify_user_message`, once that block is back on.
+    out empty here and still be there in the whole message, since an attachment block was
+    stripped before the detectors ran; :func:`classify_user_message` settles that once the block
+    is back on.
     """
     match = _SEED_CONTEXT_RE.match(content)
     if match is None:
@@ -326,12 +325,10 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
     # classification, show the message text rather than the raw attachment markdown.
     if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
-    # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble
-    # (an inline image, a download link) and is the user's own. The detectors never saw it, so
-    # put back what ``_visible_text`` took off the end -- and only then judge whether anything
-    # of the user's is left. A context block with NOTHING after it is not one this app built
-    # (a launch always carries the user's message), so it renders whole rather than as a bubble
-    # of nothing.
+    # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble as
+    # an inline image or a download link. Put back what ``_visible_text`` took off the end, and
+    # only then judge whether any of the user's message is left; a context block with nothing
+    # after it is not one this app built, and renders whole rather than as an empty bubble.
     if decision.display is DisplayKind.PROMPT_WITH_CONTEXT:
         spoken = f"{decision.display_body}{content[len(visible) :]}" if visible != content else decision.display_body
         if not spoken or not spoken.strip():

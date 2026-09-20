@@ -96,7 +96,6 @@ class DisplayKind(StrEnum):
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
     # user_message only: a genuine human turn the chat app prefixed with machine context (a
-    # seeded chat's first send, which carries the conversation the chat opened on). Renders as
-    # the baseline bubble showing ``display_body`` -- the user's own words -- rather than the
-    # whole content, so the context the agent needs never becomes a wall of text in the chat.
+    # seeded chat's first send, which carries the conversation the chat opened on). The baseline
+    # bubble, drawn from ``display_body`` -- the user's own words -- rather than the whole content.
     PROMPT_WITH_CONTEXT = "prompt_with_context"

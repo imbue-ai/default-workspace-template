@@ -2845,10 +2845,9 @@ class AgentManager:
         role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
 
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
-        # this app renders from a file, which no harness transcript holds. Its launch carries
-        # that conversation ahead of the user's own words, which is what makes a reply like "1"
-        # mean the option the seed's last turn numbered. The provisional record keeps the words
-        # themselves, so a retry after a failed create wraps them afresh rather than twice.
+        # this app renders from a file, which no harness transcript holds, so its launch carries
+        # that conversation ahead of the user's own words. The provisional record keeps the words
+        # alone, so a retry after a failed create wraps them once.
         launch_message = (
             message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
