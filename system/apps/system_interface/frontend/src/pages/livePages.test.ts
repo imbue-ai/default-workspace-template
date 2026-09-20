@@ -92,6 +92,26 @@ function load(windowId: string): void {
   frameOf(windowId).dispatchEvent(new Event("load"));
 }
 
+/** Every URL the frame is pointed at from now on. */
+function spyOnSrc(windowId: string): string[] {
+  const urls: string[] = [];
+  const frame = frameOf(windowId);
+  frame.setAttribute = ((name: string, value: string) => {
+    if (name === "src") urls.push(value);
+    HTMLElement.prototype.setAttribute.call(frame, name, value);
+  }) as typeof frame.setAttribute;
+  return urls;
+}
+
+/** The page inside ``windowId``'s frame moves to ``path`` itself and reports it; the shell stores it and says so. */
+async function navigateInPage(windowId: string, path: string): Promise<void> {
+  load(windowId);
+  messageFromPage(windowId, { type: SHELL_LOCATION, path, title: "" });
+  await settle();
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  layer.reconcile();
+}
+
 /** A message from the page inside ``windowId``'s frame, as the relay sees it. */
 function messageFromPage(windowId: string, data: Record<string, unknown>): void {
   window.dispatchEvent(
@@ -212,20 +232,17 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.display).toBe("");
   });
 
-  it("hides a stopped app's page and reloads it once the app runs again", () => {
-    const spy = vi.fn();
-    const frame = frameOf("win-1");
-    frame.setAttribute = ((name: string, value: string) => {
-      spy(name, value);
-      HTMLElement.prototype.setAttribute.call(frame, name, value);
-    }) as typeof frame.setAttribute;
+  it("hides a stopped app's page and reloads it at the window's stored path once the app runs again", async () => {
+    await navigateInPage("win-1", "/?doc=2");
+    const reloads = spyOnSrc("win-1");
     socket.deliver().onAppsUpdated([{ ...docs, is_running: false }, notes]);
     layer.reconcile();
     expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(reloads).toEqual([]);
     socket.deliver().onAppsUpdated([docs, notes]);
     layer.reconcile();
     expect(wrapperOf("win-1").style.display).toBe("");
-    expect(spy).toHaveBeenCalledWith("src", "http://127.0.0.1:7001/?doc=1");
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
   });
 });
 
@@ -336,16 +353,12 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
-  it("reloads pages for the agent's refresh op", () => {
-    const reloads: string[] = [];
-    const frame = frameOf("win-1");
-    frame.setAttribute = ((name: string, value: string) => {
-      if (name === "src") reloads.push(value);
-      HTMLElement.prototype.setAttribute.call(frame, name, value);
-    }) as typeof frame.setAttribute;
+  it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {
+    await navigateInPage("win-1", "/?doc=2");
+    const reloads = spyOnSrc("win-1");
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
-    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=1", "http://127.0.0.1:7001/?doc=1"]);
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2", "http://127.0.0.1:7001/?doc=2"]);
   });
 
   it("tells the focused page about the close chord before closing its window", async () => {

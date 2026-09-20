@@ -119,13 +119,28 @@ export class LivePagesLayer implements PageDriver {
 
   reload(windowId: string): void {
     const page = this.pages.get(windowId);
-    if (page !== undefined) reloadFrame(page.frame);
+    if (page !== undefined) this.reloadPage(page);
   }
 
   reloadApp(appName: string): void {
     for (const page of this.pages.values()) {
-      if (page.app === appName) reloadFrame(page.frame);
+      if (page.app === appName) this.reloadPage(page);
     }
+  }
+
+  /** Reload a page at its window's stored path (the page may have moved since it was first pointed). */
+  private reloadPage(page: LivePage): void {
+    const state = this.store.getState();
+    const found = findWindow(state, page.windowId);
+    const app = found === null ? undefined : appByName(state, found.window.app);
+    if (found === null || app === undefined) return;
+    this.pointPageAt(page, app, found.window.path);
+  }
+
+  /** Point the frame at the app's page for ``path`` (cross-origin, so a reload is a ``src`` reassignment). */
+  private pointPageAt(page: LivePage, app: AppRecord, path: string): void {
+    page.lastReportedPath = path;
+    page.frame.setAttribute("src", windowPageUrl(app, path, this.options.host, this.options.protocol));
   }
 
   requestClose(windowId: string): void {
@@ -170,7 +185,7 @@ export class LivePagesLayer implements PageDriver {
       }
       if (page.isHeldForStop) {
         page.isHeldForStop = false;
-        reloadFrame(page.frame);
+        this.reloadPage(page);
       }
       const box = this.contentBox(window.id);
       if (box === null) {
@@ -215,8 +230,7 @@ export class LivePagesLayer implements PageDriver {
         sendToChildFrame(page.frame, SHELL_NAVIGATE, { path: action.path });
       } else {
         const app = appByName(this.store.getState(), found.window.app);
-        if (app !== undefined)
-          page.frame.src = windowPageUrl(app, action.path, this.options.host, this.options.protocol);
+        if (app !== undefined) this.pointPageAt(page, app, action.path);
       }
     }
   }
@@ -266,7 +280,7 @@ export class LivePagesLayer implements PageDriver {
     });
     this.pages.set(window.id, page);
     this.host.appendChild(wrapper);
-    frame.src = windowPageUrl(app, window.path, this.options.host, this.options.protocol);
+    this.pointPageAt(page, app, window.path);
     return page;
   }
 
@@ -360,10 +374,4 @@ export class LivePagesLayer implements PageDriver {
     const ifPresent = payload.ifPresent === "new" ? "new" : "focus";
     void this.store.openPathFromWindow(page.windowId, path, ifPresent);
   }
-}
-
-/** Reload a frame: cross-origin, so by ``src`` reassignment. */
-function reloadFrame(frame: HTMLIFrameElement): void {
-  const currentSrc = frame.getAttribute("src");
-  if (currentSrc !== null) frame.setAttribute("src", currentSrc);
 }
