@@ -261,5 +261,5 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["account_id", "message"]
     assert by_name["terminal"].instances_url == "http://127.0.0.1:7682"
-    assert by_name["files"].instances_url == "http://127.0.0.1:8301"
+    assert by_name["files"].instances_url is None
     assert by_name["browser"].instances_url is None
