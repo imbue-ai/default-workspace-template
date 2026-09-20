@@ -26,11 +26,22 @@ describe("windowMenuEntries", () => {
     expect(setAppLifecycle).toHaveBeenCalledWith("stop");
   });
 
-  it("offers Start for a stopped app, and neither Share nor Stop where the caller gives none", () => {
+  it("offers Start instead of Stop for a stopped app", () => {
     const stopped = appRecord("docs", { is_running: false });
     expect(
       keysOf(windowMenuEntries(stopped, { refresh: vi.fn(), share: null, setAppLifecycle: vi.fn(), close: vi.fn() })),
     ).toEqual(["refresh", "start", "|", "close"]);
+  });
+
+  it("offers neither Share nor Stop where the caller gives none (a critical app, one the workspace cannot stop)", () => {
+    expect(
+      keysOf(
+        windowMenuEntries(appRecord("docs"), { refresh: vi.fn(), share: null, setAppLifecycle: null, close: vi.fn() }),
+      ),
+    ).toEqual(["refresh", "|", "close"]);
+  });
+
+  it("offers only Refresh and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
         windowMenuEntries(undefined, { refresh: vi.fn(), share: vi.fn(), setAppLifecycle: vi.fn(), close: vi.fn() }),
