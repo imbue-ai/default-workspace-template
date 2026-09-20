@@ -6,6 +6,8 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 
 - The shared contract module (`system/libs/workspace_ui/src/app_contract.ts`) loses `open(address)` and the handshake's `deviceKind`, `address`, `tabId`, and `viewId`; the handshake is `{clientId, windowId, desktopId, path}`. `ClientIdentity` keeps the active desktop id beside the client id (`getActiveDesktopId`, `adoptClientIdentity({clientId, desktopId})`). `addresses.ts` and `views.ts` are deleted, and the stale dockview comments in the library describe the desktop.
 
+- `system/scripts/forward_port.py --manifest` copies `display_name`, `critical`, `priority`, `program`, `internal`, `launcher_rank`, `default_shortcut` (which now needs `launch` and `mode`), and `launch_paths` onto the row; the tabbed shell's `instances`, `instances_url`, and `actions` keys are no longer read, and a re-registration strips them from a row an earlier release wrote (a `CLEANUP:` note says when that can go).
+
 - The files app's supervisord program runs dufs directly after registering the app; the root `pyproject.toml` no longer lists the deleted packages, and `uv.lock` follows.
 
 - The auto-open in `.mngr/settings.toml` posts the desktop's `open` of the chat at `/?chat=<id>`.

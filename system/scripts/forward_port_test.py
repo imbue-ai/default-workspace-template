@@ -650,9 +650,9 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     # Written in the order the contract spells the inline table (tomllib keeps file order).
     assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
+    assert "actions" not in row
     # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
     # key at all for a launch path that declares none.
-    assert "actions" not in row
     assert row["launch_paths"] == [
         {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
