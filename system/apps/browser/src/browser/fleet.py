@@ -187,7 +187,7 @@ def _layout(*args: str, quiet: bool = False) -> bool:
     return result.returncode == 0
 
 
-def _pull_in_pane(browser_name: str) -> None:
+def _open_viewer_window(browser_name: str) -> None:
     """Surface browser ``browser_name`` as its own window on the requesting agent's desktop, optimistically.
 
     ``layout.py open browser --path /?session=<name>`` lands the window on the client that most recently
@@ -294,7 +294,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     if status == 200:
         # Open the new browser's window right away, so "open a new browser" visibly
         # opens one (idempotent with the open the first direct command also does).
-        _pull_in_pane(payload["name"])
+        _open_viewer_window(payload["name"])
         _out(f"started browser {payload['name']}")
         _print_attach(payload["name"])
         return _EXIT_OK
@@ -477,14 +477,14 @@ def _action(browser_name: str, verb: str, kind: str, body: dict[str, Any] | None
     # The first command for a browser (and the first after a human hands it back)
     # opens its viewer as a window on your desktop, so the human can watch.
     if payload.get("newly_acquired"):
-        _pull_in_pane(browser_name)
+        _open_viewer_window(browser_name)
     return _render_action(payload, browser_name, kind)
 
 
 def cmd_acquire(args: argparse.Namespace) -> int:
     _, payload = _request("POST", f"/browsers/{args.name}/acquire", {"reclaim": args.reclaim})
     if payload.get("ok"):
-        _pull_in_pane(args.name)
+        _open_viewer_window(args.name)
         _out(f"acquired browser {args.name}")
         _print_attach(args.name)
         return _EXIT_OK
@@ -498,7 +498,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         _err(payload.get("error", f"no browser {args.name}"))
         return _EXIT_ERROR
     if payload.get("ok"):
-        _pull_in_pane(args.name)  # surface/focus the pane so the human sees what to solve
+        _open_viewer_window(args.name)  # surface the viewer so the human sees what to solve
         _out(
             f"handed browser {args.name} to the human: {args.reason}. You're first in line to "
             f"resume. Tell the user what to do, end your turn, and re-run `state {args.name}` "
