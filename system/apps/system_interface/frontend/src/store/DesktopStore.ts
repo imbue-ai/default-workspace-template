@@ -537,7 +537,18 @@ export class DesktopStore {
     await this.closeWindow(focused);
   }
 
+  /** Whether showing the window has to wait: it is still settling on another client's open, and this
+   *  client has no placement for it. Showing it now would create its page at the launch path and run
+   *  the launch a second time, so the restore is queued for when the window has a real path. */
+  private deferWhileSettling(windowId: string): boolean {
+    const found = findWindow(this.state, windowId);
+    if (found === null || !found.window.is_settling || this.isPlacedHere(windowId)) return false;
+    this.pendingRestores.add(windowId);
+    return true;
+  }
+
   raiseWindow(windowId: string): void {
+    if (this.deferWhileSettling(windowId)) return;
     this.dispatch({ type: "window_raised", windowId });
   }
 
@@ -545,22 +556,18 @@ export class DesktopStore {
     this.dispatch({ type: "window_minimized", windowId });
   }
 
-  /** Restore a minimized window; a window still settling on another client's open waits for its path. */
+  /** Restore a minimized window (the taskbar's verb): raised, and deferred while it settles elsewhere. */
   restoreWindow(windowId: string): void {
-    const found = findWindow(this.state, windowId);
-    if (found !== null && found.window.is_settling && !this.isPlacedHere(windowId)) {
-      this.pendingRestores.add(windowId);
-      return;
-    }
-    this.dispatch({ type: "window_raised", windowId });
+    this.raiseWindow(windowId);
   }
 
   setWindowState(windowId: string, state: WindowState): void {
+    if (this.deferWhileSettling(windowId)) return;
     this.dispatch({ type: "window_state_set", windowId, state });
   }
 
   toggleMaximized(windowId: string): void {
-    if (this.state.modes.isCompact) return;
+    if (this.state.modes.isCompact || this.deferWhileSettling(windowId)) return;
     const placement = placementOf(this.state.layout, windowId);
     if (placement.state === "MAXIMIZED") this.dispatch({ type: "window_restored", windowId });
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
