@@ -736,7 +736,12 @@ def test_page_shell_open_opens_a_sibling_window_of_its_app(e2e_server: E2EServer
     frame.evaluate("() => window.__openPath('/?doc=2', 'focus')")
     _assert_no_further_window(page, e2e_server, [first, second["id"]])
     frame.evaluate("() => window.__openPath('/?doc=2', 'new')")
-    assert len(_wait_for_window_count(e2e_server.base_url, 3)) == 3
+    (third,) = [
+        window
+        for window in _wait_for_window_count(e2e_server.base_url, 3)
+        if window["id"] not in (first, second["id"])
+    ]
+    assert third["app"] == _STUB_APP_NAME and third["path"] == "/?doc=2"
 
 
 @pytest.mark.timeout(60, func_only=False)
