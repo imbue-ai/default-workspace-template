@@ -159,10 +159,16 @@ export class DesktopStore {
   private saveInFlight: Promise<void> | null = null;
   private layoutFetchSequence = 0;
   private pageDriver: PageDriver | null = null;
+  // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
+  private readonly appsLoaded: Promise<void>;
+  private markAppsLoaded: () => void = () => undefined;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
+    this.appsLoaded = new Promise((resolve) => {
+      this.markAppsLoaded = resolve;
+    });
   }
 
   getState(): DesktopState {
@@ -247,7 +253,7 @@ export class DesktopStore {
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.reportClientState(""),
-      onAppsUpdated: (apps) => this.dispatch({ type: "apps_updated", apps }),
+      onAppsUpdated: (apps) => this.takeApps(apps),
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
@@ -265,7 +271,14 @@ export class DesktopStore {
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
+    if (deepLink.open === null && deepLink.launch === null) return;
+    await this.appsLoaded;
     await this.applyDeepLink(deepLink);
+  }
+
+  private takeApps(apps: AppRecord[]): void {
+    this.dispatch({ type: "apps_updated", apps });
+    this.markAppsLoaded();
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {
