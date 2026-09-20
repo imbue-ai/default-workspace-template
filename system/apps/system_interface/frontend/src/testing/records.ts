@@ -7,6 +7,7 @@
 import type { AppRecord, Desktop, LaunchPath, Placement, WindowRecord } from "../model/records";
 import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
+import type { ThemeMetrics } from "../theme/metrics";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -83,6 +84,25 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
     needs_ai: false,
     apt_packages: [],
     choices: [],
+    ...overrides,
+  };
+}
+
+/** The theme metrics at the contract's default (non-compact) values. */
+export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
+  return {
+    titleBarHeight: 36,
+    taskbarHeight: 48,
+    cellWidth: 96,
+    cellHeight: 112,
+    gridInset: 16,
+    windowMinWidth: 320,
+    windowMinHeight: 240,
+    titleMinVisible: 120,
+    snapThreshold: 16,
+    unsnapDistance: 12,
+    dragThreshold: 4,
+    touchTarget: 32,
     ...overrides,
   };
 }

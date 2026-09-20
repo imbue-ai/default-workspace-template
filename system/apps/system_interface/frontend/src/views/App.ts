@@ -86,6 +86,9 @@ export function App(): m.Component<AppAttrs> {
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    // One layer per Escape: a dialog up over the launcher (the template detail) takes it through the
+    // Modal's own listener, and the launcher under it stays.
+    if (document.querySelector(".modal-overlay") !== null) return;
     if (store?.isLauncherOpen() === true) {
       closeLauncher();
       m.redraw();
