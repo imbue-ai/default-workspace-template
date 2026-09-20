@@ -1102,7 +1102,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     _open_desktops_menu(page)
     page.locator('[data-menu-item="delete"]').click()
     expect(dialog).to_be_visible(timeout=5000)
-    dialog.locator(".destroy-dialog-btn-destroy").click()
+    dialog.locator(".desktop-settings-confirm-delete").click()
     wait_for(
         lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [HOME_DESKTOP_ID],
         timeout=10.0,
