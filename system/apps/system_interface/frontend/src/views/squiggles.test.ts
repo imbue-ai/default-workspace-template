@@ -17,7 +17,7 @@ describe("squiggleMarkup", () => {
 });
 
 describe("monogramMarkup", () => {
-  it("paints the tile in the project's color and shows the first letter", () => {
+  it("paints the tile in the desktop's color and shows the first letter", () => {
     const markup = monogramMarkup("newsreader", "#0b292b", 18);
     expect(markup).toContain('fill="#0b292b"');
     expect(markup).toContain(">N</text>");
@@ -46,7 +46,7 @@ describe("monogramMarkup", () => {
     expect(monogramMarkup("Grey", "rebeccapurple", 18)).toContain('fill="#000000"');
   });
 
-  it("escapes the letter and tolerates a nameless project", () => {
+  it("escapes the letter and tolerates a nameless desktop", () => {
     expect(monogramMarkup("<b>", "#fcefd4", 18)).toContain(">&lt;</text>");
     expect(monogramMarkup("   ", "#fcefd4", 18)).toContain("></text>");
   });
