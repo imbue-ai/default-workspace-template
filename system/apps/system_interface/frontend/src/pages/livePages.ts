@@ -89,8 +89,8 @@ export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
   private lastFocusedWindowId: string | null = null;
-  /** The desktops the pages last followed: a stored path changes only with them. */
-  private followedDesktops: readonly Desktop[] | null = null;
+  /** The shell's desktops revision the pages last followed: a stored path changes only with it. */
+  private followedDesktopsRevision = 0;
 
   constructor(
     private readonly host: HTMLElement,
@@ -201,10 +201,12 @@ export class LivePagesLayer implements PageDriver {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
 
-    // Only after a desktops update: between a page's own location report and the broadcast that stores
-    // it, the stored path is still the old one, and a redraw must not send the page back there.
-    if (state.desktops !== this.followedDesktops) {
-      this.followedDesktops = state.desktops;
+    // Only after the shell's own desktops update, never on a redraw or a local edit (an open, a close, a
+    // settings answer): between a page's own location report and the broadcast that stores it, the
+    // stored path is still the old one, and nothing must send the page back there.
+    const revision = this.store.getDesktopsRevision();
+    if (revision !== this.followedDesktopsRevision) {
+      this.followedDesktopsRevision = revision;
       this.follow(windowsById);
     }
 
