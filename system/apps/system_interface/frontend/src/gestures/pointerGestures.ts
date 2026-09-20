@@ -11,11 +11,11 @@
 import type { PixelPoint } from "../geometry/frames";
 import { isResizeEdge } from "../geometry/frames";
 import type { ResizeEdge } from "../geometry/frames";
+import { WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 
 export const DRAG_HANDLE_ATTRIBUTE = "data-drag-handle";
 export const RESIZE_EDGE_ATTRIBUTE = "data-resize-edge";
 export const SHORTCUT_ATTRIBUTE = "data-shortcut";
-export const WINDOW_ID_ATTRIBUTE = "data-window-id";
 export const TASKBAR_ENTRY_ATTRIBUTE = "data-taskbar-entry";
 /** Marks an element (a menu button) whose press must not start a drag. */
 export const NO_DRAG_ATTRIBUTE = "data-no-drag";
