@@ -1,0 +1,3 @@
+- `system/scripts/layout.py` imports only the standard library again: the registry is read with `tomllib` and the read verbs (`context`, `desktops`, `list`, `shortcuts`, and the shortcut writes' output) print indented JSON. Inside a workspace the script runs under the system `python3`, which has neither `tomlkit` nor `yaml`, so every documented `python3 system/scripts/layout.py ...` call had been failing with `ModuleNotFoundError`. `--json` is still accepted and changes nothing.
+
+- A new test in `system/scripts/` (`stdlib_only_scripts_test.py`) parses the imports of every script the documentation runs with a bare `python3` and fails on anything outside the standard library, so this cannot recur.
