@@ -1,82 +1,69 @@
 #!/usr/bin/env python3
-"""Agent-facing helper for inspecting and mutating the workspace layout, over addresses.
+"""Agent-facing helper for the workspace desktop: read what is open, open and arrange windows, edit a desktop.
 
 Subcommands:
-    list                                List every app with its instances (address, title, status, where docked).
-    inspect                             Describe the live dock (compact by default; --verbose for the YAML tree).
-    where <address>                     Show one panel: its group's tab-mates and the addresses in each direction.
-    context                             Show each browser client's recent messages, device kind, and active view.
-    views                               List the views (projects + Everything): tab sets and the clients on each.
-    load <view>                         Switch the target client onto a view.
-    open <address|url>                  Dock an instance next to the caller's chat (focus it when it is already open),
-                                        create one (--action / --param), or open a URL in a new browser.
-    focus <address>                     Activate the named panel within its group.
-    split <address> [...]               Add a panel relative to another panel; tabs into an adjacent group by default.
-    close <address>                     Remove the named panel.
-    move <address> --relative-to <address> [...]  Relocate a panel; iframe DOM is preserved.
-    rename <address> <title>            Retitle an instance through its app (the title shows in every view).
-    delete <address>                    Delete an instance through its app (it leaves every view).
-    stop <address>                      Stop what backs an instance (a chat's agent, a browser's Chromium, a
-                                        terminal's session) through its app; the instance stays, as ``stopped``.
-    start <address>                     Bring a stopped instance back through its app.
-    replace-url <address> <path-or-url> Point an instance at a path under its app, or at a URL for an app that browses.
-    maximize <address>                  Maximize the panel's group within the dock.
-    restore                             Exit a maximized group.
-    refresh <address>                   Reload one iframe; a bare app address reloads every iframe of that app.
-    shortcuts                           List a view's rail shortcuts (app, action, mode).
-    shortcut set <app> <action> [...]   Add a rail shortcut to a project, or change its mode.
-    shortcut remove <app> <action>      Take a rail shortcut off a project.
+    context                             Show each browser client: its active desktop, connection state, recent messages.
+    desktops                            List every desktop with its windows and shortcuts, and every client.
+    list                                List every app (launch paths, running or not) with its windows, plus the desktops.
+    load <desktop>                      Switch the target client onto a desktop.
+    open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new]
+                                        Open a window of an app (a bare https:// URL opens a new browser on that page).
+    focus <window>                      Restore and raise a window.
+    minimize <window>                   Put a window out of sight (its frame is kept).
+    restore <window>                    Bring a minimized or maximized window back to its frame.
+    maximize <window>                   Fill the backdrop with a window.
+    place <window> --zone Z | --frame x,y,w,h
+                                        Snap a window to a half (left, right) or maximize it, or set its frame.
+    close <window>                      Close a window for everyone.
+    navigate <window> <path>            Point a window at another path under its app.
+    refresh <window> | --app <name>     Reload one window's page, or every page of an app.
+    shortcuts                           List a desktop's backdrop shortcuts.
+    shortcut set <app> <launch> [--mode] [--cell c,r]
+                                        Add a shortcut to a desktop, or change its mode or cell.
+    shortcut move <app> <launch> --cell c,r
+                                        Move a shortcut to another cell.
+    shortcut remove <app> <launch>      Take a shortcut off a desktop.
+    wallpaper <kind> <name> | none      Set a desktop's wallpaper (a bundled image, a file), or clear it.
 
-Every instance is named by one *address* (contracts.md section 1):
+A *desktop* is a named, shared collection of *windows*: each window is one page of an app,
+named by its app and the path under the app's origin it is at (``chat`` at ``/?chat=<id>``,
+``terminal`` at ``/?session=<name>``, ``files`` at ``/notes/``). Windows and desktops are shared
+by everyone; where each window sits on a screen (its frame, whether it is minimized or
+maximized) is one client's own *placement*. Every browser *client* has one active desktop.
 
-- ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its chat id
-  (``app:chat?instance=agent-...``, the id of its first agent), a terminal by its tmux
-  session name
-  (``app:terminal?instance=terminal-3``), a browser by its name.
-- ``app:<name>`` -- a single-instance app's one tab (an app built without instances, say
-  ``app:docs``), or, as an ``open`` / ``split`` target, "a fresh instance of this app" for an
-  app that has instances (``open app:terminal``, ``open app:files``).
+A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
+``self`` (the caller's own chat window), or by an app name (that app's most recently focused
+window on the target client's active desktop).
 
-A bare word is shorthand for ``app:<word>``; a bare ``https://`` URL opens a new browser on
-that page. The old ``chat:`` / ``terminal:`` / ``service:`` / ``url:`` / ``subagent:``
-spellings are refused with the address to use instead; ``list`` shows every address on the
-machine.
+Every op targets exactly one client: ``--client <id>`` (from ``context``), else the client
+that most recently messaged you, else the one connected client; with several clients and no
+way to tell, the op is refused and lists them. The shell edits that client's placements
+itself, so an op lands whether or not a browser is connected, and a connected window shows it
+within a redraw. An op edits the client's active desktop; ``--desktop <name>`` edits that
+desktop and switches the client to it.
 
-The workspace shows one *view* at a time: a project, or ``Everything`` (the unfiltered
-home). Every browser *client* (one per browser, shared by its windows) has one active view and
-its own arrangement of every view, kept in a file on the shell that is the truth of the
-arrangement. Every op targets exactly one client: ``--client <id>`` (from ``context``), else
-the client that most recently messaged you, else the one connected client; with several
-clients and no way to tell, the op is refused and lists them. The shell edits that client's
-file itself, so an op lands whether or not a browser is connected, and a connected window
-shows it within a redraw. An op edits the client's active view; ``--view <name>`` (a
-project's name, or ``Everything``) edits that view's arrangement and switches the client to
-it. ``context`` tells you which client (and view, and device kind) recently messaged each chat.
+``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
+with ``--param name=value`` for its parameters; with neither, the app's default launch path).
+A window of the app already at that path is focused rather than duplicated unless
+``--if-present new`` is passed. The new window's id is printed to stdout. To open a folder in
+the file viewer, ``open files --path /notes/`` (the ``path`` launch parameter is the same:
+``open files --param path=/notes/``).
 
-``--direction`` on ``split`` / ``move`` accepts five values: ``left`` / ``right`` /
-``above`` / ``below`` target the *adjacent* group in that direction (tabbing into one that
-already lives there unless ``--new-group`` is passed), and ``within`` tabs the panel into
-the anchor's *own* group.
+Every op POSTs one body ``{op, args, requester}`` to a loopback-only endpoint on the shell:
+``requester`` is the caller's own chat, ``{"app": "chat", "marker": $MINDS_CHAT_ID}`` (the chat
+app sets ``MINDS_CHAT_ID`` on every agent it creates; ``MNGR_AGENT_ID`` stands in for an agent
+that is its own chat), which is what ``self`` means and how the shell attributes the op to a
+client (the one that last messaged that chat). ``desktops`` and ``list`` read ``GET
+/api/inventory`` instead.
 
-The document ops (``open`` / ``split`` / ``move`` / ``focus`` / ``close``) answer with the
-arrangement as the shell wrote it, so on success they print a concise description on stderr
-at once; ``open`` of an app (or a URL) creates the instance through the app inside the op and
-prints the new address to stdout, and an app's refusal is the op's error. ``maximize`` /
-``restore`` / ``refresh`` change what is on screen without changing the saved arrangement,
-so they are sent to the target client's windows and confirm the send. ``rename`` /
-``delete`` / ``replace-url`` / ``stop`` / ``start`` go through the shell's relay to the app
-that owns the instance and echo the app's refusal when it gives one (an instance that cannot
-be stopped on its own, such as a file viewer, refuses ``stop`` with a 400).
+Output for the read commands is YAML by default; pass ``--json`` for the raw structured
+object. Descriptions of what an op did go to stderr; stdout carries only the window id of an
+``open`` and the structured output of the read commands.
 
-All dock ops POST one body ``{op, args, requester}`` to a loopback-only endpoint on the
-shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MINDS_CHAT_ID`` (the chat
-app sets ``MINDS_CHAT_ID`` on every agent it creates; ``MNGR_AGENT_ID`` stands in for an
-agent that is its own chat), which is what ``self`` means and how the shell attributes the
-op to a client (the one that last messaged that chat).
-
-Output for ``list`` / ``views`` / ``context`` / ``shortcuts`` is YAML by default; pass
-``--json`` for the raw structured object. ``inspect`` and ``where`` default to a compact
-rendering; ``--verbose`` prints the full YAML tree.
+Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
+``replace-url``, ``inspect``, ``where``, ``views``) and the old ``app:``, ``chat:``,
+``terminal:``, ``service:``, ``url:``, and ``subagent:`` spellings are refused with the verb or
+form to use instead.
 """
 
 import argparse
@@ -100,20 +87,23 @@ DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
 ENV_MINDS_CHAT_ID = "MINDS_CHAT_ID"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-ADDRESS_SCHEME = "app:"
-ADDRESS_INSTANCE_PARAMETER = "instance="
-EVERYTHING_VIEW_ID = "everything"
 
-# A bare URL opens a new browser on that page: the browser app's ``new`` action with its
-# ``url`` param (contracts.md section 4.3).
+# The requester every op carries is the caller's own chat: the chat app's name, and the chat
+# id its window's path carries.
+REQUESTER_APP = "chat"
+
+# A bare URL opens a new browser on that page: the browser app's ``new`` launch path with the
+# URL as its ``url`` parameter (system/apps/browser/app.toml).
 _BROWSER_APP_NAME = "browser"
-_BROWSER_NEW_ACTION = "new"
+_BROWSER_NEW_LAUNCH = "new"
 _BROWSER_URL_PARAM = "url"
+_EXTERNAL_URL_PREFIXES = ("https://", "http://")
 
-# Spellings refused by name, each with the address to use instead, so an agent working
-# from an old note gets the address rather than a five second registration wait for an
-# app called ``chat:alice``.
+# The spellings of the tabbed shell, refused by name with the form to use instead, so an agent
+# working from an old note is told what to type rather than waiting on a registration that
+# never comes.
 _RETIRED_PREFIXES = (
+    "app:",
     "chat-terminal:",
     "chat:",
     "terminal:",
@@ -121,45 +111,57 @@ _RETIRED_PREFIXES = (
     "url:",
     "subagent:",
 )
-_EXTERNAL_URL_PREFIXES = ("https://", "http://")
-# A bare word that may stand in for ``app:<word>``: the registry's name rule
-# (``forward_port.py``'s ``NAME_PATTERN``, ``MAX_SERVICE_NAME_LENGTH``, ``RESERVED_NAMES``,
-# and ``RESERVED_NAME_PREFIXES``), so a name the registry could never hold is refused here
-# rather than waited for.
+# The verbs of the tabbed shell, each with its replacement.
+_RETIRED_VERBS = {
+    "split": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
+    "move": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h)",
+    "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename, a terminal's own rename route",
+    "delete": "close the window with 'close'; what backs the page is the app's to end (the chat's destroy route, the terminal's delete route, the browser's DELETE /browsers/<name>)",
+    "stop": "the app's own route stops what backs a page (the chat's stop route, the browser's POST /browsers/<name>/stop)",
+    "start": "the app's own route starts what backs a page (the browser's POST /browsers/<name>/start)",
+    "replace-url": "'navigate <window> <path>' points a window at another path under its app",
+    "inspect": "'desktops' lists every desktop with its windows; 'list' adds every app",
+    "where": "'desktops' lists every desktop with its windows and their ids",
+    "views": "'desktops' lists every desktop and which clients are on each",
+}
+
+# A bare word that may name an app: the registry's name rule (``forward_port.py``'s
+# ``NAME_PATTERN``, ``MAX_SERVICE_NAME_LENGTH``, ``RESERVED_NAMES``, and
+# ``RESERVED_NAME_PREFIXES``), so a name the registry could never hold is refused here rather
+# than waited for.
 _APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 _MAX_APP_NAME_LENGTH = 32
 _RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
 _RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
-_INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# A window id as the shell mints it.
+_WINDOW_ID_PATTERN = re.compile(r"^win-[0-9a-f]{16}$")
 
-# How long ``open`` / ``split`` wait for a freshly-registered app to appear before giving
-# up. The supervisord-managed forward_port.py call races with the agent invoking this
-# script right after build-app, so a brief window where the row is not yet visible is fine.
+# How long ``open`` waits for a freshly-registered app to appear before giving up. The
+# supervisord-managed forward_port.py call races with the agent invoking this script right
+# after build-app, so a brief window where the row is not yet visible is fine.
 _REGISTRATION_TIMEOUT_SECONDS = 5.0
 _REGISTRATION_POLL_INTERVAL_SECONDS = 0.25
 
-_WITHIN_DIRECTION = "within"
-_CARDINAL_DIRECTIONS = ("left", "right", "above", "below")
-_DIRECTIONS = (*_CARDINAL_DIRECTIONS, _WITHIN_DIRECTION)
-
-# A read answers from memory and the state files; a document op may run an app's create
-# through the relay (the relay itself waits up to 150 s on the app), so it gets the longer bound.
-_READ_TIMEOUT_SECONDS = 10.0
-_OP_TIMEOUT_SECONDS = 160.0
-
+_ZONES = ("left", "right", "maximized")
 _SHORTCUT_MODES = ("focus", "new")
+_IF_PRESENT_CHOICES = ("focus", "new")
+_WALLPAPER_KINDS = ("bundled", "file")
+_NO_WALLPAPER = "none"
 
-# Exit codes: 0 / 1 / 3. Agents branch on "did it work"; the one distinct code worth its
-# own slot is an app that cannot act right now (a 409 or a 503 from it), where
-# retry-with-backoff is the right response. Slot 2 is left to argparse's usage exit.
+# A read answers from memory and the state files; an ``open`` waits on nothing slower than a
+# file write either, but keeps a wider bound for a shell busy with a client's save.
+_READ_TIMEOUT_SECONDS = 10.0
+_OP_TIMEOUT_SECONDS = 30.0
+
+# Exit codes: 0 / 1 / 3. Agents branch on "did it work"; the one distinct code worth its own
+# slot is a shell or app that cannot act right now (a 409 or a 503), where retry-with-backoff
+# is the right response. Slot 2 is left to argparse's usage exit.
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_CONFLICT = 3
 
-# The caller's own chat. Valid as a ``--relative-to`` value for ``split`` / ``move`` and as
-# a target for any dock op; ``_resolve_address`` turns it into ``_requester_address()``. Every
-# op also carries that address as ``requester``, which is what the shell (and, for a transient
-# op, the windows) resolve ``self`` from; with no requester the shell refuses ``self`` (400).
+# The caller's own chat window. Valid wherever a window is named; the shell resolves it from
+# the op's ``requester`` (and refuses it with a 400 when the op carries none).
 _SELF_REF = "self"
 
 
@@ -170,18 +172,16 @@ def _workspace_base_url() -> str:
 def _own_chat_id() -> str:
     """The caller's chat id: ``MINDS_CHAT_ID`` from the chat app that created the agent, else the
     agent's own id (an agent created any other way is its own chat), else "" outside an agent."""
-    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(
-        ENV_MNGR_AGENT_ID, ""
-    )
+    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(ENV_MNGR_AGENT_ID, "")
 
 
-def _requester_address() -> str:
-    """The caller's own chat as an address, or "" outside an agent: what ``self`` names and what
-    every op carries so the shell knows who asked."""
+def _requester() -> dict[str, str] | None:
+    """The caller's own chat as the op route's requester, or None outside an agent: what ``self``
+    names and what every op carries so the shell knows who asked."""
     chat_id = _own_chat_id()
-    return (
-        f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{chat_id}" if chat_id else ""
-    )
+    if not chat_id:
+        return None
+    return {"app": REQUESTER_APP, "marker": chat_id}
 
 
 def _apps_file() -> Path:
@@ -189,7 +189,7 @@ def _apps_file() -> Path:
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
-# ---------- Addresses ----------
+# ---------- Names ----------
 
 
 def _fail(message: str) -> None:
@@ -198,58 +198,40 @@ def _fail(message: str) -> None:
 
 
 def _retired_spelling_message(value: str) -> str:
-    prefix = next(
-        candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate)
-    )
+    prefix = next(candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate))
     remainder = value[len(prefix) :]
-    if prefix == "chat:":
-        hint = (
-            f"a chat is addressed by its chat id, not its name: app:chat?instance=<chat-id> "
-            f"(the chat rows of 'layout.py list' carry the id of the one titled {remainder!r})"
-        )
-    elif prefix == "chat-terminal:":
-        hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<chat-id>"
-    elif prefix == "terminal:":
-        hint = f"a terminal is addressed by its tmux session name: app:terminal?instance={remainder or '<session>'}"
-    elif prefix == "service:":
+    if prefix == "app:":
         name, _, query = remainder.partition("?")
         if query.startswith("instance="):
-            hint = f"use app:{name}?{query}"
-        elif query.startswith("session="):
-            hint = f"a browser is addressed by its name: app:browser?instance={query.removeprefix('session=')}"
+            hint = (
+                f"a window is named by its id (see 'desktops'); to open one, give the app and the path of its page: "
+                f"'layout.py open {name or '<app>'} --path <path>'"
+            )
         else:
-            hint = f"use app:{name}"
+            hint = f"give the app name on its own: 'layout.py open {name or '<app>'}'"
+    elif prefix == "chat:":
+        hint = "a chat's window is the chat app at its page: 'layout.py open chat --path \"/?chat=<chat-id>\"'"
+    elif prefix == "chat-terminal:":
+        hint = "an agent's terminal is the back face of its chat: open the chat's page, 'layout.py open chat --path \"/?chat=<chat-id>\"'"
+    elif prefix == "terminal:":
+        hint = f"a terminal's window is the terminal app at its page: 'layout.py open terminal --path \"/?session={remainder or '<session>'}\"'"
+    elif prefix == "service:":
+        name, _, query = remainder.partition("?")
+        hint = f"give the app name on its own: 'layout.py open {name or '<app>'}'" + (
+            f" (with --path \"/?{query}\" for one page of it)" if query else ""
+        )
     elif prefix == "url:":
         hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
     else:
-        hint = "a subagent is an instance of the chat app: app:chat?instance=<chat-id>.<agent-id>.<session>"
+        hint = "a subagent's view is a page of the chat app: 'layout.py open chat --path <the subagent view's path>'"
     return (
-        f"{value!r} is not an address any more; {hint}. Addresses are app:<name> or "
-        f"app:<name>?instance=<key>; run 'layout.py list' to see every one on the machine"
+        f"{value!r} is not how the desktop names things: give an app name and a path. {hint}; "
+        f"'layout.py desktops' lists every window with its id"
     )
 
 
 def _is_external_url(value: str) -> bool:
     return any(value.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES)
-
-
-def _normalize_address(value: str) -> str:
-    """Expand a bare app name into ``app:<name>``; refuse the retired spellings and external URLs by name."""
-    if value == _SELF_REF or value.startswith(ADDRESS_SCHEME):
-        return value
-    if any(value.startswith(prefix) for prefix in _RETIRED_PREFIXES):
-        _fail(_retired_spelling_message(value))
-    if _is_external_url(value):
-        _fail(
-            f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser); "
-            "an existing browser is addressed as app:browser?instance=<name>"
-        )
-    if _is_app_name(value):
-        return f"{ADDRESS_SCHEME}{value}"
-    _fail(
-        f"{value!r} is not an address: expected app:<name>, app:<name>?instance=<key>, or a bare app name"
-    )
-    return value
 
 
 def _is_app_name(value: str) -> bool:
@@ -261,51 +243,29 @@ def _is_app_name(value: str) -> bool:
     )
 
 
-def _address_parts(address: str) -> tuple[str, str | None]:
-    """``(app, key)`` of a validated address; ``key`` is None for the bare form."""
-    body = address[len(ADDRESS_SCHEME) :]
-    name, separator, remainder = body.partition("?")
-    if not separator:
-        return name, None
-    return name, remainder[len(ADDRESS_INSTANCE_PARAMETER) :]
+def _refuse_retired_spelling(value: str) -> None:
+    if any(value.startswith(prefix) for prefix in _RETIRED_PREFIXES):
+        _fail(_retired_spelling_message(value))
 
 
-def _validate_address(address: str) -> None:
-    """Raise SystemExit unless ``address`` is ``self`` or a well-formed address."""
-    if address == _SELF_REF:
-        return
-    if not address.startswith(ADDRESS_SCHEME):
-        _fail(
-            f"{address!r} is not an address: expected app:<name> or app:<name>?instance=<key>"
-        )
-    body = address[len(ADDRESS_SCHEME) :]
-    name, separator, remainder = body.partition("?")
-    if not _is_app_name(name):
-        _fail(f"{address!r} names no app: an address starts with app:<name>")
-    if separator:
-        if not remainder.startswith(ADDRESS_INSTANCE_PARAMETER):
-            _fail(f"{address!r}: the part after '?' must be instance=<key>")
-        key = remainder[len(ADDRESS_INSTANCE_PARAMETER) :]
-        if not _INSTANCE_KEY_PATTERN.fullmatch(key):
-            _fail(f"{address!r}: {key!r} is not an instance key")
+def _app_name(value: str) -> str:
+    """An argument that must name an app; the retired spellings and a URL are refused by name."""
+    _refuse_retired_spelling(value)
+    if _is_external_url(value):
+        _fail(f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser)")
+    if not _is_app_name(value):
+        _fail(f"{value!r} is not an app name (lowercase words joined by single dashes, at most {_MAX_APP_NAME_LENGTH} characters)")
+    return value
 
 
-def _resolve_address(value: str) -> str:
-    if value == _SELF_REF and _requester_address():
-        value = _requester_address()
-    address = _normalize_address(value)
-    _validate_address(address)
-    return address
-
-
-def _instance_address(address: str, verb: str) -> tuple[str, str]:
-    """``(app, key)`` of an address that must name one instance (the relay verbs)."""
-    app, key = _address_parts(address)
-    if key is None:
-        _fail(
-            f"{verb} needs an instance address (app:<name>?instance=<key>), not the app {address!r}"
-        )
-    return app, str(key)
+def _window_ref(value: str) -> str:
+    """An argument that names a window: a window id, ``self``, or an app name."""
+    if value == _SELF_REF or _WINDOW_ID_PATTERN.fullmatch(value):
+        return value
+    _refuse_retired_spelling(value)
+    if not _is_app_name(value):
+        _fail(f"{value!r} is not a window: give a window id (win-<hex>, from 'desktops'), 'self', or an app name")
+    return value
 
 
 # ---------- The registry ----------
@@ -323,15 +283,8 @@ def _read_registry_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _registry_row(name: str) -> dict[str, Any] | None:
-    for row in _read_registry_rows(_apps_file()):
-        if row.get("name") == name:
-            return row
-    return None
-
-
 def _is_app_registered(name: str) -> bool:
-    return _registry_row(name) is not None
+    return any(row.get("name") == name for row in _read_registry_rows(_apps_file()))
 
 
 def _wait_for_registration(name: str, timeout: float) -> bool:
@@ -387,16 +340,9 @@ def _post_layout(
     return _request_json(
         "POST",
         f"{_workspace_base_url()}/api/layout/broadcast",
-        {"op": op, "args": args, "requester": _requester_address()},
+        {"op": op, "args": args, "requester": _requester()},
         timeout=timeout,
     )
-
-
-def _request_rest_json(
-    method: str, path: str, body: dict[str, Any] | None = None
-) -> tuple[int, dict[str, Any] | str]:
-    """Call one of the shell's REST routes (the relay, the projects) and parse the answer."""
-    return _request_json(method, f"{_workspace_base_url()}{path}", body)
 
 
 def _maybe_parse_json(text: str) -> dict[str, Any] | str:
@@ -410,7 +356,7 @@ def _maybe_parse_json(text: str) -> dict[str, Any] | str:
 
 
 def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
-    """Translate (status, body) into a stderr message + exit code; only a 409 or a 503 (the app cannot do it right now) has its own code."""
+    """Translate (status, body) into a stderr message + exit code; only a 409 or a 503 (the shell or an app cannot do it right now) has its own code."""
     if status == -1:
         sys.stderr.write(f"error: could not reach the workspace shell: {body}\n")
         return EXIT_ERROR
@@ -418,13 +364,10 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     if isinstance(body, dict):
         detail = str(body.get("detail", body))
         if status == 412:
-            sys.stderr.write(
-                f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n"
-            )
+            sys.stderr.write(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
             return EXIT_ERROR
         if status in (409, 503):
-            # The app cannot do it right now (a full browser fleet, no signed-in account, an app
-            # still starting up): retry later.
+            # The shell or the app cannot do it right now (a save in flight, an app still starting up): retry later.
             sys.stderr.write(f"error: {op!r} rejected (HTTP {status}): {detail}\n")
             return EXIT_CONFLICT
         if status == 404:
@@ -444,393 +387,148 @@ def _emit_structured(data: Any, as_json: bool) -> None:
         sys.stdout.write(json.dumps(data, indent=2))
         sys.stdout.write("\n")
     else:
-        # ``sort_keys=False`` keeps the server's intentional ordering (panels in tab order).
+        # ``sort_keys=False`` keeps the server's intentional ordering (windows in opening order).
         yaml.safe_dump(data, sys.stdout, sort_keys=False, default_flow_style=False)
 
 
-# ---------- Inspect helpers (fetch, where, compact view) ----------
+# ---------- Targeting and answers ----------
 
 
-def _view_args(view: str | None) -> dict[str, str]:
-    return {"view": view} if view else {}
-
-
-def _target_args(view: str | None, client: str | None) -> dict[str, str]:
-    """The ``view`` and ``client`` an op names, when it names them."""
-    args = _view_args(view)
+def _target_args(desktop: str | None, client: str | None) -> dict[str, str]:
+    """The ``desktop`` and ``client`` an op names, when it names them."""
+    args: dict[str, str] = {}
+    if desktop:
+        args["desktop"] = desktop
     if client:
         args["client"] = client
     return args
 
 
-def _fetch_layout(
-    view: str | None = None, client: str | None = None
-) -> dict[str, Any] | None:
-    """Run ``inspect`` once and return the parsed ``layout`` block, or None when the call failed."""
-    status, body = _post_layout("inspect", _target_args(view, client))
-    if status != 200 or not isinstance(body, dict):
-        return None
-    layout = body.get("layout", {})
-    if not isinstance(layout, dict):
-        return None
-    return layout
-
-
-def _walk_tree_leaves(node: Any) -> list[dict[str, Any]]:
-    """Every leaf node of the inspect tree, depth-first."""
-    if not isinstance(node, dict):
-        return []
-    if node.get("type") == "leaf":
-        return [node]
-    if node.get("type") == "branch":
-        leaves: list[dict[str, Any]] = []
-        for child in node.get("children", []) or []:
-            leaves.extend(_walk_tree_leaves(child))
-        return leaves
-    return []
-
-
-def _address_matches(requested: str, panel_address: Any) -> bool:
-    """Whether a live panel's address satisfies the requested one.
-
-    Exact match, plus one widening: a bare ``app:<name>`` is satisfied by any instance of
-    that app (``app:<name>?instance=...``), the way the frontend resolves it.
-    """
-    if not isinstance(panel_address, str):
-        return False
-    if panel_address == requested:
-        return True
-    if "?" in requested:
-        return False
-    return panel_address.startswith(f"{requested}?{ADDRESS_INSTANCE_PARAMETER}")
-
-
-def _find_leaf_for_address(
-    layout: dict[str, Any], address: str
-) -> dict[str, Any] | None:
-    for leaf in _walk_tree_leaves(layout.get("tree")):
-        for panel in leaf.get("panels", []) or []:
-            if _address_matches(address, panel.get("address")):
-                return leaf
+def _window_in(answer: dict[str, Any], window_id: str | None) -> dict[str, Any] | None:
+    desktop = answer.get("desktop")
+    windows = desktop.get("windows", []) if isinstance(desktop, dict) else []
+    for window in windows:
+        if isinstance(window, dict) and window.get("id") == window_id:
+            return window
     return None
 
 
-def _find_panel_summary(layout: dict[str, Any], address: str) -> dict[str, Any] | None:
-    for panel in layout.get("panels", []) or []:
-        if _address_matches(address, panel.get("address")):
-            return panel
-    return None
+def _describe_window(answer: dict[str, Any], window_id: str | None) -> str:
+    """``<id> (<app> at <path>)`` for the window an answer names, or just the id when it is gone (a close)."""
+    window = _window_in(answer, window_id)
+    if window is None:
+        return str(window_id)
+    return f"{window_id} ({window.get('app')} at {window.get('path')})"
 
 
-def _addresses_in_group(leaf: dict[str, Any]) -> list[str]:
-    """Tab-mate addresses in order, with the active tab marked by a trailing ``*``."""
-    out: list[str] = []
-    for panel in leaf.get("panels", []) or []:
-        address = panel.get("address")
-        if not isinstance(address, str):
-            continue
-        out.append(f"{address}*" if panel.get("active") else address)
-    return out
+def _describe_target(answer: dict[str, Any]) -> str:
+    return f"desktop {answer.get('desktop_id')} for client {answer.get('client_id')}"
 
 
-def _describe_group(leaf: dict[str, Any] | None) -> str:
-    if leaf is None:
-        return "<absent>"
-    return "tabs=[" + ", ".join(_addresses_in_group(leaf)) + "]"
-
-
-# ---------- The runners: document ops answer with the arrangement, transient ops confirm the send ----------
-
-
-def _run_document_op(
-    op: str,
-    args: dict[str, Any],
-    describe: Callable[[dict[str, Any], str | None], str],
+def _run_desktop_op(
+    op: str, args: dict[str, Any], describe: Callable[[dict[str, Any]], str]
 ) -> int:
-    """Post one document op; the shell edits the target client's file and answers with the arrangement.
+    """Post one op the shell applies to the files; it answers with the desktop and the client's placements.
 
-    A create (``open`` / ``split`` of an app, or of a URL) prints the new address to stdout so a
-    later op can name it; ``describe`` renders the one-line stderr summary from the answer's
-    layout and the created address (None when the op created nothing).
+    ``describe`` renders the one-line stderr summary from the answer.
     """
     status, body = _post_layout(op, args, timeout=_OP_TIMEOUT_SECONDS)
     if status != 200 or not isinstance(body, dict):
         return _report_failure(op, status, body)
-    raw_created = body.get("created_address")
-    created = raw_created if isinstance(raw_created, str) and raw_created else None
-    if created is not None:
-        sys.stdout.write(f"{created}\n")
-    layout = body.get("layout")
-    sys.stderr.write(describe(layout if isinstance(layout, dict) else {}, created))
+    sys.stderr.write(describe(body) + "\n")
     return EXIT_OK
 
 
 def _run_transient_op(op: str, args: dict[str, Any]) -> int:
-    """Post one of the verbs with nothing to store (maximize, restore, refresh); the target client's windows apply it."""
+    """Post one of the verbs with nothing to store (refresh); the target client's windows apply it."""
     status, body = _post_layout(op, args)
     if status != 200:
         return _report_failure(op, status, body)
     target = body.get("target_client_id") if isinstance(body, dict) else None
-    where = f"client {target}" if target else "every window"
+    where = f"client {target}" if target else "every client"
     sys.stderr.write(f"(sent {op} to {where})\n")
     return EXIT_OK
 
 
-# ---------- Compact rendering for inspect / where ----------
-
-
-def _format_tree_compact(node: Any, indent: int = 0) -> list[str]:
-    pad = "  " * indent
-    if not isinstance(node, dict):
-        return []
-    if node.get("type") == "leaf":
-        size = node.get("size_ratio")
-        size_str = f" size={size}" if size is not None else ""
-        return [f"{pad}[{' '.join(_addresses_in_group(node))}]{size_str}"]
-    if node.get("type") == "branch":
-        size = node.get("size_ratio")
-        size_str = f" size={size}" if size is not None else ""
-        out = [f"{pad}{node.get('arrangement', '?')}{size_str}"]
-        for child in node.get("children", []) or []:
-            out.extend(_format_tree_compact(child, indent + 1))
-        return out
-    return []
-
-
-def _emit_layout_view(layout: dict[str, Any], *, as_json: bool, verbose: bool) -> None:
-    if as_json:
-        sys.stdout.write(json.dumps(layout, indent=2))
-        sys.stdout.write("\n")
-        return
-    if verbose:
-        yaml.safe_dump(layout, sys.stdout, sort_keys=False, default_flow_style=False)
-        return
-    active = layout.get("active_panel")
-    if active is not None:
-        sys.stdout.write(f"active_panel: {active}\n")
-    tree = layout.get("tree")
-    if tree is None:
-        sys.stdout.write("(no layout)\n")
-        return
-    for line in _format_tree_compact(tree):
-        sys.stdout.write(line + "\n")
-
-
-# ---------- where: neighbor lookup by tree structure ----------
-
-
-def _build_leaf_parents(
-    node: Any, parent_chain: tuple[dict[str, Any], ...]
-) -> dict[int, tuple[dict[str, Any], ...]]:
-    out: dict[int, tuple[dict[str, Any], ...]] = {}
-    if not isinstance(node, dict):
-        return out
-    if node.get("type") == "leaf":
-        out[id(node)] = parent_chain
-        return out
-    if node.get("type") == "branch":
-        extended = (*parent_chain, node)
-        for child in node.get("children", []) or []:
-            out.update(_build_leaf_parents(child, extended))
-    return out
-
-
-def _neighbors_in_direction(
-    layout: dict[str, Any], leaf: dict[str, Any], direction: str
-) -> list[dict[str, Any]]:
-    """Leaves adjacent to ``leaf`` in ``direction``: the nearest ancestor of the matching arrangement decides."""
-    tree = layout.get("tree")
-    if tree is None:
-        return []
-    chain = _build_leaf_parents(tree, ()).get(id(leaf), ())
-    if not chain:
-        return []
-    target_arrangement = "row" if direction in ("left", "right") else "column"
-    side = "before" if direction in ("left", "above") else "after"
-    current: dict[str, Any] = leaf
-    for ancestor in reversed(chain):
-        if ancestor.get("arrangement") != target_arrangement:
-            current = ancestor
-            continue
-        children = ancestor.get("children", []) or []
-        try:
-            idx = next(i for i, c in enumerate(children) if c is current)
-        except StopIteration:
-            return []
-        if side == "before" and idx > 0:
-            return _walk_tree_leaves(children[idx - 1])
-        if side == "after" and idx < len(children) - 1:
-            return _walk_tree_leaves(children[idx + 1])
-        current = ancestor
-    return []
-
-
-# ---------- The inventory (list, views, Everything's rail) ----------
+# ---------- The read commands ----------
 
 
 def _fetch_inventory() -> dict[str, Any] | None:
-    status, body = _request_rest_json("GET", "/api/inventory")
+    status, body = _request_json("GET", f"{_workspace_base_url()}/api/inventory")
     if status != 200 or not isinstance(body, dict):
-        sys.stderr.write(
-            f"error: could not read the inventory (HTTP {status}): {body}\n"
-        )
+        sys.stderr.write(f"error: could not read the inventory (HTTP {status}): {body}\n")
         return None
     return body
 
 
-def _view_id_for_name(view_name: str, projects: list[dict[str, Any]]) -> str | None:
-    """The view a ``--view`` value names, as the shell matches it: ``Everything`` (any case), else the
-    project whose name matches case-insensitively or whose id matches exactly; None for none."""
-    if view_name.strip().lower() == EVERYTHING_VIEW_ID:
-        return EVERYTHING_VIEW_ID
-    wanted = view_name.strip().lower()
-    for project in projects:
-        if (
-            project.get("id") == view_name
-            or str(project.get("name", "")).strip().lower() == wanted
-        ):
-            return str(project.get("id"))
-    return None
+def _listed_window(window: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": window.get("id"),
+        "app": window.get("app"),
+        "path": window.get("path"),
+        "title": window.get("title"),
+        "is_settling": window.get("is_settling"),
+    }
 
 
-def _resolve_view_id(view: str | None, inventory: dict[str, Any]) -> str | None:
-    """A ``--view`` name or id as a view id; None with an error printed when it names nothing."""
-    if view is None:
-        return None
-    view_id = _view_id_for_name(view, inventory.get("projects", []) or [])
-    if view_id is not None:
-        return view_id
-    known = ", ".join(
-        str(project.get("name")) for project in inventory.get("projects", []) or []
-    )
-    sys.stderr.write(
-        f"error: view {view!r} not found (known views: {known or '<none>'}, Everything)\n"
-    )
-    return None
-
-
-def _listing_from_inventory(
-    inventory: dict[str, Any], view_id: str | None
-) -> list[dict[str, Any]]:
-    """Every app with its instances and the clients docking each (contracts.md section 12), from the inventory
-    document; ``view_id`` narrows ``docked_in`` to clients whose active view is that view."""
-    docked_in_by_address: dict[str, list[str]] = {}
-    for client in inventory.get("clients", []) or []:
-        if view_id is not None and client.get("active_view") != view_id:
+def _listed_desktops(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    listed: list[dict[str, Any]] = []
+    for desktop in inventory.get("desktops", []) or []:
+        if not isinstance(desktop, dict):
             continue
-        for address in client.get("docked", []) or []:
-            clients = docked_in_by_address.setdefault(str(address), [])
-            if str(client.get("id")) not in clients:
-                clients.append(str(client.get("id")))
-    listing: list[dict[str, Any]] = []
+        listed.append(
+            {
+                "id": desktop.get("id"),
+                "name": desktop.get("name"),
+                "wallpaper": desktop.get("wallpaper"),
+                "shortcuts": desktop.get("shortcuts", []),
+                "windows": [_listed_window(window) for window in desktop.get("windows", []) or [] if isinstance(window, dict)],
+            }
+        )
+    return listed
+
+
+def _listed_clients(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": client.get("id"),
+            "active_desktop": client.get("active_desktop"),
+            "is_connected": client.get("is_connected"),
+            "shown": client.get("shown", []),
+            "last_seen": client.get("last_seen"),
+        }
+        for client in inventory.get("clients", []) or []
+        if isinstance(client, dict)
+    ]
+
+
+def _listed_apps(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every app a user can open, with where its windows are."""
+    windows_by_app: dict[str, list[dict[str, Any]]] = {}
+    for desktop in inventory.get("desktops", []) or []:
+        if not isinstance(desktop, dict):
+            continue
+        for window in desktop.get("windows", []) or []:
+            if isinstance(window, dict):
+                windows_by_app.setdefault(str(window.get("app")), []).append(
+                    {**_listed_window(window), "desktop": desktop.get("id")}
+                )
+    listed: list[dict[str, Any]] = []
     for app in inventory.get("apps", []) or []:
-        if app.get("internal"):
+        if not isinstance(app, dict) or bool(app.get("internal", False)):
             continue
         name = str(app.get("name"))
-        listing.append(
+        listed.append(
             {
                 "name": name,
                 "display_name": app.get("display_name", name),
                 "is_running": app.get("is_running"),
-                "actions": app.get("actions", []),
-                "instances": [
-                    _listed_instance(name, instance, docked_in_by_address)
-                    for instance in app.get("instances", []) or []
-                ],
+                "launch_paths": app.get("launch_paths", []),
+                "default_shortcut": app.get("default_shortcut"),
+                "windows": windows_by_app.get(name, []),
             }
         )
-    return listing
-
-
-def _listed_instance(
-    app: str, instance: dict[str, Any], docked_in_by_address: dict[str, list[str]]
-) -> dict[str, Any]:
-    key = str(instance.get("key", ""))
-    address = _address_of(app, key)
-    return {
-        "key": key,
-        "address": address,
-        "title": instance.get("title"),
-        "status": instance.get("status"),
-        "docked_in": docked_in_by_address.get(address, []),
-    }
-
-
-def _address_of(app: str, key: str) -> str:
-    return (
-        f"{ADDRESS_SCHEME}{app}"
-        if key == ""
-        else f"{ADDRESS_SCHEME}{app}?{ADDRESS_INSTANCE_PARAMETER}{key}"
-    )
-
-
-def _views_from_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every view with its tab set and the connected clients on it."""
-    clients_by_view: dict[str, list[dict[str, str]]] = {}
-    for client in inventory.get("clients", []) or []:
-        if not client.get("is_connected"):
-            continue
-        clients_by_view.setdefault(str(client.get("active_view")), []).append(
-            {"id": str(client.get("id")), "device_kind": str(client.get("device_kind"))}
-        )
-    views = [
-        {
-            "id": project.get("id"),
-            "name": project.get("name"),
-            "is_everything": False,
-            "tabs": project.get("tabs", []),
-            "clients": clients_by_view.get(str(project.get("id")), []),
-        }
-        for project in inventory.get("projects", []) or []
-    ]
-    everything = inventory.get("everything", {}) or {}
-    views.append(
-        {
-            "id": EVERYTHING_VIEW_ID,
-            "name": "Everything",
-            "is_everything": True,
-            "tabs": everything.get("tabs", []),
-            "clients": clients_by_view.get(EVERYTHING_VIEW_ID, []),
-        }
-    )
-    return views
-
-
-def _cmd_list(args: argparse.Namespace) -> int:
-    inventory = _fetch_inventory()
-    if inventory is None:
-        return EXIT_ERROR
-    view_id = _resolve_view_id(args.view, inventory)
-    if args.view is not None and view_id is None:
-        return EXIT_ERROR
-    _emit_structured(_listing_from_inventory(inventory, view_id), args.json)
-    return EXIT_OK
-
-
-def _cmd_views(args: argparse.Namespace) -> int:
-    inventory = _fetch_inventory()
-    if inventory is None:
-        return EXIT_ERROR
-    _emit_structured(_views_from_inventory(inventory), args.json)
-    return EXIT_OK
-
-
-# ---------- Read subcommands over the op route ----------
-
-
-def _cmd_inspect(args: argparse.Namespace) -> int:
-    status, body = _post_layout("inspect", _target_args(args.view, args.client))
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("inspect", status, body)
-    layout = body.get("layout", {})
-    if not isinstance(layout, dict):
-        layout = {}
-    if not args.json:
-        sys.stderr.write(
-            f"(view: {body.get('view_id')}, client: {body.get('client_id')})\n"
-        )
-    _emit_layout_view(layout, as_json=args.json, verbose=args.verbose)
-    return EXIT_OK
+    return listed
 
 
 def _cmd_context(args: argparse.Namespace) -> int:
@@ -841,78 +539,44 @@ def _cmd_context(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _cmd_load(args: argparse.Namespace) -> int:
-    status, body = _post_layout("load", _target_args(args.view_name, args.client))
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("load", status, body)
-    sys.stderr.write(
-        f"switched client {body.get('target_client_id')} onto view {body.get('view_id')!r}\n"
+def _cmd_desktops(args: argparse.Namespace) -> int:
+    inventory = _fetch_inventory()
+    if inventory is None:
+        return EXIT_ERROR
+    _emit_structured(
+        {"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)}, args.json
     )
     return EXIT_OK
 
 
-def _cmd_where(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    if address == _SELF_REF:
-        sys.stderr.write(
-            "error: 'self' is your own chat, which needs MINDS_CHAT_ID (or MNGR_AGENT_ID) in the "
-            "environment; pass the chat's address (app:chat?instance=<chat id>) or use ``inspect`` to "
-            "see every address\n"
-        )
+def _cmd_list(args: argparse.Namespace) -> int:
+    inventory = _fetch_inventory()
+    if inventory is None:
         return EXIT_ERROR
-    layout = _fetch_layout(args.view, args.client)
-    if layout is None:
-        sys.stderr.write("error: inspect failed; could not locate the panel\n")
-        return EXIT_ERROR
-    leaf = _find_leaf_for_address(layout, address)
-    if leaf is None:
-        sys.stderr.write(f"error: {address!r} is not currently open\n")
-        return EXIT_ERROR
-    panel_summary = _find_panel_summary(layout, address) or {}
-    view: dict[str, Any] = {
-        "address": panel_summary.get("address", address),
-        "title": panel_summary.get("title"),
-        "tab_id": panel_summary.get("tab_id"),
-        "group": {
-            "size_ratio": leaf.get("size_ratio"),
-            "tabs": _addresses_in_group(leaf),
+    _emit_structured(
+        {
+            "apps": _listed_apps(inventory),
+            "desktops": _listed_desktops(inventory),
+            "clients": _listed_clients(inventory),
         },
-        "neighbors": {
-            direction: [
-                tab
-                for neighbor in _neighbors_in_direction(layout, leaf, direction)
-                for tab in _addresses_in_group(neighbor)
-            ]
-            for direction in _CARDINAL_DIRECTIONS
-        },
-    }
-    if args.verbose:
-        view["full_layout"] = layout
-    if args.json:
-        sys.stdout.write(json.dumps(view, indent=2))
-        sys.stdout.write("\n")
-        return EXIT_OK
-    if args.verbose:
-        yaml.safe_dump(view, sys.stdout, sort_keys=False, default_flow_style=False)
-        return EXIT_OK
-    sys.stdout.write(f"address: {view['address']}\n")
-    if panel_summary.get("title"):
-        sys.stdout.write(f"title:   {panel_summary['title']}\n")
-    sys.stdout.write(f"group:   [{' '.join(view['group']['tabs'])}]\n")
-    for direction in _CARDINAL_DIRECTIONS:
-        neighbor_addresses = view["neighbors"][direction]
-        rendered = (
-            "[" + " ".join(neighbor_addresses) + "]" if neighbor_addresses else "-"
-        )
-        sys.stdout.write(f"{direction:<8} {rendered}\n")
+        args.json,
+    )
     return EXIT_OK
 
 
-# ---------- Dock subcommands ----------
+def _cmd_load(args: argparse.Namespace) -> int:
+    return _run_desktop_op(
+        "load",
+        _target_args(args.desktop, args.client),
+        lambda answer: f"switched client {answer.get('client_id')} onto desktop {answer.get('desktop_id')}",
+    )
+
+
+# ---------- open ----------
 
 
 def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
-    """``--param name=value`` pairs as the create body's ``params``."""
+    """``--param name=value`` pairs as a launch path's query parameters."""
     params: dict[str, str] = {}
     for raw in raw_params or []:
         name, separator, value = raw.partition("=")
@@ -922,694 +586,335 @@ def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
     return params
 
 
-def _open_target(
-    op: str, target: str, action: str | None, raw_params: list[str] | None
-) -> tuple[str, dict[str, Any]]:
-    """The address an ``open`` / ``split`` (``op``) names and the create arguments it carries.
+def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
+    """The ``open`` op's arguments: the app, and its path or launch path with parameters.
 
-    A bare URL is the browser app's ``new`` with the URL as its ``url`` param; an app address
-    carries ``--action`` and every ``--param``; an instance address takes neither.
+    A bare URL is the browser app's ``new`` launch path with the URL as its ``url`` parameter.
     """
-    params = _parse_params(raw_params)
+    params = _parse_params(args.param)
+    target: str = args.target
     if _is_external_url(target):
-        if action or params:
-            _fail(
-                "a URL is opened in a new browser; --action and --param do not apply to it"
-            )
-        return f"{ADDRESS_SCHEME}{_BROWSER_APP_NAME}", {
-            "action": _BROWSER_NEW_ACTION,
-            "params": {_BROWSER_URL_PARAM: target},
-        }
-    address = _resolve_address(target)
-    if address == _SELF_REF:
-        _fail(f"{op} needs an address, not 'self'")
-    _app, key = _address_parts(address)
-    if key is not None and (action or params):
-        _fail(
-            f"{address!r} names an existing instance; --action and --param are for creating one (app:<name>)"
-        )
-    create_args: dict[str, Any] = {}
-    if action:
-        create_args["action"] = action
+        if args.path or args.launch or params:
+            _fail("a URL is opened in a new browser; --path, --launch, and --param do not apply to it")
+        return {"app": _BROWSER_APP_NAME, "launch": _BROWSER_NEW_LAUNCH, "params": {_BROWSER_URL_PARAM: target}}
+    op_args: dict[str, Any] = {"app": _app_name(target)}
+    if args.path:
+        if args.launch or params:
+            _fail("--path names the page to open; --launch and --param choose a launch path instead. Pass one or the other")
+        if not args.path.startswith("/"):
+            _fail(f"--path takes a path under the app's origin, starting with '/', not {args.path!r}")
+        op_args["path"] = args.path
+    if args.launch:
+        op_args["launch"] = args.launch
     if params:
-        create_args["params"] = params
-    return address, create_args
-
-
-def _describe_docked(
-    address: str, verb: str
-) -> Callable[[dict[str, Any], str | None], str]:
-    """The stderr line for a docking op: the panel it created when it created one (a bare app address
-    would otherwise match whichever instance of the app was docked first), else the one it named."""
-
-    def describe(layout: dict[str, Any], created: str | None) -> str:
-        docked_address = created if created is not None else address
-        leaf = _find_leaf_for_address(layout, docked_address)
-        docked = _find_panel_summary(layout, docked_address)
-        shown = (
-            str(docked.get("address"))
-            if docked and isinstance(docked.get("address"), str)
-            else docked_address
-        )
-        return f"{verb} {shown} in {_describe_group(leaf)}\n"
-
-    return describe
+        op_args["params"] = params
+    return op_args
 
 
 def _cmd_open(args: argparse.Namespace) -> int:
-    address, create_args = _open_target("open", args.target, args.action, args.param)
-    app, _key = _address_parts(address)
-    if (err := _require_registered(app)) is not None:
+    op_args = _open_arguments(args)
+    if (err := _require_registered(op_args["app"])) is not None:
         return err
-    payload: dict[str, Any] = {
-        "address": address,
-        "new_group": bool(args.new_group),
-        **create_args,
-        **_target_args(args.view, args.client),
-    }
-    return _run_document_op("open", payload, _describe_docked(address, "opened"))
+    if args.if_present:
+        op_args["if_present"] = args.if_present
+    op_args.update(_target_args(args.desktop, args.client))
+    status, body = _post_layout("open", op_args, timeout=_OP_TIMEOUT_SECONDS)
+    if status != 200 or not isinstance(body, dict):
+        return _report_failure("open", status, body)
+    window_id = body.get("window_id")
+    if isinstance(window_id, str) and window_id:
+        sys.stdout.write(f"{window_id}\n")
+    sys.stderr.write(f"opened window {_describe_window(body, window_id)} on {_describe_target(body)}\n")
+    return EXIT_OK
 
 
-def _cmd_focus(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    return _run_document_op(
-        "focus",
-        {"address": address, **_target_args(args.view, args.client)},
-        lambda layout, created: f"focused {address}\n",
-    )
+# ---------- The window verbs ----------
 
 
-def _cmd_split(args: argparse.Namespace) -> int:
-    if args.direction == _WITHIN_DIRECTION and args.new_group:
-        sys.stderr.write(
-            f"error: --new-group is meaningless with --direction={_WITHIN_DIRECTION} "
-            f"(within tabs into the anchor's own group)\n"
+def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace], int]:
+    def run(args: argparse.Namespace) -> int:
+        window = _window_ref(args.window)
+        return _run_desktop_op(
+            op,
+            {"window": window, **_target_args(args.desktop, args.client)},
+            lambda answer: f"{past_tense} window {_describe_window(answer, answer.get('window_id'))} on {_describe_target(answer)}",
         )
-        return EXIT_ERROR
-    address, create_args = _open_target("split", args.target, args.action, args.param)
-    app, _key = _address_parts(address)
-    if (err := _require_registered(app)) is not None:
-        return err
-    relative_to = _resolve_address(args.relative_to)
-    payload: dict[str, Any] = {
-        "address": address,
-        "relative_to": relative_to,
-        "direction": args.direction,
-        "ratio": args.ratio,
-        "new_group": bool(args.new_group),
-        **create_args,
-        **_target_args(args.view, args.client),
-    }
-    return _run_document_op("split", payload, _describe_docked(address, "split:"))
+
+    return run
 
 
-def _cmd_close(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    return _run_document_op(
-        "close",
-        {"address": address, **_target_args(args.view, args.client)},
-        lambda layout, created: f"closed {address}\n",
+def _cmd_place(args: argparse.Namespace) -> int:
+    window = _window_ref(args.window)
+    if bool(args.zone) == bool(args.frame):
+        _fail("place takes exactly one of --zone (left, right, maximized) or --frame x,y,width,height")
+    op_args: dict[str, Any] = {"window": window, **_target_args(args.desktop, args.client)}
+    if args.zone:
+        op_args["zone"] = args.zone
+        what = f"in the {args.zone} zone"
+    else:
+        op_args["frame"] = args.frame
+        what = f"at frame {args.frame}"
+    return _run_desktop_op(
+        "place",
+        op_args,
+        lambda answer: f"placed window {_describe_window(answer, answer.get('window_id'))} {what} on {_describe_target(answer)}",
     )
 
 
-def _cmd_move(args: argparse.Namespace) -> int:
-    if args.direction == _WITHIN_DIRECTION and args.new_group:
-        sys.stderr.write(
-            f"error: --new-group is meaningless with --direction={_WITHIN_DIRECTION} "
-            f"(within targets the anchor's own group)\n"
-        )
-        return EXIT_ERROR
-    address = _resolve_address(args.address)
-    relative_to = _resolve_address(args.relative_to)
-    payload: dict[str, Any] = {
-        "address": address,
-        "relative_to": relative_to,
-        "direction": args.direction,
-        "new_group": bool(args.new_group),
-        **_target_args(args.view, args.client),
-    }
-    return _run_document_op("move", payload, _describe_docked(address, "moved"))
-
-
-def _cmd_maximize(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    return _run_transient_op(
-        "maximize", {"address": address, **_target_args(None, args.client)}
+def _cmd_navigate(args: argparse.Namespace) -> int:
+    window = _window_ref(args.window)
+    if not args.path.startswith("/"):
+        _fail(f"navigate takes a path under the window's app, starting with '/', not {args.path!r}")
+    return _run_desktop_op(
+        "navigate",
+        {"window": window, "path": args.path, **_target_args(args.desktop, args.client)},
+        lambda answer: f"pointed window {_describe_window(answer, answer.get('window_id'))} at {args.path} on {_describe_target(answer)}",
     )
-
-
-def _cmd_restore(args: argparse.Namespace) -> int:
-    return _run_transient_op("restore", _target_args(None, args.client))
 
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.target)
+    if bool(args.window) == bool(args.app):
+        _fail("refresh takes a window (a window id, 'self', or an app name) or --app <name> for every page of an app")
+    if args.app:
+        return _run_transient_op("refresh", {"app": _app_name(args.app)})
     return _run_transient_op(
-        "refresh", {"address": address, **_target_args(None, args.client)}
+        "refresh", {"window": _window_ref(args.window), **_target_args(args.desktop, args.client)}
     )
 
 
-# ---------- Relay subcommands (the instance verbs) ----------
+# ---------- Shortcuts and the wallpaper ----------
 
 
-def _relay(verb: str, address: str, suffix: str, body: dict[str, Any] | None) -> int:
-    """POST one relay verb for the instance ``address`` names; the app's refusal is printed with the address."""
-    app, key = _instance_address(address, verb)
-    path = f"/api/apps/{urllib.parse.quote(app)}/instances/{urllib.parse.quote(key)}{suffix}"
-    status, response = _request_rest_json("POST", path, body)
-    if status == -1:
-        sys.stderr.write(f"error: could not reach the workspace shell: {response}\n")
-        return EXIT_ERROR
-    if status >= 400:
-        detail = (
-            response.get("detail", response) if isinstance(response, dict) else response
-        )
-        sys.stderr.write(f"error: {verb} {address} refused (HTTP {status}): {detail}\n")
-        return EXIT_ERROR
-    return EXIT_OK
+def _shortcuts_of(answer: dict[str, Any]) -> list[Any]:
+    desktop = answer.get("desktop")
+    return list(desktop.get("shortcuts", [])) if isinstance(desktop, dict) else []
 
 
-def _cmd_rename(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    exit_code = _relay("rename", address, "/rename", {"title": args.title})
-    if exit_code == EXIT_OK:
-        sys.stderr.write(f"renamed {address} to {args.title!r}\n")
-    return exit_code
-
-
-def _cmd_delete(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    exit_code = _relay("delete", address, "/delete", None)
-    if exit_code == EXIT_OK:
-        sys.stderr.write(f"deleted {address}\n")
-    return exit_code
-
-
-def _cmd_stop(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    exit_code = _relay("stop", address, "/stop", None)
-    if exit_code == EXIT_OK:
-        sys.stderr.write(f"stopped {address}\n")
-    return exit_code
-
-
-def _cmd_start(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    exit_code = _relay("start", address, "/start", None)
-    if exit_code == EXIT_OK:
-        sys.stderr.write(f"started {address}\n")
-    return exit_code
-
-
-def _cmd_replace_url(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.address)
-    if not args.path:
-        _fail(
-            "replace-url needs a path under the instance's app, or an absolute http(s) URL"
-        )
-    # Which form the app takes (a rooted path for a file viewer, an absolute URL for the
-    # browser) is the app's rule, and it answers 400 for the other; nothing is checked here.
-    exit_code = _relay("replace-url", address, "/location", {"path": args.path})
-    if exit_code == EXIT_OK:
-        sys.stderr.write(f"pointed {address} at {args.path}\n")
-    return exit_code
-
-
-# ---------- Shortcuts (per-project rail configuration) ----------
-
-
-def _fetch_projects() -> list[dict[str, Any]] | None:
-    status, body = _request_rest_json("GET", "/api/projects")
-    if (
-        status != 200
-        or not isinstance(body, dict)
-        or not isinstance(body.get("projects"), list)
-    ):
-        sys.stderr.write(f"error: could not list projects (HTTP {status}): {body}\n")
-        return None
-    return list(body["projects"])
-
-
-def _active_view_of_a_connected_client() -> str | None:
-    """The view the most recently active connected client is on, from ``context``."""
-    status, body = _post_layout("context", {})
+def _run_shortcut_write(op: str, op_args: dict[str, Any], done: str) -> int:
+    """Post one shortcut or wallpaper write and print the desktop's shortcuts as they stand after it."""
+    status, body = _post_layout(op, op_args, timeout=_OP_TIMEOUT_SECONDS)
     if status != 200 or not isinstance(body, dict):
-        return None
-    for client in body.get("clients", []) or []:
-        if (
-            isinstance(client, dict)
-            and client.get("is_connected")
-            and client.get("active_view")
-        ):
-            return str(client["active_view"])
-    return None
-
-
-def _resolve_project_view(
-    view_name: str | None,
-) -> tuple[str, dict[str, Any] | None] | None:
-    """``(view_id, project)`` for ``--view``; ``project`` is None for Everything. None on error."""
-    projects = _fetch_projects()
-    if projects is None:
-        return None
-    if view_name is None:
-        view_name = _active_view_of_a_connected_client()
-        if view_name is None:
-            sys.stderr.write(
-                "error: no connected client to take the view from; pass --view <project name>\n"
-            )
-            return None
-    view_id = _view_id_for_name(view_name, projects)
-    if view_id == EVERYTHING_VIEW_ID:
-        return EVERYTHING_VIEW_ID, None
-    if view_id is not None:
-        for project in projects:
-            if project.get("id") == view_id:
-                return view_id, project
-    known = ", ".join(repr(str(p.get("name", p.get("id", "?")))) for p in projects)
-    sys.stderr.write(
-        f"error: no project named {view_name!r} (projects: {known or '<none>'}, or 'Everything')\n"
-    )
-    return None
-
-
-def _primary_action_id(app: dict[str, Any]) -> str | None:
-    """The action an app's rail row runs, as the shell picks it: its ``default_shortcut`` action
-    when declared, else its first declared action; None for an app with instances that declares
-    no action (a single-instance app's inventory entry carries the synthesized ``open``)."""
-    actions = app.get("actions")
-    action_ids = (
-        [str(action.get("id")) for action in actions if hasattr(action, "get")]
-        if isinstance(actions, list)
-        else []
-    )
-    default_shortcut = app.get("default_shortcut")
-    if hasattr(default_shortcut, "get"):
-        default_action = str(default_shortcut.get("action", ""))
-        if default_action in action_ids:
-            return default_action
-    return action_ids[0] if action_ids else None
-
-
-def _everything_shortcut_rows() -> list[dict[str, Any]] | None:
-    """Everything's rail: every registered app's primary action, in registry order, in focus mode."""
-    inventory = _fetch_inventory()
-    if inventory is None:
-        return None
-    rows: list[dict[str, Any]] = []
-    for app in inventory.get("apps", []) or []:
-        if bool(app.get("internal", False)):
-            continue
-        action_id = _primary_action_id(app)
-        if action_id is None:
-            continue
-        rows.append({"app": str(app["name"]), "action": action_id, "mode": "focus"})
-    return rows
+        return _report_failure(op, status, body)
+    sys.stderr.write(f"{done} on {_describe_target(body)}\n")
+    _emit_structured({"desktop": body.get("desktop_id"), "shortcuts": _shortcuts_of(body)}, False)
+    return EXIT_OK
 
 
 def _cmd_shortcuts(args: argparse.Namespace) -> int:
-    resolved = _resolve_project_view(args.view)
-    if resolved is None:
-        return EXIT_ERROR
-    view_id, project = resolved
-    rows = (
-        project.get("shortcuts", [])
-        if project is not None
-        else _everything_shortcut_rows()
-    )
-    if rows is None:
-        return EXIT_ERROR
-    _emit_structured({"view": view_id, "shortcuts": rows}, args.json)
-    return EXIT_OK
-
-
-def _project_for_shortcut_write(view_name: str | None) -> str | None:
-    resolved = _resolve_project_view(view_name)
-    if resolved is None:
-        return None
-    project_id, project = resolved
-    if project is None:
-        sys.stderr.write(
-            "error: Everything's rail is fixed (every app's primary action); pass --view <project name>\n"
-        )
-        return None
-    return project_id
-
-
-def _run_shortcut_write(
-    verb: str, path: str, body: dict[str, Any], project_id: str, done_line: str
-) -> int:
-    """POST one shortcut write to the shell and print the project's rail as it stands after it."""
-    status, response = _request_rest_json("POST", path, body)
-    if status != 200 or not isinstance(response, dict):
-        detail = (
-            response.get("detail", response) if isinstance(response, dict) else response
-        )
-        sys.stderr.write(f"error: shortcut {verb} failed (HTTP {status}): {detail}\n")
-        return EXIT_ERROR
-    sys.stderr.write(f"{done_line}\n")
-    _emit_structured(
-        {"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False
-    )
+    status, body = _post_layout("shortcuts", _target_args(args.desktop, args.client))
+    if status != 200 or not isinstance(body, dict):
+        return _report_failure("shortcuts", status, body)
+    _emit_structured({"desktop": body.get("desktop_id"), "shortcuts": _shortcuts_of(body)}, args.json)
     return EXIT_OK
 
 
 def _cmd_shortcut_set(args: argparse.Namespace) -> int:
-    project_id = _project_for_shortcut_write(args.view)
-    if project_id is None:
-        return EXIT_ERROR
-    return _run_shortcut_write(
-        "set",
-        f"/api/projects/{project_id}/shortcuts",
-        {"app": args.app, "action": args.action, "mode": args.mode},
-        project_id,
-        f"set {args.app} {args.action} ({args.mode}) on project {project_id!r}",
-    )
+    app = _app_name(args.app)
+    op_args: dict[str, Any] = {"app": app, "launch": args.launch, "mode": args.mode}
+    if args.cell:
+        op_args["cell"] = args.cell
+    op_args.update(_target_args(args.desktop, args.client))
+    return _run_shortcut_write("shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})")
+
+
+def _cmd_shortcut_move(args: argparse.Namespace) -> int:
+    app = _app_name(args.app)
+    op_args: dict[str, Any] = {"app": app, "launch": args.launch, "cell": args.cell}
+    op_args.update(_target_args(args.desktop, args.client))
+    return _run_shortcut_write("shortcut_move", op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}")
 
 
 def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
-    project_id = _project_for_shortcut_write(args.view)
-    if project_id is None:
-        return EXIT_ERROR
-    return _run_shortcut_write(
-        "remove",
-        f"/api/projects/{project_id}/shortcuts/remove",
-        {"app": args.app, "action": args.action},
-        project_id,
-        f"removed {args.app} {args.action} from project {project_id!r}",
-    )
+    app = _app_name(args.app)
+    op_args: dict[str, Any] = {"app": app, "launch": args.launch}
+    op_args.update(_target_args(args.desktop, args.client))
+    return _run_shortcut_write("shortcut_remove", op_args, f"removed shortcut {app} {args.launch}")
+
+
+def _cmd_wallpaper(args: argparse.Namespace) -> int:
+    if args.kind == _NO_WALLPAPER:
+        if args.name:
+            _fail("'wallpaper none' takes no name")
+        wallpaper = None
+        done = "cleared the wallpaper"
+    else:
+        if args.kind not in _WALLPAPER_KINDS or not args.name:
+            _fail(f"wallpaper takes '<kind> <name>' with kind one of {list(_WALLPAPER_KINDS)}, or 'none'")
+        wallpaper = {"kind": args.kind, "name": args.name}
+        done = f"set the wallpaper to {args.kind} {args.name}"
+    op_args: dict[str, Any] = {"wallpaper": wallpaper, **_target_args(args.desktop, args.client)}
+    status, body = _post_layout("wallpaper", op_args, timeout=_OP_TIMEOUT_SECONDS)
+    if status != 200 or not isinstance(body, dict):
+        return _report_failure("wallpaper", status, body)
+    sys.stderr.write(f"{done} on {_describe_target(body)}\n")
+    return EXIT_OK
+
+
+# ---------- The retired verbs ----------
+
+
+def _cmd_retired(args: argparse.Namespace) -> int:
+    _fail(f"'{args.verb}' is not a desktop verb: {_RETIRED_VERBS[args.verb]}")
+    return EXIT_ERROR
 
 
 # ---------- The parser ----------
 
 
-def _add_view_argument(subparser: argparse.ArgumentParser, help_text: str) -> None:
-    subparser.add_argument(
-        "--view", "--layout", dest="view", metavar="VIEW", default=None, help=help_text
-    )
-
-
-_MUTATING_VIEW_HELP = (
-    "View whose arrangement to edit: a project's name, or ``Everything``. Defaults to the target "
-    "client's active view; naming another view edits that one and switches the client to it."
-)
-_READ_VIEW_HELP = "View (a project's name, or ``Everything``) to read; defaults to the target client's active view."
 _CLIENT_HELP = (
-    "The client whose arrangement the op targets (an id from ``context``). Defaults to the client that "
+    "The client whose desktop the op targets (an id from ``context``). Defaults to the client that "
     "most recently messaged you, else the one connected client; refused when that settles nothing."
 )
+_DESKTOP_HELP = (
+    "The desktop to edit, by name or id. Defaults to the target client's active desktop; naming "
+    "another edits that one and switches the client to it."
+)
 
 
-def _add_client_argument(subparser: argparse.ArgumentParser) -> None:
+def _add_target_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--client", default=None, help=_CLIENT_HELP)
+    subparser.add_argument("--desktop", default=None, help=_DESKTOP_HELP)
 
 
-def _add_create_arguments(subparser: argparse.ArgumentParser) -> None:
-    subparser.add_argument(
-        "--action",
-        default=None,
-        help="For an app address: the action to create the instance with (defaults to the app's primary action).",
+def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+
+
+def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
+    subparser = subparsers.add_parser(verb, help=help_text)
+    subparser.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    _add_target_arguments(subparser)
+    subparser.set_defaults(func=_window_op(verb, past_tense))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    p_context = subparsers.add_parser(
+        "context", help="Show each client: its active desktop, connection state, and recent messages"
     )
-    subparser.add_argument(
+    _add_json_argument(p_context)
+    p_context.set_defaults(func=_cmd_context)
+
+    p_desktops = subparsers.add_parser("desktops", help="List every desktop with its windows and shortcuts, and every client")
+    _add_json_argument(p_desktops)
+    p_desktops.set_defaults(func=_cmd_desktops)
+
+    p_list = subparsers.add_parser("list", help="List every app with its launch paths and windows, plus the desktops")
+    _add_json_argument(p_list)
+    p_list.set_defaults(func=_cmd_list)
+
+    p_load = subparsers.add_parser("load", help="Switch the target client onto a desktop")
+    p_load.add_argument("desktop", help="The desktop's name or id")
+    p_load.add_argument("--client", default=None, help=_CLIENT_HELP)
+    p_load.set_defaults(func=_cmd_load)
+
+    p_open = subparsers.add_parser("open", help="Open a window of an app (or a URL in a new browser)")
+    p_open.add_argument(
+        "target",
+        help="An app name (open a window of it), or a bare https:// URL (open it in a new browser)",
+    )
+    p_open.add_argument(
+        "--path",
+        default=None,
+        help="The page to open, a path under the app's origin: 'open files --path /notes/' opens a folder, "
+        "'open chat --path \"/?chat=<id>\"' a chat. Without it, a launch path is used.",
+    )
+    p_open.add_argument(
+        "--launch",
+        default=None,
+        help="The launch path to open (an id from 'list'); defaults to the app's default launch path.",
+    )
+    p_open.add_argument(
         "--param",
         action="append",
         default=None,
         metavar="NAME=VALUE",
-        help="For an app address: a create param (repeatable), e.g. --param workdir=/data.",
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    p_list = subparsers.add_parser("list", help="List every app with its instances")
-    p_list.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
-    _add_view_argument(p_list, _READ_VIEW_HELP)
-    p_list.set_defaults(func=_cmd_list)
-
-    p_inspect = subparsers.add_parser(
-        "inspect", help="Describe the live dock (compact text by default)"
-    )
-    p_inspect.add_argument(
-        "--json", action="store_true", help="Emit JSON (full detail)"
-    )
-    p_inspect.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit the full YAML tree instead of the compact view",
-    )
-    _add_view_argument(p_inspect, _READ_VIEW_HELP)
-    _add_client_argument(p_inspect)
-    p_inspect.set_defaults(func=_cmd_inspect)
-
-    p_context = subparsers.add_parser(
-        "context",
-        help="Show each browser client's recent messages, device kind, and active view",
-    )
-    p_context.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of YAML"
-    )
-    p_context.set_defaults(func=_cmd_context)
-
-    p_views = subparsers.add_parser(
-        "views",
-        help="List the views: every project plus Everything, their tab sets, and who is on each",
-    )
-    p_views.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of YAML"
-    )
-    p_views.set_defaults(func=_cmd_views)
-
-    p_load = subparsers.add_parser(
-        "load", help="Switch a client onto a view (a project, or ``Everything``)"
-    )
-    p_load.add_argument(
-        "view_name",
-        metavar="view",
-        help="The view to put in front: a project's name, or ``Everything``",
-    )
-    _add_client_argument(p_load)
-    p_load.set_defaults(func=_cmd_load)
-
-    p_where = subparsers.add_parser(
-        "where", help="Show one panel's group tab-mates and its neighbors"
-    )
-    p_where.add_argument("address", help="Panel address (bare app name accepted)")
-    p_where.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of text"
-    )
-    p_where.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Also include the full inspect layout under ``full_layout``",
-    )
-    _add_view_argument(p_where, _READ_VIEW_HELP)
-    _add_client_argument(p_where)
-    p_where.set_defaults(func=_cmd_where)
-
-    p_open = subparsers.add_parser("open", help="Surface an instance in the UI")
-    p_open.add_argument(
-        "target",
-        help="An address (``app:terminal?instance=terminal-2`` docks that instance; ``app:docs`` docks a "
-        "single-instance app's one tab), a bare app name, or a URL. A bare name of an app with instances "
-        "creates a fresh one (with --action and --param) and prints its address; a URL opens a new browser on it.",
+        help="A launch path parameter (repeatable), e.g. --param workdir=/data, --param path=/notes/.",
     )
     p_open.add_argument(
-        "--new-group",
-        action="store_true",
-        help="Force a brand-new dock group instead of tabbing into an existing right-side group.",
+        "--if-present",
+        dest="if_present",
+        choices=_IF_PRESENT_CHOICES,
+        default=None,
+        help="What to do about a window of the app already at the path: focus it (the default) or open another.",
     )
-    _add_create_arguments(p_open)
-    _add_view_argument(p_open, _MUTATING_VIEW_HELP)
-    _add_client_argument(p_open)
+    _add_target_arguments(p_open)
     p_open.set_defaults(func=_cmd_open)
 
-    p_focus = subparsers.add_parser(
-        "focus", help="Activate the named panel within its group"
-    )
-    p_focus.add_argument("address", help="Panel address")
-    _add_view_argument(p_focus, _MUTATING_VIEW_HELP)
-    _add_client_argument(p_focus)
-    p_focus.set_defaults(func=_cmd_focus)
+    _add_window_verb(subparsers, "focus", "Restore and raise a window", "focused")
+    _add_window_verb(subparsers, "minimize", "Put a window out of sight", "minimized")
+    _add_window_verb(subparsers, "restore", "Bring a window back to its frame", "restored")
+    _add_window_verb(subparsers, "maximize", "Fill the backdrop with a window", "maximized")
+    _add_window_verb(subparsers, "close", "Close a window for everyone", "closed")
 
-    p_split = subparsers.add_parser("split", help="Open a new panel as a split")
-    p_split.add_argument(
-        "target", help="Address, bare app name, or URL to open as the new panel"
+    p_place = subparsers.add_parser("place", help="Snap a window to a zone or set its frame")
+    p_place.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_place.add_argument("--zone", choices=_ZONES, default=None, help="Snap to the left or right half, or maximize")
+    p_place.add_argument(
+        "--frame", default=None, metavar="X,Y,WIDTH,HEIGHT", help="The frame in fractions of the backdrop (0..1)"
     )
-    p_split.add_argument(
-        "--relative-to",
-        default=_SELF_REF,
-        help="Address to split relative to. ``self`` (default) resolves to the caller's chat panel.",
-    )
-    p_split.add_argument(
-        "--direction",
-        default="right",
-        choices=_DIRECTIONS,
-        help="Where to place the new panel relative to the anchor; ``within`` tabs it into the anchor's own group.",
-    )
-    p_split.add_argument(
-        "--ratio",
-        type=float,
-        default=0.6,
-        help="Fraction the new panel occupies (0..1); ignored with --direction=within.",
-    )
-    p_split.add_argument(
-        "--new-group",
-        action="store_true",
-        help="Force a brand-new dock group instead of tabbing into the group in the requested direction.",
-    )
-    _add_create_arguments(p_split)
-    _add_view_argument(p_split, _MUTATING_VIEW_HELP)
-    _add_client_argument(p_split)
-    p_split.set_defaults(func=_cmd_split)
+    _add_target_arguments(p_place)
+    p_place.set_defaults(func=_cmd_place)
 
-    p_close = subparsers.add_parser("close", help="Remove a panel")
-    p_close.add_argument("address", help="Panel address")
-    _add_view_argument(p_close, _MUTATING_VIEW_HELP)
-    _add_client_argument(p_close)
-    p_close.set_defaults(func=_cmd_close)
+    p_navigate = subparsers.add_parser("navigate", help="Point a window at another path under its app")
+    p_navigate.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_navigate.add_argument("path", help="The path under the app's origin, starting with '/'")
+    _add_target_arguments(p_navigate)
+    p_navigate.set_defaults(func=_cmd_navigate)
 
-    p_move = subparsers.add_parser(
-        "move", help="Relocate an existing panel (state-preserving)"
-    )
-    p_move.add_argument("address", help="Panel address to move")
-    p_move.add_argument(
-        "--relative-to", required=True, help="Address to move relative to"
-    )
-    p_move.add_argument(
-        "--direction",
-        required=True,
-        choices=_DIRECTIONS,
-        help="Where to land the moved panel; ``within`` tabs it into the anchor's own group.",
-    )
-    p_move.add_argument(
-        "--new-group",
-        action="store_true",
-        help="Force a brand-new dock group instead of moving into an adjacent existing group.",
-    )
-    _add_view_argument(p_move, _MUTATING_VIEW_HELP)
-    _add_client_argument(p_move)
-    p_move.set_defaults(func=_cmd_move)
-
-    p_rename = subparsers.add_parser(
-        "rename", help="Retitle an instance through its app"
-    )
-    p_rename.add_argument(
-        "address", help="Instance address (app:<name>?instance=<key>)"
-    )
-    p_rename.add_argument("title", help="New title, shown in every view")
-    p_rename.set_defaults(func=_cmd_rename)
-
-    p_delete = subparsers.add_parser(
-        "delete", help="Delete an instance through its app"
-    )
-    p_delete.add_argument(
-        "address", help="Instance address (app:<name>?instance=<key>)"
-    )
-    p_delete.set_defaults(func=_cmd_delete)
-
-    p_stop = subparsers.add_parser(
-        "stop",
-        help="Stop what backs an instance through its app; the instance stays, as stopped",
-    )
-    p_stop.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
-    p_stop.set_defaults(func=_cmd_stop)
-
-    p_start = subparsers.add_parser(
-        "start", help="Bring a stopped instance back through its app"
-    )
-    p_start.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
-    p_start.set_defaults(func=_cmd_start)
-
-    p_max = subparsers.add_parser(
-        "maximize", help="Maximize a panel's group on the target client's screen"
-    )
-    p_max.add_argument("address", help="Panel address")
-    _add_client_argument(p_max)
-    p_max.set_defaults(func=_cmd_maximize)
-
-    p_restore = subparsers.add_parser(
-        "restore", help="Exit a maximized group on the target client's screen"
-    )
-    _add_client_argument(p_restore)
-    p_restore.set_defaults(func=_cmd_restore)
-
-    p_replace = subparsers.add_parser(
-        "replace-url",
-        help="Point an instance at a path under its app, or at an absolute http(s) URL for an app that browses to one",
-    )
-    p_replace.add_argument(
-        "address", help="Instance address (app:<name>?instance=<key>)"
-    )
-    p_replace.add_argument(
-        "path",
-        help="A path under the app starting with '/', or an absolute http(s) URL (the app refuses the form it does not take)",
-    )
-    p_replace.set_defaults(func=_cmd_replace_url)
-
-    p_refresh = subparsers.add_parser(
-        "refresh", help="Reload an iframe (or every iframe of an app)"
-    )
-    p_refresh.add_argument(
-        "target",
-        help="Panel address; a bare app address reloads every iframe of that app on every client.",
-    )
-    _add_client_argument(p_refresh)
+    p_refresh = subparsers.add_parser("refresh", help="Reload one window's page, or every page of an app")
+    p_refresh.add_argument("window", nargs="?", default=None, help="A window id (win-<hex>), 'self', or an app name")
+    p_refresh.add_argument("--app", default=None, help="Reload every page of this app, on every client")
+    _add_target_arguments(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)
 
-    p_shortcuts = subparsers.add_parser(
-        "shortcuts", help="List a view's rail shortcuts: app, action, mode"
-    )
-    _add_view_argument(
-        p_shortcuts,
-        "View to read: a project's name, or ``Everything``. Defaults to the connected client's view.",
-    )
-    p_shortcuts.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of YAML"
-    )
+    p_shortcuts = subparsers.add_parser("shortcuts", help="List a desktop's backdrop shortcuts")
+    _add_json_argument(p_shortcuts)
+    _add_target_arguments(p_shortcuts)
     p_shortcuts.set_defaults(func=_cmd_shortcuts)
 
-    p_shortcut = subparsers.add_parser(
-        "shortcut", help="Configure one rail shortcut on a project"
-    )
-    shortcut_subparsers = p_shortcut.add_subparsers(
-        dest="shortcut_command", required=True
-    )
-    p_shortcut_set = shortcut_subparsers.add_parser(
-        "set", help="Add a shortcut to a project's rail, or change its mode"
-    )
+    p_shortcut = subparsers.add_parser("shortcut", help="Add, move, or remove a desktop's shortcuts")
+    shortcut_subparsers = p_shortcut.add_subparsers(dest="shortcut_command", required=True)
+    p_shortcut_set = shortcut_subparsers.add_parser("set", help="Add a shortcut, or change its mode or cell")
     p_shortcut_set.add_argument("app", help="The registered app")
-    p_shortcut_set.add_argument(
-        "action", help="One of the app's actions (``open`` for a single-instance app)"
-    )
+    p_shortcut_set.add_argument("launch", help="The launch path the shortcut runs (an id from 'list')")
     p_shortcut_set.add_argument(
         "--mode",
         choices=_SHORTCUT_MODES,
         default="focus",
-        help="What clicking the row does: ``focus`` the app's most recent tab (creating only when it has none), or always create (``new``)",
+        help="focus: raise the app's most recent window, opening one only when it has none; new: always open one",
     )
-    _add_view_argument(
-        p_shortcut_set,
-        "Project to configure, by name. Defaults to the connected client's view; Everything is refused.",
-    )
+    p_shortcut_set.add_argument("--cell", default=None, metavar="COLUMN,ROW", help="The grid cell; the next free one by default")
+    _add_target_arguments(p_shortcut_set)
     p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
-    p_shortcut_remove = shortcut_subparsers.add_parser(
-        "remove", help="Take a shortcut off a project's rail"
-    )
+    p_shortcut_move = shortcut_subparsers.add_parser("move", help="Move a shortcut to another cell")
+    p_shortcut_move.add_argument("app", help="The registered app")
+    p_shortcut_move.add_argument("launch", help="The launch path the shortcut runs")
+    p_shortcut_move.add_argument("--cell", required=True, metavar="COLUMN,ROW", help="The grid cell to move to")
+    _add_target_arguments(p_shortcut_move)
+    p_shortcut_move.set_defaults(func=_cmd_shortcut_move)
+    p_shortcut_remove = shortcut_subparsers.add_parser("remove", help="Take a shortcut off the desktop")
     p_shortcut_remove.add_argument("app", help="The registered app")
-    p_shortcut_remove.add_argument("action", help="The action the row runs")
-    _add_view_argument(
-        p_shortcut_remove,
-        "Project to configure, by name. Defaults to the connected client's view; Everything is refused.",
-    )
+    p_shortcut_remove.add_argument("launch", help="The launch path the shortcut runs")
+    _add_target_arguments(p_shortcut_remove)
     p_shortcut_remove.set_defaults(func=_cmd_shortcut_remove)
 
+    p_wallpaper = subparsers.add_parser("wallpaper", help="Set or clear a desktop's wallpaper")
+    p_wallpaper.add_argument("kind", help="'bundled' or 'file', or 'none' to clear it")
+    p_wallpaper.add_argument("name", nargs="?", default=None, help="The image's file name without its extension")
+    _add_target_arguments(p_wallpaper)
+    p_wallpaper.set_defaults(func=_cmd_wallpaper)
+
+    for verb in _RETIRED_VERBS:
+        p_retired = subparsers.add_parser(verb)
+        p_retired.add_argument("rest", nargs=argparse.REMAINDER)
+        p_retired.set_defaults(func=_cmd_retired, verb=verb)
+
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

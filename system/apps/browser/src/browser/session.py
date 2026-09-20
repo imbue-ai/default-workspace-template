@@ -406,7 +406,7 @@ _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS"
 
 def _stopped_hint(browser_id: str) -> str:
     """How to bring a stopped browser back, for an agent told it is stopped."""
-    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_id}`"
+    return f"start it from its window's Start button, or with `POST /browsers/{browser_id}/start` on the browser daemon"
 
 
 # Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)

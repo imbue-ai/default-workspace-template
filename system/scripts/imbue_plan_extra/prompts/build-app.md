@@ -180,7 +180,7 @@ worth putting whatever can run there alongside it.
 
 Much of this work already exists here. build-app names the skills it calls as it
 goes: `frontend-design` before any markup, `use-ai-integration` when the app
-itself calls a model, and `manage-layout` for tab work beyond opening and
+itself calls a model, and `manage-desktop` for window work beyond opening and
 refreshing. It drives the rest through its own scripts. Take the real set from
 what you read in Step 1, since it moves as the product does, and check what
 exists before writing a node that would rebuild one.

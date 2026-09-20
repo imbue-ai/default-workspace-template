@@ -185,19 +185,20 @@ uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in
 ```
 
 `handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
-it will not pass to another agent), and surfaces the pane. In the **same turn**: tell the user
+it will not pass to another agent), and opens the browser's window. In the **same turn**: tell the user
 exactly what to do and on which page, then **end your turn**. You are woken first when they hand
 it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
 
 ## Live view vs. your output
 
-The browser streams to a UI pane next to your chat, and it follows whatever tab you are acting
-on. `new` and your first command surface it automatically -- but only when the user is currently
-watching your chat. Do not manage panes yourself; if the user asks for a browser that is not
-showing, tell them to open it from the workspace **+ -> browser** menu.
+The browser streams to a window on the desktop of whoever is watching your chat, and it follows
+whatever tab you are acting on. `new` and your first command open that window automatically --
+but only when the shell can tell which screen asked (the client that last messaged your chat,
+else the one connected client). Do not arrange windows yourself; if the user asks for a browser
+that is not showing, tell them to open it from the desktop's launcher (Browser).
 
-The pane is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
-the user to "check the tab" for results.
+The window is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
+the user to "check the window" for results.
 
 ## Multiple browsers, tabs, sub-agents
 

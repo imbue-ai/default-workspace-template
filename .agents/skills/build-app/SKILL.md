@@ -189,7 +189,7 @@ is taken, or the manifest check, the tool install or `uv sync` fails.
 What gets generated:
 
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
-  `name`, `display_name`, `icon`, `instances = false` (one tab),
+  `name`, `display_name`, `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
@@ -302,7 +302,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--view` flag), then loop:
+- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -423,43 +423,41 @@ a tab stuck on the loading page, broken WebSockets), see
 ## Step 4: Surface the view to the user
 
 Once verification passes, tell the workspace UI to actually open the
-new tab. Without this step the user would have to discover it via the
-"+" dropdown -- skip the surfacing step only for services with no UI
+new window. Without this step the user would have to discover it via the
+launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
 python3 system/scripts/layout.py open <name>
 ```
 
-With no `--view`, the op edits the view the target client is looking
-at, which is where the user expects the new tab. (Pass `--view <name>`
--- a project's name, or `Everything` -- to surface it in a different
-view instead; the op edits that view's arrangement and switches the
-client to it.)
-`layout.py` POSTs to a loopback-only shell endpoint that applies the op
-to that client's saved layout (no browser needs to be connected) and
-broadcasts `layout_updated`, so every window of the client docks the
-new tab beside the requesting chat, or brings the tab for `<name>` to
-the front when it is already open.
+With no `--desktop`, the op edits the desktop the target client is looking
+at, which is where the user expects the new window. (Pass `--desktop <name>`
+to surface it on a different desktop instead; the op edits that desktop and
+switches the client to it.)
+`layout.py` POSTs to a loopback-only shell endpoint that opens the window
+on the desktop and writes that client's placement of it (no browser needs
+to be connected) and broadcasts the change, so the client's screen shows the
+new window on top, or brings the window for `<name>` to the front when it is
+already open. The new window's id is printed to stdout.
 The script briefly waits for the service to appear in
 `data/.state/apps.toml` so it's safe to run immediately after the
 `forward_port.py` call.
 
-To force a reload of an already-open tab (e.g. after redeploying the
+To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
 
-For anything beyond `open` / `refresh` -- splitting, moving, focusing,
-renaming, maximizing, replacing an iframe's URL, inspecting the live
-tree -- see the `manage-layout` skill. `layout.py list` is also useful
-when the user is asking about what tabs are available (it prints every
-app with its instances: address, title, status, and which clients have
-each docked).
+For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
+maximizing, navigating a window to another path, reading the desktops -- see
+the `manage-desktop` skill. `layout.py list` is also useful when the user is
+asking about what is open (it prints every app with its launch paths and
+its windows, and every desktop).
 
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
@@ -517,7 +515,6 @@ it as `system/apps/<name>/app.toml` (like the `files` app):
 name = "<name>"
 display_name = "<What users see>"
 icon = "icon.svg"
-instances = false
 priority = "user"
 program = "<name>"
 ```

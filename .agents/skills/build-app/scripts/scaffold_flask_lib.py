@@ -454,14 +454,13 @@ def _write_lib(
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
 # ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names; ``instances = false``
-# makes it a single tab. No ``default_shortcut``: an app pins itself to a
-# project's rail only when the user asks.
+# ``oom_tag_service.py user`` prefix below also names. No launch paths: the
+# shell offers ``open`` at the app's root. No ``default_shortcut``: an app
+# pins itself to a desktop's backdrop only when the user asks.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
-instances = false
 priority = "user"
 program = "{name}"
 """

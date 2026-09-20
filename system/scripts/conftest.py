@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 import tomlkit
+from layout_testing import desktop_answer
 
 
 def _load_script_module(module_name: str, filename: str) -> Any:
@@ -70,22 +71,20 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
 @pytest.fixture(autouse=True)
 def _isolate_own_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the chat id the chat app stamps on its agents, so a test that asserts on the
-    address layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
+    requester layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
     monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
 
 
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "apps.toml"
-    _write_apps_toml(
-        path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new")}
-    )
+    _write_apps_toml(path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new"), "browser": ("new",)})
     monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
     return path
 
 
 class _FakeShellHandler(BaseHTTPRequestHandler):
-    """The shell's REST routes the relay verbs and the shortcut commands ride."""
+    """The shell's op route and inventory document, answering what the fixture holds."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -100,16 +99,12 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         server: Any = self.server
-        if self.path == "/api/projects":
-            self._respond(200, {"projects": server.projects})
-            return
         if self.path == "/api/inventory":
             self._respond(
                 200,
                 {
-                    "projects": server.projects,
-                    "everything": {"id": "everything", "tabs": server.everything_tabs},
                     "apps": server.inventory_apps,
+                    "desktops": server.inventory_desktops,
                     "clients": server.inventory_clients,
                 },
             )
@@ -122,57 +117,32 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(body_length) or b"{}")
         server.posted.append((self.path, body))
         if self.path == "/api/layout/broadcast":
-            self._respond(
-                200,
-                {
-                    "ok": True,
-                    "clients": server.context_clients,
-                    "view_id": "everything",
-                    "client_id": "c1",
-                    "target_client_id": "c1",
-                    "layout": server.op_layout,
-                    "created_address": server.created_address,
-                },
-            )
-            return
-        if self.path.startswith("/api/projects/") and "/shortcuts" in self.path:
-            self._respond(
-                200,
-                {"id": self.path.split("/")[3], "shortcuts": server.shortcuts_answer},
-            )
-            return
-        if self.path.startswith("/api/apps/"):
-            if server.relay_refuses:
-                self._respond(404, {"detail": "no such instance"})
-            elif self.path.endswith("/delete"):
-                self._respond(204, {})
+            if body.get("op") == "context":
+                self._respond(200, {"ok": True, "clients": server.context_clients})
+            elif body.get("op") == "refresh":
+                self._respond(200, {"ok": True, "target_client_id": server.refresh_target})
+            elif server.op_refusal is not None:
+                self._respond(*server.op_refusal)
             else:
-                self._respond(
-                    200,
-                    {
-                        "instance": {
-                            "key": self.path.split("/")[5],
-                            "title": body.get("title", ""),
-                        }
-                    },
-                )
+                self._respond(200, server.op_answer)
             return
         self._respond(404, {"detail": f"unknown path {self.path}"})
 
 
 @pytest.fixture
 def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received; ``server.op_answer``
+    is what a desktop op answers (``server.op_refusal`` a ``(status, body)`` refusal instead), and the
+    ``inventory_*`` lists are the inventory document."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
-    server.projects = []
     server.posted = []
-    server.shortcuts_answer = []
     server.context_clients = []
-    server.relay_refuses = False
-    server.everything_tabs = []
     server.inventory_apps = []
+    server.inventory_desktops = []
     server.inventory_clients = []
-    server.op_layout = {"active_panel": None, "panels": [], "tree": None}
-    server.created_address = None
+    server.op_answer = desktop_answer()
+    server.op_refusal = None
+    server.refresh_target = "c1"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     monkeypatch.setenv(

@@ -212,33 +212,33 @@ when extending the default look; see [`frontend/style_guide.md`](frontend/style_
 It is a convention, not a rule: a user who wants their interface restyled gets
 that, tokens or not.
 
-## Driving the workspace layout from an agent
+## Driving the desktop from an agent
 
-An agent inside the workspace rearranges the tabbed layout through
-`system/scripts/layout.py` (`list / inspect / where / context / views / load /
-open / focus / split / close / move / rename / delete / stop / start /
-maximize / restore / replace-url / refresh / shortcuts / shortcut set /
-shortcut remove`), which speaks addresses:
+An agent inside the workspace arranges the desktop through
+`system/scripts/layout.py` (`context / desktops / list / load / open / focus /
+minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
+shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
+and windows (desktop-interface contracts.md section 8):
 
 ```bash
-python3 system/scripts/layout.py list
+python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open app:files?instance=files-2 --view Everything
+python3 system/scripts/layout.py open files --path /notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
-python3 system/scripts/layout.py rename app:terminal?instance=terminal-3 "Build log"
-python3 system/scripts/layout.py inspect --view Everything
+python3 system/scripts/layout.py place self --zone left
+python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
 ```
 
-The document ops (`open`, `focus`, `split`, `close`, `move`) are applied by
-the shell to the target client's layout file and announced as
-`layout_updated`, so an op lands whether or not a browser is connected. Every
-op targets exactly one client (`--client <id>`, else the client that last
+The document ops are applied by the shell to the desktop and to the target
+client's placements and announced as `desktops_updated` and
+`placements_updated`, so an op lands whether or not a browser is connected.
+Every op targets exactly one client (`--client <id>`, else the client that last
 messaged the requesting agent, else the one connected client; refused with the
-clients listed otherwise); `--view` edits that view and switches the client to
-it; `open` of an app with instances creates one through the relay inside the
-op (`--action`, `--param`; a bare URL is the browser's `new`). Only
-`maximize`, `restore`, `refresh`, and the interface reload reach the browser
-as messages. See the `manage-layout` skill for end-to-end orientation.
+clients listed otherwise); `--desktop` edits that desktop and switches the
+client to it; `open` opens a window at `--path` or at a launch path
+(`--launch`, `--param`; a bare URL is the browser's `new`) and prints the
+window's id. Only `refresh` and the interface reload reach the browser as
+messages. See the `manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 

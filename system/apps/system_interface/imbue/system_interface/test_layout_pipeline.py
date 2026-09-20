@@ -1,22 +1,22 @@
-"""Acceptance test for the agent-driven layout pipeline over addresses.
+"""Acceptance test for the agent-driven desktop pipeline.
 
 Exercises the full backend path the agent-facing helper depends on:
 ``system/scripts/layout.py`` (subprocess) -> ``POST /api/layout/broadcast``
-(loopback Flask route) -> ``WebSocketBroadcaster.broadcast_layout_op``, and the
-relay verbs (``rename``, ``delete``) -> ``POST /api/apps/<app>/instances/...``
--> the app's own instances API. The WS-to-DOM step is ``test_e2e.py``'s.
+(loopback Flask route) -> the desktop and placement files -> the broadcaster's
+``desktops_updated`` and ``placements_updated`` messages. The WS-to-DOM step is
+``test_e2e.py``'s.
 
 The machine the script sees is a registry with two rows, both stub apps served
-by ``app_instances``' in-memory source over loopback (so the relay has a real
-instances API to reach): one seeded with an instance, one empty. Broadcaster
-output is observed via the broadcaster's own queue-registration API rather than
-a live WebSocket.
+by ``app_instances``' in-memory source over loopback: one seeded with an
+instance, one empty. Broadcaster output is observed via the broadcaster's own
+queue-registration API rather than a live WebSocket.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -59,6 +59,9 @@ _SEEDED_ADDRESS = f"app:{_SEEDED_APP_NAME}?instance={_SEEDED_KEY}"
 # The requesting agent, which the script resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
 _STUB_APP_NAME = "docs"
+# The one connected client of most tests, on the default desktop.
+_CLIENT_ID = "client-1"
+_DEFAULT_DESKTOP_ID = "home"
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
@@ -174,25 +177,14 @@ def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
     """``layout.py list --json`` as ``{app name: entry}``."""
     result = _run_layout_script(["list", "--json"], harness, cwd)
     assert result.returncode == 0, f"stderr={result.stderr!r}"
-    return {entry["name"]: entry for entry in json.loads(result.stdout)}
+    return {entry["name"]: entry for entry in json.loads(result.stdout)["apps"]}
 
 
-def _nudge(harness: PipelineHarness, app: str) -> None:
-    """Tell the shell an app's list changed, as the app itself would (``POST /api/apps/<name>/changed``)."""
-    request = urllib.request.Request(f"{harness.base_url}/api/apps/{app}/changed", method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        assert response.status == 204
-
-
-def _wait_for_instance_listed(harness: PipelineHarness, cwd: Path, app: str, address: str) -> None:
-    """The inventory fetches instance lists off the request thread, so a listing is polled for."""
-    wait_for(
-        lambda: address
-        in {instance["address"] for instance in _listing(harness, cwd).get(app, {"instances": []})["instances"]},
-        timeout=10.0,
-        poll_interval=0.2,
-        error_message=f"{address} never listed under {app}",
-    )
+def _windows(harness: PipelineHarness, cwd: Path) -> list[dict[str, Any]]:
+    """Every window on every desktop, as ``layout.py desktops --json`` lists them."""
+    result = _run_layout_script(["desktops", "--json"], harness, cwd)
+    assert result.returncode == 0, f"stderr={result.stderr!r}"
+    return [window for desktop in json.loads(result.stdout)["desktops"] for window in desktop["windows"]]
 
 
 def _sandbox(tmp_path: Path) -> Path:
@@ -201,270 +193,232 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
-def test_inspect_and_context_round_trip_through_script_and_endpoint(
+@pytest.fixture
+def connected_client(layout_server: PipelineHarness) -> Generator["queue.Queue[str | None]", None, None]:
+    """One connected browser client on the default desktop: the client every op with no ``--client`` targets."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(
+        client_queue, _CLIENT_ID, "", "desktop", active_desktop=_DEFAULT_DESKTOP_ID
+    )
+    try:
+        yield client_queue
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_context_and_desktops_round_trip_through_script_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """``inspect --json`` and ``context --json`` answer with the empty shapes for a machine nobody has opened,
-    and ``context`` lists a client as soon as it connects, before it has messaged or switched views."""
+    """``context --json`` is empty for a machine nobody has opened and lists a client as soon as it connects,
+    before it has messaged; ``desktops --json`` lists the default desktop with no windows."""
     sandbox = _sandbox(tmp_path)
-
-    inspect = _run_layout_script(["inspect", "--json"], layout_server, sandbox)
-    assert inspect.returncode == 0, f"stderr={inspect.stderr!r}"
-    assert json.loads(inspect.stdout)["panels"] == []
 
     context = _run_layout_script(["context", "--json"], layout_server, sandbox)
     assert context.returncode == 0, f"stderr={context.stderr!r}"
     assert json.loads(context.stdout) == []
 
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(
-        client_queue, "client-silent", "everything", "desktop", active_desktop=""
-    )
+    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "", "desktop", active_desktop="home")
     try:
         connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
         assert connected.returncode == 0, f"stderr={connected.stderr!r}"
         (entry,) = json.loads(connected.stdout)
         assert entry["client_id"] == "client-silent"
-        assert entry["is_connected"] is True and entry["active_view"] == "everything"
+        assert entry["is_connected"] is True and entry["active_desktop"] == "home"
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
+    desktops = _run_layout_script(["desktops", "--json"], layout_server, sandbox)
+    assert desktops.returncode == 0, f"stderr={desktops.stderr!r}"
+    listed = json.loads(desktops.stdout)
+    assert [(desktop["id"], desktop["windows"]) for desktop in listed["desktops"]] == [(_DEFAULT_DESKTOP_ID, [])]
+
 
 def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """With no client connected or recorded, there is nobody's arrangement to edit, and the script says so."""
-    result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, _sandbox(tmp_path))
+    """With no client connected or recorded, there is nobody's placements to edit, and the script says so."""
+    result = _run_layout_script(["open", _STUB_APP_NAME], layout_server, _sandbox(tmp_path))
 
     assert result.returncode == 1
     assert "Could not tell which client" in result.stderr and "--client" in result.stderr
 
 
-def test_list_shows_every_app_with_the_seeded_instance(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``list --json`` is the inventory: the seeded app with its instance's address, and the stub app with none yet."""
-    sandbox = _sandbox(tmp_path)
-    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
+def test_list_shows_every_app_with_its_launch_paths(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``list --json`` is the inventory: every app a user can open, its launch paths, and whether it runs."""
+    listing = _listing(layout_server, _sandbox(tmp_path))
 
-    listing = _listing(layout_server, sandbox)
-    seeded = listing[_SEEDED_APP_NAME]
-    assert [instance["title"] for instance in seeded["instances"] if instance["address"] == _SEEDED_ADDRESS] == [
-        _SEEDED_TITLE
-    ]
-    assert [action["id"] for action in seeded["actions"]] == ["new", "subagent"]
-    assert listing[_STUB_APP_NAME]["instances"] == []
+    assert set(listing) == {_SEEDED_APP_NAME, _STUB_APP_NAME}
+    # An app declaring no launch path offers the synthesized ``open`` at its root.
+    assert [(launch["id"], launch["path"]) for launch in listing[_STUB_APP_NAME]["launch_paths"]] == [("open", "/")]
     assert listing[_STUB_APP_NAME]["is_running"] is True
+    assert listing[_STUB_APP_NAME]["windows"] == []
 
 
-def _inspect_addresses(harness: PipelineHarness, cwd: Path, client_id: str) -> list[str]:
-    inspected = _run_layout_script(["inspect", "--json", "--client", client_id], harness, cwd)
-    assert inspected.returncode == 0, f"stderr={inspected.stderr!r}"
-    return [panel["address"] for panel in json.loads(inspected.stdout)["panels"]]
-
-
-def test_open_of_a_bare_app_creates_the_instance_and_docks_it_in_the_clients_file(
-    layout_server: PipelineHarness, tmp_path: Path
+def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
-    """``open docs --param path=/notes`` creates through the app inside the op, prints the new address, and docks
-    it in the one connected client's arrangement; the write is announced to that client's windows."""
+    """``open docs`` opens a window at the app's launch path on the connected client's desktop and prints its
+    id; ``focus``, ``place``, and ``minimize`` edit that client's placements; ``close`` removes the window for
+    everyone; the writes are announced to the client."""
     sandbox = _sandbox(tmp_path)
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
-    try:
-        result = _run_layout_script(
-            ["open", _STUB_APP_NAME, "--view", "Everything", "--param", "path=/notes"], layout_server, sandbox
-        )
-        assert result.returncode == 0, f"stderr={result.stderr!r}"
-        created = result.stdout.strip()
-        assert created == f"app:{_STUB_APP_NAME}?instance=stub-1"
-        assert [str(record.url) for record in layout_server.stub_source.records] == ["/notes"]
-        assert _inspect_addresses(layout_server, sandbox, "client-1") == [created]
-        assert any(
-            message["type"] == "layout_updated" and message["client_id"] == "client-1"
-            for message in drain_messages(client_queue)
-        )
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
+
+    opened = _run_layout_script(["open", _STUB_APP_NAME], layout_server, sandbox)
+    assert opened.returncode == 0, f"stderr={opened.stderr!r}"
+    window_id = opened.stdout.strip()
+    assert window_id.startswith("win-")
+    assert f"opened window {window_id} ({_STUB_APP_NAME} at /)" in opened.stderr
+    (window,) = _windows(layout_server, sandbox)
+    assert (window["id"], window["app"], window["path"], window["is_settling"]) == (window_id, _STUB_APP_NAME, "/", True)
+    assert [entry["id"] for entry in _listing(layout_server, sandbox)[_STUB_APP_NAME]["windows"]] == [window_id]
+
+    # Opening the app again focuses the window already at its launch path rather than opening another.
+    focused = _run_layout_script(["open", _STUB_APP_NAME], layout_server, sandbox)
+    assert focused.returncode == 0, f"stderr={focused.stderr!r}"
+    assert focused.stdout.strip() == window_id
+    assert len(_windows(layout_server, sandbox)) == 1
+
+    def placement_states() -> list[tuple[str, str, bool]]:
+        stored = _get_json(layout_server, f"/api/placements/{_DEFAULT_DESKTOP_ID}?client={_CLIENT_ID}")
+        return [(row["window_id"], row["state"], row["is_minimized"]) for row in stored["placements"]]
+
+    for verb, extra, expected in (
+        ("focus", [], (window_id, "NORMAL", False)),
+        ("place", ["--zone", "left"], (window_id, "SNAPPED_LEFT", False)),
+        ("minimize", [], (window_id, "SNAPPED_LEFT", True)),
+        ("restore", [], (window_id, "NORMAL", False)),
+        ("maximize", [], (window_id, "MAXIMIZED", False)),
+        ("place", ["--frame", "0.1,0.1,0.5,0.5"], (window_id, "NORMAL", False)),
+    ):
+        result = _run_layout_script([verb, window_id, *extra], layout_server, sandbox)
+        assert result.returncode == 0, f"{verb}: stderr={result.stderr!r}"
+        assert placement_states() == [expected], verb
+
+    closed = _run_layout_script(["close", window_id], layout_server, sandbox)
+    assert closed.returncode == 0, f"stderr={closed.stderr!r}"
+    assert _windows(layout_server, sandbox) == []
+    types = [message["type"] for message in drain_messages(connected_client)]
+    assert "desktops_updated" in types and "placements_updated" in types
+    # Focusing what is gone is a 404 with the window named.
+    missing = _run_layout_script(["focus", window_id], layout_server, sandbox)
+    assert missing.returncode == 1 and window_id in missing.stderr
 
 
-def test_open_and_close_of_an_instance_address_edit_the_clients_file(
-    layout_server: PipelineHarness, tmp_path: Path
+def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
-    """``open`` docks a listed instance and ``close`` removes it, whether or not a window is open: the client only
-    has to be one the shell knows."""
+    """``open chat --path /?chat=<id>`` opens the page itself (no launch path, not settling); ``self`` resolves
+    to the window of the requester's chat; ``navigate`` points a window elsewhere; a second window of the app
+    is reached by the app's name."""
     sandbox = _sandbox(tmp_path)
-    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
-    try:
-        open_result = _run_layout_script(["open", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
-        assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
-        assert f"opened {_SEEDED_ADDRESS}" in open_result.stderr
-        assert _inspect_addresses(layout_server, sandbox, "client-1") == [_SEEDED_ADDRESS]
+    own_path = f"/?chat={_AGENT_ID}"
 
-        close_result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
-        assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
-        assert _inspect_addresses(layout_server, sandbox, "client-1") == []
-        # Closing what is not open is a 404 with the address named.
-        missing = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
-        assert missing.returncode == 1 and _SEEDED_ADDRESS in missing.stderr
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
+    opened = _run_layout_script(["open", _SEEDED_APP_NAME, "--path", own_path], layout_server, sandbox)
+    assert opened.returncode == 0, f"stderr={opened.stderr!r}"
+    own_window_id = opened.stdout.strip()
+    (window,) = _windows(layout_server, sandbox)
+    assert (window["path"], window["is_settling"]) == (own_path, False)
+
+    focused = _run_layout_script(["focus", "self"], layout_server, sandbox)
+    assert focused.returncode == 0, f"stderr={focused.stderr!r}"
+    assert f"focused window {own_window_id}" in focused.stderr
+
+    navigated = _run_layout_script(["navigate", "self", "/?chat=other"], layout_server, sandbox)
+    assert navigated.returncode == 0, f"stderr={navigated.stderr!r}"
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/?chat=other"]
+    # With its marker gone from every path, ``self`` names nothing.
+    gone = _run_layout_script(["focus", "self"], layout_server, sandbox)
+    assert gone.returncode == 1 and "self" in gone.stderr
+
+    by_app = _run_layout_script(["maximize", _SEEDED_APP_NAME], layout_server, sandbox)
+    assert by_app.returncode == 0, f"stderr={by_app.stderr!r}"
+    assert f"maximized window {own_window_id}" in by_app.stderr
 
 
 @pytest.mark.parametrize(
-    ("spelling", "expected_hint"),
+    ("argv", "expected_hint"),
     [
-        (f"chat:{_SEEDED_TITLE}", f"the one titled {_SEEDED_TITLE!r}"),
-        ("service:docs?instance=docs-1", "app:docs?instance=docs-1"),
-        ("terminal:terminal-1", "app:terminal?instance=terminal-1"),
+        (["open", f"app:{_STUB_APP_NAME}"], "give an app name and a path"),
+        (["open", f"chat:{_SEEDED_TITLE}"], "give an app name and a path"),
+        (["focus", f"app:{_STUB_APP_NAME}?instance=x"], "give an app name and a path"),
+        (["split", _STUB_APP_NAME, "--relative-to", "self"], "not a desktop verb"),
+        (["rename", f"app:{_STUB_APP_NAME}?instance=x", "Docs"], "not a desktop verb"),
     ],
 )
-def test_retired_spellings_are_refused_before_they_reach_the_shell(
-    layout_server: PipelineHarness, tmp_path: Path, spelling: str, expected_hint: str
+def test_retired_spellings_and_verbs_are_refused_before_they_reach_the_shell(
+    layout_server: PipelineHarness,
+    connected_client: "queue.Queue[str | None]",
+    tmp_path: Path,
+    argv: list[str],
+    expected_hint: str,
 ) -> None:
-    """A retired ref fails at the script, naming the new form, and edits nobody's arrangement."""
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
-    try:
-        result = _run_layout_script(["open", spelling, "--view", "Everything"], layout_server, _sandbox(tmp_path))
-        assert result.returncode != 0
-        assert spelling in result.stderr
-        assert expected_hint in result.stderr
-        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
+    """A retired form fails at the script, naming what to use instead, and opens nothing."""
+    result = _run_layout_script(argv, layout_server, _sandbox(tmp_path))
 
-
-def test_a_url_needs_the_browser_app(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``open https://...`` is the browser's ``new``, so with no browser registered it fails naming the browser."""
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
-    try:
-        result = _run_layout_script(
-            ["open", "https://example.com/", "--view", "Everything"], layout_server, _sandbox(tmp_path)
-        )
-        assert result.returncode != 0 and "browser" in result.stderr
-        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
-
-
-def test_unknown_app_is_refused_by_name(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``open app:nowhere`` names the missing registration and edits nobody's arrangement."""
-    client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop", active_desktop="")
-    try:
-        result = _run_layout_script(["open", "app:nowhere", "--view", "Everything"], layout_server, _sandbox(tmp_path))
-        assert result.returncode != 0
-        assert "nowhere" in result.stderr
-        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
-    finally:
-        layout_server.broadcaster.unregister(client_queue)
-
-
-def test_rename_and_delete_reach_the_app_through_the_relay(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``rename`` retitles the instance in its app, ``delete`` removes it there, and ``list`` follows."""
-    sandbox = _sandbox(tmp_path)
-    layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
-    address = f"app:{_STUB_APP_NAME}?instance=stub-1"
-    _nudge(layout_server, _STUB_APP_NAME)
-    _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
-
-    rename = _run_layout_script(["rename", address, "Design notes"], layout_server, sandbox)
-    assert rename.returncode == 0, f"stderr={rename.stderr!r}"
-    assert [str(record.title) for record in layout_server.stub_source.records] == ["Design notes"]
-    wait_for(
-        lambda: {instance["title"] for instance in _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"]}
-        == {"Design notes"},
-        timeout=10.0,
-        poll_interval=0.2,
-        error_message="the listing never showed the new title",
-    )
-
-    delete = _run_layout_script(["delete", address], layout_server, sandbox)
-    assert delete.returncode == 0, f"stderr={delete.stderr!r}"
-    assert layout_server.stub_source.records == []
-    wait_for(
-        lambda: _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"] == [],
-        timeout=10.0,
-        poll_interval=0.2,
-        error_message="the listing kept the deleted instance",
-    )
-
-
-def test_stop_and_start_reach_the_app_through_the_relay(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``stop`` and ``start`` drive the instance through its app, and ``list`` shows the status they set."""
-    sandbox = _sandbox(tmp_path)
-    layout_server.stub_source.is_stoppable = True
-    layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
-    address = f"app:{_STUB_APP_NAME}?instance=stub-1"
-    _nudge(layout_server, _STUB_APP_NAME)
-    _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
-
-    stop = _run_layout_script(["stop", address], layout_server, sandbox)
-    assert stop.returncode == 0, f"stderr={stop.stderr!r}"
-    assert [str(record.status) for record in layout_server.stub_source.records] == ["stopped"]
-    wait_for(
-        lambda: {instance["status"] for instance in _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"]}
-        == {"stopped"},
-        timeout=10.0,
-        poll_interval=0.2,
-        error_message="the listing never showed the instance as stopped",
-    )
-
-    start = _run_layout_script(["start", address], layout_server, sandbox)
-    assert start.returncode == 0, f"stderr={start.stderr!r}"
-    assert [str(record.status) for record in layout_server.stub_source.records] == ["idle"]
-
-    layout_server.stub_source.is_stoppable = False
-    refused = _run_layout_script(["stop", address], layout_server, sandbox)
-    assert refused.returncode != 0
-    assert "HTTP 400" in refused.stderr
-
-
-def test_relay_verbs_need_an_instance_address(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``rename app:docs`` names the app, not an instance, and says so."""
-    result = _run_layout_script(["rename", f"app:{_STUB_APP_NAME}", "Nope"], layout_server, _sandbox(tmp_path))
     assert result.returncode != 0
-    assert "instance address" in result.stderr
+    assert expected_hint in result.stderr
+    assert _windows(layout_server, _sandbox(tmp_path)) == []
 
 
-def test_shortcuts_are_set_and_removed_on_a_project(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``shortcut set`` pins an app's action to a project's rail and ``shortcut remove`` takes it off."""
+def test_a_url_needs_the_browser_app(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
+) -> None:
+    """``open https://...`` is the browser's ``new`` launch path, so with no browser registered it fails naming it."""
+    result = _run_layout_script(["open", "https://example.com/"], layout_server, _sandbox(tmp_path))
+
+    assert result.returncode != 0 and "browser" in result.stderr
+    assert _windows(layout_server, _sandbox(tmp_path)) == []
+
+
+def test_unknown_app_is_refused_by_name(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
+) -> None:
+    """``open nowhere`` names the missing registration and opens nothing."""
+    result = _run_layout_script(["open", "nowhere"], layout_server, _sandbox(tmp_path))
+
+    assert result.returncode != 0
+    assert "nowhere" in result.stderr
+    assert _windows(layout_server, _sandbox(tmp_path)) == []
+
+
+def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
+) -> None:
+    """``shortcut set`` pins an app's launch path to the desktop's backdrop, ``shortcut move`` puts it in another
+    cell, and ``shortcut remove`` takes it off."""
     sandbox = _sandbox(tmp_path)
-    create = urllib.request.Request(
-        f"{layout_server.base_url}/api/projects",
-        data=json.dumps({"name": "Project 1", "color": "#3B82F6", "glyph": 1}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(create, timeout=5) as response:
-        assert response.status == 201
 
     set_result = _run_layout_script(
-        ["shortcut", "set", _STUB_APP_NAME, "new", "--mode", "focus", "--view", "Project 1"], layout_server, sandbox
+        ["shortcut", "set", _STUB_APP_NAME, "open", "--mode", "new", "--cell", "1,0"], layout_server, sandbox
     )
     assert set_result.returncode == 0, f"stderr={set_result.stderr!r}"
-    listed = _run_layout_script(["shortcuts", "--view", "Project 1", "--json"], layout_server, sandbox)
+    listed = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
     assert listed.returncode == 0, f"stderr={listed.stderr!r}"
-    rows = {(row["app"], row["action"]): row["mode"] for row in json.loads(listed.stdout)["shortcuts"]}
-    assert rows[(_STUB_APP_NAME, "new")] == "focus"
-    # The chat's default shortcut was seeded when the project was created.
-    assert rows[("chat", "new")] == "new"
+    shortcuts = json.loads(listed.stdout)
+    assert shortcuts["desktop"] == _DEFAULT_DESKTOP_ID
+    rows = {(row["target"]["app"], row["target"]["launch"]): row for row in shortcuts["shortcuts"]}
+    assert rows[(_STUB_APP_NAME, "open")]["mode"] == "new"
+    assert rows[(_STUB_APP_NAME, "open")]["cell"] == {"column": 1, "row": 0}
 
-    remove_result = _run_layout_script(
-        ["shortcut", "remove", _STUB_APP_NAME, "new", "--view", "Project 1"], layout_server, sandbox
-    )
-    assert remove_result.returncode == 0, f"stderr={remove_result.stderr!r}"
-    listed_after = _run_layout_script(["shortcuts", "--view", "Project 1", "--json"], layout_server, sandbox)
-    assert (_STUB_APP_NAME, "new") not in {
-        (row["app"], row["action"]) for row in json.loads(listed_after.stdout)["shortcuts"]
+    moved = _run_layout_script(["shortcut", "move", _STUB_APP_NAME, "open", "--cell", "2,1"], layout_server, sandbox)
+    assert moved.returncode == 0, f"stderr={moved.stderr!r}"
+    desktops = _get_json(layout_server, "/api/desktops")["desktops"]
+    (shortcut,) = [
+        shortcut for shortcut in desktops[0]["shortcuts"] if shortcut["target"]["app"] == _STUB_APP_NAME
+    ]
+    assert shortcut["cell"] == {"column": 2, "row": 1}
+
+    removed = _run_layout_script(["shortcut", "remove", _STUB_APP_NAME, "open"], layout_server, sandbox)
+    assert removed.returncode == 0, f"stderr={removed.stderr!r}"
+    listed_after = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
+    assert (_STUB_APP_NAME, "open") not in {
+        (row["target"]["app"], row["target"]["launch"]) for row in json.loads(listed_after.stdout)["shortcuts"]
     }
 
 
 def test_script_runs_without_a_registry_file_for_read_ops(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``views --json`` needs no registry on disk: the shell answers it."""
+    """``desktops --json`` needs no registry on disk: the shell answers it."""
     sandbox = _sandbox(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(_LAYOUT_SCRIPT), "views", "--json"],
+        [sys.executable, str(_LAYOUT_SCRIPT), "desktops", "--json"],
         capture_output=True,
         text=True,
         cwd=str(sandbox),
@@ -477,8 +431,7 @@ def test_script_runs_without_a_registry_file_for_read_ops(layout_server: Pipelin
         timeout=15,
     )
     assert result.returncode == 0, f"stderr={result.stderr!r}"
-    views = json.loads(result.stdout)
-    assert any(view["id"] == "everything" for view in views)
+    assert [desktop["id"] for desktop in json.loads(result.stdout)["desktops"]] == [_DEFAULT_DESKTOP_ID]
 
 
 def _post_op(
