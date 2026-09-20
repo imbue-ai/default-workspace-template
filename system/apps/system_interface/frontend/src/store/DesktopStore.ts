@@ -235,8 +235,11 @@ export class DesktopStore {
   dispatch(event: DesktopEvent): void {
     const next = reduceDesktopState(this.state, event);
     if (next === this.state) return;
+    // Only an event that changed the layout re-arms the debounce: a broadcast landing while a save
+    // waits (every page's location report is one) must not push the save back.
+    const isLayoutChanged = next.layoutVersion !== this.state.layoutVersion;
     this.state = next;
-    if (isLayoutDirty(next)) this.scheduleSave();
+    if (isLayoutChanged && isLayoutDirty(next)) this.scheduleSave();
     this.notifyListeners();
   }
 

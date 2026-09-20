@@ -135,6 +135,19 @@ describe("saving", () => {
     expect(api.layoutOf("home", CLIENT).placements[0].is_minimized).toBe(true);
   });
 
+  it("a stream of broadcasts while a save waits does not push the save back", async () => {
+    const store = await startedStore();
+    store.minimizeWindow("win-1");
+    for (let round = 0; round < 5; round += 1) {
+      await vi.advanceTimersByTimeAsync(100);
+      socket.deliver().onDesktopsUpdated(store.getState().desktops);
+      socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
+    }
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toHaveLength(1);
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
   it("takes the shell's layout when a save is refused as stale", async () => {
     const store = await startedStore();
     // The shell wrote a newer layout meanwhile (an agent op).
