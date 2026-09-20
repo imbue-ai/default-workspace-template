@@ -35,7 +35,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "aria-pressed": entry.isFocused ? "true" : "false",
         class:
           "taskbar-entry flex h-9 min-w-(--desk-touch-target) shrink-0 items-center gap-2 rounded-md border px-2 " +
-          "text-(length:--font-size-row) select-none touch-none " +
+          "text-(length:--font-size-row) select-none touch-pan-x " +
           (isCompact ? "max-w-11 " : "max-w-48 ") +
           (entry.isFocused
             ? "border-default bg-surface text-primary shadow-raised "
