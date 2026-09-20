@@ -1,7 +1,7 @@
 # Creation: system interface
 
-`system/apps/system_interface` -- the live web workspace UI (the dockview shell
-that docks every app's pages, the sidebar, the New Tab launcher) and its Flask
+`system/apps/system_interface` -- the live web workspace UI (the desktop that
+shows every app's pages as windows, with its taskbar and launcher) and its Flask
 backend. This reference describes what the
 system interface *is*; for how to run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
@@ -14,7 +14,7 @@ It is what the user is looking at *right now*, so you always work against an
 - Backend: `system/apps/system_interface/imbue/system_interface/` (Flask + flask-sock,
   served by the threaded Werkzeug server).
 - Frontend: `system/apps/system_interface/frontend/src/` (TypeScript + Vite + Tailwind
-  + mithril/dockview), one member of the npm workspace rooted at `system/package.json`
+  + mithril), one member of the npm workspace rooted at `system/package.json`
   beside the chat app's frontend (`system/apps/chat/frontend/`) and the shared
   `system/libs/workspace_ui` library both import. Build output goes to the gitignored
   `system/apps/system_interface/imbue/system_interface/static/` (and the chat's to
