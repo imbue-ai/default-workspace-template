@@ -16,8 +16,9 @@
  *   `sendToChildFrame`.
  *
  * Trust: a child frame's message counts only when `event.source` is the `contentWindow` of an
- * iframe in this document and `event.origin` shares this shell's workspace coordinate (the
- * origin family the minds chrome checks). The chrome's messages count only from
+ * iframe in this document and `event.origin` either shares this shell's workspace coordinate (the
+ * origin family the minds chrome checks) or is the origin the shell itself pointed that frame at
+ * (an app on its own loopback port, outside the family). The chrome's messages count only from
  * `window.parent`, and only when this shell is framed at all.
  */
 
