@@ -56,6 +56,8 @@ export interface RunningAppPopoverAttrs {
   readonly app: AppRecord;
   /** The app's windows on the active desktop, with the title each shows and whether it is minimized. */
   readonly windows: readonly { window: WindowRecord; title: string; isMinimized: boolean }[];
+  /** The ``<app>:<launch>`` keys of the shortcuts already on the active desktop. */
+  readonly desktopShortcutKeys: ReadonlySet<string>;
   readonly onPickWindow: (windowId: string) => void;
   readonly onRunLaunch: (launchPath: LaunchPath) => void;
   readonly onAddShortcut: (launchPath: LaunchPath) => void;
@@ -64,7 +66,7 @@ export interface RunningAppPopoverAttrs {
 /** The popover's content: the app's windows here, then its launch paths. */
 export const RunningAppPopover: m.Component<RunningAppPopoverAttrs> = {
   view(vnode) {
-    const { app, windows, onPickWindow, onRunLaunch, onAddShortcut } = vnode.attrs;
+    const { app, windows, desktopShortcutKeys, onPickWindow, onRunLaunch, onAddShortcut } = vnode.attrs;
     return m("div", { "data-running-app-popover": app.name, class: "min-w-64" }, [
       m("div", { class: "type-section px-3 py-1 text-faint" }, app.display_name),
       windows.length === 0
@@ -86,13 +88,15 @@ export const RunningAppPopover: m.Component<RunningAppPopoverAttrs> = {
             ),
           ),
       m("div", { class: menuDividerClass() }),
-      app.launch_paths.map((launchPath) =>
-        m("div", { key: launchPath.id, class: "flex items-center gap-1 px-3 py-0.5" }, [
+      app.launch_paths.map((launchPath) => {
+        const key = `${app.name}:${launchPath.id}`;
+        const isOnDesktop = desktopShortcutKeys.has(key);
+        return m("div", { key: launchPath.id, class: "flex items-center gap-1 px-3 py-0.5" }, [
           m(
             "button",
             {
               type: "button",
-              "data-popover-launch": `${app.name}:${launchPath.id}`,
+              "data-popover-launch": key,
               class:
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-(length:--font-size-row) text-primary hover:bg-fill-hover",
               onclick: () => onRunLaunch(launchPath),
@@ -108,14 +112,19 @@ export const RunningAppPopover: m.Component<RunningAppPopoverAttrs> = {
               variant: "ghost",
               sm: true,
               extra: "add-shortcut shrink-0",
-              "data-add-shortcut": `${app.name}:${launchPath.id}`,
-              ...hoverTooltipAttrs(`Add ${launchPath.label} to this desktop`),
+              "data-add-shortcut": key,
+              disabled: isOnDesktop,
+              ...hoverTooltipAttrs(
+                isOnDesktop
+                  ? `${launchPath.label} is on this desktop already`
+                  : `Add ${launchPath.label} to this desktop`,
+              ),
               onclick: () => onAddShortcut(launchPath),
             },
-            "Add to desktop",
+            isOnDesktop ? "On desktop" : "Add to desktop",
           ),
-        ]),
-      ),
+        ]);
+      }),
     ]);
   },
 };
