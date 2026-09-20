@@ -291,11 +291,15 @@ describe("the contract", () => {
   it("posts a page's location to the shell, remembering it first so the update never bounces back", async () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
     spy.mockClear();
     messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: "Second" });
+    // A redraw while the report is on its way (the stored path is still the old one): no navigation.
+    layer.reconcile();
+    expect(spy).not.toHaveBeenCalled();
     await settle();
     expect(api.calls).toContain("reportWindowLocation:home:win-1:/?doc=2:Second");
-    // The broadcast that follows carries the path the page already reported: no navigation.
+    // The broadcast that follows carries the path the page already reported: no navigation either.
     socket.deliver().onDesktopsUpdated(api.desktops);
     layer.reconcile();
     expect(spy).not.toHaveBeenCalled();

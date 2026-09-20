@@ -9,8 +9,8 @@
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
- * of plan section 4.6 (``shell:navigate`` for a page that declared navigation, a ``src``
- * reassignment otherwise), and the pages' own ``shell:capabilities``, ``shell:location``,
+ * of plan section 4.6 after every desktops update (``shell:navigate`` for a page that declared
+ * navigation, a ``src`` reassignment otherwise), and the pages' own ``shell:capabilities``, ``shell:location``,
  * ``shell:focused``, and ``shell:open``. Messages cross through ``relay.ts``.
  */
 
@@ -89,6 +89,8 @@ export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
   private lastFocusedWindowId: string | null = null;
+  /** The desktops the pages last followed: a stored path changes only with them. */
+  private followedDesktops: readonly Desktop[] | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -199,7 +201,12 @@ export class LivePagesLayer implements PageDriver {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
 
-    this.follow(windowsById);
+    // Only after a desktops update: between a page's own location report and the broadcast that stores
+    // it, the stored path is still the old one, and a redraw must not send the page back there.
+    if (state.desktops !== this.followedDesktops) {
+      this.followedDesktops = state.desktops;
+      this.follow(windowsById);
+    }
 
     if (focused !== this.lastFocusedWindowId) {
       this.lastFocusedWindowId = focused;
