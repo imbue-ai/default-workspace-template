@@ -40,8 +40,8 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
-from imbue.chat.testing import free_port
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import free_port
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
