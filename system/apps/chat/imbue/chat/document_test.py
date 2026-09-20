@@ -23,8 +23,8 @@ from imbue.chat.testing import RecordingClientActivityShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import wait_until_true
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
-from imbue.mngr.utils.polling import wait_for
 
 
 def _agent_id() -> str:
@@ -123,8 +123,6 @@ def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
 
 
-
-
 def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> None:
     chat_id = ChatId("agent-1")
     framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
@@ -149,7 +147,9 @@ def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
         _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
         _record_client_message_activity(chat_id, framed)
-        wait_for(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout=5.0, poll_interval=0.05, error_message="the condition never held")
+        wait_until_true(
+            lambda: shell.received == [client_activity_report(chat_id, framed)], 5.0, "the client-activity report"
+        )
 
 
 def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

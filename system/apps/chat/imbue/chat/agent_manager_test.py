@@ -95,6 +95,7 @@ from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -439,11 +440,8 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     )
     try:
         created = manager.create_chat("", message="hello")
-        wait_for(
-            lambda: manager.get_provisional_chat(created.chat_id) is None,
-            timeout=10,
-            poll_interval=0.05,
-            error_message="the condition never held",
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
         )
     finally:
         manager.stop()
@@ -563,11 +561,8 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
         seeded = manager.seed_chat("Getting started", _seed_turns())
         launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
         # The create runs on a thread; stopping the manager before it lands would kill the fake mngr.
-        wait_for(
-            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
-            timeout=10,
-            poll_interval=0.05,
-            error_message="the condition never held",
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
         )
     finally:
         manager.stop()
@@ -616,11 +611,8 @@ def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
         with pytest.raises(AgentCreationError, match="keeps the first message"):
             manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id, message="Something else")
         relaunched = manager.create_chat("", chat_id=seeded.chat_id, account_id=signed_in.id)
-        wait_for(
-            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
-            timeout=10,
-            poll_interval=0.05,
-            error_message="the condition never held",
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
         )
 
         assert relaunched.chat_id == seeded.chat_id
@@ -696,11 +688,8 @@ def test_a_seeded_chats_first_agent_is_the_chats_from_its_create_on_and_never_a_
         assert [segment.agent.harness for segment in segments] == [HarnessType.SEED, HarnessType.CLAUDE]
 
         go_path.touch()
-        wait_for(
-            lambda: manager.get_provisional_chat(seeded.chat_id) is None,
-            timeout=10,
-            poll_interval=0.05,
-            error_message="the condition never held",
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
         )
         landed = store.read(chat_id)
         assert landed is not None
@@ -730,7 +719,7 @@ def test_a_seeded_chats_failed_create_takes_its_agent_back_off_the_record(
         seeded = manager.seed_chat("Getting started", _seed_turns())
         chat_id = ChatId(seeded.chat_id)
         manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
-        wait_for(is_failed, timeout=10, poll_interval=0.05, error_message="the condition never held")
+        wait_until_true(is_failed, 10, "the failed creation")
 
         failed = manager.get_provisional_chat(seeded.chat_id)
         assert failed is not None
@@ -777,9 +766,7 @@ def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
         assert manager.get_agent_by_id(agent.agent_id) is not None
 
         go_path.touch()
-        wait_for(
-            lambda: len(destroys()) == 1, timeout=10, poll_interval=0.05, error_message="the condition never held"
-        )
+        wait_until_true(lambda: len(destroys()) == 1, 10, "the stale agent's destroy")
 
         assert destroys() == [f"destroy {agent.agent_id} --force"]
         failed = manager.get_provisional_chat(seeded.chat_id)

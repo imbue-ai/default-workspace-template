@@ -24,6 +24,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -78,11 +79,11 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
-from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
 
@@ -522,6 +523,11 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+def wait_until_true(predicate: Callable[[], bool], timeout_seconds: float, what: str) -> None:
+    """Poll ``predicate`` every 50ms until it holds; raises naming ``what`` never happened when the timeout passes."""
+    wait_for(predicate, timeout=timeout_seconds, poll_interval=0.05, error_message=f"{what} never happened")
+
+
 def _wait_until_serving(host: str, port: int, timeout: float = 10.0) -> None:
     """Poll a TCP connect until the server accepts, or raise on timeout."""
     deadline = time.monotonic() + timeout
@@ -688,8 +694,6 @@ def _is_serving_api(base_url: str) -> bool:
         return True
     except OSError:
         return False
-
-
 
 
 def _write_fake_binaries(tmp_path: Path) -> Path:
