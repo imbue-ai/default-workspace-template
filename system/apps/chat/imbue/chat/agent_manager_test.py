@@ -35,6 +35,7 @@ from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
@@ -4368,3 +4369,22 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
             deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
     finally:
         manager.stop()
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_permission_pending", "expected"),
+    [
+        ("RUNNING", ActivityState.THINKING, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.TOOL_RUNNING, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.IDLE, False, ChatStatus.IDLE),
+        ("WAITING", None, False, ChatStatus.IDLE),
+        ("UNKNOWN", ActivityState.THINKING, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.THINKING, True, ChatStatus.ATTENTION),
+        ("STOPPED", ActivityState.THINKING, True, ChatStatus.STOPPED),
+        ("DONE", None, False, ChatStatus.STOPPED),
+    ],
+)
+def test_status_mapping_follows_the_chat_row(
+    lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
+) -> None:
+    assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
