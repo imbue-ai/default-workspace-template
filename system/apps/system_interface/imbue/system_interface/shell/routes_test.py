@@ -356,7 +356,9 @@ def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_
     client = shell_application(tmp_path, inventory, broadcaster).test_client()
     assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == []
 
-    write_two_app_registry(tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar")))
+    write_two_app_registry(
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar"))
+    )
     inventory.reload_registry()
     (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
     assert pinned["app"] == "buddy" and pinned["is_pinned"] is True
@@ -414,7 +416,9 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     assert drain_messages(first_queue) == []
     # A report without a client is refused.
     assert (
-        client.post(f"/api/desktops/home/windows/{pinned['id']}/location", json={"path": "/x", "title": ""}).status_code
+        client.post(
+            f"/api/desktops/home/windows/{pinned['id']}/location", json={"path": "/x", "title": ""}
+        ).status_code
         == 400
     )
 
@@ -473,25 +477,34 @@ def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_ch
     plain = client.post("/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "plain", "position": None})
     assert plain.status_code == 200 and plain.get_json()["entries"]["buddy"]["mode"] == "bar"
     assert (
-        client.post("/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "dot", "position": None}).status_code
-        == 400
-    )
-    assert (
-        client.post("/api/clients/c1/entries/files", json={"mode": "bar", "style": "plain", "position": None}).status_code
-        == 400
-    )
-    assert (
-        client.post("/api/clients/c1/entries/nope", json={"mode": "bar", "style": "plain", "position": None}).status_code
-        == 404
-    )
-    assert (
         client.post(
-            "/api/clients/c1/entries/buddy", json={"mode": "floating", "style": "plain", "position": {"x": 1.5, "y": 0}}
+            "/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "dot", "position": None}
         ).status_code
         == 400
     )
     assert (
-        client.post("/api/clients/ghost/entries/buddy", json={"mode": "bar", "style": "plain", "position": None}).status_code
+        client.post(
+            "/api/clients/c1/entries/files", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/nope", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/buddy",
+            json={"mode": "floating", "style": "plain", "position": {"x": 1.5, "y": 0}},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/clients/ghost/entries/buddy", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
         == 404
     )
 

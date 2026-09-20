@@ -653,7 +653,9 @@ def _op_window(
                 raise LayoutOpError("navigate needs a path")
             # As if the target client's page had reported it: an independent window moves for that client alone.
             seen = shell.effective_window_for_client(desktop, window, target.client_id)
-            shell.report_window_location(desktop.id, window.id, target.client_id, WindowPath(arguments.path), seen.title)
+            shell.report_window_location(
+                desktop.id, window.id, target.client_id, WindowPath(arguments.path), seen.title
+            )
         case _:
             raise LayoutOpError(f"Op {op!r} has no window handler")
     return window.id

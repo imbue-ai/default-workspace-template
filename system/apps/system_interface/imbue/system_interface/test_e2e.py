@@ -127,7 +127,9 @@ class E2EServer(FrozenModel):
     state_dir: Path = Field(description="The shell's state directory")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
-    agent_events_path: Path = Field(description="The agents event file the avatar's mood is read from, absent at first")
+    agent_events_path: Path = Field(
+        description="The agents event file the avatar's mood is read from, absent at first"
+    )
 
 
 def _get_json(url: str) -> Any:
@@ -1304,11 +1306,15 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             wait_for(
                 lambda: _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")[
                     "window_paths"
-                ].get(pinned["id"], {}).get("path")
+                ]
+                .get(pinned["id"], {})
+                .get("path")
                 == "/?doc=1"
                 and _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={other_client_id}")[
                     "window_paths"
-                ].get(pinned["id"], {}).get("path")
+                ]
+                .get(pinned["id"], {})
+                .get("path")
                 == "/?doc=2",
                 timeout=15.0,
                 poll_interval=0.1,
@@ -1404,7 +1410,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         page.locator('[data-menu-item="move-to-taskbar"]').click()
         expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
         expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
-        expect(page.locator('[data-floating-entries] [data-pinned-entry]')).to_have_count(0)
+        expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
         wait_for(
             lambda: _client_entries(server.base_url, client_id)[_PINNED_APP_NAME]["mode"] == "bar",
             timeout=10.0,
@@ -1414,7 +1420,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _taskbar_entry(page, pinned["id"]).click(button="right")
         expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
         page.locator('[data-menu-item="float"]').click()
-        expect(page.locator('[data-floating-entries] [data-pinned-entry]')).to_have_count(1, timeout=10000)
+        expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
         _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
 
@@ -1427,7 +1433,11 @@ def _write_agent_events(path: Path, state: str) -> None:
     """One ``AGENT_STATE`` line stamped now, for an agent in ``state``, beside the services agent (always running)."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
     lines = [
-        {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "services", "state": "RUNNING", "labels": {"is_primary": "true"}}},
+        {
+            "timestamp": now,
+            "type": "AGENT_STATE",
+            "agent": {"id": "services", "state": "RUNNING", "labels": {"is_primary": "true"}},
+        },
         {"timestamp": now, "type": "AGENT_STATE", "agent": {"id": "worker", "state": state, "labels": {}}},
     ]
     with path.open("a") as stream:
@@ -1481,7 +1491,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             chooser.locator(".avatar-design-own").click()
             expect(chooser).to_have_count(0)
-            (window,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["app"] == _STUB_APP_NAME]
+            (window,) = [
+                window for window in _wait_for_window_count(server.base_url, 2) if window["app"] == _STUB_APP_NAME
+            ]
             assert window["path"].startswith(f"{_STUB_LAUNCH_PATH}?message=")
             assert "design my own desktop avatar" in _launch_message(window["path"])
 
@@ -1500,7 +1512,9 @@ def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tm
             expect(phone_entry).to_have_attribute("data-entry-mode", "bar")
             expect(phone_page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
             phone_entry.tap()
-            expect(_window(phone_page, pinned["id"])).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
+            expect(_window(phone_page, pinned["id"])).to_have_attribute(
+                "data-window-state", "MAXIMIZED", timeout=15000
+            )
             phone_entry.tap()
             expect(_shown_windows(phone_page)).to_have_count(0)
             # A long press (a touch press held still) opens the entry's menu, which offers no Float and no Close

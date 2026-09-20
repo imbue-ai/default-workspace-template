@@ -51,10 +51,14 @@ class WindowPathStore(MutableModel):
         try:
             document = WindowPathsDocument.model_validate(raw)
         except ValidationError as e:
-            logger.warning("Ignored an unreadable window paths file at {}: {}", self._path(client_id), e.errors()[0]["msg"])
+            logger.warning(
+                "Ignored an unreadable window paths file at {}: {}", self._path(client_id), e.errors()[0]["msg"]
+            )
             return WindowPathsDocument(version=WINDOW_PATHS_FILE_VERSION, windows={})
         if document.version != WINDOW_PATHS_FILE_VERSION:
-            logger.warning("Ignored a window paths file of version {!r} at {}", document.version, self._path(client_id))
+            logger.warning(
+                "Ignored a window paths file of version {!r} at {}", document.version, self._path(client_id)
+            )
             return WindowPathsDocument(version=WINDOW_PATHS_FILE_VERSION, windows={})
         return document
 
@@ -74,7 +78,11 @@ class WindowPathStore(MutableModel):
         return paths
 
     def set_path(
-        self, client_id: ClientId, window_id: WindowId, stored: StoredWindowPath, live_window_ids: AbstractSet[WindowId]
+        self,
+        client_id: ClientId,
+        window_id: WindowId,
+        stored: StoredWindowPath,
+        live_window_ids: AbstractSet[WindowId],
     ) -> bool:
         """Store the client's path and title for a window, dropping entries of windows since gone; answers whether
         anything was written (a report that changes nothing writes nothing)."""

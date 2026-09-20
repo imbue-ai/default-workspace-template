@@ -38,11 +38,20 @@ def test_a_minimal_design_parses() -> None:
     ("svg", "reason"),
     [
         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><script>1</script></svg>', "element"),
-        ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><image href="http://x/y.png"/></svg>', "element"),
-        ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle onclick="1" r="1"/></svg>', "attribute"),
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><image href="http://x/y.png"/></svg>',
+            "element",
+        ),
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle onclick="1" r="1"/></svg>',
+            "attribute",
+        ),
         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>*{x:1}</style></svg>', "custom CSS"),
         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"/>', "viewBox"),
-        ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="1" fill="url(http://x)"/></svg>', "paint"),
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="1" fill="url(http://x)"/></svg>',
+            "paint",
+        ),
         ('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>', "processing"),
         ('<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>', "invalid"),
         ("<svg viewBox='0 0 100 100'/>", "namespace"),
@@ -75,9 +84,7 @@ def test_a_bundled_design_wakes_when_working_and_rests_when_idle() -> None:
     assert design is not None
     source = bundled_design_source(design)
     idle = fromstring(render_design_svg(source, AvatarMood.IDLE, is_preview=False, design_id=DEFAULT_DESIGN_ID))
-    working = fromstring(
-        render_design_svg(source, AvatarMood.WORKING, is_preview=False, design_id=DEFAULT_DESIGN_ID)
-    )
+    working = fromstring(render_design_svg(source, AvatarMood.WORKING, is_preview=False, design_id=DEFAULT_DESIGN_ID))
     eyes_path = f".//{{{SVG_NAMESPACE}}}g[@class='jelly-eyes']"
     assert idle.find(eyes_path).find(f"{{{SVG_NAMESPACE}}}ellipse") is None
     assert working.find(eyes_path).find(f"{{{SVG_NAMESPACE}}}ellipse") is not None

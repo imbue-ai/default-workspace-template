@@ -258,11 +258,15 @@ def test_a_fresh_desktop_gets_one_pinned_window_per_pinned_app_and_a_second_ensu
     desktop = desktop_with_windows()
     ensured = with_pinned_windows_ensured(desktop, [_pin("chat"), _pin("notes", "/inbox")], TEST_NOW)
     assert ensured.is_written is True
-    assert [(str(window.app), str(window.path), window.is_pinned, window.title) for window in ensured.desktop.windows] == [
+    assert [
+        (str(window.app), str(window.path), window.is_pinned, window.title) for window in ensured.desktop.windows
+    ] == [
         ("chat", "/", True, ""),
         ("notes", "/inbox", True, ""),
     ]
-    assert all(window.is_settling is False and window.scope is LocationScope.LINKED for window in ensured.desktop.windows)
+    assert all(
+        window.is_settling is False and window.scope is LocationScope.LINKED for window in ensured.desktop.windows
+    )
     again = with_pinned_windows_ensured(ensured.desktop, [_pin("chat"), _pin("notes", "/inbox")], TEST_NOW)
     assert again.is_written is False and again.desktop is ensured.desktop
     # No pins: nothing to ensure, and the same object answers.

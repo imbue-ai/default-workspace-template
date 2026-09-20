@@ -95,9 +95,13 @@ class ShellState(MutableModel):
     clients: ClientStore = Field(frozen=True, description="clients.json")
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
-    avatar_catalog: AvatarCatalogStore = Field(frozen=True, description="The avatar designs registered in the workspace")
+    avatar_catalog: AvatarCatalogStore = Field(
+        frozen=True, description="The avatar designs registered in the workspace"
+    )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
-    avatar_status: AvatarStatusReader = Field(frozen=True, description="The avatar's mood, read from mngr's event file")
+    avatar_status: AvatarStatusReader = Field(
+        frozen=True, description="The avatar's mood, read from mngr's event file"
+    )
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
