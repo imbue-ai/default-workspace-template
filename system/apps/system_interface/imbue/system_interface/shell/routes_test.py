@@ -368,6 +368,74 @@ def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_
     assert client.post(f"/api/desktops/home/windows/{freed['id']}/close").status_code == 204
 
 
+def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays_the_home_path(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A report on an independent window is stored for the reporting client alone, announced to that client with
+    a shell-minted save id, and answered as that client sees the window; the shared record keeps the home path
+    and an empty title, another client sees its own path (or the home path), and ``navigate`` moves one client."""
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "independent", "bar"))
+    )
+    app = shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert pinned["scope"] == "independent"
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    located = client.post(
+        f"/api/desktops/home/windows/{pinned['id']}/location",
+        json={"client_id": "c1", "path": "/?doc=1", "title": "First"},
+    )
+    assert located.status_code == 200
+    assert (located.get_json()["path"], located.get_json()["title"]) == ("/?doc=1", "First")
+    shared = client.get("/api/desktops").get_json()["desktops"][0]["windows"][0]
+    assert (shared["path"], shared["title"]) == ("/", "")
+    # The reporting client's windows are told through placements_updated naming that client (which, as with every
+    # layout write, every window hears and only that client's apply); the shared desktops are not re-announced.
+    announced = drain_messages(first_queue)
+    assert [(message["type"], message["client_id"]) for message in announced] == [("placements_updated", "c1")]
+    assert announced[0]["save_id"].startswith("save-")
+    assert [(message["type"], message["client_id"]) for message in drain_messages(second_queue)] == [
+        ("placements_updated", "c1")
+    ]
+    layout = client.get("/api/placements/home?client=c1").get_json()
+    assert layout["window_paths"] == {pinned["id"]: {"path": "/?doc=1", "title": "First"}}
+    assert layout["updated_at"] is None
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    # The same report again is silent.
+    client.post(
+        f"/api/desktops/home/windows/{pinned['id']}/location",
+        json={"client_id": "c1", "path": "/?doc=1", "title": "First"},
+    )
+    assert drain_messages(first_queue) == []
+    # A report without a client is refused.
+    assert (
+        client.post(f"/api/desktops/home/windows/{pinned['id']}/location", json={"path": "/x", "title": ""}).status_code
+        == 400
+    )
+
+    # ``navigate`` writes the target client's path and keeps its title; the other client is untouched.
+    navigated = _op(client, "navigate", {"window": pinned["id"], "path": "/?doc=2", "client": "c1"}, None)
+    assert navigated.status_code == 200
+    assert navigated.get_json()["layout"]["window_paths"] == {pinned["id"]: {"path": "/?doc=2", "title": "First"}}
+    assert navigated.get_json()["desktop"]["windows"][0]["path"] == "/"
+    assert [message["type"] for message in drain_messages(first_queue)] == ["placements_updated"]
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    drain_messages(second_queue)
+    # A linked window still moves for everyone through the same route.
+    linked = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
+    client.post(
+        f"/api/desktops/home/windows/{linked['id']}/location",
+        json={"client_id": "c2", "path": "/?session=t2", "title": "Two"},
+    )
+    assert [window["path"] for window in _desktop_windows(client)] == ["/", "/?session=t2"]
+    assert "desktops_updated" in [message["type"] for message in drain_messages(first_queue)]
+
+
 # The desktop routes (desktop contracts.md section 5)
 
 
@@ -519,24 +587,27 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
     # A location report replaces the path and title, ends the settling, and is silent when it changes nothing.
     located = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
-        json={"path": "/?session=terminal-1", "title": "  Build log  "},
+        json={"client_id": "c1", "path": "/?session=terminal-1", "title": "  Build log  "},
     )
     assert located.status_code == 200
     assert located.get_json()["title"] == "Build log" and located.get_json()["is_settling"] is False
     drain_messages(first_queue)
     again = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
-        json={"path": "/?session=terminal-1", "title": "Build log"},
+        json={"client_id": "c1", "path": "/?session=terminal-1", "title": "Build log"},
     )
     assert again.status_code == 200 and drain_messages(first_queue) == []
     assert (
         client.post(
-            "/api/desktops/home/windows/win-00000000000000ff/location", json={"path": "/", "title": ""}
+            "/api/desktops/home/windows/win-00000000000000ff/location",
+            json={"client_id": "c1", "path": "/", "title": ""},
         ).status_code
         == 404
     )
     assert (
-        client.post(f"/api/desktops/home/windows/{window['id']}/location", json={"path": "x", "title": ""}).status_code
+        client.post(
+            f"/api/desktops/home/windows/{window['id']}/location", json={"client_id": "c1", "path": "x", "title": ""}
+        ).status_code
         == 400
     )
 
@@ -560,6 +631,7 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
         "version": 1,
         "updated_at": None,
         "placements": [],
+        "window_paths": {},
     }
     assert client.get("/api/placements/home").status_code == 400
     assert client.get("/api/placements/nowhere?client=c2").status_code == 404

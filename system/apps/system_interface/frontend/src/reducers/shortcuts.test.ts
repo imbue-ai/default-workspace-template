@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appRecord, desktopRecord, placementRecord, windowRecord } from "../testing/records";
+import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveLaunchRun } from "./shortcuts";
@@ -27,10 +27,7 @@ describe("resolveLaunchRun", () => {
     const state = stateWith({
       type: "layout_loaded",
       desktopId: "home",
-      layout: {
-        updated_at: null,
-        placements: [placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })],
-      },
+      layout: layoutRecord([placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })]),
     });
     expect(resolveLaunchRun(state, "docs", "new", "focus")).toEqual({ kind: "raise", windowId: "win-1" });
   });

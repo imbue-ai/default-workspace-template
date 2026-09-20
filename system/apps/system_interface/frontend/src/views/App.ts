@@ -20,10 +20,10 @@ import {
   activePlacements,
   appByName,
   desktopById,
+  effectiveWindowTitle,
   isWindowMinimized,
   openableApps,
   taskbarEntries,
-  windowTitle,
 } from "../reducers/desktopState";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
@@ -384,7 +384,7 @@ export function App(): m.Component<AppAttrs> {
       .filter((window) => window.app === app.name)
       .map((window) => ({
         window,
-        title: windowTitle(window, app),
+        title: effectiveWindowTitle(state, window, app),
         isMinimized: isWindowMinimized(placements, window.id),
       }));
     return m(
@@ -463,7 +463,7 @@ export function App(): m.Component<AppAttrs> {
       state.desktops,
       state.activeDesktopId,
       (name) => appByName(state, name),
-      windowTitle,
+      (window, app) => effectiveWindowTitle(state, window, app),
       (desktopId, windowId) => (desktopId === state.activeDesktopId ? isWindowMinimized(placements, windowId) : false),
     );
   }

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
-import { appRecord, desktopRecord, placementRecord, windowRecord } from "../testing/records";
+import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
 import {
   activeFocusedWindowId,
   activePlacements,
+  effectiveWindowPath,
+  effectiveWindowTitle,
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
@@ -30,7 +32,7 @@ function loaded(): DesktopState {
     { type: "apps_updated", apps: [appRecord("docs"), appRecord("notes")] },
     { type: "desktops_updated", desktops: [home, work] },
     { type: "desktop_activated", desktopId: "home" },
-    { type: "layout_loaded", desktopId: "home", layout: { updated_at: "t1", placements: [placementRecord("win-1")] } },
+    { type: "layout_loaded", desktopId: "home", layout: layoutRecord([placementRecord("win-1")], "t1") },
   );
 }
 
@@ -47,7 +49,7 @@ describe("loading", () => {
     const state = reduceDesktopState(loaded(), {
       type: "layout_loaded",
       desktopId: "work",
-      layout: { updated_at: "t9", placements: [] },
+      layout: layoutRecord([], "t9"),
     });
     expect(state.layout.updated_at).toBe("t1");
   });
@@ -98,7 +100,7 @@ describe("the window verbs", () => {
     const reloaded = reduceDesktopState(gestured, {
       type: "layout_loaded",
       desktopId: "home",
-      layout: { updated_at: "t3", placements: [placementRecord("win-2")] },
+      layout: layoutRecord([placementRecord("win-2")], "t3"),
     });
     const late = reduceDesktopState(reloaded, {
       type: "layout_saved",
@@ -162,7 +164,7 @@ describe("opens and closes this client made", () => {
     const before = reduceDesktopState(loaded(), {
       type: "layout_loaded",
       desktopId: "home",
-      layout: { updated_at: "t2", placements: [placementRecord("win-1"), stored] },
+      layout: layoutRecord([placementRecord("win-1"), stored], "t2"),
     });
     const state = reduceDesktopState(before, {
       type: "window_opened_here",
@@ -201,6 +203,48 @@ describe("opens and closes this client made", () => {
       window: windowRecord("win-9", "docs", "/x"),
     });
     expect(gone).toBe(state);
+  });
+
+  it("takes the client's window paths alone without touching the placements or their version", () => {
+    const gestured = reduceDesktopState(loaded(), { type: "window_minimized", windowId: "win-1" });
+    const state = reduceDesktopState(gestured, {
+      type: "window_paths_loaded",
+      desktopId: "home",
+      windowPaths: { "win-2": { path: "/?doc=4", title: "Four" } },
+    });
+    expect(state.layout.placements).toBe(gestured.layout.placements);
+    expect(state.layoutVersion).toBe(gestured.layoutVersion);
+    expect(isLayoutDirty(state)).toBe(true);
+    expect(state.layout.window_paths).toEqual({ "win-2": { path: "/?doc=4", title: "Four" } });
+    expect(reduceDesktopState(state, { type: "window_paths_loaded", desktopId: "work", windowPaths: {} })).toBe(state);
+  });
+
+  it("keeps an independent window's answered location beside the layout, not on the shared record", () => {
+    const independent = windowRecord("win-3", "docs", "/", { is_pinned: true, scope: "independent" });
+    const before = reduceDesktopState(loaded(), {
+      type: "desktops_updated",
+      desktops: [{ ...home, windows: [...home.windows, independent] }, work],
+    });
+    const state = reduceDesktopState(before, {
+      type: "window_location_reported",
+      desktopId: "home",
+      window: { ...independent, path: "/?doc=5", title: "Five" },
+    });
+    expect(state.desktops[0].windows[2].path).toBe("/");
+    expect(state.layout.window_paths).toEqual({ "win-3": { path: "/?doc=5", title: "Five" } });
+    expect(isLayoutDirty(state)).toBe(false);
+    expect(effectiveWindowPath(state, independent)).toBe("/?doc=5");
+    expect(effectiveWindowTitle(state, independent, appRecord("docs"))).toBe("Five");
+    expect(effectiveWindowTitle(before, independent, appRecord("docs"))).toBe("Docs");
+    expect(taskbarEntries(state).map((entry) => entry.title)).toEqual(["Docs", "Notes", "Five"]);
+    // The same answer again changes nothing; one for another desktop is not this layout's.
+    expect(
+      reduceDesktopState(state, {
+        type: "window_location_reported",
+        desktopId: "home",
+        window: { ...independent, path: "/?doc=5", title: "Five" },
+      }),
+    ).toBe(state);
   });
 
   it("drops a closed window and its placement", () => {

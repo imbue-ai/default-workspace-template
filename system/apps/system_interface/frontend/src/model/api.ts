@@ -121,14 +121,18 @@ export async function closeWindow(desktopId: string, windowId: string): Promise<
   await postJson<void>(desktopUrl(desktopId, `/windows/${encodeURIComponent(windowId)}/close`), {});
 }
 
+/** Report where a page is; the answer is the window as this client sees it (an independent window at the
+ *  client's own path). */
 export async function reportWindowLocation(
   desktopId: string,
   windowId: string,
+  clientId: string,
   path: string,
   title: string,
 ): Promise<WindowRecord> {
   return parseWindow(
     await postJson<unknown>(desktopUrl(desktopId, `/windows/${encodeURIComponent(windowId)}/location`), {
+      client_id: clientId,
       path,
       title,
     }),

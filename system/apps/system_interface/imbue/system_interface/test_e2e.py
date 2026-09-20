@@ -1270,6 +1270,69 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         assert [window["id"] for window in _windows(server.base_url, created["id"])] == [born["id"]]
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navigates_one_client(
+    tmp_path: Path, page: Page
+) -> None:
+    """Two clients restore the same independent pinned window: each page moves on its own and reports its own
+    path, the shared record keeps the home path, neither client follows the other, and an agent's ``navigate``
+    for one client moves that client's page alone."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        assert pinned["scope"] == "independent"
+        with _second_client(page, server) as other_page:
+            for client_page in (page, other_page):
+                _taskbar_entry(client_page, pinned["id"]).click()
+                expect(_window(client_page, pinned["id"])).to_be_visible(timeout=15000)
+            frame = _page_frame(page, pinned["id"])
+            other_frame = _page_frame(other_page, pinned["id"])
+            client_id = _client_id(page)
+            other_client_id = _client_id(other_page)
+
+            frame.evaluate("() => window.__navigateTo('/?doc=1')")
+            other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
+            wait_for(
+                lambda: _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")[
+                    "window_paths"
+                ].get(pinned["id"], {}).get("path")
+                == "/?doc=1"
+                and _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={other_client_id}")[
+                    "window_paths"
+                ].get(pinned["id"], {}).get("path")
+                == "/?doc=2",
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the two clients' own paths never reached their window path files",
+            )
+            page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+            assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
+            assert _pinned_window(server.base_url)["title"] == ""
+            expect(frame.locator("#where")).to_have_text("/?doc=1")
+            expect(other_frame.locator("#where")).to_have_text("/?doc=2")
+            assert frame.evaluate("() => window.__navigations") == []
+            assert other_frame.evaluate("() => window.__navigations") == []
+            expect(_window(page, pinned["id"]).locator(".window-title")).to_have_text("Stub /?doc=1", timeout=15000)
+            expect(_window(other_page, pinned["id"]).locator(".window-title")).to_have_text("Stub /?doc=2")
+            expect(_taskbar_entry(page, pinned["id"])).to_contain_text("Stub /?doc=1")
+
+            answer = _broadcast_op(
+                server.base_url, "navigate", {"window": pinned["id"], "path": "/?doc=3", "client": client_id}
+            )
+            assert answer["layout"]["window_paths"][pinned["id"]]["path"] == "/?doc=3"
+            expect(frame.locator("#where")).to_have_text("/?doc=3", timeout=15000)
+            assert frame.evaluate("() => window.__navigations") == ["/?doc=3"]
+            page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+            expect(other_frame.locator("#where")).to_have_text("/?doc=2")
+            assert other_frame.evaluate("() => window.__navigations") == []
+            assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
+
+            # A reload of the first client lands its page at its own path again.
+            page.reload()
+            expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+            assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}/?doc=3"
+
+
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting with the Playwright
 # version. The shell reads compactness off the viewport width and touch off the coarse pointer.
 _MOBILE_CONTEXT_ARGS: dict[str, Any] = {

@@ -246,23 +246,30 @@ def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
 
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowLocationReport)
-    window = _shell().report_window_location(desktop_id, WindowId(window_id), body.path, body.title)
+    window = _shell().report_window_location(desktop_id, WindowId(window_id), body.client_id, body.path, body.title)
     return jsonify(window_wire_json(window))
 
 
 # Section 5.4: placements
 
 
+def _layout_wire_json(shell: ShellState, desktop: Desktop, client_id: str) -> dict[str, Any]:
+    """The client's layout of the desktop with its stored paths for the desktop's independent windows."""
+    layout = shell.placements.read_layout(desktop.id, client_id, {window.id for window in desktop.windows})
+    return desktop_layout_wire_json(layout, shell.read_window_paths(desktop, client_id))
+
+
 def get_placements(desktop_id: str) -> ResponseReturnValue:
     client_id = ClientId(request.args.get("client", ""))
-    return jsonify(desktop_layout_wire_json(_shell().read_desktop_layout(desktop_id, client_id)))
+    shell = _shell()
+    return jsonify(_layout_wire_json(shell, shell.get_desktop(desktop_id), client_id))
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(PlacementsSaveRequest)
     saved = _shell().save_browser_placements(desktop_id, body)
     # The stamp is spelled as the read route spells it, so the window compares like with like.
-    return jsonify({"updated_at": desktop_layout_wire_json(saved)["updated_at"] if saved is not None else None})
+    return jsonify({"updated_at": desktop_layout_wire_json(saved, {})["updated_at"] if saved is not None else None})
 
 
 # Section 5.5: wallpapers, and the inventory document
@@ -544,14 +551,13 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
 
 def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
     desktop = shell.get_desktop(target.desktop.id)
-    layout = shell.read_desktop_layout(desktop.id, target.client_id)
     return jsonify(
         {
             "ok": True,
             "desktop_id": str(desktop.id),
             "client_id": str(target.client_id),
             "desktop": desktop_wire_json(desktop),
-            "layout": desktop_layout_wire_json(layout),
+            "layout": _layout_wire_json(shell, desktop, target.client_id),
             "window_id": str(window_id) if window_id is not None else None,
         }
     )
@@ -645,7 +651,9 @@ def _op_window(
         case "navigate":
             if not arguments.path:
                 raise LayoutOpError("navigate needs a path")
-            shell.report_window_location(desktop.id, window.id, WindowPath(arguments.path), window.title)
+            # As if the target client's page had reported it: an independent window moves for that client alone.
+            seen = shell.effective_window_for_client(desktop, window, target.client_id)
+            shell.report_window_location(desktop.id, window.id, target.client_id, WindowPath(arguments.path), seen.title)
         case _:
             raise LayoutOpError(f"Op {op!r} has no window handler")
     return window.id

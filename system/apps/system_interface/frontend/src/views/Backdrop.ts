@@ -12,7 +12,7 @@ import { cellRect, placeShortcuts } from "../geometry/grid";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
-import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
+import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
@@ -112,7 +112,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   key: window.id,
                   window,
                   app,
-                  title: windowTitle(window, app),
+                  title: effectiveWindowTitle(state, window, app),
                   rect: gestureRect ?? store.renderedRect(placement),
                   state: renderedState(placement, state.modes),
                   stackIndex: index,

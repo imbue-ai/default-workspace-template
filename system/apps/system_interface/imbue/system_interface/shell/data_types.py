@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
@@ -16,6 +17,7 @@ from pydantic import Field
 from pydantic import model_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -292,9 +294,17 @@ class WindowOpenRequest(FrozenModel):
     )
 
 
+class StoredWindowPath(FrozenModel):
+    """One client's path and title for an independent window (pinned-taskbar-entries plan section 5.1)."""
+
+    path: WindowPath = Field(description="Where the client's page of the window is")
+    title: WindowTitle = Field(description="What that page calls itself; empty means the app's display name")
+
+
 class WindowLocationReport(FrozenModel):
     """The body of ``POST /api/desktops/<id>/windows/<window_id>/location``."""
 
+    client_id: ClientId = Field(description="The client whose page reported, whose own path an independent window keeps")
     path: WindowPath = Field(description="Where the page is now")
     title: WindowTitle = Field(description="What the page calls itself now")
 
@@ -347,6 +357,21 @@ def window_wire_json(window: Window) -> dict[str, Any]:
 
 
 @pure
-def desktop_layout_wire_json(layout: DesktopLayout) -> dict[str, Any]:
-    """The ``layout`` object of desktop contracts.md section 4.2."""
-    return layout.model_dump(mode="json")
+def desktop_layout_wire_json(layout: DesktopLayout, window_paths: Mapping[WindowId, StoredWindowPath]) -> dict[str, Any]:
+    """The ``layout`` object of desktop contracts.md section 4.2, with the client's stored paths for the desktop's
+    independent windows (pinned-taskbar-entries plan section 5.3)."""
+    return {
+        **layout.model_dump(mode="json"),
+        "window_paths": {str(window_id): stored.model_dump(mode="json") for window_id, stored in window_paths.items()},
+    }
+
+
+@pure
+def effective_window(window: Window, stored: StoredWindowPath | None) -> Window:
+    """The window as one client sees it: an independent window wears the client's stored path and title (the home
+    path with no title when it has none); a linked window is the shared record."""
+    if window.scope is LocationScope.LINKED or stored is None:
+        return window
+    return window.model_copy_update(
+        to_update(window.field_ref().path, stored.path), to_update(window.field_ref().title, stored.title)
+    )
