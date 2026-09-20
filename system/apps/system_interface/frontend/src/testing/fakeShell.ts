@@ -104,6 +104,9 @@ export class FakeDesktopApi implements DesktopApi {
   async deleteDesktop(desktopId: string): Promise<string> {
     this.calls.push(`deleteDesktop:${desktopId}`);
     this.refuse();
+    this.desktop(desktopId);
+    // The shell's own refusal: the last desktop stays.
+    if (this.desktops.length === 1) throw new Error("the last desktop cannot be deleted");
     this.desktops = this.desktops.filter((candidate) => candidate.id !== desktopId);
     return this.desktops[0].id;
   }
