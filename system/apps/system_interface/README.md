@@ -55,17 +55,25 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `/wallpapers/<kind>/<name>`), the per-app Stop and Start
   (`/api/apps/<name>/stop|start`), clients (`/api/clients`), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), the templates
-  catalog (`/api/templates-catalog`), and the loopback-only op route
-  (`/api/layout/broadcast`).
+  catalog (`/api/templates-catalog`), each client's pinned-entry presentation
+  (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
+  `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
+  registration `POST /api/avatars` is loopback-only), and the loopback-only
+  op route (`/api/layout/broadcast`).
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `placements_updated`, `active_desktop_changed`, and `layout_op` (contracts
+  `placements_updated`, `active_desktop_changed`, `client_entries_changed`,
+  `avatar_status`, `avatar_selection_changed`, and `layout_op` (contracts
   section 6); it accepts each client's `client_state` report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
-`placements/<desktop>/<client>.json`, `clients.json`, and the client-activity
-event log (`events/client_activity/events.jsonl`, what `layout.py context`
-reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
-`data/.apps/system_interface/wallpapers/` (files the user adds).
+`placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
+own paths for independent windows), `clients.json`, `avatar_selection.json`,
+and the client-activity event log (`events/client_activity/events.jsonl`, what
+`layout.py context` reads). Wallpapers are listed from `static/wallpapers/`
+(bundled) and `data/.apps/system_interface/wallpapers/` (files the user adds);
+avatar designs an agent registers live in
+`data/.apps/system_interface/avatars/catalog.json` beside the seven bundled
+ones (`docs/system/avatar-designs.md`).
 
 ### The desktop model
 
@@ -74,6 +82,17 @@ reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized; the order is the stack).
+- **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
+  app whose manifest declares a `[pin]` has exactly one pinned window on
+  every desktop, reconciled on every read after the registry is read and
+  never closed. With the `independent` scope the window's shared path stays
+  its home path and each client's own path and title live in
+  `shell/window_paths.py`'s per-client file. How a client shows the entry
+  (in the bar or floating, plain or as the avatar) is on its client record.
+- **The avatar** (`avatar/`): the bundled and registered designs, the
+  workspace's selection, the rendered image routes, and the status reader,
+  which folds mngr's agents event file into a mood (working when any agent
+  but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
   registry has been read. A client record holds the client's active desktop
@@ -135,7 +154,10 @@ The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
 window menu. The taskbar shows the desktop switcher, one entry per window of
 the active desktop, the launcher button, and the tray (running apps, the
-update-staleness banner). Desktops are created, renamed, recoloured,
+update-staleness banner). A pinned window's entry may float above the windows
+instead, drawn as the workspace's avatar (the chat's default); its context
+menu moves it between the bar and the desktop, switches its style, and opens
+the avatar chooser. Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 

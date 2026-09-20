@@ -60,6 +60,8 @@ A window has an id, minted when it is opened and never reused, which is how plac
 The path and the title are live shared state.
 Whoever drives the page changes them, the page reports them, and every other client's page follows, which is what makes a shared desktop a primitive kind of app sharing.
 An app that keeps its state in its URL gets that for free; the convention for app authors is that anything another person should see belongs in the URL.
+That is a *linked* window, the default.
+A window an app's manifest pins may instead be *independent*: its home path is shared, but the path and title each client's page is at are that client's own, stored per client and followed by no one (pinned-taskbar-entries plan section 3.2).
 
 The shell stores nothing else about what a window shows.
 It has no status, no listing of what is inside an app, and no verbs on the app's things; a window's menu offers only what the shell itself can do.
@@ -104,12 +106,14 @@ No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 The window menu offers Refresh, Share, Stop and Start the app, and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
+A pinned window's title bar has no close control and its menu no Close: it is never closed, only minimized.
 
 ### 2.8 Taskbar, launcher, system tray, tray widgets
 
 The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized ones marked; then the **system tray**.
 An entry shows the app icon and the title (icon only in compact mode).
+A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
 Clicking an entry restores a minimized window and raises it, minimizes the top window, or raises any other window.
 
 The launcher is the text field and the overlay it opens: typing shows results (windows across desktops, apps and their launch paths, "Start something" intents, templates), and focusing the empty field shows the resting content the New Tab page shows today.
@@ -216,7 +220,7 @@ Recorded here so the spec need not re-argue them.
 3. Windows are shared per desktop; placements, including stacking order, are per client; a window without a placement is minimized.
 4. Shortcut cells are shared and fitted to the current grid at render time.
 5. Geometry is fractions of the backdrop.
-6. Taskbar entries are the active desktop's windows in this client.
+6. Taskbar entries are the active desktop's windows in this client; a pinned window's entry may be drawn in the bar with a style or floating above the windows.
 7. The launcher is a text field and an overlay, never a window.
 8. The shell has no instance layer; apps own their things, and the chat app lists its chats inside its own page with an inner frame per selected chat, keeping its single-chat page for direct launches.
 9. A window's close removes it for everyone; minimize is the per-client way to get it out of sight.
@@ -224,4 +228,4 @@ Recorded here so the spec need not re-argue them.
 11. The `{tab}` placeholder, tab ids on the wire, and the rebind route go.
 12. Agent verbs are window and desktop verbs only; `split` and `move` become `place`.
 13. A desktop's sharing mode is a flag with one window set in both modes.
-14. A window's URL is followed live by every client, navigated in-app where the page can and by reload otherwise, never echoed back to the client that drove it.
+14. A window's URL is followed live by every client, navigated in-app where the page can and by reload otherwise, never echoed back to the client that drove it. The independent scope is the one exception: such a window's path is each client's own, and only an agent's `navigate` moves one client's page.
