@@ -39,7 +39,9 @@ const MENU_MARGIN = 6;
 /**
  * Where a floating card goes: hanging under its anchor ("below") or beside it ("right"). Either
  * way it flips to the opposite side when it would overflow the window and there is room on the
- * other one, then clamps MENU_MARGIN from the edges.
+ * other one, then keeps MENU_MARGIN from the right and bottom edges and from the top; on the left
+ * it stops at the margin or at its anchor's own edge, whichever is nearer the window's edge, so a
+ * card for an anchor inside the margin stays flush with it.
  */
 export function placeMenu(
   anchor: MenuAnchor,
