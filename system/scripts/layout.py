@@ -477,6 +477,8 @@ def _listed_window(window: dict[str, Any]) -> dict[str, Any]:
         "path": window.get("path"),
         "title": window.get("title"),
         "is_settling": window.get("is_settling"),
+        "is_pinned": window.get("is_pinned", False),
+        "scope": window.get("scope", "linked"),
     }
 
 

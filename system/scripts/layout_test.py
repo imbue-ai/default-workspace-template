@@ -288,7 +288,15 @@ def test_desktops_and_list_read_the_inventory_document(fake_shell: Any, capsys: 
             "wallpaper": None,
             "shortcuts": fake_shell.inventory_desktops[0]["shortcuts"],
             "windows": [
-                {"id": _FILES_WINDOW["id"], "app": "files", "path": "/notes/", "title": "notes", "is_settling": False}
+                {
+                    "id": _FILES_WINDOW["id"],
+                    "app": "files",
+                    "path": "/notes/",
+                    "title": "notes",
+                    "is_settling": False,
+                    "is_pinned": False,
+                    "scope": "linked",
+                }
             ],
         }
     ]
@@ -302,7 +310,16 @@ def test_desktops_and_list_read_the_inventory_document(fake_shell: Any, capsys: 
     assert [app["name"] for app in listing["apps"]] == ["files"]
     assert listing["apps"][0]["launch_paths"] == fake_shell.inventory_apps[0]["launch_paths"]
     assert listing["apps"][0]["windows"] == [
-        {"id": _FILES_WINDOW["id"], "app": "files", "path": "/notes/", "title": "notes", "is_settling": False, "desktop": "home"}
+        {
+            "id": _FILES_WINDOW["id"],
+            "app": "files",
+            "path": "/notes/",
+            "title": "notes",
+            "is_settling": False,
+            "is_pinned": False,
+            "scope": "linked",
+            "desktop": "home",
+        }
     ]
     assert [desktop["id"] for desktop in listing["desktops"]] == ["home"]
 

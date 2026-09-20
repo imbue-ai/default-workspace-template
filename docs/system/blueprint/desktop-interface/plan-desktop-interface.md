@@ -189,6 +189,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 Nothing else happens to the app: the shell has no notion of stopping or deleting what the window showed.
+A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", its chrome and menus offer no Close, and the close chord minimizes it instead (pinned-taskbar-entries plan section 4.4).
 
 ### 4.6 Following the URL
 
@@ -224,6 +225,7 @@ Adding a shortcut: the launcher's tiles and the Running apps popover offer "Add 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
+A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu has no Close and adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Desktops and Running apps (concepts.md 2.8); each is one component with one popover, and adding a third is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
@@ -361,6 +363,7 @@ A page that nests a further frame of its own (the chat root, section 9.1) relays
 It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
+A `[pin]` table (`path`, and optionally `style`, `scope`, `default_mode`) declares the app's pinned window (pinned-taskbar-entries plan section 7.1).
 `forward_port.py` copies the new fields onto the registry row and drops the old ones; the app watcher and minds read `name`, `url`, `label`, `icon` as before.
 
 ## 9. The built-in apps
@@ -453,7 +456,7 @@ The order is additive first: the apps learn the new contract and gain their laun
 - Theme switching and a settings route; V1 ships one theme.
 - Wallpaper upload from the settings dialog; V1 lists files already in the wallpapers directory.
 - Taskbar auto-hide; window cycling and keyboard move and resize; a status signal from pages to the taskbar; a window-targeted shortcut kind.
-- Enforcing the sharing mode once workspaces have more than one user; presence, avatars, and a multiplayer chat.
+- Enforcing the sharing mode once workspaces have more than one user; presence and a multiplayer chat (the avatar landed with the pinned-taskbar-entries plan).
 - A richer launcher (type-ahead over app contents through an app-declared search route).
 - Narrowing a per-app share grant to the terminal alone, which needs its pty origin admitted with it.
 - Reporting a terminal's in-tmux session switch as a location, which needs the ttyd client to learn the session name.

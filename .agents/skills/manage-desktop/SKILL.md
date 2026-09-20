@@ -81,7 +81,7 @@ A window argument is one of:
 | Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
 | Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
-| Close a window | `python3 system/scripts/layout.py close <window>` |
+| Close a window | `python3 system/scripts/layout.py close <window>` (refused for a pinned window, which is never closed; `minimize` it instead) |
 
 `open` prints the window's id (the new one's, or the focused one's) to **stdout**
 so you can name it in later ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
@@ -114,7 +114,10 @@ target client's placements only:
 
 `navigate` and `refresh` reach the page itself: `navigate` sets the window's
 path as if its page had reported it (the client's page follows), and `refresh`
-reloads the page (on the target client, or on every client for `--app`).
+reloads the page (on the target client, or on every client for `--app`). On a
+window whose `scope` is `independent` (the chat's pinned root window: each
+viewer keeps their own path there), `navigate` moves the target client's page
+alone and leaves every other client where it was.
 
 The most common natural request, "put a terminal next to my chat", is:
 
@@ -160,7 +163,9 @@ subcommand: it is the taskbar's desktop menu, or the shell's REST routes
 
 `desktops` prints every desktop with its windows (`id`, `app`, `path`, `title`,
 `is_settling`: true from an open at a launch path until the page's first
-location report) and shortcuts, and every client with its `active_desktop`,
+location report; `is_pinned`: the app's pinned window, present on every desktop
+and never closed; `scope`: `linked`, or `independent` for a window whose path
+is each client's own) and shortcuts, and every client with its `active_desktop`,
 `is_connected`, and `shown` (the windows of its active desktop it has not
 minimized). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both

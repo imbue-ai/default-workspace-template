@@ -596,10 +596,16 @@ Flags:
 - `--manifest`: the app's `app.toml`. Its `name` (validated like
   `--name` below), the icon file it names (validated like `--icon-file`),
   and its static fields (`display_name`, `critical`, `priority`, `program`,
-  `internal`, `launcher_rank`, `default_shortcut`, `launch_paths`) are
+  `internal`, `launcher_rank`, `default_shortcut`, `launch_paths`, `pin`) are
   copied onto the registry row on every
   call, so a changed manifest updates the row on the next start. This is
-  the form every app with a directory uses. `--name` may accompany it and
+  the form every app with a directory uses. A `[pin]` table (`path`, and
+  optionally `style = "plain" | "avatar"`, `scope = "linked" | "independent"`,
+  `default_mode = "bar" | "floating"`) gives the app one window at that path
+  on every desktop that is never closed and whose taskbar entry each client
+  may draw in the bar or floating above the windows; almost no app wants
+  one (the chat's root window is the case it exists for), so leave it out
+  unless the user asked for an always-present window. `--name` may accompany it and
   must then equal the manifest's name; `--icon-file`, `--program`,
   `--internal` and `--no-icon` are for registrations with no app directory
   (previews, isolated test servers) and cannot be combined with it.

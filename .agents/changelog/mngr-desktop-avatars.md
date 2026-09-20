@@ -1,0 +1,1 @@
+The `manage-desktop` skill documents pinned windows (listed with `is_pinned` and `scope` by `desktops`, never closed: `close` is refused, `minimize` instead) and that `navigate` on an independent window (the chat's pinned root) moves the target client's page alone. The `build-app` skill's `forward_port.py --manifest` notes cover the `[pin]` table.

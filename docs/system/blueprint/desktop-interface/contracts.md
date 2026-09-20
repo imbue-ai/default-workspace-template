@@ -32,6 +32,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
+| `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; the app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
 
 `instances`, `instances_url`, and `actions` are removed; a manifest that carries them fails to load.
@@ -48,10 +49,12 @@ Built-in manifests:
 | `files` | false | `files` | 20 | `{launch = "new", mode = "focus"}` | `new` ("New File Viewer", `/`, params `path` optional) |
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("New Browser", `/new`, params `url` optional) |
 
+The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
+
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), and `launcher_rank` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, and `pin` (inline table `{path, style, scope, default_mode}`) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -76,7 +79,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
         {"target": {"kind": "launch", "app": "chat", "launch": "new"}, "mode": "new", "cell": {"column": 0, "row": 0}}
       ],
       "windows": [
-        {"id": "win-0123456789abcdef", "app": "chat", "path": "/?chat=agent-3f2a", "title": "Plan the launch", "opened_at": "2026-09-19T14:11:02.824Z", "is_settling": false}
+        {"id": "win-0123456789abcdef", "app": "chat", "path": "/?chat=agent-3f2a", "title": "Plan the launch", "opened_at": "2026-09-19T14:11:02.824Z", "is_settling": false, "is_pinned": false, "scope": "linked"}
       ]
     }
   ]
@@ -86,7 +89,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - `desktops` is in creation order; the first is the fallback desktop.
 - `color` is `#RRGGBB`; `glyph` is `0..9`; `sharing` is `shared` or `personal`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
 - `shortcuts`: `target.kind` is `launch` (the only V1 kind); at most one shortcut per `(app, launch)`; `cell.column` and `cell.row` are integers at least 0.
-- `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_settling` is true from an open at a launch path until the first location report, and false for an open at an explicit path.
+- `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_settling` is true from an open at a launch path until the first location report, and false for an open at an explicit path; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
 - A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read.
 
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
@@ -109,10 +112,18 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.3 `clients.json`
 
-`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>"}}}`.
+`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}}}}`; `entries` (default `{}`) is how the client shows each pinned entry.
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
 
-### 4.4 Wallpapers
+### 4.4 `window_paths/<client_id>.json`
+
+`{"version": 1, "windows": {"<window_id>": {"path", "title"}}}`: the client's own path and title for each independent window, written by that client's location reports and an agent's `navigate` targeting it; entries for windows since gone are dropped on read, and the file is pruned with the client.
+
+### 4.5 `avatar_selection.json`
+
+`{"version": 1, "design": "<design id>"}`: the workspace's avatar design; absent or unreadable reads as the default (`gummy-seal`). The registered designs live at `data/.apps/system_interface/avatars/catalog.json` (`docs/system/avatar-designs.md`).
+
+### 4.6 Wallpapers
 
 Bundled wallpapers ship at `imbue/system_interface/static/wallpapers/<name>.<ext>`; file wallpapers live at `data/.apps/system_interface/wallpapers/<name>.<ext>`.
 Accepted extensions: `png`, `jpg`, `jpeg`, `webp`.
@@ -150,8 +161,8 @@ Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and 
 | Route | Request | Response |
 |---|---|---|
 | `POST /api/desktops/<id>/windows` | `{"app", "path", "client_id", "if_present": "focus" \| "new", "launch": "<launch path id>"?}` | `201 {"window", "is_new": true}` for an open; `200 {"window", "is_new": false}` when `if_present` is `focus` and a window of that app at that path exists on the desktop; `400` for an unregistered app or a bad path. `launch` marks the path as a launch path, which sets `is_settling` |
-| `POST /api/desktops/<id>/windows/<window_id>/close` | | `204`; idempotent |
-| `POST /api/desktops/<id>/windows/<window_id>/location` | `{"path", "title"}` | `200 window`; `404` unknown window; `400` bad path or title |
+| `POST /api/desktops/<id>/windows/<window_id>/close` | | `204`; idempotent; `409` for a pinned window |
+| `POST /api/desktops/<id>/windows/<window_id>/location` | `{"path", "title", "client_id"}` | `200 window`; `404` unknown window; `400` bad path or title. For an independent window the report is stored for `client_id` alone and the answer's `path` and `title` are that client's |
 
 An open with `is_new` writes the requesting client's placement (section 10, cascade) on top of its stack and broadcasts `placements_updated` for that client, and `desktops_updated` for everyone.
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
@@ -163,22 +174,27 @@ A location that changes nothing writes and broadcasts nothing.
 
 | Route | Request | Response |
 |---|---|---|
-| `GET /api/placements/<desktop_id>?client=<client_id>` | | `200 layout` (the client's own, else `{"version": 1, "updated_at": null, "placements": []}`) |
+| `GET /api/placements/<desktop_id>?client=<client_id>` | | `200 layout` (the client's own, else `{"version": 1, "updated_at": null, "placements": []}`) with `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows |
 | `POST /api/placements/<desktop_id>` | `{"client_id", "save_id", "base_updated_at", "placements"}` | `200 {"updated_at"}`; `null` when the body equalled the stored layout and nothing was written; `409` when the stored `updated_at` is newer than `base_updated_at` |
 
 `layout` is the object of section 4.2.
-A save whose placements name windows the desktop does not hold is accepted with those entries dropped.
+A save whose placements name windows the desktop does not hold is accepted with those entries dropped; the save route ignores `window_paths`.
 
 ### 5.5 Clients, inventory, wallpapers
 
 | Route | Response |
 |---|---|
-| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected"}]}` |
+| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "entries"}]}` |
+| `POST /api/clients/<client_id>/entries/<app>` | takes `{"mode", "style", "position"}` (section 4.3), for a pinned non-internal app, the style `plain` or the pin's; answers the client record and announces `client_entries_changed` to that client's windows |
+| `GET /api/avatars` | `{"designs": [{"id", "label", "source_path"}], "selected", "default"}` |
+| `POST /api/avatars` | loopback only: registers `{"id", "label", "svg", "source_path"}` (`201`); `400` for a design off the vocabulary of `docs/system/avatar-designs.md` |
+| `GET /api/avatars/<id>/image.svg?mood=idle\|working&preview=1` | the rendered image; `GET /api/avatars/<id>/source.svg` the original as an attachment; `404` otherwise |
+| `POST /api/avatar-selection` | takes `{"design"}`; writes `avatar_selection.json` and announces `avatar_selection_changed`; `400` for an unknown design |
 | `GET /api/inventory` | `{"desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `shown` is the windows of the client's active desktop that its layout does not minimize |
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "is_running"}`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`.
 
 ## 6. The WebSocket
 
@@ -192,9 +208,12 @@ Outbound:
 |---|---|---|
 | `apps_updated` | `{"apps": [app, ...]}` | on connect, and when any row or liveness changed |
 | `desktops_updated` | `{"desktops": [desktop, ...]}` | on connect, and after any write of `desktops.json` (a desktop, shortcut, wallpaper, window open or close, or location change) |
-| `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file; a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
+| `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file, and after a write of a client's window path (with a shell-minted save id); a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
 | `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report or an op changed the client's stored active desktop |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the transient ops `refresh` and `reload_system_interface` (section 8) |
+| `client_entries_changed` | `{"client_id", "entries"}` | to that client's windows, after its entry presentations were written |
+| `avatar_status` | `{"mood": "idle" \| "working", "is_stale"}` | on connect, and when either changes |
+| `avatar_selection_changed` | `{"design"}` | after the selection is written |
 
 `is_connected` on a client is whether any window of it holds the socket.
 
@@ -300,6 +319,9 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-default-wallpaper` | `url(/wallpapers/bundled/<name>)` | | | no |
 | `--desk-icon-size` | `48px` | `40px` | | no |
 | `--desk-shortcut-label-shadow` | `0 1px 2px rgb(0 0 0 / 0.6)` | | | no |
+| `--desk-floating-entry-size` | `56px` | | | yes |
+| `--desk-floating-entry-inset-x` | `16px` | | | yes |
+| `--desk-floating-entry-inset-y` | `12px` | | | yes |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
@@ -319,6 +341,12 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-tray-widget="desktops\|running-apps"`, `data-desktop-switch="<id>"` | the tray |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
+| `data-pinned="true\|false"` | each window's root and each taskbar entry |
+| `data-pinned-entry="<app>"`, `data-entry-mode="bar\|floating"`, `data-entry-style="plain\|avatar"` | each pinned entry, in the bar or floating |
+| `data-floating-entries` | the floating layer |
+| `data-mood="working\|idle"`, `data-stale="true\|false"` | each avatar image's button |
+| `data-avatar-chooser`, `data-avatar-design="<id>"` | the chooser and its cells |
+| `data-menu-item="float\|move-to-taskbar\|style-plain\|style-avatar\|change-avatar"` | the pinned entry's menu rows |
 
 ## 13. Where data lives
 
