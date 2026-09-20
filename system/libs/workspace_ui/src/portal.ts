@@ -2,9 +2,10 @@ import m from "mithril";
 
 /** Renders its children into <body>.
  *
- * Popovers here live inside `overflow: hidden` containers (a window's body, the taskbar), so
- * anything that extends past its container is clipped at the edge. Mithril has no portal, so this mounts a detached root
- * and renders into it -- the same shape `lightbox.ts` and `hoverTooltip.ts` use.
+ * Popovers here open from inside clipping containers (a window's `overflow: hidden` body, the
+ * taskbar's scrolling entries strip, the chat's model bar), so anything that extends past its
+ * container is clipped at the edge. Mithril has no portal, so this mounts a detached root and
+ * renders into it -- the same shape `lightbox.ts` and `hoverTooltip.ts` use.
  *
  * Children must be positioned in VIEWPORT coordinates (`position: fixed`): they no longer have
  * their original parent to lay them out.
