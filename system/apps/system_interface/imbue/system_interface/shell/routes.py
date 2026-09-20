@@ -1,4 +1,4 @@
-"""The shell's HTTP routes beside the desktop routes (desktop contracts.md sections 5, 6, and 8): the client-activity
+"""The shell's HTTP routes beside the desktop routes (desktop contracts.md sections 5 and 8): the client-activity
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
@@ -87,7 +87,7 @@ def _entry_or_raise(name: str) -> AppInventoryEntry:
     return entry
 
 
-# Section 6: the client-activity report
+# Section 5.1: the client-activity report
 
 
 def client_activity_route() -> ResponseReturnValue:
