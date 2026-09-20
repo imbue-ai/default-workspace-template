@@ -293,7 +293,6 @@ export function parseWindow(raw: unknown): WindowRecord {
     title: asString(record.title, "window.title"),
     opened_at: asString(record.opened_at, "window.opened_at"),
     is_settling: asBoolean(record.is_settling, "window.is_settling"),
-    // Both additive with defaults, so a V1 record reads unchanged.
     is_pinned: record.is_pinned === undefined ? false : asBoolean(record.is_pinned, "window.is_pinned"),
     scope: record.scope === undefined ? "linked" : asOneOf(record.scope, ["linked", "independent"], "window.scope"),
   };

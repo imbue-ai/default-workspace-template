@@ -330,7 +330,6 @@ class AvatarStatusReader(MutableModel):
             self._wake.clear()
             if self._stop.is_set():
                 return
-            # A burst of writes (the observer's snapshot lands as several lines) settles before one refold.
             if is_woken:
                 self._stop.wait(timeout=self.debounce_seconds)
             self._ensure_watching()
