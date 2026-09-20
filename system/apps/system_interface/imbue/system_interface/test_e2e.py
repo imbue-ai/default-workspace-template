@@ -750,6 +750,8 @@ def test_agent_open_op_opens_a_window_for_the_named_client(e2e_server: E2EServer
     desktop, shown and focused there, without a reload."""
     _land(page, e2e_server)
     client_id = _client_id(page)
+    # A reload would drop this; the window has to arrive in the page as it stands.
+    page.evaluate("() => { window.__e2eSamePage = true; }")
     answer = _broadcast_op(
         e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/?doc=7", "client": client_id}
     )
@@ -757,6 +759,7 @@ def test_agent_open_op_opens_a_window_for_the_named_client(e2e_server: E2EServer
     assert answer["desktop_id"] == _HOME_DESKTOP_ID
     expect(_window(page, window_id)).to_be_visible(timeout=15000)
     expect(_window(page, window_id)).to_have_attribute("data-focused", "true")
+    assert page.evaluate("() => window.__e2eSamePage === true"), "the shell reloaded to show the window"
     frame = _page_frame(page, window_id)
     assert frame.url == f"{e2e_server.stub_url}/?doc=7"
     assert _placements(e2e_server.base_url, client_id)[window_id]["is_minimized"] is False
