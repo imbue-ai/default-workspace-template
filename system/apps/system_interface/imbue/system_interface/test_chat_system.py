@@ -83,9 +83,7 @@ def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: 
         _wait_for_the_chat_app(workspace.shell_url)
         # A client the shell knows, registered through the socket's own bookkeeping.
         client_queue = workspace.shell_state.shell.broadcaster.register()
-        workspace.shell_state.shell.broadcaster.set_client_info(
-            client_queue, "client-1", "", "desktop", active_desktop=_HOME_DESKTOP_ID
-        )
+        workspace.shell_state.shell.broadcaster.set_client_info(client_queue, "client-1", _HOME_DESKTOP_ID)
         try:
             status, answer = _post_json(
                 f"{workspace.shell_url}/api/layout/broadcast",
