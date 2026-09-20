@@ -1048,12 +1048,11 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
             poll_interval=0.1,
             error_message="the dropped shortcut never took the occupied cell",
         )
-        cells = _shortcut_cells(server.base_url)
-        displaced = cells[_STUB_SHORTCUT_KEY]
-        assert displaced != (2, 2)
-        assert abs(displaced[0] - 2) + abs(displaced[1] - 2) == 1, f"not a neighbour of the taken cell: {displaced}"
+        # The nearest free cell, ties by lower column then lower row (contracts.md section 10).
+        displaced = _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY]
+        assert displaced == (1, 2)
         expect(notes).to_have_attribute("data-cell", "2,2")
-        expect(docs).to_have_attribute("data-cell", f"{displaced[0]},{displaced[1]}")
+        expect(docs).to_have_attribute("data-cell", "1,2")
 
 
 @pytest.mark.timeout(60, func_only=False)
