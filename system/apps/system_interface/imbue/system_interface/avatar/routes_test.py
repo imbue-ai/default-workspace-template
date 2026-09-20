@@ -36,7 +36,9 @@ def test_the_image_is_an_isolated_svg_wearing_the_mood(client: FlaskClient) -> N
     assert response.headers["Cache-Control"] == "no-cache"
     assert 'data-mood="working"' in response.get_data(as_text=True)
     assert 'data-mood="idle"' in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg").get_data(as_text=True)
-    assert "animation:none" in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?preview=1").get_data(as_text=True)
+    assert "animation:none" in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?preview=1").get_data(
+        as_text=True
+    )
     assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=angry").status_code == 400
     assert client.get("/api/avatars/nobody/image.svg").status_code == 404
 

@@ -72,10 +72,20 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
         eyes_y=64,
     ),
     BundledDesign(
-        id=DesignId("shy-cube"), label="Mint cube", filename="04-shy-cube.svg", eyes_left_x=40, eyes_right_x=60, eyes_y=69
+        id=DesignId("shy-cube"),
+        label="Mint cube",
+        filename="04-shy-cube.svg",
+        eyes_left_x=40,
+        eyes_right_x=60,
+        eyes_y=69,
     ),
     BundledDesign(
-        id=DesignId("jelly-cat"), label="Pink cat", filename="07-jelly-cat.svg", eyes_left_x=41, eyes_right_x=59, eyes_y=59
+        id=DesignId("jelly-cat"),
+        label="Pink cat",
+        filename="07-jelly-cat.svg",
+        eyes_left_x=41,
+        eyes_right_x=59,
+        eyes_y=59,
     ),
     BundledDesign(
         id=DesignId("bubble-snail"),
@@ -86,7 +96,12 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
         eyes_y=64,
     ),
     BundledDesign(
-        id=DEFAULT_DESIGN_ID, label="Gummy seal", filename="15-gummy-seal.svg", eyes_left_x=36, eyes_right_x=54, eyes_y=61
+        id=DEFAULT_DESIGN_ID,
+        label="Gummy seal",
+        filename="15-gummy-seal.svg",
+        eyes_left_x=36,
+        eyes_right_x=54,
+        eyes_y=61,
     ),
     BundledDesign(
         id=DesignId("heart-bubble"),

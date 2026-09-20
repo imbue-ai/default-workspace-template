@@ -104,7 +104,9 @@ class AvatarCatalogStore(MutableModel):
             return AvatarCatalog.model_validate(raw)
         except ValidationError as e:
             if is_writing:
-                raise InvalidShellValueError(f"the avatar catalog at {path} is invalid; refusing to overwrite it") from e
+                raise InvalidShellValueError(
+                    f"the avatar catalog at {path} is invalid; refusing to overwrite it"
+                ) from e
             logger.warning("Ignored an invalid avatar catalog at {}: {}", path, e.errors()[0]["msg"])
             return AvatarCatalog()
 
@@ -112,7 +114,9 @@ class AvatarCatalogStore(MutableModel):
         """Every design on offer: the bundled ones, then the registered ones."""
         listings = [DesignListing(id=design.id, label=design.label, source_path=None) for design in BUNDLED_DESIGNS]
         for registered in self.read().designs:
-            listings.append(DesignListing(id=registered.id, label=registered.label, source_path=registered.source_path))
+            listings.append(
+                DesignListing(id=registered.id, label=registered.label, source_path=registered.source_path)
+            )
         return listings
 
     def source(self, design_id: str) -> str | None:

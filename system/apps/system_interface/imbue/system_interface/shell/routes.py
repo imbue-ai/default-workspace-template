@@ -200,8 +200,12 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
     if pin is None or entry.row.internal:
         raise InvalidShellValueError(f"App {app!r} declares no pinned entry")
     if body.style is not PinStyle.PLAIN and body.style is not pin.style:
-        raise InvalidShellValueError(f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}")
-    record = shell.clients.set_entry_presentation(ClientId(client_id), str(AppName(app)), body, datetime.now(timezone.utc))
+        raise InvalidShellValueError(
+            f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
+        )
+    record = shell.clients.set_entry_presentation(
+        ClientId(client_id), str(AppName(app)), body, datetime.now(timezone.utc)
+    )
     shell.broadcaster.broadcast_client_entries_changed(str(record.id), entries_wire_json(record.entries))
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 

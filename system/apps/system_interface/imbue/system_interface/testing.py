@@ -241,7 +241,9 @@ def build_test_state(
         inventory=inventory,
         wallpaper_files_directory=state_directory / "wallpapers",
         avatar_catalog_directory=state_directory / "avatars",
-        agent_events_path=agent_events_path if agent_events_path is not None else state_directory / "agent-events.jsonl",
+        agent_events_path=agent_events_path
+        if agent_events_path is not None
+        else state_directory / "agent-events.jsonl",
     )
     template_catalog = build_template_catalog_store(
         catalog_url=resolved_config.system_interface_template_catalog_url

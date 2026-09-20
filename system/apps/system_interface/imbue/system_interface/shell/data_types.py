@@ -324,7 +324,9 @@ class StoredWindowPath(FrozenModel):
 class WindowLocationReport(FrozenModel):
     """The body of ``POST /api/desktops/<id>/windows/<window_id>/location``."""
 
-    client_id: ClientId = Field(description="The client whose page reported, whose own path an independent window keeps")
+    client_id: ClientId = Field(
+        description="The client whose page reported, whose own path an independent window keeps"
+    )
     path: WindowPath = Field(description="Where the page is now")
     title: WindowTitle = Field(description="What the page calls itself now")
 
@@ -377,7 +379,9 @@ def window_wire_json(window: Window) -> dict[str, Any]:
 
 
 @pure
-def desktop_layout_wire_json(layout: DesktopLayout, window_paths: Mapping[WindowId, StoredWindowPath]) -> dict[str, Any]:
+def desktop_layout_wire_json(
+    layout: DesktopLayout, window_paths: Mapping[WindowId, StoredWindowPath]
+) -> dict[str, Any]:
     """The ``layout`` object of desktop contracts.md section 4.2, with the client's stored paths for the desktop's
     independent windows (pinned-taskbar-entries plan section 5.3)."""
     return {
