@@ -3932,8 +3932,13 @@ class AgentManager:
             is_permission_state_changed = self._fold_pending_permissions_locked(agent_id, events)
             tracker = self._activity_tracker_by_agent.get(agent_id)
             is_activity_changed = tracker is not None and tracker.observe(events)
+        # A filed request or its verdict flips the chat's ``attention`` status whether or not the
+        # activity state moved, and the rail's status dot is drawn from these snapshots alone; the
+        # recompute's own broadcast is skipped then so the batch announces itself once.
         if is_activity_changed:
-            self._recompute_activity_state(agent_id, broadcast_on_change=True)
+            self._recompute_activity_state(agent_id, broadcast_on_change=not is_permission_state_changed)
+        if is_permission_state_changed:
+            self._broadcast_chats_updated()
 
     def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
         """Fold a batch of events into the agent's pending permission requests; True when the set changed.
