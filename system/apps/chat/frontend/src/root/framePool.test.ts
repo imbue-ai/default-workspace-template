@@ -10,7 +10,16 @@ import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatPageEmbedApi } from "../embedApi";
 import { InnerFramePool, MAX_HELD_FRAMES } from "./framePool";
 
-const HANDSHAKE: ShellHandshake = { clientId: "client-1", deviceKind: "", viewId: "", address: "", tabId: "" };
+const HANDSHAKE: ShellHandshake = {
+  clientId: "client-1",
+  windowId: "win-1",
+  desktopId: "home",
+  path: "/",
+  deviceKind: "",
+  viewId: "home",
+  address: "",
+  tabId: "",
+};
 
 let container: HTMLElement;
 let pool: InnerFramePool;
