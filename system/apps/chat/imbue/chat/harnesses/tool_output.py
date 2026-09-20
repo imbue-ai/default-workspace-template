@@ -68,7 +68,7 @@ _PERMISSION_REQUEST_POST_RE = re.compile(r"-X\s*POST|--request\s*POST", re.IGNOR
 # `uv run` prefix both match), with the script's required `--file` after it: a `Read`
 # or `Grep` of the script names it too but files nothing.
 SECRET_REQUEST_SCRIPT = "request_secret.py"
-_SECRET_REQUEST_SCRIPT_RE = re.compile(r"(?:^|[\s\"'/])request_secret\.py(?=$|[\s\"'\\])")
+_SECRET_REQUEST_SCRIPT_RE = re.compile(r"(?:^|[\s\"'/])" + re.escape(SECRET_REQUEST_SCRIPT) + r"(?=$|[\s\"'\\])")
 _SECRET_REQUEST_FILE_FLAG_RE = re.compile(r"\s--file(?:=|\s)")
 
 _TK_OUTPUT_DECORATION_PATTERN = re.compile(
