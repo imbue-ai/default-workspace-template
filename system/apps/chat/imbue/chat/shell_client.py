@@ -32,9 +32,9 @@ def shell_base_url() -> str:
     return os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/")
 
 
-def post_to_shell(url: str, body: Mapping[str, Any] | None) -> None:
-    """POST ``body`` as JSON (None for an empty body) to the shell route at ``url``; an unreachable or failing
-    shell is a debug log, a slow one or one that refuses the body a warning."""
+def post_to_shell(url: str, body: Mapping[str, Any]) -> None:
+    """POST ``body`` as JSON to the shell route at ``url``; an unreachable or failing shell is a debug log, a slow
+    one or one that refuses the body a warning."""
     started_at = time.monotonic()
     try:
         response = httpx.post(url, json=body, timeout=SHELL_POST_TIMEOUT_SECONDS)
