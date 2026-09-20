@@ -125,8 +125,8 @@ class SuccessorUntrackedError(HandoffStepError):
 def converging_detail(phase: HandoffPhase, target_label: str) -> str:
     """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
 
-    Names the destination and the phase in plain words rather than the chat's id: the shell's
-    tab menu and the chat page both put this text in front of the user. The destination is the
+    Names the destination and the phase in plain words rather than the chat's id: the chat
+    rail and the chat page both put this text in front of the user. The destination is the
     harness for a handoff and the account for a rebind (``HandoffState.target_label``).
     """
     match phase:
