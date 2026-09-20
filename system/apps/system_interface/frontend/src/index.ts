@@ -51,6 +51,7 @@ function bootstrap(): void {
   );
   if (store === null) throw new Error("the render modes never reported");
   const desktopStore: DesktopStore = store;
+  const gestures = new PointerGestureSource();
   // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
@@ -61,7 +62,7 @@ function bootstrap(): void {
       view: () =>
         m(App, {
           store: desktopStore,
-          gestures: new PointerGestureSource(),
+          gestures,
           host: window.location.host,
           protocol: window.location.protocol,
         }),
