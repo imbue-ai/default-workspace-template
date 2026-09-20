@@ -85,10 +85,12 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _respond(self, status: int, body: dict[str, Any]) -> None:
-        payload = json.dumps(body).encode("utf-8")
+    def _respond(self, status: int, body: dict[str, Any] | str) -> None:
+        """A dict is the shell's JSON answer; a str is a page a proxy in front of it might answer with instead."""
+        is_json = isinstance(body, dict)
+        payload = (json.dumps(body) if is_json else str(body)).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json" if is_json else "text/html")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -130,7 +132,7 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
 def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
     """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received (``posted_content_types``
     the matching ``Content-Type`` headers); ``server.op_answer`` is what a desktop op answers
-    (``server.op_refusal`` a ``(status, body)`` refusal instead), and the ``inventory_*`` lists are the
+    (``server.op_refusal`` a ``(status, body)`` refusal instead, the body a dict or a page's text), and the ``inventory_*`` lists are the
     inventory document."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
     server.posted = []
