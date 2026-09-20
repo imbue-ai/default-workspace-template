@@ -156,8 +156,6 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
     attrs.onRunLaunch(target.app, target.launchPath, { [MESSAGE_PARAM]: message });
   }
 
-  // ---------- "Open new" ----------
-
   function tileView(tile: LaunchTile, attrs: LauncherOverlayAttrs): m.Vnode {
     const key = `${tile.app.name}:${tile.launchPath.id}`;
     return m(
@@ -201,8 +199,6 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
           ),
     ]);
   }
-
-  // ---------- windows ----------
 
   function windowRow(row: LauncherWindowRow, attrs: LauncherOverlayAttrs, isCrossDesktop: boolean): m.Vnode {
     return m(
@@ -263,8 +259,6 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
       rows.map((row) => windowRow(row, attrs, false)),
     ]);
   }
-
-  // ---------- "Start something" ----------
 
   function startTile(option: StartOption, attrs: LauncherOverlayAttrs): m.Vnode {
     const isCatalogOffered = attrs.catalog.kind !== "disabled";
@@ -349,8 +343,6 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
     return startSomethingSection(visibleStartOptions(START_OPTIONS, startShownCount), attrs, seeMore);
   }
 
-  // ---------- "Start from a template" ----------
-
   function templatesStatus(message: string): m.Vnode {
     return m("p", { class: "launcher-templates-status px-2 py-1 text-(length:--font-size-row) text-faint" }, message);
   }
@@ -389,8 +381,6 @@ export function LauncherOverlay(): m.Component<LauncherOverlayAttrs> {
     isScrollToTemplatesPending = false;
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-
-  // ---------- search results ----------
 
   function searchResults(attrs: LauncherOverlayAttrs): m.Children {
     const trimmed = attrs.query.trim();

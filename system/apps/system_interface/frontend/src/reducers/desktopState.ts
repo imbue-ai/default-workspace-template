@@ -182,8 +182,6 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
   }
 }
 
-// ---------- selectors ----------
-
 export function activeDesktop(state: DesktopState): Desktop | null {
   return state.desktops.find((desktop) => desktop.id === state.activeDesktopId) ?? null;
 }

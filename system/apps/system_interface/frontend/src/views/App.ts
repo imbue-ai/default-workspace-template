@@ -107,8 +107,6 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
-  // ---------- gestures ----------
-
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
     const shortcutGrabOffset = (
       binding: Extract<GestureBinding, { kind: "shortcut" }>,
@@ -198,8 +196,6 @@ export function App(): m.Component<AppAttrs> {
       },
     };
   }
-
-  // ---------- menus ----------
 
   function windowMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
     const state = current.getState();
@@ -422,8 +418,6 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  // ---------- the launcher ----------
-
   function launcherRows(current: DesktopStore): LauncherWindowRow[] {
     const state = current.getState();
     const placements = activePlacements(state);
@@ -459,8 +453,6 @@ export function App(): m.Component<AppAttrs> {
       current.restoreWindow(row.window.id);
     }
   }
-
-  // ---------- window controls ----------
 
   function onWindowControl(current: DesktopStore, windowId: string, control: WindowControl, event: MouseEvent): void {
     switch (control) {

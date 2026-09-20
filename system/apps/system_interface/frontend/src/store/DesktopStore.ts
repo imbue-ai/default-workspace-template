@@ -165,8 +165,6 @@ export class DesktopStore {
     this.metrics = deps.metrics;
   }
 
-  // ---------- reads ----------
-
   getState(): DesktopState {
     return this.state;
   }
@@ -219,8 +217,6 @@ export class DesktopStore {
     this.pageDriver = driver;
   }
 
-  // ---------- the reducer step ----------
-
   dispatch(event: DesktopEvent): void {
     const next = reduceDesktopState(this.state, event);
     if (next === this.state) return;
@@ -245,8 +241,6 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
     this.notifyListeners();
   }
-
-  // ---------- bootstrap ----------
 
   /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
    *  honour the deep link's open or launch. */
@@ -297,8 +291,6 @@ export class DesktopStore {
     this.deps.socket.reportClientState(this.deps.clientId, active, previousDesktop);
   }
 
-  // ---------- socket events ----------
-
   private takeDesktops(desktops: Desktop[]): void {
     this.dispatch({ type: "desktops_updated", desktops });
     // A restore deferred while its window settled runs once the window has a real path.
@@ -339,8 +331,6 @@ export class DesktopStore {
         return;
     }
   }
-
-  // ---------- desktops ----------
 
   /** Switch this client onto ``desktopId``: flush the outgoing layout's pending save, tell the shell,
    *  and fetch the incoming layout. A switch following a push (``active_desktop_changed``, the
@@ -391,8 +381,6 @@ export class DesktopStore {
       : [...this.state.desktops, desktop];
     this.dispatch({ type: "desktops_updated", desktops });
   }
-
-  // ---------- shortcuts ----------
 
   /** Add a launch path to the active desktop at the first free cell in reading order over the current grid. */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
@@ -460,8 +448,6 @@ export class DesktopStore {
     }
     await this.openWindowAt(record.name, launchPathWithParams(launchPath, params), launchPath.id, "new");
   }
-
-  // ---------- windows ----------
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
    *  refetched for the stamp the shell wrote. Answers the window id, or null when the shell refused. */
@@ -581,8 +567,6 @@ export class DesktopStore {
     }
   }
 
-  // ---------- the launcher ----------
-
   openLauncher(): void {
     if (this.isLauncherOpenNow) return;
     this.isLauncherOpenNow = true;
@@ -594,8 +578,6 @@ export class DesktopStore {
     this.isLauncherOpenNow = false;
     this.notifyListeners();
   }
-
-  // ---------- gestures ----------
 
   /** A drag of a window's title bar began (past the threshold) at ``pointer``, in backdrop pixels. */
   beginWindowMove(windowId: string, pointer: PixelPoint): void {
@@ -739,8 +721,6 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  // ---------- saving ----------
-
   private scheduleSave(): void {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
@@ -810,8 +790,6 @@ export class DesktopStore {
       return;
     this.dispatch({ type: "layout_loaded", desktopId, layout });
   }
-
-  // ---------- geometry for the views ----------
 
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
