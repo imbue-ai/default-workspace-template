@@ -61,6 +61,7 @@ from imbue.system_interface.shell.layout_ops import DesktopOpArguments
 from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
+from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
 from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.primitives import ClientId
@@ -94,7 +95,6 @@ _ZONE_STATES: Final[dict[str, WindowState]] = {
 }
 _FRAME_COMPONENT_COUNT: Final[int] = 4
 _CELL_COMPONENT_COUNT: Final[int] = 2
-RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
 
 
 class DesktopMetadataRequest(FrozenModel):
