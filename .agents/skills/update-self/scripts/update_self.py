@@ -721,7 +721,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     surface_parser = sub.add_parser(
         "surface-chat-tab",
-        help="Open this run's own chat tab once a workspace client can show it.",
+        help="Open this run's own chat window once a workspace client can show it.",
         parents=[common],
     )
     surface_parser.add_argument(

@@ -9,7 +9,7 @@ metadata:
 
 The Caretaker is a **beta** feature, off by default: a background agent that
 checks this workspace about once a week -- crashed services, fresh errors in
-the logs, a filling disk, memory trouble -- and opens a chat tab only when
+the logs, a filling disk, memory trouble -- and opens a chat only when
 there is something to say. Off by default means literally nothing runs: no
 cron entry exists until this skill creates it.
 

@@ -19,11 +19,11 @@
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
 export const SHELL_HANDSHAKE = "shell:handshake";
-/** Shell to app: the tab became visible in this client. */
+/** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
-/** Shell to app: the tab stopped being visible in this client. */
+/** Shell to app: the window stopped being visible in this client. */
 export const SHELL_HIDDEN = "shell:hidden";
-/** Shell to app: the close chord fired while this tab was active. */
+/** Shell to app: the close chord fired while this window was focused. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";

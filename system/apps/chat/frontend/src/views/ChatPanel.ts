@@ -457,7 +457,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   /**
    * Re-run the load that the panel is currently reporting a failure for.
    *
-   * Identical to what the tab menu's Refresh does, offered where the user is
+   * Identical to what the window menu's Refresh does, offered where the user is
    * already looking: an error screen whose only remedy lives behind a menu they
    * have no particular reason to open reads as a dead end. Redraws on settle
    * because a *failed* reload writes only the load state, which no redraw
@@ -600,7 +600,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
-    // error state as soon as any reload succeeds -- the tab's Refresh or the
+    // error state as soon as any reload succeeds -- the window menu's Refresh or the
     // stream's background reconnect, neither of which goes through loadChat.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
     // fall through to "No events yet for this agent.", which claims an answer it does not have.

@@ -192,7 +192,7 @@ verdict REFUSED --detail "..."` as in Step 2.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Mind app sends the user into this
+Surface your own chat window first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:

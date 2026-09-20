@@ -157,7 +157,7 @@ rescans `/etc/cron.d/` within a minute; no reload.
 
 An **automation** is a skill run automatically on a schedule (the workspace
 vocabulary term): a scheduled job that, instead of running a plain script,
-wakes a dedicated agent to run one skill in its own chat tab. The machinery
+wakes a dedicated agent to run one skill in its own chat. The machinery
 lives in `system/libs/automations/`. To add one -- say a news digest:
 
 1. **Write the skill** at `.agents/skills/<name>/SKILL.md` -- the instructions

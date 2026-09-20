@@ -542,7 +542,7 @@ const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 
 // Where each chat's snapshot load stands. It lives here rather than in the
 // panel because every path that reloads a transcript -- the panel's own load,
-// the tab's Refresh, and the stream's background reconnect -- goes through
+// the window menu's Refresh, and the stream's background reconnect -- goes through
 // `fetchEvents`, and only one of those is the panel. A panel holding its own
 // copy could not be cleared by the other two, so a recovered transcript stayed
 // hidden behind a stale error until the page was reloaded. Holding the whole

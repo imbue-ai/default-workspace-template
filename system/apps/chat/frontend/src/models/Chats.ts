@@ -443,7 +443,7 @@ export function createChat(
 
 /**
  * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
- * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
+ * on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
  */
 export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
   // A seeded chat's launch brings the user's first message; a reserved chat keeps the one it

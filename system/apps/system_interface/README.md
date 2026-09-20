@@ -218,7 +218,7 @@ messages. See the `manage-desktop` skill for end-to-end orientation.
 The deployed system interface is the live web UI the user is looking at, so
 changes are not applied in place. The canonical flow is the
 `update-system-interface` agent skill: a change is delegated to a worker,
-tested in isolation, **previewed** to the user as a tab
+tested in isolation, **previewed** to the user as a window
 (`reveal_system_interface.py preview --slug <name> --work-dir <dir>` boots the
 worker's already-built work_dir on a free port and registers it, with a
 labeled wrapper page, as the `si-preview` app; `unpreview` tears it down),

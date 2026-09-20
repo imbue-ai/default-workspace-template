@@ -412,7 +412,7 @@ _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
 
 
 def _templates_catalog_endpoint() -> Response:
-    """The New Tab page's template catalog: the freshest copy the store holds, with each drawing
+    """The launcher's template catalog: the freshest copy the store holds, with each drawing
     resolved to a URL; ``catalog`` is null when no catalog URL is configured, and a 503 says
     nothing could be loaded."""
     state = get_state()

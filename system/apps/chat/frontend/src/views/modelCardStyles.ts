@@ -3,7 +3,7 @@
  *
  * The card's frame, rows and divider are the workspace's floating-menu chrome
  * (`components/menu`), and its flyouts are the same chrome again -- so this menu
- * matches the tab menu and the rail's row menus. What lives here is the part no
+ * matches the window menu and the rail's row menus. What lives here is the part no
  * other surface has: the effort slider, the fast-mode switch, and the row
  * geometry that reserves a lane for each of a row's trailing controls.
  *
