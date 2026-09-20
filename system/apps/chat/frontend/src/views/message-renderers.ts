@@ -219,8 +219,6 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
-        // The auth-error note reads the chat, which the chat list can deliver after this
-        // message first painted; without this the note keeps its chat-less shape for good.
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion
       );
