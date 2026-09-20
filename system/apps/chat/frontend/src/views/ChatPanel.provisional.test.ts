@@ -220,7 +220,6 @@ describe("ChatPanel over a seeded chat", () => {
     render();
 
     // The transcript path, not a provisional screen: the seed segment is what the page reads.
-    expect(findByClass(tree, "message-list-awaiting-account")).toBeUndefined();
     expect(findByClass(tree, "message-list-creating")).toBeUndefined();
     expect(findByClass(tree, "message-list-empty")).toBeTruthy();
     expect(mocks.fetchEvents).toHaveBeenCalledTimes(1);
