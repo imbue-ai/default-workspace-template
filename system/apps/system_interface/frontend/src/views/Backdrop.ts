@@ -9,8 +9,8 @@
 import m from "mithril";
 import { wallpaperImageUrl } from "../model/api";
 import { cellRect, placeShortcuts } from "../geometry/grid";
-import type { PixelPoint } from "../geometry/frames";
-import type { Desktop, DesktopShortcut, Placement } from "../model/records";
+import type { PixelPoint, PixelRect } from "../geometry/frames";
+import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -132,11 +132,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           ),
           snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
-            ? shortcutGhost(
-                gesture.iconPosition,
-                cellRect(gesture.targetCell, metrics),
-                state.apps.find((app) => app.name === gesture.app),
-              )
+            ? shortcutGhost(gesture.iconPosition, cellRect(gesture.targetCell, metrics), appByName(state, gesture.app))
             : null,
         ],
       );
@@ -145,11 +141,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
 }
 
 /** The lifted shortcut's icon under the pointer, and the outline of the cell it would drop into. */
-function shortcutGhost(
-  position: PixelPoint,
-  target: { x: number; y: number; width: number; height: number },
-  app: { name: string; icon: string } | undefined,
-): m.Children {
+function shortcutGhost(position: PixelPoint, target: PixelRect, app: AppRecord | undefined): m.Children {
   return [
     m("div", {
       "data-drop-cell": "",
