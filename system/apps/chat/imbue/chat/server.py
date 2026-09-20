@@ -558,7 +558,7 @@ def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigi
 
 @pure
 def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> dict[str, str]:
-    """The body of the shell's ``POST /api/client-activity`` for one send (desktop contracts.md section 6), keyed by chat."""
+    """The body of the shell's ``POST /api/client-activity`` for one send (desktop contracts.md section 5.1), keyed by chat."""
     return {
         "client_id": send_message_request.client_id,
         "desktop_id": send_message_request.desktop_id,
@@ -1501,7 +1501,7 @@ def _root_document() -> Response:
 
 
 def _chat_document(key: str) -> Response:
-    """Serve the chat page for an instance key: a chat id, or ``<chat-id>.<agent-id>.<session-id>`` for a subagent view."""
+    """Serve the chat page for a key: a chat id, or ``<chat-id>.<agent-id>.<session-id>`` for a subagent view."""
     subagent = parse_subagent_key(key)
     if subagent is not None:
         chat_id, agent_id, session_id = subagent.chat_id, subagent.agent_id, subagent.session_id

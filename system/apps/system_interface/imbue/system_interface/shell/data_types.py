@@ -83,7 +83,7 @@ class ClientStateReport(FrozenModel):
 
 
 class ClientActivityReport(FrozenModel):
-    """The body of ``POST /api/client-activity`` (desktop contracts.md section 6): a message a client sent."""
+    """The body of ``POST /api/client-activity`` (desktop contracts.md section 5.1): a message a client sent."""
 
     client_id: ClientId = Field(description="The client the activity belongs to")
     desktop_id: DesktopId = Field(description="The desktop the client was on")

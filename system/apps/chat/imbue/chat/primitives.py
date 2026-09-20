@@ -18,7 +18,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 
 # The chat app's registered name: the one app that may name itself to the shell (the client-activity
-# the manifest, the desktop's open op).
+# report, the manifest, the desktop's open op).
 CHAT_APP_NAME: Final[AppName] = AppName("chat")
 
 # An agent id: ``agent-<32 hex>`` as mngr mints it, loosened so a test fixture's id counts too. A
@@ -54,7 +54,7 @@ class ChatId(NonEmptyStr):
 def parse_chat_ref(chat_ref: str) -> ChatId | None:
     """The chat id a caller's string names, or None for a blank one.
 
-    Routes and instance keys hand the manager whatever string they were given; a blank one
+    Routes and page keys hand the manager whatever string they were given; a blank one
     names no chat, and answering None lets the caller say "not found" instead of tripping over
     the primitive's own validation.
     """
