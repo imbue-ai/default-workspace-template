@@ -106,13 +106,21 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
+  /** The gesture source measures points against ``root`` (the whole layout, so the taskbar's long presses
+   *  count too); the store wants the backdrop's pixels, which differ by whatever sits above the backdrop. */
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
+    const backdropOrigin = (): DOMRect => (backdropArea ?? root).getBoundingClientRect();
+    const toBackdrop = (point: PixelPoint): PixelPoint => {
+      const rootBox = root.getBoundingClientRect();
+      const origin = backdropOrigin();
+      return { x: point.x - (origin.left - rootBox.left), y: point.y - (origin.top - rootBox.top) };
+    };
     const shortcutGrabOffset = (
       binding: Extract<GestureBinding, { kind: "shortcut" }>,
       press: PixelPoint,
     ): PixelPoint => {
       const iconRect = binding.element.getBoundingClientRect();
-      const origin = root.getBoundingClientRect();
+      const origin = backdropOrigin();
       return { x: press.x - (iconRect.left - origin.left), y: press.y - (iconRect.top - origin.top) };
     };
     return {
@@ -122,8 +130,9 @@ export function App(): m.Component<AppAttrs> {
         if (binding.kind === "taskbar-entry") return false;
         return !current.getState().modes.isCompact;
       },
-      onBegin: (binding, point, press) => {
+      onBegin: (binding, rootPoint, rootPress) => {
         pages?.setGestureActive(true);
+        const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
             current.beginWindowMove(binding.windowId, point);
@@ -132,13 +141,19 @@ export function App(): m.Component<AppAttrs> {
             current.beginWindowResize(binding.windowId, binding.edge);
             return;
           case "shortcut":
-            current.beginShortcutDrag(binding.app, binding.launch, point, shortcutGrabOffset(binding, press));
+            current.beginShortcutDrag(
+              binding.app,
+              binding.launch,
+              point,
+              shortcutGrabOffset(binding, toBackdrop(rootPress)),
+            );
             return;
           case "taskbar-entry":
             return;
         }
       },
-      onMove: (binding, point, delta) => {
+      onMove: (binding, rootPoint, delta) => {
+        const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
             current.updateWindowMove(point);
@@ -153,7 +168,8 @@ export function App(): m.Component<AppAttrs> {
             return;
         }
       },
-      onEnd: (binding, point, delta) => {
+      onEnd: (binding, rootPoint, delta) => {
+        const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
             current.endWindowMove(point);
@@ -493,7 +509,7 @@ export function App(): m.Component<AppAttrs> {
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
       const root = vnode.dom as HTMLElement;
-      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(vnode.attrs.store, backdropArea ?? root));
+      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(vnode.attrs.store, root));
       ensureTemplateCatalogRequested();
     },
     onupdate() {
