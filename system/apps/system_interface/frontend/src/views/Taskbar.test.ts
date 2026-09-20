@@ -120,4 +120,23 @@ describe("Taskbar", () => {
     expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
     expect(taskbar.querySelector('[data-tray-widget="running-apps"]')).not.toBeNull();
   });
+
+  it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {
+    const onQuery = vi.fn();
+    const onClose = vi.fn();
+    const onDocumentKeyDown = vi.fn();
+    document.addEventListener("keydown", onDocumentKeyDown);
+    try {
+      const taskbar = render({
+        launcher: { query: "docs", isOpen: true, isCompact: false, onOpen: vi.fn(), onClose, onQuery },
+      });
+      const input = taskbar.querySelector("[data-launcher-field] input") as HTMLInputElement;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(onQuery).toHaveBeenCalledWith("");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onDocumentKeyDown).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onDocumentKeyDown);
+    }
+  });
 });

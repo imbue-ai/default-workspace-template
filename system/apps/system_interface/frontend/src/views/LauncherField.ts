@@ -70,12 +70,14 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               onOpen();
             },
             onkeydown: (event: KeyboardEvent) => {
-              if (event.key === "Escape") {
-                if (query !== "") onQuery("");
-                else {
-                  (event.target as HTMLInputElement).blur();
-                  onClose();
-                }
+              if (event.key !== "Escape") return;
+              // Handled here in two steps; the document's Escape (which closes the launcher) must not see it.
+              event.preventDefault();
+              event.stopPropagation();
+              if (query !== "") onQuery("");
+              else {
+                (event.target as HTMLInputElement).blur();
+                onClose();
               }
             },
           }),
