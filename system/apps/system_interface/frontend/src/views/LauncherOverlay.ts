@@ -82,7 +82,7 @@ export function createMachineFromTemplateMessage(template: CatalogTemplate): str
 /** The windows a query finds: by title, desktop, or the app they belong to. */
 export function searchWindowRows(rows: readonly LauncherWindowRow[], query: string): LauncherWindowRow[] {
   return rows.filter((row) =>
-    matchesQuery(query, row.title, row.desktopName, row.app?.display_name ?? "", row.window.app, row.window.path),
+    matchesQuery(query, row.title, row.desktopName, row.app?.display_name ?? "", row.window.app),
   );
 }
 
