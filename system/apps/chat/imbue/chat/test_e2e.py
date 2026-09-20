@@ -38,11 +38,11 @@ from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
-from imbue.chat.testing import free_port
 from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
+from imbue.chat.testing import free_port
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
