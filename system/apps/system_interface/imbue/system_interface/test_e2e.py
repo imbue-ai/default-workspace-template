@@ -34,6 +34,7 @@ from flask import Flask
 from flask import Response
 from flask import request
 from playwright.sync_api import BrowserContext
+from playwright.sync_api import FloatRect
 from playwright.sync_api import Frame
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
@@ -484,13 +485,13 @@ def _page_frame(page: Page, window_id: str) -> Frame:
     return frame
 
 
-def _box(locator: Locator) -> dict[str, float]:
+def _box(locator: Locator) -> FloatRect:
     box = locator.bounding_box()
     assert box is not None, "the element has no box"
     return box
 
 
-def _center(box: dict[str, float]) -> tuple[float, float]:
+def _center(box: FloatRect) -> tuple[float, float]:
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
 
@@ -519,12 +520,12 @@ def _assert_close(actual: float, expected: float, what: str) -> None:
     assert abs(actual - expected) <= _GEOMETRY_TOLERANCE_PX, f"{what}: {actual} is not within tolerance of {expected}"
 
 
-def _assert_same_box(actual: dict[str, float], expected: dict[str, float], what: str) -> None:
+def _assert_same_box(actual: FloatRect, expected: FloatRect, what: str) -> None:
     for key in ("x", "y", "width", "height"):
         _assert_close(actual[key], expected[key], f"{what} {key}")
 
 
-def _cell_center(backdrop: dict[str, float], column: int, row: int) -> tuple[float, float]:
+def _cell_center(backdrop: FloatRect, column: int, row: int) -> tuple[float, float]:
     return (
         backdrop["x"] + _GRID_INSET + column * _CELL_WIDTH + _CELL_WIDTH / 2,
         backdrop["y"] + _GRID_INSET + row * _CELL_HEIGHT + _CELL_HEIGHT / 2,

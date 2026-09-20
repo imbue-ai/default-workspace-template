@@ -1104,8 +1104,12 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert unknown.status_code == 404
     shell.wallpaper_files_directory.mkdir(parents=True)
     (shell.wallpaper_files_directory / "mine.png").write_bytes(b"png")
+    # The bundled wallpaper the shell ships, beside whatever sits in the wallpapers directory.
     assert client.get("/api/wallpapers").get_json() == {
-        "wallpapers": [{"kind": "file", "name": "mine", "url": "/wallpapers/file/mine"}]
+        "wallpapers": [
+            {"kind": "bundled", "name": "dawn", "url": "/wallpapers/bundled/dawn"},
+            {"kind": "file", "name": "mine", "url": "/wallpapers/file/mine"},
+        ]
     }
     papered = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "file", "name": "mine"}})
     assert papered.status_code == 200 and papered.get_json()["wallpaper"] == {"kind": "file", "name": "mine"}

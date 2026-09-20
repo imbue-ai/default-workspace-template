@@ -215,7 +215,7 @@ def test_prevent_pixel_metrics_in_views_and_reducers() -> None:
             _FRONTEND_SRC / directory, FileExtension(".ts"), _PIXEL_METRIC_PATTERN, ("*.test.ts",)
         )
     ]
-    assert len(chunks) <= snapshot(0), _PIXEL_METRIC_RULE.format_failure(chunks)
+    assert len(chunks) <= snapshot(0), _PIXEL_METRIC_RULE.format_failure(tuple(chunks))
 
 
 @pytest.mark.parametrize(
