@@ -23,8 +23,8 @@
 #     incl. secrets). No upstream fetch/pull -- provenance link only.
 #   - Overlay via `rsync -a "$STAGE/" "$REPO/"` (root-to-root), NEVER
 #     `cp -a "$STAGE/apps" "$REPO/apps"` (nests into apps/apps).
-#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate
-# the authoritative blocker. It runs the sibling scan_secrets.sh, which
+#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate,
+#     the authoritative blocker. It runs the sibling scan_secrets.sh, which
 #     requires BOTH scanners (betterleaks with the sibling betterleaks.toml
 #     config, kingfisher with --no-validate) and fails on any finding, any
 #     scanner error, or any missing scanner binary. There is NO fallback
@@ -237,7 +237,7 @@ done < <(git log --first-parent --format='%H %s' HEAD)
 
 # 1. stage the selected paths BEFORE the reset
 #
-# include out of this checkout, --data-include out of the live workspace (see
+# --include out of this checkout, --data-include out of the live workspace (see
 # the data_source comment below).
 
 # rsync -R preserves each relative path so it lands at the same location under
@@ -375,7 +375,7 @@ fi
 #
 # Scanning the STAGE (not the assembled tree) means the scan covers exactly
 # the content overlaid out of the live mind: the selected --include /
-# data-include paths. The manifest files are generated after the scan. The
+# --data-include paths. The manifest files are generated after the scan. The
 # clean base is the trusted, public default workspace template -- it cannot
 # contain the user's secrets, and its own test fixtures legitimately hold
 # placeholder token strings (e.g. "sk-ant-test"), so scanning it would only
@@ -910,7 +910,7 @@ fi
 # module. The apt-resolution half is skipped HERE and only here: this run sees
 # the freshly-generated skeleton, whose [environment] is still empty, so there
 # is nothing to resolve yet. The worker re-runs this command WITHOUT
-# skip-apt-check once it has filled the declarations in (that is the run that
+# --skip-apt-check once it has filled the declarations in (that is the run that
 # rejects an unmirrorable package), and the lead runs it again before the push.
 #
 # `uv run --no-project` resolves no workspace project at all -- the same reason

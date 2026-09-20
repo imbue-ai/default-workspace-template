@@ -390,7 +390,7 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
   }
 
   // Only a recognised, pure tk lifecycle call is hidden from the rendered
-  // output. Anything else -- including a command that merely mentions a tk verb
+  // output. Anything else (including a command that merely mentions a tk verb)
   // renders as normal work, so real work is never silently dropped.
   const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
   if (realCalls.length === e.tool_calls.length) {

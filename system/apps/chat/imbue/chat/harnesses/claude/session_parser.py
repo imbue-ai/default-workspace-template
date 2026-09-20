@@ -474,7 +474,7 @@ def _parse_user_message(
                         "message_uuid": uuid,
                     }
                     # Claude Code's own markers (``isMeta`` for framework-injected,
-                    # model-only messages) are read HERE and become the shared render decision
+                    # model-only messages) are read HERE and become the shared render decision;
                     # the raw flags never cross the wire. Explicit detectors win over
                     # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
                     # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
