@@ -110,6 +110,14 @@ describe("bootstrap", () => {
     expect(store.getState().isDesktopsLoaded).toBe(true);
   });
 
+  it("tells the user when the desktops cannot be read, instead of failing silently", async () => {
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    expect(notices).toEqual(["Could not read the desktops: the shell is restarting"]);
+    expect(store.getState().activeDesktopId).toBeNull();
+  });
+
   it("chooses the first desktop when nothing names one", () => {
     const desktops = [desktopRecord("a"), desktopRecord("b")];
     expect(chooseInitialDesktopId(desktops, "zzz", "zzz")).toBe("a");
