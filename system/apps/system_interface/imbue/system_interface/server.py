@@ -3,8 +3,6 @@ import json
 import queue
 import re
 import shlex
-from datetime import datetime
-from datetime import timezone
 from typing import Any
 from typing import Final
 from typing import assert_never
@@ -29,9 +27,10 @@ from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
-from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
+from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.template_catalog import TemplateCatalogAvailability
@@ -479,10 +478,11 @@ def _handle_client_state_message(
 ) -> bool:
     """Process one incoming WebSocket message; returns True for a well-formed ``client_state``.
 
-    ``client_state`` is the only message type clients send: it registers the browser's client
-    id, device kind, and active view (on connect and on every view switch). Registration feeds
-    the broadcaster's client registry (which targets layout ops), the client record, and the
-    client-activity log (a ``view_switch`` when the report names a different previous view).
+    ``client_state`` is the only message type clients send: it registers the browser's client id and the
+    view (the tabbed shell, with its device kind) or the desktop (the desktop shell) it is on, on connect and
+    on every switch. Registration feeds the broadcaster's client registry (which targets layout ops), the
+    client record, and the client-activity log (a ``view_switch`` or ``desktop_switch`` when the report
+    names a different previous one).
     """
     try:
         parsed = json.loads(raw_message)
@@ -498,28 +498,47 @@ def _handle_client_state_message(
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
     shell.broadcaster.set_client_info(
-        client_queue, str(report.client_id), str(report.active_view), report.device_kind.value
+        client_queue,
+        str(report.client_id),
+        str(report.active_view) if report.active_view is not None else "",
+        report.device_kind.value,
+        active_desktop=str(report.active_desktop) if report.active_desktop is not None else "",
     )
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
     try:
-        outcome = shell.clients.record_report(report, datetime.now(timezone.utc))
+        shell.record_client_report(report)
     except ShellStateError as e:
         _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
-    else:
-        # Only a report that moved the stored view is broadcast: a window following a push reports the
-        # view it was pushed to, which matches the record, so the chain ends after one hop.
-        if outcome.is_active_view_changed:
-            shell.broadcaster.broadcast_active_view_changed(str(report.client_id), str(report.active_view))
     if is_first_report:
         _loguru_logger.info(
-            "WS client registered: client_id={} view={} device={} (conn {})",
+            "WS client registered: client_id={} view={} desktop={} device={} (conn {})",
             report.client_id,
             report.active_view,
+            report.active_desktop,
             report.device_kind.value,
             id(client_queue),
         )
-    elif report.previous_view and report.previous_view != report.active_view:
+        return True
+    _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _log_client_switches(
+    report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
+) -> None:
+    """Log, and append to the activity log, the view switch and the desktop switch a re-report names (a report
+    whose previous view or desktop is empty or unchanged names none)."""
+    is_view_switch = (
+        report.active_view is not None and bool(report.previous_view) and report.previous_view != report.active_view
+    )
+    is_desktop_switch = (
+        report.active_desktop is not None
+        and bool(report.previous_desktop)
+        and report.previous_desktop != report.active_desktop
+    )
+    # A switch the log cannot take is a warning: the record already moved the client.
+    if is_view_switch:
         _loguru_logger.info(
             "WS client {} switched view {} -> {} (conn {})",
             report.client_id,
@@ -533,10 +552,20 @@ def _handle_client_state_message(
             )
         except OSError as e:
             _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
-    else:
-        # A re-report on an already-registered connection with an unchanged view.
-        pass
-    return True
+    if is_desktop_switch:
+        _loguru_logger.info(
+            "WS client {} switched desktop {} -> {} (conn {})",
+            report.client_id,
+            report.previous_desktop,
+            report.active_desktop,
+            id(client_queue),
+        )
+        try:
+            shell.activity.append_desktop_switch(
+                str(report.client_id), report.previous_desktop, str(report.active_desktop)
+            )
+        except OSError as e:
+            _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
 def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
@@ -560,6 +589,14 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
                 {
                     "type": "projects_updated",
                     "projects": [project_wire_json(project) for project in shell.projects.list_projects()],
+                }
+            )
+        )
+        websocket.send(
+            json.dumps(
+                {
+                    "type": "desktops_updated",
+                    "desktops": [desktop_wire_json(desktop) for desktop in shell.list_desktops()],
                 }
             )
         )

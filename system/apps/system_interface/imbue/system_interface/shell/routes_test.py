@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from app_instances.data_types import InstanceStatus
 from app_instances.testing import StubInstanceSource
+from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -14,13 +15,15 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
+from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
+from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import ViewId
-from imbue.system_interface.shell.routes import _resolve_client
+from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -51,7 +54,7 @@ def _shell(app: Flask) -> ShellState:
 def _register_client(app: Flask, client_id: str, view_id: str) -> "queue.Queue[str | None]":
     """A connected window of ``client_id`` on ``view_id``, recorded the way its ``client_state`` report would record it."""
     client_queue = _shell(app).broadcaster.register()
-    _shell(app).broadcaster.set_client_info(client_queue, client_id, view_id, "desktop")
+    _shell(app).broadcaster.set_client_info(client_queue, client_id, view_id, "desktop", active_desktop="")
     _shell(app).clients.record_report(
         ClientStateReport(
             client_id=ClientId(client_id),
@@ -79,7 +82,7 @@ def _panel_addresses(layout: dict[str, Any]) -> list[str]:
     return [panel["address"] for panel in layout["panels"]]
 
 
-# ---------- section 5 ----------
+# Section 5
 
 
 def test_an_app_nudge_is_accepted_from_loopback_only(client: FlaskClient, app: Flask) -> None:
@@ -190,7 +193,7 @@ def test_client_activity_is_appended_by_kind(client: FlaskClient, app: Flask) ->
     assert events[0]["key"] == "agent-1" and events[1]["from_view_id"] == "alpha"
 
 
-# ---------- section 6: the relay ----------
+# Section 6: the relay
 
 
 def test_instance_verbs_are_relayed_and_the_list_refetched(
@@ -295,7 +298,7 @@ def test_a_refused_delete_keeps_the_instance_in_its_tab_sets(
     assert shell.projects.get_project("alpha").tabs == (stub_1,)
 
 
-# ---------- section 6: stop and start ----------
+# Section 6: stop and start
 
 
 def test_stop_and_start_drive_the_supervised_program(
@@ -352,7 +355,7 @@ def test_an_unreachable_supervisord_is_a_502(
     assert client.post("/api/apps/files/stop").status_code == 502
 
 
-# ---------- section 6: projects ----------
+# Section 6: projects
 
 
 def test_projects_are_created_seeded_and_listed(client: FlaskClient, app: Flask) -> None:
@@ -441,7 +444,7 @@ def test_project_settings_tabs_shortcuts_and_deletion(client: FlaskClient, app: 
     assert client.post("/api/projects/alpha/delete").status_code == 404
 
 
-# ---------- section 6: layouts ----------
+# Section 6: layouts
 
 
 def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClient, app: Flask) -> None:
@@ -571,7 +574,7 @@ def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskCl
     assert seeded["device_kind"] == "mobile" and list(addresses_by_panel_id(seeded["dockview"]).values()) == [_FILES]
 
 
-# ---------- the broadcast endpoint ----------
+# The broadcast endpoint
 
 
 def _broadcast(
@@ -624,8 +627,8 @@ def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: F
     # A second client that has connected and done nothing else: it has no event in the log.
     _register_client(app, "c9", "everything")
 
-    # The script's list and views read GET /api/inventory; the op route's reads are inspect and context.
-    assert _broadcast(client, "list").status_code == 400
+    # The script's list and views read GET /api/inventory; the address route's reads are inspect and context
+    # (``list`` is the desktop vocabulary's, answered from the desktops).
     assert _broadcast(client, "views").status_code == 400
 
     inspected = _broadcast(client, "inspect", {"view": "Alpha"}).get_json()
@@ -646,6 +649,7 @@ def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: F
         "client_id": "c9",
         "device_kind": "desktop",
         "active_view": "everything",
+        "active_desktop": None,
         "last_seen": "",
         "is_connected": True,
         "recent_messages": [],
@@ -683,7 +687,7 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     shell.activity.append_message("c7", "desktop", "alpha", "files", "None", "hello")
     _register_client(app, "c1", "alpha")
 
-    assert _resolve_client(shell, {}, Address("app:files")) is None
+    assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
 
 
 def test_load_switches_the_requesting_agents_client(client: FlaskClient, app: Flask) -> None:
@@ -1025,3 +1029,469 @@ def test_reload_system_interface_reaches_every_view_and_null_args_are_refused(cl
         assert [message["op"] for message in reloads] == ["reload_system_interface"]
         assert reloads[0]["target_client_id"] is None
     assert client.post("/api/layout/broadcast", json={"op": "refresh", "args": None}).status_code == 400
+
+
+# The desktop interface (desktop contracts.md sections 5 and 8)
+
+
+def _register_desktop_client(app: Flask, client_id: str, desktop_id: str) -> "queue.Queue[str | None]":
+    """A connected window of ``client_id`` on ``desktop_id``, recorded the way the desktop shell's report records it."""
+    client_queue = _shell(app).broadcaster.register()
+    _shell(app).broadcaster.set_client_info(client_queue, client_id, "", "desktop", active_desktop=desktop_id)
+    _shell(app).record_client_report(
+        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id))
+    )
+    return client_queue
+
+
+def _open_window(client: FlaskClient, app_name: str, path: str, client_id: str = "c1", **extra: Any) -> Any:
+    return client.post(
+        "/api/desktops/home/windows", json={"app": app_name, "path": path, "client_id": client_id, **extra}
+    )
+
+
+def _placements(client: FlaskClient, client_id: str) -> list[dict[str, Any]]:
+    return client.get(f"/api/placements/home?client={client_id}").get_json()["placements"]
+
+
+def _desktop_windows(client: FlaskClient) -> list[dict[str, Any]]:
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    return home["windows"]
+
+
+def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(client: FlaskClient) -> None:
+    desktops = client.get("/api/desktops").get_json()["desktops"]
+    assert [desktop["id"] for desktop in desktops] == ["home"]
+    (home,) = desktops
+    assert home["name"] == "Home" and home["sharing"] == "shared" and home["wallpaper"] is None
+    assert home["windows"] == []
+    assert home["shortcuts"] == [
+        {
+            "target": {"kind": "launch", "app": "terminal", "launch": "new"},
+            "mode": "new",
+            "cell": {"column": 0, "row": 0},
+        },
+        {
+            "target": {"kind": "launch", "app": "files", "launch": "open"},
+            "mode": "focus",
+            "cell": {"column": 0, "row": 1},
+        },
+    ]
+
+
+def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, app: Flask) -> None:
+    shell = _shell(app)
+    client_queue = _register_desktop_client(app, "c1", "home")
+    created = client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    assert created.status_code == 201
+    assert created.get_json()["id"] == "research" and len(created.get_json()["shortcuts"]) == 2
+    assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
+    assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
+    settled = client.post(
+        "/api/desktops/research/settings",
+        json={"name": "Research 2", "color": "#222222", "glyph": 2, "sharing": "personal"},
+    )
+    assert settled.status_code == 200 and settled.get_json()["sharing"] == "personal"
+    assert (
+        client.post(
+            "/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2, "sharing": "shared"}
+        ).status_code
+        == 404
+    )
+
+    # A wallpaper must exist to be set; file wallpapers are whatever sits in the wallpapers directory.
+    unknown = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "bundled", "name": "nope"}})
+    assert unknown.status_code == 404
+    shell.wallpaper_files_directory.mkdir(parents=True)
+    (shell.wallpaper_files_directory / "mine.png").write_bytes(b"png")
+    assert client.get("/api/wallpapers").get_json() == {
+        "wallpapers": [{"kind": "file", "name": "mine", "url": "/wallpapers/file/mine"}]
+    }
+    papered = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "file", "name": "mine"}})
+    assert papered.status_code == 200 and papered.get_json()["wallpaper"] == {"kind": "file", "name": "mine"}
+    assert client.get("/wallpapers/file/mine").status_code == 200
+    missing = client.get("/wallpapers/file/nope")
+    assert missing.status_code == 404 and "nope" in missing.get_json()["detail"]
+    assert client.get("/wallpapers/odd/mine").status_code == 404
+    assert client.post("/api/desktops/research/wallpaper", json={"wallpaper": None}).get_json()["wallpaper"] is None
+
+    # Shortcuts: a launch path the app does not declare is refused; set replaces in place; move displaces.
+    bad_shortcut = {
+        "target": {"kind": "launch", "app": "terminal", "launch": "open"},
+        "mode": "new",
+        "cell": {"column": 1, "row": 1},
+    }
+    assert client.post("/api/desktops/research/shortcuts", json=bad_shortcut).status_code == 400
+    flipped = client.post(
+        "/api/desktops/research/shortcuts",
+        json={
+            "target": {"kind": "launch", "app": "terminal", "launch": "new"},
+            "mode": "focus",
+            "cell": {"column": 2, "row": 2},
+        },
+    )
+    assert flipped.status_code == 200
+    assert flipped.get_json()["shortcuts"][0]["mode"] == "focus" and flipped.get_json()["shortcuts"][0]["cell"] == {
+        "column": 2,
+        "row": 2,
+    }
+    moved = client.post(
+        "/api/desktops/research/shortcuts/move",
+        json={"app": "files", "launch": "open", "cell": {"column": 2, "row": 2}},
+    )
+    assert {entry["target"]["app"]: entry["cell"] for entry in moved.get_json()["shortcuts"]} == {
+        "files": {"column": 2, "row": 2},
+        "terminal": {"column": 1, "row": 2},
+    }
+    removed = client.post("/api/desktops/research/shortcuts/remove", json={"app": "files", "launch": "open"})
+    assert [entry["target"]["app"] for entry in removed.get_json()["shortcuts"]] == ["terminal"]
+
+    # Deleting a desktop moves the clients on it to the fallback; the last desktop is refused.
+    shell.set_client_active_desktop(ClientId("c1"), DesktopId("research"))
+    deleted = client.post("/api/desktops/research/delete")
+    assert deleted.status_code == 200 and deleted.get_json() == {"fallback_desktop_id": "home"}
+    recorded = shell.clients.get_client("c1")
+    assert recorded is not None and recorded.active_desktop == "home"
+    assert client.post("/api/desktops/research/delete").status_code == 404
+    assert client.post("/api/desktops/home/delete").status_code == 409
+    types = [message["type"] for message in drain_messages(client_queue)]
+    assert "desktops_updated" in types and "active_desktop_changed" in types
+
+
+def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient, app: Flask) -> None:
+    first_queue = _register_desktop_client(app, "c1", "home")
+    second_queue = _register_desktop_client(app, "c2", "home")
+
+    opened = _open_window(client, "terminal", "/new?workdir=%2Ftmp", launch="new")
+    assert opened.status_code == 201 and opened.get_json()["is_new"] is True
+    window = opened.get_json()["window"]
+    assert window["app"] == "terminal" and window["path"] == "/new?workdir=%2Ftmp"
+    assert window["title"] == "" and window["is_settling"] is True
+    (placed,) = _placements(client, "c1")
+    assert placed["window_id"] == window["id"] and placed["is_minimized"] is False and placed["state"] == "NORMAL"
+    assert placed["frame"] == {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}
+    assert _placements(client, "c2") == []
+    # The opener hears of the window before the placement that arranges it.
+    announced = [
+        message["type"] for message in drain_messages(first_queue) if message["type"] != "active_desktop_changed"
+    ]
+    assert announced == ["desktops_updated", "placements_updated"]
+
+    # The same app at the same path is answered rather than opened, and raised in the requesting client's layout.
+    focused = _open_window(client, "terminal", "/new?workdir=%2Ftmp", client_id="c2")
+    assert focused.status_code == 200 and focused.get_json() == {"window": window, "is_new": False}
+    (restored,) = _placements(client, "c2")
+    assert restored["window_id"] == window["id"] and restored["is_minimized"] is False
+    another = _open_window(client, "terminal", "/new?workdir=%2Ftmp", if_present="new")
+    assert another.status_code == 201 and another.get_json()["window"]["id"] != window["id"]
+    assert [placement["frame"]["x"] for placement in _placements(client, "c1")] == [0.05, 0.08]
+
+    assert _open_window(client, "nope", "/").status_code == 400
+    assert _open_window(client, "terminal", "/new", launch="nope").status_code == 400
+    assert _open_window(client, "terminal", "//evil").status_code == 400
+    assert (
+        client.post(
+            "/api/desktops/nowhere/windows", json={"app": "terminal", "path": "/", "client_id": "c1"}
+        ).status_code
+        == 404
+    )
+
+    # A location report replaces the path and title, ends the settling, and is silent when it changes nothing.
+    located = client.post(
+        f"/api/desktops/home/windows/{window['id']}/location",
+        json={"path": "/?session=terminal-1", "title": "  Build log  "},
+    )
+    assert located.status_code == 200
+    assert located.get_json()["title"] == "Build log" and located.get_json()["is_settling"] is False
+    drain_messages(first_queue)
+    again = client.post(
+        f"/api/desktops/home/windows/{window['id']}/location",
+        json={"path": "/?session=terminal-1", "title": "Build log"},
+    )
+    assert again.status_code == 200 and drain_messages(first_queue) == []
+    assert (
+        client.post(
+            "/api/desktops/home/windows/win-00000000000000ff/location", json={"path": "/", "title": ""}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(f"/api/desktops/home/windows/{window['id']}/location", json={"path": "x", "title": ""}).status_code
+        == 400
+    )
+
+    # A close takes the window off the desktop and out of every client's layout, once.
+    drain_messages(second_queue)
+    assert client.post(f"/api/desktops/home/windows/{window['id']}/close").status_code == 204
+    assert [entry["id"] for entry in _desktop_windows(client)] == [another.get_json()["window"]["id"]]
+    assert [placement["window_id"] for placement in _placements(client, "c1")] == [another.get_json()["window"]["id"]]
+    assert _placements(client, "c2") == []
+    messages = drain_messages(second_queue)
+    assert "desktops_updated" in [message["type"] for message in messages]
+    assert {message["client_id"] for message in messages if message["type"] == "placements_updated"} == {"c1", "c2"}
+    assert client.post(f"/api/desktops/home/windows/{window['id']}/close").status_code == 204
+    assert drain_messages(second_queue) == []
+
+
+def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: FlaskClient, app: Flask) -> None:
+    client_queue = _register_desktop_client(app, "c2", "home")
+    window = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]
+    assert client.get("/api/placements/home?client=c2").get_json() == {
+        "version": 1,
+        "updated_at": None,
+        "placements": [],
+    }
+    assert client.get("/api/placements/home").status_code == 400
+    assert client.get("/api/placements/nowhere?client=c2").status_code == 404
+    drain_messages(client_queue)
+
+    body = {
+        "client_id": "c2",
+        "save_id": "save-0000000000000001",
+        "placements": [
+            {
+                "window_id": window["id"],
+                "frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5},
+                "state": "MAXIMIZED",
+                "is_minimized": False,
+            },
+            {
+                "window_id": "win-00000000000000ff",
+                "frame": {"x": 0, "y": 0, "width": 0.5, "height": 0.5},
+                "state": "NORMAL",
+                "is_minimized": True,
+            },
+        ],
+    }
+    saved = client.post("/api/placements/home", json=body)
+    assert saved.status_code == 200 and saved.get_json()["updated_at"] is not None
+    stored = client.get("/api/placements/home?client=c2").get_json()
+    assert [placement["window_id"] for placement in stored["placements"]] == [window["id"]]
+    assert stored["placements"][0]["state"] == "MAXIMIZED" and stored["updated_at"] == saved.get_json()["updated_at"]
+    assert [message for message in drain_messages(client_queue) if message["type"] == "placements_updated"] == [
+        {"type": "placements_updated", "desktop_id": "home", "client_id": "c2", "save_id": "save-0000000000000001"}
+    ]
+    unchanged = client.post(
+        "/api/placements/home",
+        json={**body, "save_id": "save-0000000000000002", "base_updated_at": stored["updated_at"]},
+    )
+    assert unchanged.status_code == 200 and unchanged.get_json() == {"updated_at": None}
+    assert client.post("/api/placements/home", json={**body, "placements": []}).status_code == 409
+    fresh = client.post(
+        "/api/placements/home",
+        json={**body, "save_id": "save-0000000000000003", "base_updated_at": stored["updated_at"], "placements": []},
+    )
+    assert fresh.status_code == 200 and client.get("/api/placements/home?client=c2").get_json()["placements"] == []
+    bad_frame = {
+        **body,
+        "placements": [{**body["placements"][0], "frame": {"x": 0.8, "y": 0, "width": 0.5, "height": 0.5}}],
+    }
+    assert (
+        client.post(
+            "/api/placements/home", json={**bad_frame, "base_updated_at": fresh.get_json()["updated_at"]}
+        ).status_code
+        == 400
+    )
+
+
+def test_the_inventory_carries_desktops_launch_paths_and_shown_windows(client: FlaskClient, app: Flask) -> None:
+    _register_desktop_client(app, "c1", "home")
+    _record_client(app, "c2", "everything")
+    window = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]
+
+    document = client.get("/api/inventory").get_json()
+    assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
+    assert {entry["name"]: entry["launch_paths"] for entry in document["apps"]} == {
+        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": []}],
+        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": []}],
+    }
+    by_id = {entry["id"]: entry for entry in document["clients"]}
+    assert by_id["c1"]["active_desktop"] == "home" and by_id["c1"]["shown"] == [window["id"]]
+    # A tabbed-shell client with no desktop of its own reads as on the first desktop, with nothing shown.
+    assert by_id["c2"]["active_desktop"] == "home" and by_id["c2"]["shown"] == []
+    assert by_id["c2"]["docked"] == []
+    assert client.get("/api/clients").get_json()["clients"][0]["active_desktop"] == "home"
+
+
+def _desktop_op(client: FlaskClient, op: str, args: dict[str, Any], requester: dict[str, str] | None) -> Any:
+    return client.post("/api/layout/broadcast", json={"op": op, "args": args, "requester": requester})
+
+
+_TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
+
+
+def test_desktop_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskClient, app: Flask) -> None:
+    client_queue = _register_desktop_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+
+    listed = _desktop_op(client, "desktops", {}, requester)
+    assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
+
+    # An open at a launch path with params, and one at an explicit path.
+    opened = _desktop_op(client, "open", {"app": "terminal", "params": {"workdir": "/tmp"}}, requester)
+    assert opened.status_code == 200 and opened.get_json()["desktop_id"] == "home"
+    first_id = opened.get_json()["window_id"]
+    (first,) = opened.get_json()["desktop"]["windows"]
+    assert first["path"] == "/new?workdir=%2Ftmp" and first["is_settling"] is True
+    assert [placement["window_id"] for placement in opened.get_json()["layout"]["placements"]] == [first_id]
+    second_id = _desktop_op(client, "open", {"app": "terminal", "path": "/?session=terminal-7"}, requester).get_json()[
+        "window_id"
+    ]
+    assert [window["is_settling"] for window in _desktop_windows(client)] == [True, False]
+    assert (
+        _desktop_op(client, "open", {"app": "terminal", "path": "/x", "launch": "new"}, requester).status_code == 400
+    )
+
+    # The window verbs, named by id, by app (the most recently focused window of it), and by ``self``.
+    focused = _desktop_op(client, "focus", {"window": first_id}, requester)
+    assert [placement["window_id"] for placement in focused.get_json()["layout"]["placements"]] == [
+        second_id,
+        first_id,
+    ]
+    minimized = _desktop_op(client, "minimize", {"window": "terminal"}, requester)
+    assert minimized.get_json()["window_id"] == first_id
+    assert minimized.get_json()["layout"]["placements"][-1]["is_minimized"] is True
+    placed = _desktop_op(client, "place", {"window": first_id, "zone": "left"}, requester).get_json()
+    assert placed["layout"]["placements"][-1]["state"] == "SNAPPED_LEFT"
+    assert placed["layout"]["placements"][-1]["is_minimized"] is False
+    framed = _desktop_op(client, "place", {"window": first_id, "frame": "0.1,0.2,0.5,0.5"}, requester).get_json()
+    assert framed["layout"]["placements"][-1]["state"] == "NORMAL"
+    assert framed["layout"]["placements"][-1]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5}
+    maximized = _desktop_op(client, "maximize", {"window": first_id}, requester).get_json()
+    assert maximized["layout"]["placements"][-1]["state"] == "MAXIMIZED"
+    restored = _desktop_op(client, "restore", {"window": first_id}, requester).get_json()
+    assert restored["layout"]["placements"][-1]["state"] == "NORMAL"
+    navigated = _desktop_op(
+        client, "navigate", {"window": first_id, "path": "/?session=terminal-9"}, requester
+    ).get_json()
+    assert [window["path"] for window in navigated["desktop"]["windows"]] == [
+        "/?session=terminal-9",
+        "/?session=terminal-7",
+    ]
+    assert _desktop_op(client, "place", {"window": first_id}, requester).status_code == 400
+    assert _desktop_op(client, "place", {"window": first_id, "zone": "up"}, requester).status_code == 400
+    assert _desktop_op(client, "focus", {"window": "files"}, requester).status_code == 404
+    assert _desktop_op(client, "open", {"app": "chat:alice"}, requester).status_code == 400
+    assert "app name and a path" in _desktop_op(client, "open", {"app": "chat:alice"}, requester).get_json()["detail"]
+
+    # A refresh of one window goes to the target client; a refresh of a whole app to every window.
+    drain_messages(client_queue)
+    assert _desktop_op(client, "refresh", {"window": first_id}, requester).get_json()["target_client_id"] == "c1"
+    assert _desktop_op(client, "refresh", {"app": "terminal"}, requester).get_json()["target_client_id"] is None
+    ops = [message for message in drain_messages(client_queue) if message["type"] == "layout_op"]
+    assert [message["args"] for message in ops] == [{"window": first_id}, {"app": "terminal"}]
+    assert ops[0]["target_client_id"] == "c1" and ops[1]["target_client_id"] is None
+
+    # ``self`` is the requester's window: the one whose path carries its marker.
+    closed = _desktop_op(client, "close", {"window": "self"}, requester)
+    assert closed.status_code == 200 and closed.get_json()["window_id"] == second_id
+    assert [window["id"] for window in _desktop_windows(client)] == [first_id]
+    assert _desktop_op(client, "close", {"window": "self"}, requester).status_code == 404
+    assert _desktop_op(client, "close", {"window": "self"}, None).status_code == 400
+
+    # The address verbs still dispatch on the same route: a close of an address edits the dockview arrangement
+    # (a client of the desktop shell has no view of its own, so one must be named).
+    assert _broadcast(client, "close", {"address": str(_TERMINAL_1)}).status_code == 412
+    assert _broadcast(client, "close", {"address": str(_TERMINAL_1), "view": "everything"}).status_code == 404
+
+
+def test_a_desktop_op_targets_the_named_desktop_and_load_switches_the_client(client: FlaskClient, app: Flask) -> None:
+    """``--desktop`` edits that desktop and switches the client to it; ``load`` switches alone."""
+    shell = _shell(app)
+    client_queue = _register_desktop_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    drain_messages(client_queue)
+
+    on_research = _desktop_op(client, "open", {"app": "files", "desktop": "Research"}, requester)
+    assert on_research.status_code == 200 and on_research.get_json()["desktop_id"] == "research"
+    recorded = shell.clients.get_client("c1")
+    assert recorded is not None and recorded.active_desktop == "research"
+    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    loaded = _desktop_op(client, "load", {"desktop": "home"}, requester)
+    assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
+    assert _desktop_op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
+    assert _desktop_op(client, "load", {}, requester).status_code == 400
+
+
+def test_desktop_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient, app: Flask) -> None:
+    _register_desktop_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+
+    shortcuts = _desktop_op(client, "shortcuts", {}, requester).get_json()["desktop"]["shortcuts"]
+    assert [entry["target"]["app"] for entry in shortcuts] == ["terminal", "files"]
+    added = _desktop_op(
+        client, "shortcut_set", {"app": "files", "launch": "open", "mode": "new"}, requester
+    ).get_json()
+    assert added["desktop"]["shortcuts"][1]["mode"] == "new"
+    moved = _desktop_op(
+        client, "shortcut_move", {"app": "files", "launch": "open", "cell": "3,1"}, requester
+    ).get_json()
+    assert moved["desktop"]["shortcuts"][1]["cell"] == {"column": 3, "row": 1}
+    assert _desktop_op(client, "shortcut_move", {"app": "files", "launch": "open"}, requester).status_code == 400
+    removed = _desktop_op(client, "shortcut_remove", {"app": "files", "launch": "open"}, requester).get_json()
+    assert [entry["target"]["app"] for entry in removed["desktop"]["shortcuts"]] == ["terminal"]
+    assert (
+        _desktop_op(client, "wallpaper", {"wallpaper": {"kind": "bundled", "name": "nope"}}, requester).status_code
+        == 404
+    )
+    assert _desktop_op(client, "wallpaper", {"wallpaper": None}, requester).get_json()["desktop"]["wallpaper"] is None
+
+
+def test_inspect_answers_no_view_when_only_desktop_clients_are_known(client: FlaskClient, app: Flask) -> None:
+    """A desktop-shell client is on no view, so the address verbs' ``inspect`` settles on none rather than on the
+    empty view it registered or the ``None`` its record holds: with two of them connected, and with only their
+    records left."""
+    queues = [_register_desktop_client(app, "c1", "home"), _register_desktop_client(app, "c2", "home")]
+    connected = _broadcast(client, "inspect").get_json()
+    assert connected["view_id"] is None and connected["client_id"] is None
+    for client_queue in queues:
+        _shell(app).broadcaster.unregister(client_queue)
+    recorded = _broadcast(client, "inspect").get_json()
+    assert recorded["view_id"] is None and recorded["client_id"] is None
+
+
+def test_a_desktop_op_with_no_client_to_target_is_a_412(client: FlaskClient) -> None:
+    refused = _desktop_op(client, "open", {"app": "terminal"}, None)
+    assert refused.status_code == 412 and "--client" in refused.get_json()["detail"]
+    assert _desktop_op(client, "open", {"app": "terminal", "client": "ghost"}, None).status_code == 404
+    # An argument the op itself needs is reported before any client is looked for.
+    assert _desktop_op(client, "load", {}, None).status_code == 400
+
+
+def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:
+    first_queue = _register_desktop_client(app, "c1", "home")
+    second_queue = _register_desktop_client(app, "c2", "home")
+    window_id = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]["id"]
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    # With two clients connected and none named, a whole-app refresh still goes out to both, while a
+    # one-window refresh cannot tell which client's page it means.
+    everywhere = _desktop_op(client, "refresh", {"app": "terminal"}, None)
+    assert everywhere.status_code == 200 and everywhere.get_json()["target_client_id"] is None
+    assert _desktop_op(client, "refresh", {"window": window_id}, None).status_code == 412
+    for client_queue in (first_queue, second_queue):
+        ops = [message for message in drain_messages(client_queue) if message["type"] == "layout_op"]
+        assert [(message["args"], message["target_client_id"]) for message in ops] == [({"app": "terminal"}, None)]
+
+
+@pytest.mark.parametrize(
+    ("op", "args", "fragment"),
+    [
+        ("shortcut_set", {"app": "files", "launch": "open", "mode": "bogus"}, "mode"),
+        ("shortcut_set", {"app": "files", "launch": "", "mode": "new"}, "launch"),
+        ("shortcut_set", {"app": "files", "mode": "new"}, "launch"),
+        ("shortcut_remove", {"app": "files", "launch": "Not Valid"}, "launch"),
+        ("open", {"app": "terminal", "launch": "Not Valid"}, "launch"),
+        ("wallpaper", {"wallpaper": {"kind": "nope", "name": "x"}}, "wallpaper"),
+        ("wallpaper", {"wallpaper": {"kind": "bundled"}}, "wallpaper"),
+    ],
+)
+def test_a_malformed_desktop_op_argument_is_a_400_naming_the_argument(
+    client: FlaskClient, app: Flask, op: str, args: dict[str, Any], fragment: str
+) -> None:
+    _register_desktop_client(app, "c1", "home")
+    refused = _desktop_op(client, op, args, _TERMINAL_REQUESTER)
+    assert refused.status_code == 400
+    assert fragment in refused.get_json()["detail"]
