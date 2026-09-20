@@ -26,6 +26,7 @@ from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -38,6 +39,11 @@ SEED_FILENAME: Final[str] = "seed.jsonl"
 SEED_SOURCE: Final[str] = "seed"
 # The pseudo-agent's mngr name, shown on the terminal back face of a chat that has no agent yet.
 SEED_AGENT_NAME: Final[str] = "welcome"
+
+# How much of the seeded conversation the launch message carries inline. Past it the agent is
+# pointed at the seed file instead, the way a long handoff summary is: the message rides
+# ``mngr create --message`` on an argv, whose length the kernel bounds.
+INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -154,6 +160,65 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
             continue
         events.append(parsed)
     return events
+
+
+@pure
+def seed_transcript(events: list[dict[str, Any]]) -> str:
+    """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
+
+    The turns are markdown the Mind app wrote, so they are quoted whole rather than summarised.
+    A closing context tag inside a turn (nothing the app writes, but a workspace name or a repo
+    URL is the user's to type) is broken up, so the block the page strips always ends where this
+    builder put its end.
+    """
+    blocks: list[str] = []
+    for event in events:
+        role = "user" if event.get("type") == "user_message" else "assistant"
+        text = event.get("content") if role == "user" else event.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        blocks.append(f'<turn speaker="{role}">\n{text.strip()}\n</turn>')
+    return "\n".join(blocks).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
+
+
+def seed_context_message(chat_dir: Path, message: str) -> str:
+    """A seeded chat's first send as its first agent receives it: the conversation, then the words.
+
+    The seed is a segment this app renders from a file -- no agent ever ran on it, and no
+    ``mngr transcript`` can read it -- so a first agent that is handed the user's message alone
+    joins a conversation it cannot see, and a reply like "1" names an option it never read. The
+    context block carries that conversation ahead of the message; the page strips the block and
+    shows the message alone (``harnesses/message_display.py``).
+
+    Returns ``message`` unchanged when the chat has no seed to carry (a damaged or absent file),
+    which is the behaviour of a chat that never had one.
+    """
+    events = read_seed_events(chat_dir)
+    transcript = seed_transcript(events)
+    if not transcript:
+        logger.warning("The seeded chat under {} has no readable turns; its agent starts without them", chat_dir)
+        return message
+    if len(transcript.encode("utf-8")) > INLINE_SEED_MAX_BYTES:
+        # Resolved: the chats root is relative to the app's working directory, and this path is
+        # read by another process.
+        conversation = (
+            f"The conversation is too long to carry in this message. It is on disk at "
+            f"{(chat_dir / SEED_FILENAME).resolve()}, one JSON event per line, oldest first. "
+            f"Read that file in full before replying."
+        )
+    else:
+        conversation = f"<conversation>\n{transcript}\n</conversation>"
+    return (
+        f"<{SEED_CONTEXT_TAG}>\n"
+        "This chat did not begin here. Before this workspace existed the user had the "
+        "conversation below, and the chat shows it above your first turn; you are the first "
+        "agent to join it. Treat it as the conversation so far: what follows this block is the "
+        "user's next turn in it and may lean on it entirely (a bare number, for instance, picks "
+        "one of the options the last turn offered). Answer that turn, not this block.\n\n"
+        f"{conversation}\n"
+        f"</{SEED_CONTEXT_TAG}>\n"
+        f"{message}"
+    )
 
 
 @pure

@@ -1630,6 +1630,13 @@ describe("agent switches", () => {
       display_label: "Handoff prompt",
     });
     expect(hasUserTurn([welcome, prompt])).toBe(true);
+    // A seeded chat's first send is the user's own words behind the context block the chat app
+    // prefixed for the agent, so it counts even though the bubble shows only the words.
+    const seededFirstSend = userMsg("t7", "<chat-seed-context>...</chat-seed-context>\n1", "u-s", {
+      display: "prompt_with_context",
+      display_body: "1",
+    });
+    expect(hasUserTurn([seededFirstSend])).toBe(true);
     // And it belongs to the handoff node the switch closed, not to the successor's opening section,
     // which then holds only the successor's reply.
     const sections = buildSections(

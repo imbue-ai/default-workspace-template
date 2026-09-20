@@ -969,6 +969,18 @@ def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_t
         },
     ]
     assert has_user_turn(prompted) is True
+    # A seeded chat's first send is the user's words behind the context block its launch wrapped
+    # them in, so the chat it started has something to summarize from its very first turn.
+    seeded_first_send = [
+        {
+            "event_id": "u-s",
+            "type": "user_message",
+            "display": "prompt_with_context",
+            "display_body": "1",
+            "timestamp": "2026-09-13T11:04:00+00:00",
+        }
+    ]
+    assert has_user_turn(seeded_first_send) is True
 
 
 def test_a_half_made_successor_is_destroyed_and_created_again(tmp_path: Path) -> None:

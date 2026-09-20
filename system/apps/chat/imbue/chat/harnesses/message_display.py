@@ -14,9 +14,10 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
-   model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
-   ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
+1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome, a
+   seeded chat's context block, model-bar traffic, a latchkey resolution) -> that decision.
+   Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet
+   deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
 3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
@@ -39,6 +40,12 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
+# Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
+# that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
+# message -- the conversation the chat opened on, then the user's own words -- while the page
+# shows only the words, so the block is stripped here and the rest travels as ``display_body``.
+SEED_CONTEXT_TAG = "chat-seed-context"
+
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
@@ -47,6 +54,10 @@ _TASK_NOTIFICATION_PREAMBLE = "[SYSTEM NOTIFICATION"
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
+# Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own
+# words follow it). Non-greedy: the block is built here and never nests, so the first close
+# ends it.
+_SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
@@ -151,6 +162,21 @@ def _match_welcome(content: str) -> MessageDisplay | None:
     if content.strip() != "/welcome":
         return None
     return MessageDisplay(display=DisplayKind.HIDDEN)
+
+
+def _match_seed_context(content: str) -> MessageDisplay | None:
+    """A seeded chat's first send: the context block the chat app prefixed, then the user's words.
+
+    The words alone are what the page shows, so they travel as ``display_body``; a block with
+    nothing after it is not one of ours and is left to render whole.
+    """
+    match = _SEED_CONTEXT_RE.match(content)
+    if match is None:
+        return None
+    spoken = content[match.end() :].strip()
+    if not spoken:
+        return None
+    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
 
 
 def _match_skill_expansion(content: str) -> MessageDisplay | None:
@@ -264,6 +290,7 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
 
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
+    _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
     _match_stop_hook,
@@ -300,6 +327,12 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
     # classification, show the message text rather than the raw attachment markdown.
     if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
+    # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble
+    # (an inline image, a download link) and is the user's own. The detectors never saw it, so
+    # put back what ``_visible_text`` took off the end.
+    if decision.display is DisplayKind.PROMPT_WITH_CONTEXT and visible != content:
+        spoken = f"{decision.display_body}{content[len(visible) :]}"
+        decision = decision.model_copy_update(to_update(decision.field_ref().display_body, spoken))
     return decision
 
 

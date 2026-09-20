@@ -60,6 +60,17 @@ describe("classifyUserMessage", () => {
     expect(c.label).toBe("deep-research");
   });
 
+  it("maps display: prompt_with_context to a plain user bubble showing only what the user typed", () => {
+    const c = classifyUserMessage({
+      content: "<chat-seed-context>the conversation so far</chat-seed-context>\n1",
+      display: "prompt_with_context",
+      display_body: "1",
+    });
+    expect(c.kind).toBe(UserMessageKind.UserPrompt);
+    expect(c.body).toBe("1");
+    expect(c.label).toBeNull();
+  });
+
   it("maps an uncorrelated permission_resolution to UserPrompt (the walk owns suppression)", () => {
     const c = classifyUserMessage({
       content: "Your permission request for GitHub was granted.",
