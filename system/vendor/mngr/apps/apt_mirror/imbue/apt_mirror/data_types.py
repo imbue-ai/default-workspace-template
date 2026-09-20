@@ -117,6 +117,37 @@ class DefaultWorkspaceTemplatePin(FrozenModel):
     )
 
 
+class DockerfileBaseImage(FrozenModel):
+    """The image reference of a Dockerfile's first ``FROM`` line: its name, and its content digest when it is pinned."""
+
+    image_name: str = Field(description="The reference without any digest, e.g. ``python:3.12-slim-trixie``")
+    digest: str | None = Field(
+        description="The ``sha256:<64 hex digits>`` the reference pins, or None when it floats on its tag"
+    )
+
+    @property
+    def is_digest_pinned(self) -> bool:
+        return self.digest is not None
+
+    @property
+    def image_ref(self) -> str:
+        return self.image_name if self.digest is None else f"{self.image_name}@{self.digest}"
+
+
+class TemplateCheckoutPins(FrozenModel):
+    """The image base and apt snapshot a default-workspace-template checkout commits, read from its working tree.
+
+    Unlike :class:`DefaultWorkspaceTemplatePin`, the base may float: a checkout
+    of a tag that predates the digest pin (every tag through minds-v0.6.2) is
+    exactly what the pool bake's seed of an old release builds from.
+    """
+
+    base_image: DockerfileBaseImage = Field(description="The Dockerfile's FROM reference, pinned or floating")
+    apt_snapshot_timestamp: str = Field(
+        description="The committed .mngr/apt-snapshot-timestamp, e.g. 20260725T000000Z"
+    )
+
+
 class ReleaseFileEntry(FrozenModel):
     """One file row from a Release file's SHA256 section."""
 

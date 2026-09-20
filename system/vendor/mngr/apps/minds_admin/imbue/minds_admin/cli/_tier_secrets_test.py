@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import click
 import pytest
 
@@ -7,6 +9,7 @@ from imbue.minds_admin.cli._tier_secrets import observability_tier_for_env_name
 from imbue.minds_admin.cli._tier_secrets import ovh_config_from_vault_secret
 from imbue.minds_admin.cli._tier_secrets import resolve_analytics_analyst_admin_context
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
+from imbue.minds_admin.cli._tier_secrets import resolve_supertokens_core_credentials
 from imbue.minds_admin.cli._tier_secrets import workspace_storage_config_from_secret
 from imbue.observability.primitives import CollectorRole
 from imbue.observability.primitives import ObservabilityTierName
@@ -140,3 +143,50 @@ def test_box_storage_passphrase_vault_path_is_one_leaf_per_box_under_the_tier_pr
     )
     # Every dev env shares the box (and so its passphrase) under the dev tier's prefix.
     assert box_storage_passphrase_vault_path("dev-josh", "ns1") == "secrets/minds/dev/box-storage/ns1"
+
+
+def _activate_dev_env_with_secrets(monkeypatch: pytest.MonkeyPatch, home: Path, secrets_toml: str | None) -> None:
+    """Activate a dev env whose local state lives under ``home``, with the given secrets.toml (none when None)."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MINDS_ROOT_NAME", "minds-dev-testuser")
+    if secrets_toml is not None:
+        env_dir = home / ".minds-dev-testuser"
+        env_dir.mkdir(parents=True)
+        (env_dir / "secrets.toml").write_text(secrets_toml)
+
+
+def test_supertokens_core_credentials_come_from_a_dev_envs_secrets_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _activate_dev_env_with_secrets(
+        monkeypatch,
+        tmp_path,
+        '[secrets]\nSUPERTOKENS_CONNECTION_URI = "https://core.example/appid-x"\nSUPERTOKENS_API_KEY = "core-key"\n',
+    )
+    credentials = resolve_supertokens_core_credentials()
+    assert credentials.connection_uri == "https://core.example/appid-x"
+    assert credentials.api_key.get_secret_value() == "core-key"
+
+
+def test_supertokens_core_credentials_refuse_an_incomplete_or_missing_secrets_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _activate_dev_env_with_secrets(monkeypatch, tmp_path, '[secrets]\nSUPERTOKENS_API_KEY = "core-key"\n')
+    with pytest.raises(click.ClickException) as incomplete:
+        resolve_supertokens_core_credentials()
+    assert "secrets.toml of env 'dev-testuser'" in str(incomplete.value)
+    assert "SUPERTOKENS_CONNECTION_URI" in str(incomplete.value)
+
+    _activate_dev_env_with_secrets(monkeypatch, tmp_path / "bare", None)
+    with pytest.raises(click.ClickException) as missing:
+        resolve_supertokens_core_credentials()
+    assert "no local secrets.toml" in str(missing.value)
+
+
+def test_supertokens_core_credentials_without_activation_give_an_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_ROOT_NAME", raising=False)
+    with pytest.raises(click.ClickException) as exc_info:
+        resolve_supertokens_core_credentials()
+    assert "minds-admin env activate" in str(exc_info.value)

@@ -55,6 +55,7 @@ from imbue.minds_admin.cli._activated_env import STAGING_ENV_NAME
 from imbue.minds_admin.cli._activated_env import tier_for_env_name
 from imbue.minds_admin.envs.providers.analytics_analysts import AnalyticsAnalystAdminContext
 from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
+from imbue.minds_admin.envs.r2_cleanup import SuperTokensCoreCredentials
 from imbue.mngr_imbue_cloud.config import CONNECTOR_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_ovh.config import OvhProviderConfig
@@ -122,6 +123,35 @@ def _read_activated_env_secrets_block() -> dict[str, str] | None:
     if not isinstance(secrets_block, dict):
         return None
     return {key: str(value) for key, value in secrets_block.items() if isinstance(value, str)}
+
+
+def _read_activated_tier_secret_values(
+    env_name: str, entry_name: str, *, purpose: str, vault_hint: str = "", secrets_toml_hint: str
+) -> tuple[Mapping[str, str], str]:
+    """The activated env's values for one secret entry, and how error messages should name their source.
+
+    The shared tiers keep them in the ``<vault_prefix>/<entry_name>`` Vault
+    entry; a dev / ci env in the ``[secrets]`` block of its local
+    ``secrets.toml``, where ``minds-admin env deploy`` wrote the same values.
+    ``purpose`` names the entry in the Vault refusal, ``vault_hint`` is
+    appended to it, and ``secrets_toml_hint`` is the remedy for an env with
+    no ``secrets.toml``.
+    """
+    tier = tier_for_env_name(env_name)
+    if tier in (PRODUCTION_ENV_NAME, STAGING_ENV_NAME):
+        vault_prefix = str(load_deploy_config(tier).vault_path_prefix).rstrip("/")
+        try:
+            values: Mapping[str, str] = read_vault_kv(VaultPath(f"{vault_prefix}/{entry_name}"))
+        except VaultReadError as exc:
+            raise click.ClickException(
+                f"Could not read the {purpose} Vault entry ({vault_prefix}/{entry_name}) for env "
+                f"'{env_name}': {exc}{vault_hint}."
+            ) from exc
+        return values, f"Vault entry {vault_prefix}/{entry_name}"
+    secrets_block = _read_activated_env_secrets_block()
+    if secrets_block is None:
+        raise click.ClickException(f"Env '{env_name}' has no local secrets.toml; {secrets_toml_hint}.")
+    return secrets_block, f"the secrets.toml of env '{env_name}'"
 
 
 def _read_activated_minds_host_pool_dsn() -> str | None:
@@ -314,6 +344,29 @@ def resolve_admin_api_key_value(explicit: str | None) -> str:
 
 def make_admin_connector_client(connector_url: str | None) -> ImbueCloudConnectorClient:
     return ImbueCloudConnectorClient(base_url=AnyUrl(resolve_admin_connector_url(connector_url)))
+
+
+def resolve_supertokens_core_credentials() -> SuperTokensCoreCredentials:
+    """Resolve the activated tier's SuperTokens core (connection URI + api key): Vault for the shared tiers, ``secrets.toml`` for dev/ci.
+
+    The same entry ``minds-admin env deploy`` pushes to the connector; operator
+    commands read it to map the accounts' ids to their emails (the pool rows
+    carry only a user's 16-hex prefix).
+    """
+    env_name = active_env_name_or_none()
+    if env_name is None:
+        raise click.ClickException(
+            "No minds env is activated: `minds-admin env activate <env>` first (the SuperTokens core "
+            "credentials come from the tier's Vault entry or the env's secrets.toml)."
+        )
+    values, source = _read_activated_tier_secret_values(
+        env_name, "supertokens", purpose="SuperTokens", secrets_toml_hint="deploy it first"
+    )
+    connection_uri = values.get("SUPERTOKENS_CONNECTION_URI", "")
+    api_key = values.get("SUPERTOKENS_API_KEY", "")
+    if not connection_uri or not api_key:
+        raise click.ClickException(f"{source} is missing SUPERTOKENS_CONNECTION_URI or SUPERTOKENS_API_KEY.")
+    return SuperTokensCoreCredentials(connection_uri=connection_uri, api_key=SecretStr(api_key))
 
 
 # The Vault fields of a tier's ``<vault_prefix>/storage`` entry the cutover's
@@ -651,25 +704,14 @@ def resolve_analytics_analyst_admin_context() -> AnalyticsAnalystAdminContext:
             "No minds env is activated: `minds-admin env activate <env>` first (analyst management "
             "operates on the activated tier's analytics stack)."
         )
-    tier = tier_for_env_name(env_name)
-    vault_prefix = str(load_deploy_config(tier).vault_path_prefix).rstrip("/")
-
-    if tier in (PRODUCTION_ENV_NAME, STAGING_ENV_NAME):
-        try:
-            analytics_values: Mapping[str, str] = read_vault_kv(VaultPath(f"{vault_prefix}/analytics"))
-        except VaultReadError as exc:
-            raise click.ClickException(
-                f"Could not read the analytics Vault entry ({vault_prefix}/analytics) for env "
-                f"'{env_name}': {exc}. See apps/analytics/docs/bringup.md for the tier bringup."
-            ) from exc
-    else:
-        secrets_block = _read_activated_env_secrets_block()
-        if secrets_block is None:
-            raise click.ClickException(
-                f"Env '{env_name}' has no local secrets.toml; deploy it with analytics first "
-                "(minds-admin env deploy --with-analytics)."
-            )
-        analytics_values = secrets_block
+    vault_prefix = str(load_deploy_config(tier_for_env_name(env_name)).vault_path_prefix).rstrip("/")
+    analytics_values, _source = _read_activated_tier_secret_values(
+        env_name,
+        "analytics",
+        purpose="analytics",
+        vault_hint=". See apps/analytics/docs/bringup.md for the tier bringup",
+        secrets_toml_hint="deploy it with analytics first (minds-admin env deploy --with-analytics)",
+    )
 
     missing_fields = [field for field in _REQUIRED_ANALYTICS_ADMIN_FIELDS if not analytics_values.get(field)]
     if missing_fields:
