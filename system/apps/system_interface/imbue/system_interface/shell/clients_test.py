@@ -9,6 +9,7 @@ from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
+from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -35,6 +36,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "id": "c1",
         "device_kind": "desktop",
         "active_view": "alpha",
+        "active_desktop": None,
         "last_seen": "2026-09-04T00:02:00+00:00",
         "is_connected": True,
     }
@@ -58,3 +60,23 @@ def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> N
     assert store.prune_unseen(TEST_NOW) == [ClientId("old")]
     assert [str(client.id) for client in store.list_clients()] == ["fresh"]
     assert store.prune_unseen(TEST_NOW) == []
+
+
+def test_a_desktop_report_records_the_desktop_and_keeps_the_view_the_other_shell_reported(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    first = store.record_report(
+        ClientStateReport(client_id=ClientId("c1"), active_desktop=DesktopId("home")), TEST_NOW
+    )
+    assert first.is_active_desktop_changed is True and first.is_active_view_changed is False
+    assert first.record.active_desktop == "home" and first.record.active_view is None
+    assert client_wire_json(first.record, False)["active_desktop"] == "home"
+    same = store.record_report(ClientStateReport(client_id=ClientId("c1"), active_desktop=DesktopId("home")), TEST_NOW)
+    assert same.is_active_desktop_changed is False
+    # A tabbed-shell report from the same client keeps the desktop, and vice versa.
+    viewed = store.record_report(_report("c1", "alpha"), TEST_NOW + timedelta(minutes=1))
+    assert viewed.record.active_desktop == "home" and viewed.record.active_view == "alpha"
+    assert viewed.is_active_view_changed is True and viewed.is_active_desktop_changed is False
+    moved = store.set_active_desktop(ClientId("c1"), DesktopId("alpha"), TEST_NOW + timedelta(minutes=2))
+    assert moved.is_active_desktop_changed is True and moved.record.active_view == "alpha"
+    with pytest.raises(ClientNotFoundError):
+        store.set_active_desktop(ClientId("nobody"), DesktopId("alpha"), TEST_NOW)

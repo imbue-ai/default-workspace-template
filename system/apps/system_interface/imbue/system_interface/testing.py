@@ -229,6 +229,7 @@ def build_test_state(
         registry_path=registry_path(),
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
+        wallpaper_files_directory=state_directory / "wallpapers",
     )
     template_catalog = build_template_catalog_store(
         catalog_url=resolved_config.system_interface_template_catalog_url

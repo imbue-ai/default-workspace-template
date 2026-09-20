@@ -26,6 +26,7 @@ from imbue.system_interface.shell.errors import ProjectNotFoundError
 from imbue.system_interface.shell.errors import ProjectValueError
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
+from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.primitives import ProjectId
 from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -35,8 +36,6 @@ from imbue.system_interface.shell.state_files import write_json_atomic
 PROJECTS_FILENAME: Final[str] = "projects.json"
 PROJECTS_FILE_VERSION: Final[int] = 1
 
-# ``glyph`` indexes the frontend's squiggle table, which has exactly ten entries.
-GLYPH_COUNT: Final[int] = 10
 _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 _SLUG_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
 
