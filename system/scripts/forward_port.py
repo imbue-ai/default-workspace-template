@@ -776,9 +776,9 @@ def main() -> None:
         "--internal",
         action="store_true",
         help=(
-            "Register without offering this as an app to open: no row in the "
-            "New Tab launcher's machine table, the rail's All apps popover, or "
-            "its shortcuts. For machinery with a port to forward (share/embed "
+            "Register without offering this as an app to open: no tile in the "
+            "desktop's launcher and no shortcut on a desktop. For machinery "
+            "with a port to forward (share/embed "
             "routing) but no page of its own to show -- a name with nothing "
             "behind it would otherwise open blank."
         ),
