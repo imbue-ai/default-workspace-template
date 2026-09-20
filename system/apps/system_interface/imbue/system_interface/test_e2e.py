@@ -74,7 +74,7 @@ pytestmark = [
 HOME_DESKTOP_ID = "home"
 
 # The stub app the machine offers: a multi-instance app with one launch path, ``new`` at ``/new``, and a
-# focus-mode default shortcut for it. Its pages are stand-ins served by a Playwright route.
+# focus-mode default shortcut for it. Its pages are the stand-ins the stub serves at every other path.
 _STUB_APP_NAME = "docs"
 _STUB_APP_DISPLAY_NAME = "Docs"
 _STUB_LAUNCH_ID = "new"
@@ -255,8 +255,6 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
         yield server
 
 
-# ---------- the stand-in pages ----------
-
 # A page for a stub window's frame, served by the stub app itself on its loopback origin (a page a Playwright route
 # fulfils has no network origin, and Chromium's local-network policy then refuses it the shell's contract module).
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
@@ -324,9 +322,6 @@ def _stub_app(source: StubInstanceSource, app_name: AppName, base_url: str) -> F
 def _use_plain_pages(context: BrowserContext, server: E2EServer) -> None:
     """Have the stub app serve this context the plain page, the one without in-place navigation."""
     context.add_cookies([{"name": _PLAIN_PAGE_COOKIE, "value": _PLAIN_PAGE_COOKIE_VALUE, "url": server.stub_url}])
-
-
-# ---------- reading the shell ----------
 
 
 def _desktops(base_url: str) -> list[dict[str, Any]]:
@@ -420,9 +415,6 @@ def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any
 
     wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message=f"op {op!r} never succeeded")
     return answer
-
-
-# ---------- driving the shell ----------
 
 
 def _client_id(page: Page) -> str:
@@ -550,9 +542,6 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     return browser.new_context(**context_args)
 
 
-# ---------- landing ----------
-
-
 @pytest.mark.timeout(60, func_only=False)
 def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a_client(
     e2e_server: E2EServer, page: Page
@@ -584,9 +573,6 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
         poll_interval=0.2,
         error_message="the shell never registered the client on the home desktop",
     )
-
-
-# ---------- every open path ----------
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -759,9 +745,6 @@ def test_deep_links_open_a_path_and_run_a_launch_path(e2e_server: E2EServer, pag
     assert len(_windows(e2e_server.base_url)) == 2
 
 
-# ---------- gestures, persisted ----------
-
-
 @pytest.mark.timeout(90, func_only=False)
 def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page) -> None:
     """Dragging the title bar moves the window and dragging a corner resizes it; the placement file records both
@@ -929,9 +912,6 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
 
 
-# ---------- following and closing across clients ----------
-
-
 @pytest.mark.timeout(90, func_only=False)
 def test_url_following_across_two_clients_in_place_and_by_reload(e2e_server: E2EServer, page: Page) -> None:
     """A page navigating in one client reports its location; the window's path changes for everyone, and the
@@ -1015,9 +995,6 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
     expect(_window(page, second)).to_have_count(0, timeout=15000)
 
 
-# ---------- shortcuts ----------
-
-
 @pytest.mark.timeout(60, func_only=False)
 def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupant(tmp_path: Path, page: Page) -> None:
     """Dragging a shortcut to an empty cell moves it there for everyone; dropping one on an occupied cell takes the
@@ -1084,9 +1061,6 @@ def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_s
     popover.locator(f'[data-add-shortcut="{_STUB_SHORTCUT_KEY}"]').click()
     expect(shortcut).to_be_visible(timeout=10000)
     assert _shortcut_cells(e2e_server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0)}
-
-
-# ---------- desktops and the tray ----------
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1169,8 +1143,6 @@ def test_running_apps_widget_lists_windows_and_launch_paths(e2e_server: E2EServe
     expect(_window(page, first)).to_be_visible(timeout=10000)
     expect(_window(page, first)).to_have_attribute("data-focused", "true")
 
-
-# ---------- phones ----------
 
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting with the Playwright
 # version. The shell reads compactness off the viewport width and touch off the coarse pointer.

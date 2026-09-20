@@ -115,8 +115,6 @@ export class LivePagesLayer implements PageDriver {
     this.reconcile();
   }
 
-  // ---------- PageDriver ----------
-
   reload(windowId: string): void {
     const page = this.pages.get(windowId);
     if (page !== undefined) reloadFrame(page.frame);
@@ -132,8 +130,6 @@ export class LivePagesLayer implements PageDriver {
     const page = this.pages.get(windowId);
     if (page !== undefined) sendToChildFrame(page.frame, SHELL_CLOSE_REQUEST);
   }
-
-  // ---------- reconcile ----------
 
   /**
    * Put every page where its window is. Run after each redraw, once the window chrome is in the
@@ -234,8 +230,6 @@ export class LivePagesLayer implements PageDriver {
     return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
   }
 
-  // ---------- pages ----------
-
   private create(window: WindowRecord, app: { name: string; label: string; url: string }): LivePage {
     const wrapper = document.createElement("div");
     wrapper.className = "live-page absolute";
@@ -320,8 +314,6 @@ export class LivePagesLayer implements PageDriver {
     page.lastSentVisibility = isVisible;
     sendToChildFrame(page.frame, isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
   }
-
-  // ---------- the pages' messages ----------
 
   private pageOfFrame(frame: HTMLIFrameElement): LivePage | undefined {
     const windowId = frame.getAttribute(LIVE_PAGE_ATTRIBUTE);
