@@ -718,15 +718,11 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
         for problem in problems
     )
 
-    declared = (
-        _manifest(
-            _MINIMAL_TOML
-            + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\n'
-            + '\n[[requirements.secret]]\nfile = "mailer"\nvariables = ["B"]\n',
-            tmp_path / "declared",
-        )
-        if (tmp_path / "declared").mkdir() is None
-        else None
+    (tmp_path / "declared").mkdir()
+    declared = _manifest(
+        _MINIMAL_TOML
+        + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\n'
+        + '\n[[requirements.secret]]\nfile = "mailer"\nvariables = ["B"]\n',
+        tmp_path / "declared",
     )
-    assert declared is not None
     assert check_secret_references(tmp_path, declared) == ()
