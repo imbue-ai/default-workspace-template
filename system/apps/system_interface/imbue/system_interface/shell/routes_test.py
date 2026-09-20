@@ -37,6 +37,7 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -1104,7 +1105,10 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert unknown.status_code == 404
     shell.wallpaper_files_directory.mkdir(parents=True)
     (shell.wallpaper_files_directory / "mine.png").write_bytes(b"png")
-    # The bundled wallpaper the shell ships, beside whatever sits in the wallpapers directory.
+    bundled_directory = state_of(app).static_directory / BUNDLED_WALLPAPERS_DIRNAME
+    bundled_directory.mkdir(parents=True)
+    (bundled_directory / "dawn.png").write_bytes(b"png")
+    # The bundled wallpapers beside the frontend bundle come first, then the wallpapers directory's files.
     assert client.get("/api/wallpapers").get_json() == {
         "wallpapers": [
             {"kind": "bundled", "name": "dawn", "url": "/wallpapers/bundled/dawn"},
@@ -1114,6 +1118,7 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     papered = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "file", "name": "mine"}})
     assert papered.status_code == 200 and papered.get_json()["wallpaper"] == {"kind": "file", "name": "mine"}
     assert client.get("/wallpapers/file/mine").status_code == 200
+    assert client.get("/wallpapers/bundled/dawn").status_code == 200
     missing = client.get("/wallpapers/file/nope")
     assert missing.status_code == 404 and "nope" in missing.get_json()["detail"]
     assert client.get("/wallpapers/odd/mine").status_code == 404

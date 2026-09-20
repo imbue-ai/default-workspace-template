@@ -136,8 +136,17 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
 
 
 def shell_application(tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster) -> Flask:
-    """The shell app over ``inventory``, its state under ``tmp_path``, sharing the inventory's broadcaster as in production."""
-    state = build_test_state(broadcaster=broadcaster, shell_state_directory=tmp_path / "state", inventory=inventory)
+    """The shell app over ``inventory``, its state under ``tmp_path``, sharing the inventory's broadcaster as in production.
+
+    Its bundle directory is ``tmp_path / "static"``, empty until a test fills it, so no route answer depends
+    on whether the frontend has been built in the checkout.
+    """
+    state = build_test_state(
+        broadcaster=broadcaster,
+        shell_state_directory=tmp_path / "state",
+        inventory=inventory,
+        static_directory=tmp_path / "static",
+    )
     return create_application(state)
 
 
