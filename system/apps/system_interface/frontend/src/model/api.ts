@@ -8,11 +8,11 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
-  parseClientRecord,
+  parseClientRecords,
   parseDesktop,
   parseDesktops,
   parseLayout,
-  parseWallpaperListing,
+  parseWallpaperListings,
   parseWindow,
 } from "./records";
 import type {
@@ -166,13 +166,13 @@ export async function savePlacements(desktopId: string, request: PlacementsSaveR
 }
 
 export async function fetchClients(): Promise<ClientRecord[]> {
-  const data = (await getJson(apiUrl("/api/clients"))) as { clients?: unknown[] };
-  return (data.clients ?? []).map(parseClientRecord);
+  const data = (await getJson(apiUrl("/api/clients"))) as { clients?: unknown };
+  return parseClientRecords(data.clients);
 }
 
 export async function fetchWallpapers(): Promise<WallpaperListing[]> {
-  const data = (await getJson(apiUrl("/api/wallpapers"))) as { wallpapers?: unknown[] };
-  return (data.wallpapers ?? []).map(parseWallpaperListing);
+  const data = (await getJson(apiUrl("/api/wallpapers"))) as { wallpapers?: unknown };
+  return parseWallpaperListings(data.wallpapers);
 }
 
 /** Where a wallpaper reference's image is served. */
