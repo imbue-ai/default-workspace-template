@@ -23,10 +23,10 @@ from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
-from imbue.chat.testing import free_port
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 
 # The default desktop every shell starts with (``shell/desktops.py``).
@@ -71,7 +71,7 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
     """The chat reaches the shell's inventory as an app: running, with the ``new`` launch path of its manifest and
     its default shortcut, and nothing about the chats inside it."""
-    with running_workspace(tmp_path, free_port(), free_port()) as workspace:
+    with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
         assert listed["critical"] is True
@@ -84,7 +84,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
 def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: Path) -> None:
     """The desktop ``open`` op with the chat's name and a chat page's path puts a window on the desktop for the
     target client, and the path it names is one the chat app answers with the chat document."""
-    with running_workspace(tmp_path, free_port(), free_port()) as workspace:
+    with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         _wait_for_the_chat_app(workspace.shell_url)
         # A client the shell knows, registered through the socket's own bookkeeping.
         client_queue = workspace.shell_state.shell.broadcaster.register()
