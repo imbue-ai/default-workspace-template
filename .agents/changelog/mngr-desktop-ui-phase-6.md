@@ -4,4 +4,4 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 
 - The update apply's post-restart probes poll `/api/health` on every critical app the user can open (`critical = true` and not `internal = true`; the chat and the terminal), at the URL each app's registry row names, in place of the retired instances API.
 
-- `update-self` no longer rebuilds a files app tool (the app has no Python package) and no longer runs the layout migration on apply; `build-app` documents the manifest without the retired `instances` and `actions` keys.
+- `update-self` no longer rebuilds a files app tool (the app has no Python package) and no longer runs the layout migration on apply; its `surface-chat-tab` command opens the chat's window through the desktop's `open` (`layout.py open chat --path "/?chat=<id>"`); `build-app` documents the manifest without the retired `instances` and `actions` keys.

@@ -343,9 +343,9 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to place the tab. Generous enough
+# How long the detached helper keeps trying to open the window. Generous enough
 # to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the tab is the fallback.
+# app's own copy naming the window is the fallback.
 SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
 
 SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
@@ -372,8 +372,9 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
-    result = subprocess.run(
+def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
+    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
+    result = runner.run(
         [
             sys.executable,
             "system/scripts/layout.py",
@@ -394,7 +395,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )

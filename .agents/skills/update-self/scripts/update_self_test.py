@@ -6500,6 +6500,20 @@ def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
     assert calls == 3
 
 
+def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(tmp_path: Path) -> None:
+    """The one contract the flow has with layout.py's grammar: the chat app at its chat's page, run from the repo root."""
+    runner = _RecordingRunner()
+
+    assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is True
+
+    assert runner.calls == [
+        [sys.executable, "system/scripts/layout.py", "open", "chat", "--path", "/?chat=chat-9"]
+    ]
+    assert runner.cwds == [str(tmp_path)]
+    runner.respond((sys.executable, "system/scripts/layout.py"), _Result(returncode=1, stderr="no client"))
+    assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is False
+
+
 def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     calls = 0
 

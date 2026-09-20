@@ -53,10 +53,6 @@ _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 # shell's SPA catch-all, which a stale registry row would land the probe on.
 HEALTH_PATH = "/api/health"
 
-# The chat app's own probe route, polled by its pre-flight boot: ``--preflight`` runs no
-# agent manager, and health is the boot having imported mngr and the harness plugins
-# and bound its socket.
-CHAT_HEALTH_PATH = "/api/health"
 # The chat program's entry point; a tree without it has no chat program to pre-flight.
 CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
 
@@ -301,7 +297,10 @@ def preflight_chat(
         # The repo root, where supervisord runs the chat from (its paths are relative to it).
         cwd=repo_root,
         env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
-        health_url=f"http://127.0.0.1:{port}{CHAT_HEALTH_PATH}",
+        # The chat's pre-flight boot answers the same probe route: ``--preflight`` runs no agent
+        # manager, and health is the boot having imported mngr and the harness plugins and
+        # bound its socket.
+        health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
         what="the merged chat app",
         http=http,
         spawner=spawner,
