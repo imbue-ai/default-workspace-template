@@ -212,6 +212,7 @@ def build_test_state(
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
     template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
+    static_directory: Path | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -221,6 +222,8 @@ def build_test_state(
     and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
     is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
     the network for it; with one, the store fetches the config's URL through it.
+    ``static_directory`` replaces the package's built bundle directory (the frontend bundle
+    and the bundled wallpapers) with one the test fills itself.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_config = config if config is not None else Config()
@@ -238,7 +241,11 @@ def build_test_state(
         state_directory=state_directory,
         fetcher=template_catalog_fetcher,
     )
-    return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
+    if static_directory is None:
+        return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
+    return SystemInterfaceState(
+        config=resolved_config, shell=shell, template_catalog=template_catalog, static_directory=static_directory
+    )
 
 
 def _find_free_port() -> int:
