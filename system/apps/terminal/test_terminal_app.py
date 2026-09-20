@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import urllib.parse
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,29 +15,27 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app_instances.testing import (
-    LOOPBACK_HOST,
-    SidecarEnvironment,
-    free_port,
-    is_port_accepting,
-    wait_until,
-    write_sidecar_manifest,
-)
 from app_manifest.manifest import MANIFEST_FILENAME
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.utils.polling import wait_for
 from pydantic import Field
 from terminal_app.data_types import TerminalPaths
 from terminal_app.testing import (
     ENV_FAKE_TMUX_DIR,
     ENV_FAKE_TTYD_DIR,
+    LOOPBACK_HOST,
     FakeTmux,
+    TerminalEnvironment,
     expected_session_id_file,
+    free_port,
     install_fake_tmux,
     install_fake_ttyd,
+    is_port_accepting,
     make_tmux_session,
     read_fake_ttyd_argv,
+    write_terminal_manifest,
 )
 
 _STARTUP_TIMEOUT_SECONDS: Final[float] = 20.0
@@ -44,12 +43,10 @@ _EXIT_TIMEOUT_SECONDS: Final[float] = 10.0
 
 
 class _TerminalAppUnderTest(FrozenModel):
-    """One terminal-app process's command line, its ports and files, and where its stderr lands."""
+    """One terminal-app process's command line, its port and files, and where its stderr lands."""
 
     app_name: AppName = Field(description="The unique name the app registers")
     pages_port: int = Field(description="The port the wrapper pages are served on")
-    instances_port: int = Field(description="The port the instances API is served on")
-    instances_url: str = Field(description="Where the instances API is served")
     paths: TerminalPaths = Field(description="The app's state directory layout")
     store_path: Path = Field(description="The instances.json the app is told to use")
     agent_state_dir: Path = Field(
@@ -76,7 +73,7 @@ class _TerminalPtyUnderTest(FrozenModel):
     )
 
 
-def _process_environment(environment: SidecarEnvironment, fake_tmux: FakeTmux) -> dict[str, str]:
+def _process_environment(environment: TerminalEnvironment, fake_tmux: FakeTmux) -> dict[str, str]:
     return {
         **os.environ,
         "PATH": f"{fake_tmux.bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -87,21 +84,17 @@ def _process_environment(environment: SidecarEnvironment, fake_tmux: FakeTmux) -
 
 
 def _prepare_app(
-    environment: SidecarEnvironment, fake_tmux: FakeTmux
+    environment: TerminalEnvironment, fake_tmux: FakeTmux
 ) -> _TerminalAppUnderTest:
     app_name = AppName(f"terminal-{uuid4().hex[:8]}")
     pages_port = free_port()
-    instances_port = free_port()
-    instances_url = f"http://{LOOPBACK_HOST}:{instances_port}"
     manifest_dir = environment.scratch_dir / "terminal"
     manifest_dir.mkdir()
-    manifest_path = write_sidecar_manifest(manifest_dir, app_name, instances_url)
+    manifest_path = write_terminal_manifest(manifest_dir, app_name)
     store_path = environment.scratch_dir / "apps" / "terminal" / "instances.json"
     return _TerminalAppUnderTest(
         app_name=app_name,
         pages_port=pages_port,
-        instances_port=instances_port,
-        instances_url=instances_url,
         paths=TerminalPaths(state_dir=environment.scratch_dir / "state"),
         store_path=store_path,
         agent_state_dir=environment.scratch_dir / "agent-state",
@@ -114,8 +107,6 @@ def _prepare_app(
             str(manifest_path),
             "--app-url",
             f"http://localhost:{pages_port}",
-            "--instances-url",
-            instances_url,
             "--state-dir",
             str(environment.scratch_dir / "state"),
             "--store",
@@ -126,7 +117,7 @@ def _prepare_app(
 
 
 def _prepare_pty(
-    environment: SidecarEnvironment, fake_tmux: FakeTmux
+    environment: TerminalEnvironment, fake_tmux: FakeTmux
 ) -> _TerminalPtyUnderTest:
     app_name = AppName(f"terminal-pty-{uuid4().hex[:8]}")
     ttyd_port = free_port()
@@ -189,7 +180,7 @@ def _kill_if_running(process: subprocess.Popen[bytes]) -> None:
 
 @pytest.mark.timeout(60)
 def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
-    terminal_environment: SidecarEnvironment, tmp_path: Path
+    terminal_environment: TerminalEnvironment, tmp_path: Path
 ) -> None:
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     fake_tmux.set_sessions(
@@ -198,51 +189,35 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
             make_tmux_session("mngr-alice", "$1"),
         ]
     )
-    fake_tmux.set_clients([])
     app = _prepare_app(terminal_environment, fake_tmux)
     process = _spawn(app.command, app.environment, app.log_path)
     try:
-        assert wait_until(
-            lambda: terminal_environment.registry_path.exists(), _STARTUP_TIMEOUT_SECONDS
-        ), _read_log(app.log_path)
-        assert is_port_accepting(app.instances_port), _read_log(app.log_path)
+        wait_for(
+            terminal_environment.registry_path.exists,
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            poll_interval=0.1,
+            error_message=f"the app never registered: {_read_log(app.log_path)}",
+        )
         assert is_port_accepting(app.pages_port), _read_log(app.log_path)
 
         # The startup work: the discovery event and the registration.
-        events = (
-            (app.agent_state_dir / "events" / "servers" / "events.jsonl")
-            .read_text()
-            .splitlines()
-        )
-        assert [json.loads(line)["url"] for line in events] == [
-            f"http://localhost:{app.pages_port}"
-        ]
+        events = (app.agent_state_dir / "events" / "servers" / "events.jsonl").read_text().splitlines()
+        assert [json.loads(line)["url"] for line in events] == [f"http://localhost:{app.pages_port}"]
         rows = read_registry(terminal_environment.registry_path)
-        assert [(row.name, row.url, row.instances_url) for row in rows] == [
-            (app.app_name, f"http://localhost:{app.pages_port}", app.instances_url)
-        ]
+        assert [(row.name, row.url) for row in rows] == [(app.app_name, f"http://localhost:{app.pages_port}")]
+        assert [launch_path.path for launch_path in rows[0].launch_paths] == ["/new"]
 
-        # The instances API lists the user's sessions (not the agent's) and creates through the store.
-        listed = httpx.get(f"{app.instances_url}/_instances", timeout=5.0)
-        assert listed.status_code == 200
-        assert [
-            (instance["key"], instance["title"], instance["status"], instance["url"])
-            for instance in listed.json()["instances"]
-        ] == [("terminal-2", "Terminal 2", "idle", "/?session=terminal-2&tab={tab}")]
-        created = httpx.post(
-            f"{app.instances_url}/_instances",
-            json={"action": "new", "params": {}},
-            timeout=5.0,
-        )
-        assert created.status_code == 201, created.text
-        assert created.json()["instance"]["key"] == "terminal-1"
-        assert created.json()["instance"]["status"] == "idle"
-        # The session exists from the create, running the tagged login shell in the workdir.
-        assert [session.name for session in fake_tmux.sessions()] == [
-            "terminal-2",
-            "mngr-alice",
-            "terminal-1",
-        ]
+        # The wrapper pages: the session page frames the pty by the path the dispatch reads, ``/new``
+        # allocates the lowest free name (the agent's session is not a terminal) and redirects, and the
+        # new session runs the tagged login shell in the workdir.
+        pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
+        page = httpx.get(f"{pages_url}/?session=terminal-2", timeout=5.0)
+        assert page.status_code == 200
+        assert "<title>Terminal 2</title>" in page.text
+        allocated = httpx.get(f"{pages_url}/new", timeout=5.0, follow_redirects=False)
+        assert allocated.status_code == 302
+        assert allocated.headers["location"] == "/?session=terminal-1"
+        assert [session.name for session in fake_tmux.sessions()] == ["terminal-2", "mngr-alice", "terminal-1"]
         create_call = fake_tmux.creates()[0]
         assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]
         assert create_call[-5:] == [
@@ -254,39 +229,15 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
         ]
         assert (app.paths.sessions_dir / "terminal-1").read_text() == expected_session_id_file("$6")
         assert [
-            (session["name"], session["session_id"])
-            for session in json.loads(app.store_path.read_text())["sessions"]
+            (session["name"], session["session_id"]) for session in json.loads(app.store_path.read_text())["sessions"]
         ] == [("terminal-1", "$6")]
-
-        # The wrapper pages: the session page frames the pty by the path the dispatch reads, with
-        # the workdir the create recorded, and ``/new`` allocates and redirects.
-        pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
-        page = httpx.get(f"{pages_url}/?session=terminal-1&tab=tab-01", timeout=5.0)
-        assert page.status_code == 200
-        assert "<title>Terminal 1</title>" in page.text
-        session = httpx.get(f"{pages_url}/api/sessions/terminal-1?tab=tab-01", timeout=5.0).json()
-        assert session["pty_path"].startswith("/?arg=_&arg=session&arg=terminal-1&arg=tab-01&arg=")
-        allocated = httpx.get(f"{pages_url}/new", timeout=5.0, follow_redirects=False)
-        assert allocated.status_code == 302
-        assert allocated.headers["location"] == "/?session=terminal-3"
-        assert fake_tmux.session_names()[-1] == "terminal-3"
-
-        # The hook route is served by the same process.
-        hook = httpx.post(
-            f"{app.instances_url}/tmux-hook",
-            json={
-                "kind": "session-renamed",
-                "client_tty": "",
-                "session_name": "terminal-2",
-                "session_id": "$5",
-            },
-            timeout=5.0,
-        )
-        assert hook.status_code == 204
+        session = httpx.get(f"{pages_url}/api/sessions/terminal-1", timeout=5.0).json()
+        workdir_argument = urllib.parse.quote(os.getcwd(), safe="")
+        assert session["pty_path"] == f"/?arg=_&arg=session&arg=terminal-1&arg={workdir_argument}"
+        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {"status": "ok"}
 
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == 143, _read_log(app.log_path)
-        assert not is_port_accepting(app.instances_port)
         assert not is_port_accepting(app.pages_port)
     finally:
         _kill_if_running(process)
@@ -294,15 +245,18 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
 
 @pytest.mark.timeout(60)
 def test_terminal_pty_installs_dispatch_registers_and_becomes_ttyd(
-    terminal_environment: SidecarEnvironment, tmp_path: Path
+    terminal_environment: TerminalEnvironment, tmp_path: Path
 ) -> None:
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     pty = _prepare_pty(terminal_environment, fake_tmux)
     process = _spawn(pty.command, pty.environment, pty.log_path)
     try:
-        assert wait_until(
-            lambda: read_fake_ttyd_argv(pty.ttyd_record_dir) is not None, _STARTUP_TIMEOUT_SECONDS
-        ), _read_log(pty.log_path)
+        wait_for(
+            lambda: read_fake_ttyd_argv(pty.ttyd_record_dir) is not None,
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            poll_interval=0.1,
+            error_message=f"ttyd never started: {_read_log(pty.log_path)}",
+        )
 
         # The startup work: dispatch scripts, the patched web client, the registration.
         assert sorted(path.name for path in pty.paths.commands_dir.iterdir()) == [

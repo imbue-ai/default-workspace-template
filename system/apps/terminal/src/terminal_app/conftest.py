@@ -1,19 +1,10 @@
 import os
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from app_instances.testing import (
-    RecordedShellRequests,
-    RecordingNudger,
-    serve_recording_shell,
-)
-from app_manifest.primitives import AppName
-from flask import Flask
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths
-from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -32,12 +23,11 @@ from terminal_app.tmux import SubprocessTmux
 
 @pytest.fixture
 def fake_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeTmux:
-    """A fake ``tmux`` on PATH, reporting a running server with no sessions and no clients."""
+    """A fake ``tmux`` on PATH, reporting a running server with no sessions."""
     fake = install_fake_tmux(tmp_path / "fake-tmux")
     monkeypatch.setenv("PATH", f"{fake.bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv(ENV_FAKE_TMUX_DIR, str(fake.state_dir))
     fake.set_sessions([])
-    fake.set_clients([])
     return fake
 
 
@@ -68,43 +58,9 @@ def session_source(
 
 
 @pytest.fixture
-def recording_shell() -> Iterator[RecordedShellRequests]:
-    with serve_recording_shell() as recorded:
-        yield recorded
-
-
-@pytest.fixture
-def recording_nudger() -> RecordingNudger:
-    return RecordingNudger()
-
-
-@pytest.fixture
-def hook_client(
-    session_source: TmuxSessionSource,
-    terminal_paths: TerminalPaths,
-    recording_shell: RecordedShellRequests,
-    recording_nudger: RecordingNudger,
-) -> FlaskClient:
-    """A test client over the hook route alone, posting to the recording shell."""
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_tmux_hook_blueprint(
-            source=session_source,
-            paths=terminal_paths,
-            shell=HttpShellPoster(shell_url=recording_shell.base_url),
-            nudger=recording_nudger,
-            app_name=AppName("terminal"),
-        )
-    )
-    return app.test_client()
-
-
-@pytest.fixture
-def pages_client(
-    session_source: TmuxSessionSource, recording_nudger: RecordingNudger, tmp_path: Path
-) -> FlaskClient:
+def pages_client(session_source: TmuxSessionSource, tmp_path: Path) -> FlaskClient:
     """A test client over the wrapper pages, with both the shell and the pty registered."""
     registry_path = write_registry_labels(
         tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL, "terminal-pty": TEST_PTY_LABEL}
     )
-    return build_pages_test_client(session_source, recording_nudger, registry_path)
+    return build_pages_test_client(session_source, registry_path)

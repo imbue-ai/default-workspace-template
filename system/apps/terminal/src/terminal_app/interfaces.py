@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
 
 from imbue.imbue_common.mutable_model import MutableModel
 
-from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
+from terminal_app.data_types import TerminalSessionRecord, TmuxSession
 from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 
 
@@ -14,10 +13,6 @@ class TmuxInterface(MutableModel, ABC):
     @abstractmethod
     def list_sessions(self) -> list[TmuxSession]:
         """Every session on the server; none when no server is running."""
-
-    @abstractmethod
-    def list_clients(self) -> list[TmuxClient]:
-        """Every attached client; none when no server is running."""
 
     @abstractmethod
     def create_session(
@@ -44,11 +39,3 @@ class TerminalSessionStoreInterface(MutableModel, ABC):
     @abstractmethod
     def remove_record(self, name: TmuxSessionName) -> None:
         """Forget a terminal; an absent name is not an error."""
-
-
-class ShellPosterInterface(MutableModel, ABC):
-    """Posts to the shell's loopback routes on the terminal app's behalf."""
-
-    @abstractmethod
-    def post_json(self, path: str, body: Mapping[str, Any]) -> None:
-        """POST ``body`` to the shell route at ``path``; must never raise for an unreachable or refusing shell."""

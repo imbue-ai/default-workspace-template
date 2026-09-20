@@ -1,12 +1,21 @@
-from app_instances.errors import AppInstancesError
-
-
-class TerminalAppError(AppInstancesError):
-    """Base error for the terminal app; a library error, so the instances blueprint answers it with a detail body."""
+class TerminalAppError(Exception):
+    """Base error for the terminal app; the wrapper pages answer every subclass with a detail body."""
 
 
 class InvalidTerminalValueError(TerminalAppError, ValueError):
-    """A tmux session name, tab id, client tty, or working directory does not satisfy its rule."""
+    """A tmux session name, title, or working directory does not satisfy its rule."""
+
+
+class UnknownTerminalError(TerminalAppError, LookupError):
+    """No terminal, live or remembered, has the given name."""
+
+
+class TerminalConflictError(TerminalAppError):
+    """The app refuses the verb right now: an agent's session, a title another terminal holds, or a name tmux will not create."""
+
+
+class TerminalStoreError(TerminalAppError, OSError):
+    """The terminal's JSON store cannot be read or written."""
 
 
 class TmuxCommandError(TerminalAppError):
@@ -19,6 +28,10 @@ class UnsafeDispatchPathError(TerminalAppError):
 
 class TtydStartError(TerminalAppError):
     """ttyd could not be started in place of the pty program."""
+
+
+class TerminalServeError(TerminalAppError):
+    """The app cannot serve: an app URL without a port, a port it cannot bind, or a wait run off the main thread."""
 
 
 class UnknownSessionPageError(TerminalAppError):

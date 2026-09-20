@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Final, NoReturn
 
 import click
-from app_instances.sidecar import app_url_port
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
@@ -28,6 +27,7 @@ from terminal_app.dispatch import (
     warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import TtydStartError
+from terminal_app.serving import app_url_port
 from terminal_app.wiring import (
     OOM_TAG_SCRIPT,
     STATE_DIR,
@@ -108,7 +108,7 @@ def run_terminal_pty(arguments: TerminalPtyArguments) -> NoReturn:
     type=click.Path(path_type=Path),
     default=STATE_DIR,
     show_default=True,
-    help="The terminal's state directory (dispatch scripts and pty records)",
+    help="The terminal's state directory (dispatch scripts and session id files)",
 )
 @click.option(
     "--ttyd-web-client",

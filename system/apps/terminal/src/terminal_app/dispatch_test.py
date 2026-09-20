@@ -71,57 +71,31 @@ cd "$1" 2>/dev/null && exec bash
 
 
 def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> None:
-    assert render_session_script(_COMMANDS_DIR / "clients", _SESSIONS_DIR, _OOM_TAG_SCRIPT) == snapshot("""\
+    assert render_session_script(_SESSIONS_DIR, _OOM_TAG_SCRIPT) == snapshot("""\
 #!/bin/bash
 # Attach to (or create) a named, in-memory tmux terminal session.
 #
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
-#   $1 = session name (e.g. "terminal-1"), the terminal's key
-#   $2 = tab id       (per-tab id used to map this ttyd client's pty back to
-#                      the dockview tab for live tab-title tracking; may be "")
-#   $3 = working directory to anchor a newly-created session in (may be "")
+#   $1 = session name (e.g. "terminal-1"), the terminal's name
+#   $2 = working directory to anchor a newly-created session in (may be "")
 #
 # The terminal app records the tmux session id and creation time of every
-# terminal it created under the sessions directory, named by key; attaching by
-# that id keeps the tab on its session even after someone renamed the session
-# inside tmux. When the id file is missing or lacks the id or the creation
-# time, or the session under that id is gone or was created at another time (a
-# container restart cleared the tmux server, whose successor hands the same ids
-# out again), `tmux new-session -A` attaches when a session of that name exists
-# and creates it otherwise, so the tab comes back as a fresh shell. A created
-# session runs the login shell through the memory-shedding tag, as the app's
-# own creates do.
+# terminal it created under the sessions directory, named by terminal; attaching
+# by that id keeps the window on its session even after someone renamed the
+# session inside tmux. When the id file is missing or lacks the id or the
+# creation time, or the session under that id is gone or was created at another
+# time (a container restart cleared the tmux server, whose successor hands the
+# same ids out again), `tmux new-session -A` attaches when a session of that
+# name exists and creates it otherwise, so the window comes back as a fresh
+# shell. A created session runs the login shell through the memory-shedding
+# tag, as the app's own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
-TAB_ID="${2:-}"
-WORKDIR="${3:-}"
+WORKDIR="${2:-}"
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
     exec bash
-fi
-
-# Record this connection's pty under the tab id so the tmux
-# client-session-changed / session-renamed hooks can map a live client back
-# to the dockview tab that owns it (best-effort; never fatal).
-if [ -n "$TAB_ID" ]; then
-    CLIENTS_DIR="/home/user/workspace/data/.state/terminal/commands/clients"
-    mkdir -p "$CLIENTS_DIR"
-    MY_TTY="$(tty 2>/dev/null || true)"
-    if [ -n "$MY_TTY" ]; then
-        # This pty now authoritatively belongs to this tab id. Drop any
-        # stale mapping that still points at the same pty: Linux reuses a pty
-        # number after a client disconnects, so a since-closed tab's leftover
-        # file could otherwise shadow this one and misroute title updates to a
-        # closed tab (the resolver returns the first matching entry).
-        for existing in "$CLIENTS_DIR"/*; do
-            [ -f "$existing" ] || continue
-            if [ "$(cat "$existing" 2>/dev/null)" = "$MY_TTY" ]; then
-                rm -f "$existing"
-            fi
-        done
-        printf '%s\\n' "$MY_TTY" > "$CLIENTS_DIR/$TAB_ID" 2>/dev/null || true
-    fi
 fi
 
 # The id file holds the session id and its creation time: tmux reuses ids across servers, so
@@ -196,9 +170,7 @@ def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
     scripts = {path.name: path for path in terminal_paths.commands_dir.iterdir()}
     assert sorted(scripts) == ["agent.sh", "session.sh", "workdir.sh"]
     assert scripts["agent.sh"].read_text() == render_agent_script()
-    assert scripts["session.sh"].read_text() == render_session_script(
-        terminal_paths.clients_dir, terminal_paths.sessions_dir, _OOM_TAG_SCRIPT
-    )
+    assert scripts["session.sh"].read_text() == render_session_script(terminal_paths.sessions_dir, _OOM_TAG_SCRIPT)
     assert scripts["workdir.sh"].read_text() == "#!/bin/bash\n# customised\n"
     for script in scripts.values():
         assert script.stat().st_mode & stat.S_IXUSR
