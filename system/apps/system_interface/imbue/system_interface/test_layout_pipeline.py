@@ -181,8 +181,7 @@ def _sandbox(tmp_path: Path) -> Path:
 def connected_client(layout_server: PipelineHarness) -> Generator["queue.Queue[str | None]", None, None]:
     """One connected browser client on the default desktop: the client every op with no ``--client`` targets."""
     client_queue = layout_server.broadcaster.register()
-    layout_server.broadcaster.set_client_info(client_queue, _CLIENT_ID, _DEFAULT_DESKTOP_ID
-    )
+    layout_server.broadcaster.set_client_info(client_queue, _CLIENT_ID, _DEFAULT_DESKTOP_ID)
     try:
         yield client_queue
     finally:
@@ -251,7 +250,12 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     assert window_id.startswith("win-")
     assert f"opened window {window_id} ({_STUB_APP_NAME} at /)" in opened.stderr
     (window,) = _windows(layout_server, sandbox)
-    assert (window["id"], window["app"], window["path"], window["is_settling"]) == (window_id, _STUB_APP_NAME, "/", True)
+    assert (window["id"], window["app"], window["path"], window["is_settling"]) == (
+        window_id,
+        _STUB_APP_NAME,
+        "/",
+        True,
+    )
     assert [entry["id"] for entry in _listing(layout_server, sandbox)[_STUB_APP_NAME]["windows"]] == [window_id]
 
     # Opening the app again focuses the window already at its launch path rather than opening another.
@@ -385,9 +389,7 @@ def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
     moved = _run_layout_script(["shortcut", "move", _STUB_APP_NAME, "open", "--cell", "2,1"], layout_server, sandbox)
     assert moved.returncode == 0, f"stderr={moved.stderr!r}"
     desktops = _get_json(layout_server, "/api/desktops")["desktops"]
-    (shortcut,) = [
-        shortcut for shortcut in desktops[0]["shortcuts"] if shortcut["target"]["app"] == _STUB_APP_NAME
-    ]
+    (shortcut,) = [shortcut for shortcut in desktops[0]["shortcuts"] if shortcut["target"]["app"] == _STUB_APP_NAME]
     assert shortcut["cell"] == {"column": 2, "row": 1}
 
     removed = _run_layout_script(["shortcut", "remove", _STUB_APP_NAME, "open"], layout_server, sandbox)

@@ -84,7 +84,10 @@ class WebSocketBroadcaster(MutableModel):
         with self._lock:
             if client_queue not in self._client_queues:
                 return
-            self._client_info_by_queue_id[id(client_queue)] = {"client_id": client_id, "active_desktop": active_desktop}
+            self._client_info_by_queue_id[id(client_queue)] = {
+                "client_id": client_id,
+                "active_desktop": active_desktop,
+            }
 
     def get_connected_client_infos(self) -> list[dict[str, str]]:
         """A snapshot of every registered client's self-reported identity."""
