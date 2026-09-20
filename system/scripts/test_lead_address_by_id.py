@@ -40,11 +40,10 @@ def test_an_agent_stays_addressable_by_id_across_a_rename(tmp_path: Path) -> Non
     # The lookups below resolve a name across every *enabled* provider, and one that
     # resolves nowhere reports the first provider it could not reach rather than "not
     # found". The docker provider is on by built-in default and has no daemon to reach
-    # inside a workspace container, so there this test read that verdict instead of the
-    # one it asserts -- while passing anywhere a Docker daemon happened to be running.
-    # This test creates a local agent and looks it up, so the two providers that answer
-    # over a network are turned off, matching the block the other real-mngr tests write
-    # (test_nested_dispatch_live.py, test_message_conservation_release.py).
+    # inside a workspace container. This test creates a local agent and looks it up, so
+    # the two providers that answer over a network are turned off, matching the block the
+    # other real-mngr tests write (test_nested_dispatch_live.py,
+    # test_message_conservation_release.py).
     (project / ".mngr" / "settings.toml").write_text(
         "is_allowed_in_pytest = true\n\n"
         "[providers.modal]\nis_enabled = false\n\n"
