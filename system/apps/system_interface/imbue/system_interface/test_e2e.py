@@ -72,7 +72,7 @@ pytestmark = [
 ]
 
 # The default desktop every shell starts with (desktops.py), whose shortcuts are seeded from the registry.
-HOME_DESKTOP_ID = "home"
+_HOME_DESKTOP_ID = "home"
 
 # How long a negative assertion ("nothing more opened") gives the shell before reading its state.
 _NEGATIVE_SETTLE_MS = 1000
@@ -318,15 +318,15 @@ def _desktops(base_url: str) -> list[dict[str, Any]]:
     return list(_get_json(f"{base_url}/api/desktops")["desktops"])
 
 
-def _desktop(base_url: str, desktop_id: str = HOME_DESKTOP_ID) -> dict[str, Any]:
+def _desktop(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, Any]:
     return next(desktop for desktop in _desktops(base_url) if desktop["id"] == desktop_id)
 
 
-def _windows(base_url: str, desktop_id: str = HOME_DESKTOP_ID) -> list[dict[str, Any]]:
+def _windows(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> list[dict[str, Any]]:
     return list(_desktop(base_url, desktop_id)["windows"])
 
 
-def _shortcut_cells(base_url: str, desktop_id: str = HOME_DESKTOP_ID) -> dict[str, tuple[int, int]]:
+def _shortcut_cells(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, tuple[int, int]]:
     """Each shortcut's cell by its ``app:launch`` key, off the API."""
     return {
         f"{shortcut['target']['app']}:{shortcut['target']['launch']}": (
@@ -337,18 +337,18 @@ def _shortcut_cells(base_url: str, desktop_id: str = HOME_DESKTOP_ID) -> dict[st
     }
 
 
-def _placements(base_url: str, client_id: str, desktop_id: str = HOME_DESKTOP_ID) -> dict[str, dict[str, Any]]:
+def _placements(base_url: str, client_id: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, dict[str, Any]]:
     """The client's stored placements of the desktop by window id, straight off the API."""
     layout = _get_json(f"{base_url}/api/placements/{desktop_id}?client={urllib.parse.quote(client_id)}")
     return {placement["window_id"]: placement for placement in layout["placements"]}
 
 
-def _placement_file(state_dir: Path, client_id: str, desktop_id: str = HOME_DESKTOP_ID) -> Path:
+def _placement_file(state_dir: Path, client_id: str, desktop_id: str = _HOME_DESKTOP_ID) -> Path:
     return state_dir / "placements" / desktop_id / f"{client_id}.json"
 
 
 def _stored_placements(
-    state_dir: Path, client_id: str, desktop_id: str = HOME_DESKTOP_ID
+    state_dir: Path, client_id: str, desktop_id: str = _HOME_DESKTOP_ID
 ) -> dict[str, dict[str, Any]]:
     path = _placement_file(state_dir, client_id, desktop_id)
     if not path.is_file():
@@ -362,7 +362,7 @@ def _wait_for_stored_placement(
     window_id: str,
     predicate: Callable[[dict[str, Any]], bool],
     what: str,
-    desktop_id: str = HOME_DESKTOP_ID,
+    desktop_id: str = _HOME_DESKTOP_ID,
 ) -> dict[str, Any]:
     """Wait until the client's placement file holds a placement of ``window_id`` satisfying ``predicate``."""
 
@@ -381,7 +381,7 @@ def _assert_no_further_window(page: Page, server: E2EServer, expected_ids: list[
     assert [window["id"] for window in _windows(server.base_url)] == expected_ids
 
 
-def _wait_for_window_count(base_url: str, count: int, desktop_id: str = HOME_DESKTOP_ID) -> list[dict[str, Any]]:
+def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DESKTOP_ID) -> list[dict[str, Any]]:
     wait_for(
         lambda: len(_windows(base_url, desktop_id)) == count,
         timeout=15.0,
@@ -428,7 +428,7 @@ def _client_id(page: Page) -> str:
 def _land(page: Page, server: E2EServer, query: str = "") -> None:
     """Open the shell and wait for the home desktop's backdrop and its seeded shortcut."""
     page.goto(f"{server.base_url}/{query}")
-    expect(page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
     expect(page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(timeout=15000)
 
 
@@ -584,14 +584,14 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
     expect(page.locator(f'[data-running-app="{_STUB_APP_NAME}"]')).to_be_visible()
     assert (
-        page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]')
+        page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
         .endswith('/wallpapers/bundled/dawn")')
     )
     client_id = _client_id(page)
     wait_for(
         lambda: any(
-            client["id"] == client_id and client["active_desktop"] == HOME_DESKTOP_ID
+            client["id"] == client_id and client["active_desktop"] == _HOME_DESKTOP_ID
             for client in _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
         ),
         timeout=15.0,
@@ -619,7 +619,7 @@ def test_shortcut_opens_a_window_whose_page_speaks_the_contract(e2e_server: E2ES
     handshake = frame.evaluate("() => window.__handshake")
     assert handshake["clientId"] == client_id
     assert handshake["windowId"] == window_id
-    assert handshake["desktopId"] == HOME_DESKTOP_ID
+    assert handshake["desktopId"] == _HOME_DESKTOP_ID
     assert handshake["path"] == _STUB_LAUNCH_PATH
     expect(_window(page, window_id).locator(".window-title")).to_have_text(f"Stub {_STUB_LAUNCH_PATH}", timeout=10000)
     expect(_taskbar_entry(page, window_id)).to_contain_text(f"Stub {_STUB_LAUNCH_PATH}")
@@ -748,7 +748,7 @@ def test_agent_open_op_opens_a_window_for_the_named_client(e2e_server: E2EServer
         e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/?doc=7", "client": client_id}
     )
     window_id = answer["window_id"]
-    assert answer["desktop_id"] == HOME_DESKTOP_ID
+    assert answer["desktop_id"] == _HOME_DESKTOP_ID
     expect(_window(page, window_id)).to_be_visible(timeout=15000)
     expect(_window(page, window_id)).to_have_attribute("data-focused", "true")
     frame = _page_frame(page, window_id)
@@ -796,7 +796,7 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
     _assert_close(resized["height"], before["height"] + 80, "resized height")
     _assert_close(resized["x"], moved["x"], "resized x")
 
-    backdrop = _box(page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]'))
+    backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
     stored = _wait_for_stored_placement(
         e2e_server,
         client_id,
@@ -820,7 +820,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     _land(page, e2e_server)
     window_id = _open_via_shortcut(page, e2e_server)
     client_id = _client_id(page)
-    backdrop = _box(page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]'))
+    backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
     window = _window(page, window_id)
     normal = _box(window)
 
@@ -1018,7 +1018,7 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
         assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
-        backdrop = _box(page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]'))
+        backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
         _drag(page, _center(_box(docs)), _cell_center(backdrop, 2, 2))
@@ -1095,7 +1095,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
         poll_interval=0.1,
         error_message="no second desktop was created",
     )
-    (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != HOME_DESKTOP_ID]
+    (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
     expect(page.locator(f'[data-desktop-id="{created["id"]}"]')).to_be_visible(timeout=15000)
     expect(page.locator(f'[data-desktop-switch="{created["id"]}"]')).to_have_attribute("data-active", "true")
     expect(page.locator(f'[data-desktop-id="{created["id"]}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
@@ -1115,7 +1115,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
         error_message="the rename never landed",
     )
 
-    page.locator(f'[data-desktop-switch="{HOME_DESKTOP_ID}"]').click()
+    page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
     expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
     expect(_window(page, home_window)).to_be_visible()
     page.locator(f'[data-desktop-switch="{created["id"]}"]').click()
@@ -1126,12 +1126,12 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(dialog).to_be_visible(timeout=5000)
     dialog.locator(".desktop-settings-confirm-delete").click()
     wait_for(
-        lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [HOME_DESKTOP_ID],
+        lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID],
         timeout=10.0,
         poll_interval=0.1,
         error_message="the desktop was never deleted",
     )
-    expect(page.locator(f'[data-desktop-switch="{HOME_DESKTOP_ID}"]')).to_have_attribute("data-active", "true")
+    expect(page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]')).to_have_attribute("data-active", "true")
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
 
@@ -1189,7 +1189,7 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         expect(window.locator("[data-resize-edge]")).to_have_count(0)
         expect(window.locator('[data-window-control="maximize"]')).to_have_count(0)
         expect(window.locator('[data-window-control="restore"]')).to_have_count(0)
-        backdrop = _box(phone_page.locator(f'[data-desktop-id="{HOME_DESKTOP_ID}"]'))
+        backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
         expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
