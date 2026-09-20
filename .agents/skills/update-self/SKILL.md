@@ -496,9 +496,9 @@ python3 system/scripts/layout.py close si-preview
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 ```
 
-The close goes first: an op addressed to an app the registry no longer holds is refused,
-so once `unpreview` has deregistered the row there is nothing left to close (the tab is
-pruned on its own when the app leaves the inventory).
+The close goes first: nothing takes a window away when its app leaves the registry, so
+once `unpreview` has deregistered the row the preview's window would stay on the desktop
+pointing at a page nothing serves.
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the
