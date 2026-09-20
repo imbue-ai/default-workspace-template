@@ -194,8 +194,6 @@ def _running_e2e_server(
         )
         app = create_application(state)
 
-        server = make_threaded_server("127.0.0.1", port, app)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
         stub_server = serve_in_background(
             LOOPBACK_HOST, stub_port, _stub_app(stub_source, AppName(_STUB_APP_NAME), base_url)
         )
@@ -207,7 +205,10 @@ def _running_e2e_server(
             else contextlib.nullcontext()
         )
         with stub_server, second_server:
-            # Started here, inside the stubs' contexts, so the shutdown below owns it whatever fails first.
+            # Bound and started here, inside the stubs' contexts, so the shutdown below owns it whatever fails
+            # first (a stub whose port is taken never leaves a bound shell socket behind).
+            server = make_threaded_server("127.0.0.1", port, app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
                 wait_for(
@@ -225,6 +226,7 @@ def _running_e2e_server(
             finally:
                 server.shutdown()
                 thread.join(timeout=5.0)
+                server.server_close()
 
 
 def _server_is_up(base_url: str) -> bool:
