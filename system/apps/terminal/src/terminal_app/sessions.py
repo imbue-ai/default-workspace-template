@@ -74,7 +74,7 @@ def _unclaimed_session_named(
 ) -> TmuxSession | None:
     """The live session tmux lists under ``name``, unless a terminal already holds it by id.
 
-    A session renamed inside tmux to another terminal's key stays with the terminal that holds
+    A session renamed inside tmux to another terminal's name stays with the terminal that holds
     its id; its name is not a second way to claim it, or two terminals would share one session
     and stopping either would kill the other's.
     """
@@ -213,7 +213,7 @@ class TmuxSessionSource(MutableModel):
     )
     sessions_dir: Path = Field(
         frozen=True,
-        description="Where the session id and creation time of each terminal are written, named by key, for the dispatch to attach by",
+        description="Where the session id and creation time of each terminal are written, named by terminal name, for the dispatch to attach by",
     )
     session_command: tuple[str, ...] = Field(
         frozen=True,
@@ -411,7 +411,7 @@ class TmuxSessionSource(MutableModel):
         return _unclaimed_session_named(name, live_sessions, self.store.list_records())
 
     def _user_sessions(self) -> list[TmuxSession]:
-        """The live sessions that are terminals: not an agent's, and named so the name can be a key."""
+        """The live sessions that are terminals: not an agent's, and named so the name can be a terminal name."""
         user_sessions: list[TmuxSession] = []
         for session in self.tmux.list_sessions():
             if is_agent_session(session.name, self.agent_session_prefix):
