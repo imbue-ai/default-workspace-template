@@ -119,6 +119,45 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
+  it("claims the default of a press on a handle and leaves a press elsewhere alone", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    const content = root.querySelector("#content") as Element;
+    const onHandle = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, buttons: 1 });
+    const onContent = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, buttons: 1 });
+    title.dispatchEvent(onHandle);
+    content.dispatchEvent(onContent);
+    expect(onHandle.defaultPrevented).toBe(true);
+    expect(onContent.defaultPrevented).toBe(false);
+  });
+
+  it("follows a mouse press whose moves and release arrive as a pen under another id", () => {
+    // An absolute-axis virtual mouse under a VM: the X server reports its button as a mouse and its
+    // motion as a pen, so the press and the drag carry different pointer ids and types.
+    const captured: number[] = [];
+    root.setPointerCapture = (pointerId: number) => void captured.push(pointerId);
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70, { pointerId: 1, pointerType: "mouse" });
+    pointer("pointermove", title, 130, 90, { pointerId: 2, pointerType: "pen" });
+    pointer("pointerup", title, 130, 90, { pointerId: 2, pointerType: "pen" });
+    expect(captured).toEqual([2]);
+    expect(events).toEqual([
+      "begin:move(win-1):120,70",
+      "move:move(win-1):120,70:20,20",
+      "end:move(win-1):120,70:20,20",
+    ]);
+  });
+
+  it("a second finger during a touch drag is still another pointer", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70, { pointerId: 7, pointerType: "touch" });
+    pointer("pointermove", title, 130, 90, { pointerId: 7, pointerType: "touch" });
+    pointer("pointermove", title, 300, 300, { pointerId: 8, pointerType: "touch" });
+    expect(events).toEqual(["begin:move(win-1):120,70", "move:move(win-1):120,70:20,20"]);
+  });
+
   it("a press that never travels is a click, not a gesture", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
