@@ -115,8 +115,27 @@ const beforeUnloadHandler = (event) => {
   }
 };
 
+// minds patch: the folder parameter. The shell opens a file viewer at the manifest's launch
+// path ``/`` with an optional ``path`` param, so a window asked to show a folder arrives at
+// ``/?path=/notes/``; dufs ignores the query, so the frame takes itself there. Only a rooted
+// path on this origin is honoured (one leading slash: ``//host`` and ``/\host`` would leave
+// the origin). The beacon below then reports the folder as the window's location.
+function rootedPathParam() {
+  const path = PARAMS.path;
+  if (typeof path !== "string" || !path.startsWith("/") || /^\/[\/\\]/.test(path)) {
+    return null;
+  }
+  return path;
+}
+
 // Produce table when window loads
 window.addEventListener("DOMContentLoaded", async () => {
+  const folderPath = rootedPathParam();
+  if (folderPath !== null) {
+    location.replace(folderPath);
+    return;
+  }
+
   const $indexData = document.getElementById('index-data');
   if (!$indexData) {
     alert("No data");
