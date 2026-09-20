@@ -41,11 +41,11 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
-from imbue.chat.testing import free_port
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.testing import find_free_port
 
 
 def _playwright_browsers_installed() -> bool:
@@ -251,7 +251,7 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     in today. It must leave that state on its own -- no reload, no tab switch --
     once ``chats_updated`` names the agent.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=free_port(), release_on_completion=False) as base_url:
+    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=False) as base_url:
         # The create minted the first free "Chat N" display name the moment it returned; the
         # machine petname the agent actually runs under was never asked for.
         assert _create_chat_and_open_its_page(page, base_url) == "Chat 1"
@@ -276,7 +276,7 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     log never renders and the panel is left on the 404 -- the panel must still
     recover from the agent resolving.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=free_port(), release_on_completion=True) as base_url:
+    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=True) as base_url:
         _create_chat_and_open_its_page(page, base_url)
 
         not_found = _shown_chat(page).locator(".message-list-not-found")
@@ -297,7 +297,7 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
     has no pane to capture. That feedback loop issued hundreds of requests per
     second, each one shelling out to tmux on a real workspace.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=free_port(), release_on_completion=False) as base_url:
+    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=False) as base_url:
         screen_requests: list[str] = []
         page.on(
             "request",
