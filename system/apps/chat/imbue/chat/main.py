@@ -10,8 +10,8 @@ import httpx
 from app_instances.nudge import ShellNudger
 from app_instances.nudge import ThreadedNudger
 from app_instances.nudge import shell_base_url
-from app_instances.sidecar import register_app
 from app_manifest.primitives import AppUrl
+from app_manifest.registry import register_app
 from flask import Flask
 from loguru import logger as _loguru_logger
 

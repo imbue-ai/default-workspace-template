@@ -11,13 +11,12 @@ from app_instances.nudge import ShellNudger, shell_base_url
 from app_instances.sidecar import (
     app_url_port,
     load_instances_manifest,
-    register_app,
     serve_in_background,
     split_instances_url,
     wait_for_shutdown_signal,
 )
 from app_manifest.primitives import AppName, AppUrl, InstancesUrl
-from app_manifest.registry import registry_path
+from app_manifest.registry import register_app, registry_path
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span

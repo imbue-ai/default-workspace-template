@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Final, NoReturn
 
 import click
-from app_instances.sidecar import app_url_port, register_app
+from app_instances.sidecar import app_url_port
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import AppUrl
+from app_manifest.registry import register_app
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from loguru import logger

@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Final
@@ -10,6 +13,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
 
+from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
@@ -32,6 +36,14 @@ ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 # The workspace shell's registered name: the row whose origin label a plain app page reads
 # (``read_origin_label``) to import the app contract module from the shell's origin.
 SHELL_APP_NAME: Final[AppName] = AppName("system_interface")
+
+# The registration script, relative to the repo root every supervised program runs from.
+FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
+
+# Registration is one local file write; past the first threshold it is suspicious, past the
+# second it is broken.
+REGISTRATION_SLOW_SECONDS: Final[float] = 2.0
+REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
 
 
 class RegistryAction(FrozenModel):
@@ -138,3 +150,30 @@ def read_origin_label(path: Path, name: AppName) -> str:
         if row.name == name:
             return row.label
     return ""
+
+
+def register_app(manifest_path: Path, app_url: AppUrl) -> None:
+    """Upsert the app's registry row through ``forward_port.py --manifest``; raises AppRegistrationError when that fails.
+
+    Run under this interpreter from the repo root, the way every app's entry point registers itself
+    at startup (the supervisord program lines of apps with no entry point run the script directly).
+    """
+    if not FORWARD_PORT_SCRIPT.is_file():
+        raise AppRegistrationError(
+            f"registration script {FORWARD_PORT_SCRIPT} not found; the app must run from the repo root"
+        )
+    command = [sys.executable, str(FORWARD_PORT_SCRIPT), "--manifest", str(manifest_path), "--url", app_url]
+    started_at = time.monotonic()
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=REGISTRATION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as e:
+        raise AppRegistrationError(
+            f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"
+        ) from e
+    elapsed = time.monotonic() - started_at
+    if completed.returncode != 0:
+        raise AppRegistrationError(
+            f"registration of {manifest_path} failed with exit code {completed.returncode}: {completed.stderr.strip()}"
+        )
+    if elapsed > REGISTRATION_SLOW_SECONDS:
+        logger.warning("Registered {} slowly, in {:.1f}s", manifest_path, elapsed)
