@@ -12,7 +12,7 @@ This is the shared substrate under two service flows:
 
 Both are the same motion: launch the service on a free port, with environment
 overrides that isolate its writable state, wait until it is healthy, and
-(optionally) surface it to the user as a labeled "preview" tab. The only thing
+(optionally) surface it to the user as a labeled "preview" window. The only thing
 that differs is *what* is launched and *how* its state is isolated -- so this
 script is deliberately unopinionated and takes all of that as parameters. The
 calling skill supplies the specifics.
@@ -27,7 +27,7 @@ The two shapes:
 - **Preview (surface to the user).** Add ``--service-name`` to also register the
   instance as a service (served raw at its own browser origin), and
   ``--preview-service-name`` + ``--preview-title`` to wrap it in a labeled
-  "preview" frame (``preview_wrapper_server.py``) the user opens as a tab.
+  "preview" frame (``preview_wrapper_server.py``) the user opens as a window.
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
@@ -141,7 +141,7 @@ class Spawner:
     """Indirection over ``subprocess.Popen`` for detached servers.
 
     Every server this script starts must outlive the ``up`` invocation (so the
-    user can explore the tab / the agent can drive the port), so all spawns are
+    user can explore the window / the agent can drive the port), so all spawns are
     detached and later killed by ``down`` via the recorded pid.
     """
 
@@ -219,7 +219,7 @@ def _register_service(
             service_name,
             "--url",
             f"http://localhost:{port}",
-            "--no-icon",  # short-lived preview tabs; the generic monogram is fine
+            "--no-icon",  # short-lived preview windows; the generic monogram is fine
         ],
         cwd=str(repo_root),
         capture_output=True,
@@ -487,7 +487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Boot an isolated instance (optionally as a previewable tab)."
+        "up", help="Boot an isolated instance (optionally as a previewable window)."
     )
     up_parser.add_argument(
         "--name",
@@ -533,7 +533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--service-name",
         default=None,
         help="Register the instance as a service under this name (needed to "
-        "surface it as a tab; the name becomes a hostname label, so it must be "
+        "surface it as a window; the name becomes a hostname label, so it must be "
         "DNS-safe: lowercase letters/digits and single hyphens, no underscores, "
         "not starting with 'host-' or 'agent-'). Omit for a bare instance "
         "reached directly on its port.",
@@ -541,7 +541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "--preview-service-name",
         default=None,
-        help="Register the labeled preview-frame wrapper as this service (the tab "
+        help="Register the labeled preview-frame wrapper as this service (the window "
         "the user opens). Requires --service-name and --preview-title.",
     )
     up_parser.add_argument(

@@ -207,8 +207,8 @@ Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
 signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
 binds to an account when it is created and moves to another only through a
-switch (a handoff or a rebind, above). A launch that names no account (the New
-Tab tile, a rail shortcut, `layout.py open chat`) goes to the account the user
+switch (a handoff or a rebind, above). A launch that names no account (the
+launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
 one; pressing another account in that menu switches the chat to it (through
 the dialog, or at once for a chat with nothing to hand over -- see the switch

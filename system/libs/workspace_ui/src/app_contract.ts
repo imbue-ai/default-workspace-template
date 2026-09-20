@@ -29,7 +29,7 @@ export const SHELL_CLOSE_REQUEST = "shell:close-request";
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
 export const SHELL_CAPABILITIES = "shell:capabilities";
-/** App to shell: the page received focus; the shell activates its tab. */
+/** App to shell: the page received focus; the shell raises its window. */
 export const SHELL_FOCUSED = "shell:focused";
 /** App to shell: the page reports where it is and what it is called. */
 export const SHELL_LOCATION = "shell:location";
