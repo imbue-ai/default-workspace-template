@@ -534,6 +534,18 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     return browser.new_context(**context_args)
 
 
+@contextlib.contextmanager
+def _second_client(page: Page, e2e_server: E2EServer, **context_args: Any) -> Generator[Page, None, None]:
+    """A page of a second browser context (its own client id), landed on the shell and closed with the context."""
+    context = _second_context(page, **context_args)
+    try:
+        other_page = context.new_page()
+        _land(other_page, e2e_server)
+        yield other_page
+    finally:
+        context.close()
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a_client(
     e2e_server: E2EServer, page: Page
@@ -851,15 +863,10 @@ def test_title_bar_double_click_and_controls_toggle_maximize_and_minimize(e2e_se
         e2e_server, client_id, window_id, lambda placement: placement["is_minimized"] is True, "minimized"
     )
 
-    other = _second_context(page)
-    try:
-        other_page = other.new_page()
-        _land(other_page, e2e_server)
+    with _second_client(page, e2e_server) as other_page:
         expect(_taskbar_entry(other_page, window_id)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_shown_windows(other_page)).to_have_count(0)
         assert _client_id(other_page) != client_id
-    finally:
-        other.close()
 
     _taskbar_entry(page, window_id).click()
     expect(window).to_be_visible()
@@ -962,10 +969,7 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
     _land(page, e2e_server)
     first = _open_via_shortcut(page, e2e_server)
     client_id = _client_id(page)
-    other = _second_context(page)
-    try:
-        other_page = other.new_page()
-        _land(other_page, e2e_server)
+    with _second_client(page, e2e_server) as other_page:
         expect(_taskbar_entry(other_page, first)).to_be_visible(timeout=15000)
 
         _window(page, first).locator('[data-window-control="close"]').click()
@@ -978,8 +982,6 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
             poll_interval=0.1,
             error_message="the closed window stayed in the placement file",
         )
-    finally:
-        other.close()
 
     second = _open_via_shortcut(page, e2e_server)
     page.evaluate("() => window.postMessage({ type: 'minds:close-active-tab' }, '*')")
@@ -1155,10 +1157,7 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
     backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
     button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
     compactness is how this client renders, not what it saves)."""
-    phone = _second_context(page, **_MOBILE_CONTEXT_ARGS)
-    try:
-        phone_page = phone.new_page()
-        _land(phone_page, e2e_server)
+    with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
 
@@ -1198,8 +1197,6 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         expect(_taskbar_entry(phone_page, window_id)).to_have_attribute("data-minimized", "true")
         _taskbar_entry(phone_page, window_id).tap()
         expect(window).to_be_visible()
-    finally:
-        phone.close()
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1209,10 +1206,7 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
     launcher tile is a window on the laptop too, minimized there in turn."""
     _land(page, e2e_server)
     laptop_window = _open_via_shortcut(page, e2e_server)
-    phone = _second_context(page, **_MOBILE_CONTEXT_ARGS)
-    try:
-        phone_page = phone.new_page()
-        _land(phone_page, e2e_server)
+    with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(_taskbar_entry(phone_page, laptop_window)).to_have_attribute("data-minimized", "true", timeout=15000)
 
         phone_page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').tap()
@@ -1229,5 +1223,3 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
         expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
-    finally:
-        phone.close()
