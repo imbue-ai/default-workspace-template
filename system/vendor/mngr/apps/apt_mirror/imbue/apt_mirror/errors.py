@@ -64,3 +64,7 @@ class AptMirrorPackageListError(AptMirrorError, ValueError):
 
 class AptMirrorTimestampFileError(AptMirrorError, ValueError):
     """Raised when the current-timestamp file is missing or unreadable."""
+
+
+class AptMirrorTemplateBaseImageError(AptMirrorError, ValueError):
+    """Raised when the default-workspace-template's image base or snapshot pin cannot be read or is not digest-pinned."""

@@ -81,6 +81,42 @@ DOCKER_ARCHIVE: Final[ArchiveSource] = ArchiveSource(
 DEFAULT_ARCHIVES: Final[tuple[ArchiveSource, ...]] = (DEBIAN_ARCHIVE, DEBIAN_SECURITY_ARCHIVE, DOCKER_ARCHIVE)
 
 
+class InstalledPackage(FrozenModel):
+    """One package dpkg reports as installed on a rootfs (a ``/var/lib/dpkg/status`` stanza)."""
+
+    name: str = Field(description="The Package field")
+    version: str = Field(description="The installed Debian version string")
+
+
+class SnapshotPackageMismatch(FrozenModel):
+    """An installed package a frozen Packages index cannot keep: it lists no version at least as new (apt never downgrades)."""
+
+    name: str = Field(description="The package name")
+    installed_version: str = Field(description="The version dpkg reports installed")
+    newest_index_version: str | None = Field(
+        description="The newest version the index lists for the package, or None when it does not list the package at all"
+    )
+
+    @property
+    def text(self) -> str:
+        listed = "nothing" if self.newest_index_version is None else self.newest_index_version
+        return f"{self.name}={self.installed_version} (index lists {listed})"
+
+
+class DefaultWorkspaceTemplatePin(FrozenModel):
+    """The two pins a default-workspace-template ref commits that must agree: its image base and its apt snapshot.
+
+    The image base must be pinned by digest and its packages must exist in the
+    snapshot's frozen index, or apt (which never downgrades) cannot install the
+    template's toolchain on top of it (imbue-ai/mngr-internal#1138).
+    """
+
+    base_image_ref: str = Field(description="The Dockerfile's FROM reference, digest-pinned (``image@sha256:...``)")
+    apt_snapshot_timestamp: str = Field(
+        description="The committed .mngr/apt-snapshot-timestamp, e.g. 20260725T000000Z"
+    )
+
+
 class ReleaseFileEntry(FrozenModel):
     """One file row from a Release file's SHA256 section."""
 
