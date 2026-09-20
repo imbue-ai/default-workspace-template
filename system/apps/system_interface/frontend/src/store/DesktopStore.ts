@@ -571,6 +571,10 @@ export class DesktopStore {
   async closeWindow(windowId: string): Promise<void> {
     const found = findWindow(this.state, windowId);
     if (found === null) return;
+    // The shell drops the window from this client's stored layout and stamps the rewrite, and the refetch
+    // its broadcast triggers takes that: a gesture still waiting in the debounce goes into the file first
+    // or it is lost.
+    await this.flushPendingSave();
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {

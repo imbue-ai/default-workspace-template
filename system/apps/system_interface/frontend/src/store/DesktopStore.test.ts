@@ -336,6 +336,27 @@ describe("windows", () => {
     expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual(["win-2"]);
   });
 
+  it("saves a gesture still waiting in the debounce before closing, so the shell's rewrite keeps it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-2")],
+    });
+    const store = await startedStore();
+    store.minimizeWindow("win-1");
+    await store.closeWindow("win-2");
+    // The shell announces the layout it rewrote on the close with a save id of its own.
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    await vi.advanceTimersByTimeAsync(300);
+    await settle();
+    const stored = api.layoutOf("home", CLIENT).placements;
+    expect(stored.map((placement) => [placement.window_id, placement.is_minimized])).toEqual([["win-1", true]]);
+    expect(
+      activePlacements(store.getState()).map((placement) => [placement.window_id, placement.is_minimized]),
+    ).toEqual([["win-1", true]]);
+    expect(isLayoutDirty(store.getState())).toBe(false);
+  });
+
   it("the close chord tells the focused page first", async () => {
     const store = await startedStore();
     const requested: string[] = [];
