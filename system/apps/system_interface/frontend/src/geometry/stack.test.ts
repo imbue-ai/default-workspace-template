@@ -103,6 +103,15 @@ describe("the verbs", () => {
     expect(placed.placements[1]).toMatchObject({ window_id: "win-1", state: "NORMAL", frame });
   });
 
+  it("a verb that changes nothing answers the same layout", () => {
+    expect(withWindowRaised(layout, "win-2")).toBe(layout);
+    expect(withWindowState(layout, "win-2", "NORMAL")).toBe(layout);
+    expect(withWindowFrame(layout, "win-2", layout.placements[1].frame)).toBe(layout);
+    const minimized = withWindowMinimized(layout, "win-1");
+    expect(withWindowMinimized(minimized, "win-1")).toBe(minimized);
+    expect(withWindowRaised(layout, "win-1")).not.toBe(layout);
+  });
+
   it("a verb on a window with no placement starts from the default", () => {
     const raised = withWindowRaised(EMPTY_LAYOUT, "win-9");
     expect(raised.placements).toEqual([{ ...placementRecord("win-9"), frame: cascadeFrame(0) }]);
