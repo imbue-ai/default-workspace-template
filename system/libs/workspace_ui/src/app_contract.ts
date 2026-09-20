@@ -17,7 +17,7 @@
  * adding types.
  */
 
-/** Shell to app: sent after every `load` of the frame; says which tab and client this page is in. */
+/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the tab became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
