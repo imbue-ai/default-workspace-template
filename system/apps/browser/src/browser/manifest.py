@@ -5,10 +5,9 @@ tab URLs each had -- so the daemon can relaunch them on the next container start
 It deliberately stores NO ownership/queue state (that is connection/process-scoped
 and dies with the old container) and NO Chromium profile bytes (cookies/logins/
 history live in each browser's persistent ``user_data_dir`` on the workspace volume;
-see ``session.py``). It is the browser app's instance record, so it lives at
-``data/.apps/browser/instances.json`` (contracts.md section 17 of the workspace app
-model; gitignored), where it rides the restic host backup rather than GitHub sync; a
-backup restore brings the tab list back.
+see ``session.py``). It is the browser app's stored data, so it lives under
+``data/.apps/browser/`` (gitignored), where it rides the restic host backup rather than
+GitHub sync; a backup restore brings the tab list back.
 
 Pure synchronous file IO (no asyncio here, on purpose): writes are atomic via a
 temp file + ``os.replace`` so a reader on the next boot sees either the old or the
@@ -18,20 +17,23 @@ new complete file, never a torn one.
 import os
 from pathlib import Path
 
-from app_instances.json_store import app_store_path
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import ValidationError
 
 from browser.primitives import APP_NAME
 
-# Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts.
-_MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", str(app_store_path(APP_NAME))))
+# Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts. The file
+# keeps the name it had when it was the app's instance record, so an upgraded workspace's
+# saved fleet is still read.
+_MANIFEST_PATH = Path(
+    os.environ.get("BROWSER_MANIFEST_PATH", str(Path("data/.apps") / APP_NAME / "instances.json"))
+)
 # The manifest's former path. A workspace upgraded across the move has its saved fleet only
 # there until the daemon's first write to the new path, so reads fall back to it.
 # CLEANUP: drop this path and the fallback in read_manifest once every workspace has booted
-# a daemon from the release that ships the workspace app model (its first checkpoint writes
-# the new path).
+# a daemon from a release after the move to data/.apps (its first checkpoint writes the new
+# path).
 _LEGACY_MANIFEST_PATH = Path("data/.state/browser-fleet.json")
 # v2: browser ids are now random NAME strings (not sequential ints), and the
 # ``next_id`` high-water mark is gone. ``read_manifest`` rejects any other version
