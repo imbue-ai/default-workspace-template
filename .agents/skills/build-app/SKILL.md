@@ -437,8 +437,8 @@ switches the client to it.)
 `layout.py` POSTs to a loopback-only shell endpoint that opens the window
 on the desktop and writes that client's placement of it (no browser needs
 to be connected) and broadcasts the change, so the client's screen shows the
-new window on top, or brings the window for `<name>` to the front when it is
-already open. The new window's id is printed to stdout.
+new window on top, or brings the window for `<name>` to the front when one is
+already open at that path. The new window's id is printed to stdout.
 The script briefly waits for the service to appear in
 `data/.state/apps.toml` so it's safe to run immediately after the
 `forward_port.py` call.
