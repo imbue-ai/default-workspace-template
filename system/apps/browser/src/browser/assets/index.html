@@ -374,8 +374,8 @@
   }
 
   // The user stopped this browser: Chromium is gone but the browser, its profile, and its
-  // tabs are kept. Not terminal -- the cast socket stays up, so a start (from the tab menu,
-  // the Start button here, or an agent's layout.py) arrives as the next control message and
+  // tabs are kept. Not terminal -- the cast socket stays up, so a start (the Start button
+  // here, or the fleet's POST /browsers/<name>/start) arrives as the next control message and
   // the init cover takes over from this one.
   function showStopped() {
     lifecycle = "stopped";
