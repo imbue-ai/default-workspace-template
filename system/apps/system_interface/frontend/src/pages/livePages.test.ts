@@ -196,6 +196,23 @@ describe("creating and positioning", () => {
     expect(layer.hasPage("win-3")).toBe(false);
   });
 
+  it("creates the page of a settling window the shell placed in this client's layout (an agent's open)", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [
+        placementRecord("win-2", { is_minimized: true }),
+        placementRecord("win-1"),
+        placementRecord("win-3"),
+      ],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    renderChrome();
+    layer.reconcile();
+    expect(layer.hasPage("win-3")).toBe(true);
+    expect(frameOf("win-3").getAttribute("src")).toBe("http://127.0.0.1:7001/new");
+  });
+
   it("makes every page but the focused one inert, and all of them during a gesture", () => {
     store.restoreWindow("win-2");
     layer.reconcile();

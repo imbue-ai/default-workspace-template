@@ -39,8 +39,9 @@ export interface WindowAttrs {
   readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
-  /** Whether this client has a page for the window (a window settling on another client's open has none). */
-  readonly hasPage: boolean;
+  /** Whether this client's layout places the window; a window settling on another client's open is not
+   *  placed here and shows a placeholder instead of a page. */
+  readonly isPlacedHere: boolean;
   /** Offered when the app is stopped and the workspace can start it; null otherwise. */
   readonly onStartApp: (() => void) | null;
   readonly onRaise: () => void;
@@ -68,9 +69,9 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, hasPage } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, isPlacedHere } = attrs;
       const isStopped = app !== undefined && !app.is_running;
-      const isSettlingElsewhere = window.is_settling && !hasPage;
+      const isSettlingElsewhere = window.is_settling && !isPlacedHere;
       const isResizable = !isCompact && !isTouch;
       return m(
         "div",

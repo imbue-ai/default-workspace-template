@@ -203,7 +203,7 @@ describe("opening", () => {
     expect(api.calls).toContain("openWindow:home:docs:/new:new:new");
     const placements = activePlacements(store.getState());
     expect(last(placements)).toMatchObject({ window_id: windowId, frame: cascadeFrame(1), is_minimized: false });
-    expect(store.isOpenedHere(windowId ?? "")).toBe(true);
+    expect(store.isPlacedHere(windowId ?? "")).toBe(true);
     expect(store.getState().layout.updated_at).toBe(api.layoutOf("home", CLIENT).updated_at);
     expect(isLayoutDirty(store.getState())).toBe(false);
   });
@@ -227,7 +227,6 @@ describe("opening", () => {
     const windowId = await store.openWindowAt("notes", "/b", null, "focus");
     expect(windowId).toBe("win-2");
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    expect(store.isOpenedHere("win-2")).toBe(false);
   });
 
   it("a focus shortcut raises the app's most recent window, and opens only when there is none", async () => {
@@ -313,6 +312,28 @@ describe("windows", () => {
         { ...home, windows: [...home.windows, { ...settling, path: "/?doc=9", is_settling: false }] },
         store.getState().desktops[1],
       ]);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+  });
+
+  it("a settling window the shell placed in this client's layout (an agent's open) is this client's to show", async () => {
+    const store = await startedStore();
+    const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const home = store.getState().desktops[0];
+    socket
+      .deliver()
+      .onDesktopsUpdated([{ ...home, windows: [...home.windows, settling] }, store.getState().desktops[1]]);
+    expect(store.isPlacedHere("win-3")).toBe(false);
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-3")],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    expect(store.isPlacedHere("win-3")).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+    // Its restore is not deferred, since the page that clears the settling is this client's to load.
+    store.minimizeWindow("win-3");
+    store.restoreWindow("win-3");
     expect(activeFocusedWindowId(store.getState())).toBe("win-3");
   });
 

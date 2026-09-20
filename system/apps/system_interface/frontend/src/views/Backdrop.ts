@@ -27,7 +27,6 @@ export interface BackdropAttrs {
   readonly focusedWindowId: string | null;
   readonly selectedShortcutKey: string | null;
   readonly openMenuWindowId: string | null;
-  readonly hasPage: (windowId: string) => boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint) => void;
@@ -119,7 +118,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isCompact: state.modes.isCompact,
                   isTouch: state.modes.isTouch,
                   isMenuOpen: attrs.openMenuWindowId === window.id,
-                  hasPage: attrs.hasPage(window.id),
+                  isPlacedHere: store.isPlacedHere(window.id),
                   onStartApp:
                     app !== undefined && !app.is_running && store.canStopApp(app)
                       ? () => void store.setAppLifecycle(app.name, "start")
