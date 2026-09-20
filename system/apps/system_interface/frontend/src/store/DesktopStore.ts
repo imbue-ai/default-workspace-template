@@ -332,7 +332,7 @@ export class DesktopStore {
       if (window === undefined) this.pendingRestores.delete(windowId);
       else if (!window.is_settling) {
         this.pendingRestores.delete(windowId);
-        this.dispatch({ type: "window_restored", windowId });
+        this.dispatch({ type: "window_raised", windowId });
       }
     }
   }
@@ -371,6 +371,8 @@ export class DesktopStore {
     if (previous === desktopId) return;
     await this.flushPendingSave();
     this.cancelGesture();
+    // A restore deferred on the desktop being left is not owed to the user when they come back.
+    this.pendingRestores.clear();
     this.dispatch({ type: "desktop_activated", desktopId });
     this.reportClientState(options.isFollowingPush === true ? "" : (previous ?? ""));
     await this.refetchLayout();

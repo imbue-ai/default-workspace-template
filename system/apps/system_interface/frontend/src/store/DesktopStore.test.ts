@@ -327,6 +327,24 @@ describe("windows", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-3");
   });
 
+  it("drops a deferred restore when the user leaves the desktop", async () => {
+    const store = await startedStore();
+    const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const home = store.getState().desktops[0];
+    const work = store.getState().desktops[1];
+    socket.deliver().onDesktopsUpdated([{ ...home, windows: [...home.windows, settling] }, work]);
+    store.restoreWindow("win-3");
+    await store.switchDesktop("work");
+    await store.switchDesktop("home");
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        { ...home, windows: [...home.windows, { ...settling, path: "/?doc=9", is_settling: false }] },
+        work,
+      ]);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
   it("a settling window the shell placed in this client's layout (an agent's open) is this client's to show", async () => {
     const store = await startedStore();
     const settling = windowRecord("win-3", "docs", "/new", { is_settling: true });
