@@ -491,10 +491,7 @@ describe("the contract", () => {
     layer.reconcile();
     spy.mockClear();
     // Back to home with its layout held open: a desktops update meanwhile knows no stored path for the page.
-    let answerLayout: () => void = () => undefined;
-    api.readGate = new Promise((resolve) => {
-      answerLayout = resolve;
-    });
+    const answerLayout = api.holdReads();
     const switching = store.switchDesktop("home");
     await settle();
     expect(store.getState().activeDesktopId).toBe("home");
