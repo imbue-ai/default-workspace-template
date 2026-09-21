@@ -17,6 +17,8 @@ export interface ChatPageEmbedApi {
   shown(): void;
   /** The root has hidden this page (another chat is selected, or the root itself is hidden). */
   hidden(): void;
+  /** Put ``text`` in this page's composer above whatever is there, unsent (the root's ``draft`` param). */
+  prependDraft(text: string): void;
 }
 
 declare global {

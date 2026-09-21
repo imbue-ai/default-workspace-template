@@ -39,7 +39,7 @@ function visibleChatIds(): string[] {
 
 /** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. */
 function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi]: ReturnType<typeof vi.fn> } {
-  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn() };
+  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn() };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);

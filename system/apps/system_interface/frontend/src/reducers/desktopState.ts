@@ -15,6 +15,7 @@ import type {
   EntryPresentation,
   FloatingPosition,
   Frame,
+  LaunchPath,
   Layout,
   PinStyle,
   Placement,
@@ -23,6 +24,7 @@ import type {
   WindowState,
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
+import { DRAFT_PARAM } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -296,6 +298,27 @@ export function openableApps(state: DesktopState): AppRecord[] {
 }
 
 /** The app's pinned window on the active desktop (the shell keeps one per pinned app per desktop), or null. */
+/** Where a draft goes (pinned-taskbar-entries plan section 4.7): a pinned window on the active desktop whose app
+ *  declares, at the pin's home path, a launch path taking ``draft``; the path to navigate the window to is that
+ *  launch path's with the text. Null when no pinned app takes a draft. */
+export interface DraftTarget {
+  readonly window: WindowRecord;
+  readonly launchPath: LaunchPath;
+}
+
+export function draftTargetOf(state: DesktopState): DraftTarget | null {
+  for (const window of activeDesktop(state)?.windows ?? []) {
+    if (!window.is_pinned) continue;
+    const app = appByName(state, window.app);
+    const pinPath = app?.pin?.path;
+    const launchPath = app?.launch_paths.find(
+      (candidate) => candidate.path === pinPath && candidate.params.includes(DRAFT_PARAM),
+    );
+    if (launchPath !== undefined) return { window, launchPath };
+  }
+  return null;
+}
+
 export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord | null {
   return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
 }

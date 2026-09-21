@@ -26,6 +26,11 @@ default_mode = "floating"
 id = "root"
 label = "Chat"
 path = "/"
+# A draft lands in the composer of the selected chat (else the most recent, else a new one), unsent:
+# what the desktop's "Design your own..." hands the pinned chat window.
+params = [
+    {name = "draft", label = "Draft message", required = false},
+]
 
 [[launch_paths]]
 id = "new"

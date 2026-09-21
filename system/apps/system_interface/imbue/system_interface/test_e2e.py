@@ -193,6 +193,9 @@ def _running_e2e_server(
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
                     pin=(_PINNED_HOME_PATH, *pin),
+                    # The pin's home path takes a draft, as the chat's root does.
+                    launch_paths=(("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),),
+                    launch_params={"root": ["draft"]},
                 )
             )
         write_registry(registry_path, *rows)
@@ -1485,8 +1488,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
     """An ``avatar`` pin draws the workspace's design wearing the mood the agents event file folds to (stale and
     idle until the file exists, working once an agent runs), its menu's style rows swap the image for the app's
     icon and back, "Change avatar..." opens the chooser, choosing a design changes every open window, and
-    "Design your own..." starts a chat seeded with the design prompt through the app that takes a message."""
-    with _running_e2e_server(tmp_path, is_stub_taking_message=True, pin=("avatar", "linked", "floating")) as server:
+    "Design your own..." drafts the design prompt into this client's pinned window, whose home launch path takes a
+    draft, rather than opening a chat."""
+    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "floating")) as server:
         _land(page, server)
         entry = _pinned_entry(page)
         expect(entry).to_be_visible(timeout=15000)
@@ -1536,13 +1540,21 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 poll_interval=0.1,
                 error_message="the windows never drew the chosen design",
             )
+            # "Design your own..." drafts into this client's pinned window rather than opening a chat: the window is
+            # pointed at the draft path and shown, and no window is opened.
             chooser.locator(".avatar-design-own").click()
             expect(chooser).to_have_count(0)
-            (window,) = [
-                window for window in _wait_for_window_count(server.base_url, 2) if window["app"] == _STUB_APP_NAME
-            ]
-            assert window["path"].startswith(f"{_STUB_LAUNCH_PATH}?message=")
-            assert "design my own desktop avatar" in _launch_message(window["path"])
+            wait_for(
+                lambda: _pinned_window(server.base_url)["path"].startswith(f"{_PINNED_HOME_PATH}?draft="),
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the pinned window was never pointed at the draft",
+            )
+            drafted = _pinned_window(server.base_url)["path"]
+            (draft,) = urllib.parse.parse_qs(urllib.parse.urlsplit(drafted).query)["draft"]
+            assert "design my own desktop avatar" in draft
+            expect(_window(page, _pinned_window(server.base_url)["id"])).to_be_visible(timeout=15000)
+            assert [window["app"] for window in _windows(server.base_url)] == [_PINNED_APP_NAME]
 
 
 @pytest.mark.timeout(90, func_only=False)

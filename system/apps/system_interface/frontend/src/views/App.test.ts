@@ -225,7 +225,11 @@ function pressOn(element: HTMLElement): void {
 }
 
 describe("the avatar chooser", () => {
-  const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
+  // The pinned app takes a draft at its home path, so the chooser's prompt goes to this client's view of its window.
+  const buddy = appRecord("buddy", {
+    pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
+    launch_paths: [launchPathRecord({ id: "root", path: "/", params: ["draft"] })],
+  });
 
   /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
   function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
@@ -247,8 +251,7 @@ describe("the avatar chooser", () => {
   }
 
   it("routes the entry menu's style row and the chooser's Design your own... to the store", async () => {
-    const chat = appRecord("chat", { launch_paths: [launchPathRecord({ params: ["message"] })] });
-    const entry = pinnedEntry(chat);
+    const entry = pinnedEntry();
     openEntryMenuRow(entry, "change-avatar");
     await settle();
     m.redraw.sync();
@@ -256,8 +259,9 @@ describe("the avatar chooser", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
     await settle();
-    const prompt = new URLSearchParams({ message: AVATAR_DESIGN_PROMPT }).toString();
-    expect(api.calls).toContain(`openWindow:home:chat:/new?${prompt}:new:new`);
+    const prompt = new URLSearchParams({ draft: AVATAR_DESIGN_PROMPT }).toString();
+    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?${prompt}:Buddy`);
+    expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
 
     openEntryMenuRow(entry, "style-plain");
     await settle();

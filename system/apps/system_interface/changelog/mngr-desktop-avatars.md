@@ -17,3 +17,5 @@ Pinned taskbar entries and the chat avatar (`docs/system/blueprint/pinned-taskba
 - The layout answer places a pinned window the client has never placed at the pinned frame (the right half of the backdrop, a margin in), minimized, so the first click on the avatar opens the chat over half the screen rather than at the cascade; the client's first save writes it.
 
 - The op route's window argument accepts `pinned`, the requesting app's pinned window on the target desktop (404 when it has none, 400 without a requester), so an app can point a client's view of its pinned window somewhere and show it without knowing the window's id.
+
+- "Design your own..." no longer opens a chat: it points this client's view of the pinned window whose app takes a `draft` at its home path (the chat's root) at the design prompt and shows the window, so the prompt lands in the user's own conversation for editing before it is sent.

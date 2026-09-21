@@ -4,7 +4,7 @@ The workspace's avatar is the image the chat app's pinned entry wears in the `av
 
 The image says whether any agent on the machine is working. The seven bundled designs rest with closed eyes while every agent is idle and wake with open eyes and their own motion (the puddle shuffles, the cube squishes, the cat kneads, the snail waves its feelers, the heart floats in a figure eight, the dragon hovers, the seal paddles its flippers) while any agent but the workspace's own services agent is running. When the status may be out of date (the agents event file is older than ten minutes, or absent) the entry's tooltip says so. Reduced motion keeps every animation still. The rendered images are derived; authored originals are never changed.
 
-**Design your own...** starts a chat seeded with a prompt that asks the agent to draw a design, show a preview, and register it only once the user approves. The message is sent as soon as the chat opens. The chat app is found through the launch path that declares a `message` parameter; the shell names no app, and the button is disabled, with the reason as its tooltip, when no app declares one.
+**Design your own...** puts a prompt that asks the agent to draw a design, show a preview, and register it only once the user approves into the composer of your current chat, unsent, for you to edit and send: the pinned chat window is pointed at its `draft` launch parameter and shown, and the chat root drafts into the selected chat (else the most recent one, else a chat it creates). The shell names no app: the target is the pinned window whose app declares a launch path at its home path taking `draft`, and the button is disabled, with the reason as its tooltip, when none does.
 
 ## Authoring a design through chat
 
