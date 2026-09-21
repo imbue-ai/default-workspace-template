@@ -173,14 +173,24 @@ class HttpShellOps(ShellOpsInterface):
         except ValueError as e:
             logger.warning("The shell answered the {} op with a body that is not JSON: {}", described, e)
             return None
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            logger.warning(
+                "The shell answered the {} op with a JSON {} where the contract gives an object",
+                described,
+                type(payload).__name__,
+            )
+            return None
+        return payload
 
     def open_window(self, app: AppName, path: str, client_id: str, desktop_id: str) -> str | None:
         answer = self._post_op(open_op_body(app, path, client_id, desktop_id), f"open the {app} window")
         if answer is None:
             return None
         window_id = answer.get("window_id")
-        return window_id if isinstance(window_id, str) and window_id else None
+        if not isinstance(window_id, str) or window_id == "":
+            logger.warning("The shell accepted the open of the {} window but named no window_id: {}", app, answer)
+            return None
+        return window_id
 
     def place_window(self, window_id: str, frame: str, client_id: str, desktop_id: str) -> bool:
         return (
