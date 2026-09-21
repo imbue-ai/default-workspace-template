@@ -741,7 +741,7 @@ describe("pinned entries", () => {
   it("drags a floating entry, clamped inside the backdrop, and writes its position once on release", async () => {
     const store = await pinnedStore();
     // Grabbed 10 pixels inside the box at its default corner (928, 732).
-    store.beginFloatingEntryDrag("buddy", { x: 938, y: 742 }, { x: 10, y: 10 }, null);
+    store.beginFloatingEntryDrag("buddy", { x: 938, y: 742 }, { x: 10, y: 10 });
     expect(store.getGesture()).toMatchObject({
       kind: "floating-entry",
       app: "buddy",
@@ -768,7 +768,11 @@ describe("pinned entries", () => {
     expect(store.gestureRectFor("win-9")).toBeNull();
     // Compact mode has no floating entries to drag.
     store.setThemeMetrics(METRICS, { isCompact: true, isTouch: true });
-    store.beginFloatingEntryDrag("buddy", { x: 10, y: 10 }, { x: 0, y: 0 }, null);
+    store.beginFloatingEntryDrag("buddy", { x: 10, y: 10 }, { x: 0, y: 0 });
+    expect(store.getGesture()).toBeNull();
+    // Nor does an app with no pinned window on the active desktop.
+    store.setThemeMetrics(METRICS, { isCompact: false, isTouch: false });
+    store.beginFloatingEntryDrag("docs", { x: 10, y: 10 }, { x: 0, y: 0 });
     expect(store.getGesture()).toBeNull();
   });
 });

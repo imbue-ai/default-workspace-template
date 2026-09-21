@@ -949,15 +949,13 @@ export class DesktopStore {
     void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
   }
 
-  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. */
-  beginFloatingEntryDrag(
-    app: string,
-    pointer: PixelPoint,
-    grabOffset: PixelPoint,
-    position: FloatingPosition | null,
-  ): void {
+  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves
+   *  in compact mode, or for an app with no pinned window on the active desktop. */
+  beginFloatingEntryDrag(app: string, pointer: PixelPoint, grabOffset: PixelPoint): void {
     if (this.state.modes.isCompact) return;
-    const start = this.renderedFloatingEntryRect(app, position);
+    const current = this.presentationOf(app);
+    if (current === null) return;
+    const start = this.renderedFloatingEntryRect(app, current.position);
     this.gesture = { kind: "floating-entry", app, grabOffset, currentRect: start };
     this.updateFloatingEntryDrag(pointer);
   }

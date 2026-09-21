@@ -170,24 +170,13 @@ export function App(): m.Component<AppAttrs> {
               grabOffsetInside(binding.element, toBackdrop(rootPress)),
             );
             return;
-          case "floating-entry": {
-            const windowId = pinnedWindowIdOf(binding.app);
-            const window =
-              windowId === null
-                ? undefined
-                : activeDesktop(current.getState())?.windows.find((candidate) => candidate.id === windowId);
-            const look =
-              window === undefined
-                ? null
-                : entryLook(current.getState(), window, appByName(current.getState(), binding.app));
+          case "floating-entry":
             current.beginFloatingEntryDrag(
               binding.app,
               point,
               grabOffsetInside(binding.element, toBackdrop(rootPress)),
-              look?.position ?? null,
             );
             return;
-          }
           case "taskbar-entry":
             return;
         }
