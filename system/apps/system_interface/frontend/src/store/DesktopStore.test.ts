@@ -690,6 +690,18 @@ describe("pinned entries", () => {
     return store;
   }
 
+  it("takes the record's entries and the workspace's selection again after a reconnect", async () => {
+    const store = await pinnedStore();
+    socket.deliver().onConnected();
+    // Another window of this client moved the entry, and someone chose a design, while the socket was down.
+    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "bar", style: "avatar", position: null } } })];
+    api.avatars = { ...api.avatars, selected: "jelly-cat" };
+    socket.deliver().onConnected();
+    await settle();
+    expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
+    expect(store.getState().avatar.design).toBe("jelly-cat");
+  });
+
   it("loads this client's entries with its record and takes the shell's word on a change", async () => {
     const store = await pinnedStore();
     expect(store.getState().entries).toEqual({ buddy: { mode: "floating", style: "plain", position: null } });

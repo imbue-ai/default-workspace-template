@@ -362,15 +362,20 @@ export class DesktopStore {
   /** The client record is the shell's word after a reconnect: another window of this client may have
    *  switched desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's
    *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
-   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed. */
+   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed.
+   *  The record's entries and the workspace's selection are taken again too, for the
+   *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
     try {
       const clients = await this.deps.api.fetchClients();
-      recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
+      const own = clients.find((client) => client.id === this.deps.clientId);
+      if (own !== undefined) this.dispatch({ type: "entries_updated", entries: own.entries });
+      recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
+    void this.loadAvatarSelection();
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     if (recorded !== null && isRecordedKnown && recorded !== this.state.activeDesktopId) {
       await this.switchDesktop(recorded, { isFollowingPush: true });
