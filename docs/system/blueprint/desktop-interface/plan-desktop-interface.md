@@ -456,7 +456,7 @@ The order is additive first: the apps learn the new contract and gain their laun
 - Theme switching and a settings route; V1 ships one theme.
 - Wallpaper upload from the settings dialog; V1 lists files already in the wallpapers directory.
 - Taskbar auto-hide; window cycling and keyboard move and resize; a status signal from pages to the taskbar; a window-targeted shortcut kind.
-- Enforcing the sharing mode once workspaces have more than one user; presence and a multiplayer chat (the avatar landed with the pinned-taskbar-entries plan).
+- Enforcing the sharing mode once workspaces have more than one user; presence and a multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan).
 - A richer launcher (type-ahead over app contents through an app-declared search route).
 - Narrowing a per-app share grant to the terminal alone, which needs its pty origin admitted with it.
 - Reporting a terminal's in-tmux session switch as a location, which needs the ttyd client to learn the session name.
