@@ -21,8 +21,9 @@ from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
@@ -437,14 +438,12 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[1]["desktops"] == []
 
 
-_VISITOR_IDENTITY = json.dumps(
-    {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com", "display_name": "Bob"}
-)
-_OWNER_IDENTITY = json.dumps({"owner": True, "user_id": "user-owner-9c21", "email": "owner@example.com"})
+_VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com", display_name="Bob")
+_OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
 
-def _heartbeat(client: FlaskClient, identity: str | None, session_id: str = "tab-0001-aaaa") -> Any:
-    headers = {} if identity is None else {IDENTITY_HEADER: identity}
+def _heartbeat(client: FlaskClient, identity: RequestIdentity | None, session_id: str = "tab-0001-aaaa") -> Any:
+    headers = {} if identity is None else identity_headers(identity)
     return client.post("/api/presence/heartbeat", json={"session_id": session_id}, headers=headers)
 
 
@@ -464,7 +463,7 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
 
 def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(client: FlaskClient) -> None:
     assert _heartbeat(client, None).status_code == 204
-    assert _heartbeat(client, json.dumps({"owner": True})).status_code == 204
+    assert _heartbeat(client, RequestIdentity(owner=True)).status_code == 204
     assert client.get("/api/presence").get_json() == {"users": []}
 
 
@@ -472,13 +471,13 @@ def test_presence_heartbeat_rejects_a_bad_session_id(client: FlaskClient) -> Non
     assert _heartbeat(client, _VISITOR_IDENTITY, session_id="bad").status_code == 400
     assert (
         client.post(
-            "/api/presence/heartbeat", json={"session_id": 7}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+            "/api/presence/heartbeat", json={"session_id": 7}, headers=identity_headers(_VISITOR_IDENTITY)
         ).status_code
         == 400
     )
     assert (
         client.post(
-            "/api/presence/heartbeat", data="not json", headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+            "/api/presence/heartbeat", data="not json", headers=identity_headers(_VISITOR_IDENTITY)
         ).status_code
         == 400
     )
@@ -496,7 +495,7 @@ def test_presence_leave_removes_the_session_and_broadcasts_the_change(app: Flask
         assert [user["user_id"] for user in joined[1]["users"]] == ["user-bob-4471", "user-owner-9c21"]
 
         left = client.post(
-            "/api/presence/leave", json={"session_id": "tab-0001-aaaa"}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+            "/api/presence/leave", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)
         )
 
         assert left.status_code == 204
