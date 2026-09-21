@@ -9,6 +9,7 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.selection import SELECTION_FILENAME
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.avatar.testing import design_registration
@@ -57,6 +58,9 @@ def test_registration_is_loopback_only_and_validated(app: Flask, client: FlaskCl
     assert client.post("/api/avatars", json=_REGISTRATION, environ_base=_NOT_LOOPBACK).status_code == 403
     assert client.post("/api/avatars", json={**_REGISTRATION, "svg": "<svg/>"}).status_code == 400
     assert client.post("/api/avatars", json={**_REGISTRATION, "id": "Not Valid"}).status_code == 400
+    # A body past the route's bound is refused before it is read, so the designs' own size check is never reached.
+    oversized = {**_REGISTRATION, "svg": MINIMAL_DESIGN_SVG + " " * (MAX_SVG_BYTES * 7)}
+    assert client.post("/api/avatars", json=oversized).status_code == 413
     response = client.post("/api/avatars", json=_REGISTRATION)
     assert response.status_code == 201
     assert response.get_json() == {"id": "mine"}
