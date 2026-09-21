@@ -381,7 +381,7 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
-  /** The account the caller is moving away from: listed, but not pickable. */
+  /** A signed-in account to list but refuse, and the reason its row reads. */
   unpickable?: UnpickableAccount;
 }
 

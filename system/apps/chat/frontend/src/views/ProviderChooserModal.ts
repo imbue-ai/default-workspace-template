@@ -332,7 +332,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
    *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
-   *  the row itself also picks it; the account the caller is leaving is listed but not
+   *  the row itself also picks it; an account the caller refuses is listed but not
    *  pickable, with the word for why beside it. Re-auth stays reachable because an expired
    *  credential is otherwise a dead end: without it the only way back is to delete the account,
    *  which orphans every chat bound to it rather than reviving them. */
