@@ -38,9 +38,8 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
+from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.template_catalog import TemplateCatalogAvailability
@@ -478,7 +477,7 @@ def _presence_heartbeat_endpoint() -> Response:
     session_id = _parse_presence_session_id()
     if isinstance(session_id, Response):
         return session_id
-    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
+    identity = request_identity()
     if identity.user_id is None:
         return Response(status=204)
     try:
@@ -494,7 +493,7 @@ def _presence_leave_endpoint() -> Response:
     session_id = _parse_presence_session_id()
     if isinstance(session_id, Response):
         return session_id
-    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
+    identity = request_identity()
     if identity.user_id is None:
         return Response(status=204)
     try:

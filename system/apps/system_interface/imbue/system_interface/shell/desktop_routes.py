@@ -59,8 +59,6 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.layout_ops import DesktopOpArguments
 from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
@@ -82,6 +80,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import op_only_args
 from imbue.system_interface.shell.route_helpers import parse_request_body
+from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
@@ -287,8 +286,7 @@ def arrival_wire_json(outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
 
 def arrive_client(client_id: str) -> ResponseReturnValue:
     """A shell page has loaded for ``client_id``: settle the desktop it lands on from the requester's identity."""
-    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
-    return jsonify(arrival_wire_json(_shell().arrive_client(ClientId(client_id), identity)))
+    return jsonify(arrival_wire_json(_shell().arrive_client(ClientId(client_id), request_identity())))
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
