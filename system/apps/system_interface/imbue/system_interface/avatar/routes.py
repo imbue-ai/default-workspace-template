@@ -1,6 +1,8 @@
 """The avatar routes (pinned-taskbar-entries plan section 5.3): the designs, a design's image and original, and the
 workspace's selection; registration is loopback-only, for an agent inside the workspace."""
 
+from typing import Final
+
 from flask import Flask
 from flask import Response
 from flask import jsonify
@@ -26,11 +28,11 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 
 # A registration is one design plus its JSON framing; anything larger is not a design.
-_MAX_REGISTRATION_BYTES = MAX_SVG_BYTES * 6 + 16384
-_SVG_MIMETYPE = "image/svg+xml"
+_MAX_REGISTRATION_BYTES: Final[int] = MAX_SVG_BYTES * 6 + 16384
+_SVG_MIMETYPE: Final[str] = "image/svg+xml"
 # The image is isolated by the browser's image mode; the policy also covers a direct visit to the route.
-_IMAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
-_SOURCE_CSP = "default-src 'none'; sandbox"
+_IMAGE_CSP: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+_SOURCE_CSP: Final[str] = "default-src 'none'; sandbox"
 
 
 def _shell() -> ShellState:
