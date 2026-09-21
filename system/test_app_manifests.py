@@ -239,21 +239,24 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["chat"].critical is True
     assert by_name["chat"].program == "chat"
     assert by_name["chat"].priority == "chat"
-    assert by_name["chat"].default_shortcut is not None
-    assert by_name["chat"].default_shortcut.mode == "new"
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    for name in ("terminal", "files", "browser"):
+    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
+    # (docs/system/specs/window-bound-resources.md section 3.1).
+    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
         assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.mode == "focus"
+        assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2).
     assert by_name["system_interface"].launch_paths == ()
-    for name, launch_path in (("chat", "/new"), ("terminal", "/new"), ("files", "/"), ("browser", "/new")):
+    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [("root", "/"), ("new", "/new")]
+    assert by_name["chat"].default_shortcut is not None
+    assert by_name["chat"].default_shortcut.launch == "root"
+    for name, launch_path in (("terminal", "/new"), ("files", "/"), ("browser", "/new")):
         assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [("new", launch_path)], name
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.launch == "new", name
-    assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["account_id", "message"]
+    assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
     assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]

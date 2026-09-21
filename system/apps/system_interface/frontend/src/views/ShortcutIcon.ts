@@ -9,7 +9,6 @@
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelRect } from "../geometry/frames";
-import { launchPathOf } from "../model/launch";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
@@ -34,12 +33,10 @@ export interface ShortcutIconAttrs {
   readonly onContextMenu: (x: number, y: number) => void;
 }
 
-/** What a shortcut reads: the launch path's label while it always creates ("New Terminal"), the
- *  app's name while it focuses ("Terminal"). */
+/** What a shortcut reads: its app's name, whatever its mode ("Terminal"); the launch path's label is the
+ *  launcher tile's. */
 export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefined): string {
-  if (app === undefined) return shortcut.target.app;
-  const launchPath = launchPathOf(app, shortcut.target.launch);
-  return shortcut.mode === "new" && launchPath !== null ? launchPath.label : app.display_name;
+  return app === undefined ? shortcut.target.app : app.display_name;
 }
 
 export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {

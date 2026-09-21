@@ -42,11 +42,11 @@ Built-in manifests:
 | App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "new", mode = "new"}` | `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
-| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "focus"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
+| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
+| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "focus"}` | `new` ("New File Viewer", `/`, params `path` optional) |
-| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("New Browser", `/new`, params `url` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
+| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, params `url` optional) |
 
 ## 3. The registry (`data/.state/apps.toml`)
 
