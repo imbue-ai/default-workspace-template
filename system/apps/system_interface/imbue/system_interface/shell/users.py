@@ -28,7 +28,7 @@ class _StoredUser(FrozenModel):
     """One entry of the ``users`` map (the id is the key)."""
 
     desktop_id: DesktopId = Field(description="The desktop made for the user")
-    desktop_name: str = Field(description="The name it was created with")
+    desktop_name: str = Field(description="Its name as of the user's last arrival")
     email: str | None = Field(default=None, description="The verified email as of the last arrival")
     display_name: str | None = Field(default=None, description="The display name as of the last arrival")
     last_seen: datetime = Field(description="When a client of the user last arrived")
