@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,11 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import window_record
+
+# The frontend's glyph palette, which ``DESKTOP_GLYPH_COLORS`` restates for the desktops the shell names itself.
+_SQUIGGLES_PATH = Path(__file__).resolve().parents[3] / "frontend" / "src" / "views" / "squiggles.ts"
+_SQUIGGLE_GLYPHS_ARRAY = re.compile(r"export const SQUIGGLE_GLYPHS\b[^=]*=\s*\[(.*?)\n\];", re.DOTALL)
+_GLYPH_COLOR = re.compile(r'color: "(#[0-9A-Fa-f]{6})"')
 
 _SEED = (
     DesktopShortcut(
@@ -187,6 +193,12 @@ def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:
     assert next_glyph_index([0, 1, 3]) == 2
     assert next_glyph_index(list(range(GLYPH_COUNT))) == 0
     assert next_glyph_index([*range(GLYPH_COUNT), 0]) == 1
+
+
+def test_the_shells_glyph_colours_are_the_frontends_palette_in_glyph_order() -> None:
+    palette = _SQUIGGLE_GLYPHS_ARRAY.search(_SQUIGGLES_PATH.read_text())
+    assert palette is not None, f"no SQUIGGLE_GLYPHS array in {_SQUIGGLES_PATH}"
+    assert tuple(_GLYPH_COLOR.findall(palette.group(1))) == DESKTOP_GLYPH_COLORS
     assert len(DESKTOP_GLYPH_COLORS) == GLYPH_COUNT
 
 
