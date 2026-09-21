@@ -273,7 +273,7 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 
 ## 10. The browser-side contract (`app_contract.js`)
 
-Served by the shell at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`, as an ES module.
+Served by the shell at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`, as an ES module. The desktop interface has every app serve that same built file at `/_static/app_contract.js` from its own origin (`docs/system/blueprint/desktop-interface/contracts.md` section 7): a module import carries no cookie, and the desktop client's forwarder and the share gateway refuse it across origins.
 Source: `system/libs/workspace_ui/src/app_contract.ts`, built by the shell's frontend as a separate library entry so the served file has no other imports.
 Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate?, capabilities?})` returning `{focused(), location(path, title), open(address), openPath(path, ifPresent)}`.
 The `onNavigate` handler, the `capabilities` declaration, the `title` of a location report, and `openPath` are the desktop interface's additions (`docs/system/blueprint/desktop-interface/contracts.md` section 7); the shell of this model ignores the messages it does not know (`shell:capabilities`, a path-form `shell:open`, the `title` of a location) and never sends `shell:navigate`.
