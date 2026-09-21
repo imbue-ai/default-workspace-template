@@ -5,7 +5,8 @@
  * section 9.1.
  *
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
- * title as its location, handles ``shell:navigate`` by changing the selection, and drives its
+ * title as its location, handles ``shell:navigate`` by changing the selection (a ``draft`` in the
+ * path goes, unsent, into a chat's composer), and drives its
  * inner pages directly (they share an origin) with the shell's handshake and its shown and
  * hidden states, so each page's presence reports key on the chat it shows. The inner pages'
  * own ``minds:``, ``shell:focused``, and sub-agent ``shell:open`` messages go up through
@@ -132,6 +133,9 @@ function draftInto(chatId: string, text: string): void {
  *  selected and shown, and nothing is sent. The URL the root then reports carries the selection alone, so a reload
  *  does not draft again. */
 function takeDraft(text: string, requestedChatId: string | null): void {
+  // The shell holds the draft path as this window's location until the root reports another, so the
+  // selection goes up even when it is the one already reported.
+  reportedLocation = null;
   const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
   const listed = new Set(rows.map((row) => row.chatId));
   const chatId =
