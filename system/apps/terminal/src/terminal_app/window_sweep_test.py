@@ -4,6 +4,7 @@ from app_manifest.primitives import AppName
 from app_manifest.testing import ShellStub
 from imbue.mngr.utils.polling import wait_for
 
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import FakeTmux, make_terminal_record, make_tmux_session
@@ -66,7 +67,7 @@ def test_the_thread_sweeps_on_its_interval_and_at_once_when_asked(
         slow.start()
         try:
             shell_stub.answer(200, _desktops_showing("terminal-1"))
-            slow.request_sweep()
+            slow.request_sweep(None)
             wait_for(
                 lambda: fake_tmux.session_names() == ["terminal-1"],
                 timeout=5.0,
@@ -77,3 +78,28 @@ def test_the_thread_sweeps_on_its_interval_and_at_once_when_asked(
             slow.stop()
     finally:
         sweeper.stop()
+
+
+def test_a_hint_marks_the_closed_windows_terminal_before_the_sweep_it_brings(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    shell_stub: ShellStub,
+) -> None:
+    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1")])
+    session_store.save_record(make_terminal_record("terminal-1", None, "/srv", session_id="$1"))
+    # The window opened and closed between two periodic sweeps: no sweep ever saw it, and the shell shows none now.
+    shell_stub.answer(200, _desktops_showing())
+    sweeper = _sweeper(session_source, shell_stub, interval_seconds=3600.0)
+    sweeper.start()
+    try:
+        sweeper.request_sweep(TmuxSessionName("terminal-1"))
+        wait_for(
+            lambda: fake_tmux.session_names() == [],
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the hinted sweep never collected the terminal the hint named",
+        )
+    finally:
+        sweeper.stop()
+    assert session_store.list_records() == []

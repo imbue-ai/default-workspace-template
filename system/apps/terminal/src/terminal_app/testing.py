@@ -319,8 +319,9 @@ def build_pages_test_client(
     source: TmuxSessionSource,
     registry_path: Path,
     contract_path: Path,
-    # Appended to on every window-closed post, so a test can see the sweep was asked for.
-    window_closed_posts: list[None],
+    # Appended to on every window-closed post with the terminal the hint named, so a test can see the sweep was
+    # asked for and what it was told.
+    window_closed_posts: list[TmuxSessionName | None],
 ) -> FlaskClient:
     """A test client over the wrapper pages alone, reading origin labels from ``registry_path`` and serving the
     contract module at ``contract_path``."""
@@ -330,7 +331,7 @@ def build_pages_test_client(
             source=source,
             registry_path=registry_path,
             contract_path=contract_path,
-            on_window_closed=lambda: window_closed_posts.append(None),
+            on_window_closed=window_closed_posts.append,
         )
     )
     return app.test_client()

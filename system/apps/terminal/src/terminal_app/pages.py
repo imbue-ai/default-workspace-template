@@ -18,6 +18,7 @@ from typing import Final
 
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
+from app_manifest.shell_windows import window_query_value
 from flask import Blueprint, Response, jsonify, redirect, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -231,6 +232,27 @@ class PageConfig(FrozenModel):
 
 
 @pure
+@pure
+def closed_window_terminal(hint_body: object) -> TmuxSessionName | None:
+    """The terminal a closed window showed, from the ``path`` of the shell's hint.
+
+    None for a window at a launch path (``/new?...`` names no terminal), a path naming something that is not a
+    session name, or a body of another shape than the shell posts.
+    """
+    if not isinstance(hint_body, dict):
+        return None
+    path = hint_body.get("path")
+    if not isinstance(path, str):
+        return None
+    raw_name = window_query_value(path, SESSION_QUERY_KEY)
+    if raw_name is None:
+        return None
+    try:
+        return TmuxSessionName(raw_name)
+    except InvalidTerminalValueError:
+        return None
+
+
 def _session_name(raw: str) -> TmuxSessionName:
     try:
         return TmuxSessionName(raw)
@@ -266,8 +288,9 @@ def build_pages_blueprint(
     source: TmuxSessionSource,
     registry_path: Path,
     contract_path: Path,
-    # Called for every closed window the shell posts; the sweeper's ``request_sweep``.
-    on_window_closed: Callable[[], None],
+    # Called for every closed window the shell posts with the terminal the window's path named (None when it
+    # named none); the sweeper's ``request_sweep``.
+    on_window_closed: Callable[[TmuxSessionName | None], None],
 ) -> Blueprint:
     """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
@@ -307,8 +330,9 @@ def build_pages_blueprint(
 
     @blueprint.post(WINDOW_CLOSED_PATH)
     def window_closed() -> ResponseReturnValue:
-        # The body names the window; the sweep reads the shell for the truth rather than trusting it.
-        on_window_closed()
+        # The body says which window closed, which is proof a window showed its terminal; what is shown now
+        # is still read from the shell.
+        on_window_closed(closed_window_terminal(request.get_json(silent=True)))
         return "", HTTP_NO_CONTENT
 
     @blueprint.get(APP_CONTRACT_ROUTE)

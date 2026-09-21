@@ -169,7 +169,7 @@ An open with `is_new` writes the requesting client's placement (section 10, casc
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
 A location report on a settling window clears `is_settling`.
 A close drops the window from every layout file of the desktop and broadcasts `desktops_updated` and one `placements_updated` per rewritten layout.
-After that, when the window's app registered a `window_closed_path`, the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way.
+After that, when the window's app registered a `window_closed_path`, the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way. An app may take the posted `path` as proof that a window showed the resource it names (the terminal and the browser mark it window-seen before sweeping), while reading what is shown now from `GET /api/desktops`.
 A location that changes nothing writes and broadcasts nothing.
 
 ### 5.4 Placements
@@ -346,7 +346,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar and launcher |
-| `data-tray-widget="desktops\|running-apps"`, `data-desktop-switch="<id>"` | the tray |
+| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"` | the tray |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
 | `data-pinned="true\|false"` | each window's root and each taskbar entry |
