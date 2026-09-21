@@ -377,6 +377,55 @@ def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_
     assert client.post(f"/api/desktops/home/windows/{freed['id']}/close").status_code == 204
 
 
+def test_pinned_names_the_requesters_pinned_window_for_navigate_and_restore(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """``pinned`` in a window argument is the requesting app's pinned window on the desktop, whatever path the client
+    sees it at: a chat's auto-open navigates it for one client and restores it; an app with no pin gets a 404 and an
+    op with no requester a 400."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    requester = {"app": "buddy", "marker": ""}
+    navigated = client.post(
+        "/api/layout/broadcast",
+        json={
+            "op": "navigate",
+            "args": {"window": "pinned", "path": "/?doc=7", "client": "c1"},
+            "requester": requester,
+        },
+    )
+    assert navigated.status_code == 200
+    assert navigated.get_json()["window_id"] == pinned["id"]
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"][pinned["id"]]["path"] == "/?doc=7"
+    restored = client.post(
+        "/api/layout/broadcast",
+        json={"op": "restore", "args": {"window": "pinned", "client": "c1"}, "requester": requester},
+    )
+    assert restored.status_code == 200
+    (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert (placement["window_id"], placement["is_minimized"]) == (pinned["id"], False)
+    assert (
+        client.post(
+            "/api/layout/broadcast",
+            json={
+                "op": "restore",
+                "args": {"window": "pinned", "client": "c1"},
+                "requester": {"app": "files", "marker": ""},
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/layout/broadcast",
+            json={"op": "restore", "args": {"window": "pinned", "client": "c1"}, "requester": None},
+        ).status_code
+        == 400
+    )
+
+
 def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it_there(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:

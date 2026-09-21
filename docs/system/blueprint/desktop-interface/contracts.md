@@ -248,7 +248,7 @@ The shell and the minds chrome accept messages only from frames they created, so
 ## 8. The op route and `layout.py`
 
 `POST /api/layout/broadcast` with `{"op", "args", "requester"}`, loopback only.
-`requester` is `{"app", "marker"}` (`{"app": "chat", "marker": "<chat-id>"}` for a chat's agent, from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), or `null`; `self` in a window argument names the window of `app` on the target client's active desktop whose path, as the target client sees it (its own stored path for an independent window), carries `marker` as a path segment or a query value.
+`requester` is `{"app", "marker"}` (`{"app": "chat", "marker": "<chat-id>"}` for a chat's agent, from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), or `null`; `self` in a window argument names the window of `app` on the target client's active desktop whose path, as the target client sees it (its own stored path for an independent window), carries `marker` as a path segment or a query value; `pinned` names the pinned window of `app` on that desktop (`404` when it has none, `400` with no requester).
 Targeting: `args.client`, else the client that most recently messaged the requester, else the one connected client, else `412` listing the connected clients; `open` alone, with nothing settling the client, writes the window on `args.desktop` (else the first desktop) with no placement instead, so it reads as minimized for every client, and answers with `client_id` and `layout` null.
 `args.desktop` names the desktop an op edits by name or id and switches the target client to it.
 

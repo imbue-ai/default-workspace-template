@@ -71,6 +71,9 @@ A window argument is one of:
   `open` that made it;
 - **`self`**, your own chat's window (the chat app's window whose path carries
   `$MINDS_CHAT_ID`, or `$MNGR_AGENT_ID` for an agent that is its own chat);
+- **`pinned`**, your app's pinned window on the target client's active desktop
+  (the chat's root window, which the avatar opens): `navigate pinned /?chat=<id>`
+  shows a chat there for that client;
 - an **app name** (`files`, `browser`), that app's most recently focused window
   on the target client's active desktop.
 

@@ -41,6 +41,8 @@ KNOWN_OPS: Final[frozenset[str]] = (
 
 # The one non-id a window argument accepts: the requester's own window, which the op's ``requester`` names.
 SELF_WINDOW: Final[str] = "self"
+# The requester's app's pinned window on the target desktop (pinned-taskbar-entries plan section 4.8).
+PINNED_WINDOW: Final[str] = "pinned"
 
 
 @pure

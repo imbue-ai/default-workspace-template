@@ -232,9 +232,11 @@ entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
 (the Mind app's update and help chats) has its window surfaced by this app
-(`auto_open.py`): when the agent appears, the app asks the shell to open a chat
-root window on the chat in every connected client, holds the open until a
-client is connected if none is, and records the delivery under
+(`auto_open.py`): when the agent appears, the app asks the shell to point this
+app's pinned window (the avatar's chat) at the chat and show it, in every
+connected client (a desktop with no pinned window gets a chat root window opened
+instead), holds the request until a client is connected if none is, and records
+the delivery under
 `data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a window.
 The open is held for as long as the chat exists, so a chat started while nobody
 was connected still gets its window whenever someone finally connects. The one

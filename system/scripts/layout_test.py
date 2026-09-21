@@ -116,6 +116,7 @@ def test_a_name_the_registry_could_never_hold_is_refused_without_waiting(
 def test_windows_are_named_by_id_self_or_app(capsys: pytest.CaptureFixture[str]) -> None:
     assert layout._window_ref("win-0123456789abcdef") == "win-0123456789abcdef"
     assert layout._window_ref("self") == "self"
+    assert layout._window_ref("pinned") == "pinned"
     assert layout._window_ref("files") == "files"
     with pytest.raises(SystemExit):
         layout._window_ref("win 12")
