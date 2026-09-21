@@ -38,8 +38,9 @@ from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
 
 # The browser-side contract module (desktop contracts.md section 7): built as its own library
-# entry into ``static/_static/`` and served with a permissive CORS header, since every
-# app page that speaks the contract loads it from the shell's origin.
+# entry into ``static/_static/``. Every app serves that one file from its own origin (a module
+# import is a fetch without cookies, which the forwarder refuses across origins); the shell's
+# copy, served with a permissive CORS header, is what the e2e stub pages import.
 APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
 APP_CONTRACT_PATH: Final[str] = f"/_static/{APP_CONTRACT_FILENAME}"
 
