@@ -425,11 +425,11 @@ export function renderToolCallBlock(
   });
 }
 
-/** The "sign in again" affordance under an auth failure.
+/** The two ways out under an auth failure: "Sign in again", and the switch link beside it.
  *
- * Resolves the chat's own account from its `account` label, so the chooser opens ON that
- * account and re-authenticates it in place -- every chat bound to it recovers. Without the
- * label (a chat from before accounts, say) it opens the chooser plainly, which is still the
+ * "Sign in again" resolves the chat's own account from its `account` label, so the chooser opens
+ * ON that account and re-authenticates it in place -- every chat bound to it recovers. Without
+ * the label (a chat from before accounts, say) it opens the chooser plainly, which is still the
  * right destination.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
