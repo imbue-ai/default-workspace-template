@@ -47,8 +47,6 @@ A workspace always has at least one desktop; deleting the last one is refused, a
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
 Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10).
-It is the flag that will decide, once other people share a workspace, whether they may open and close windows on that desktop.
-There is one window set in either mode, so switching the mode moves no data.
 
 ### 2.2 Window
 
