@@ -113,6 +113,25 @@ def test_the_tail_read_stops_at_the_last_snapshot_even_when_a_block_boundary_cut
     assert read_tail_lines_back_to_snapshot(path)[:3] == [filler] * 3
 
 
+def test_the_tail_read_finds_a_snapshot_marker_that_a_block_boundary_splits(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    marker = '"AGENTS_FULL_STATE"'
+    old_snapshot = _event("AGENTS_FULL_STATE", agents=[_agent("old", "STOPPED")])
+    snapshot = _event("AGENTS_FULL_STATE", agents=[_agent("a", "RUNNING")])
+    filler = _event("AGENT_STATE", agent=_agent("filler", "STOPPED"))
+    # Sized so the block read first from the end begins five bytes into the newest snapshot's type marker: the
+    # marker straddles the boundary, and the read must still end in the block that holds the line's start
+    # rather than go on to the older snapshot.
+    into_marker = snapshot.index(marker) + 5
+    trailing = _padded_lines(filler, _TAIL_BLOCK_BYTES - (len(snapshot) + 1 - into_marker))
+    lines = [old_snapshot, *_padded_lines(filler, 2 * _TAIL_BLOCK_BYTES), snapshot, *trailing]
+    path.write_text("\n".join(lines) + "\n")
+    tail = read_tail_lines_back_to_snapshot(path)
+    assert snapshot in tail
+    assert old_snapshot not in tail
+    assert read_avatar_status(path, _NOW) == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+
+
 def test_an_absent_file_reads_stale_and_idle(tmp_path: Path) -> None:
     assert read_avatar_status(tmp_path / "missing.jsonl", _NOW) == AvatarStatus(mood=AvatarMood.IDLE, is_stale=True)
 
