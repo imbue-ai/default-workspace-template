@@ -155,8 +155,9 @@ fallback here lands the user in exactly the unreleased-code case above. Tell
 them the Mind app needs updating (or restarting, if the gateway was simply
 unreachable) and stop.
 
-Other optional fields (`host_name`, `launch_mode`, `ai_provider`, `account_id`,
-`region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400` with `{error, field}` means a field-level problem; a `422`
+Many other optional fields exist (`host_name`, `launch_mode`, `account_id`,
+`region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400`
+with `{error, field}` means a field-level problem; a `422`
 `{"errors":[{field,message}]}` means a structurally invalid body.
 
 **Backups: always create with backups unconfigured.** Leave every `backup_*`
