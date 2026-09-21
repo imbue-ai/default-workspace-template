@@ -25,14 +25,17 @@ from imbue.system_interface.avatar.status import agent_events_path
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
+from imbue.system_interface.shell.clients import entries_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
+from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import StoredWindowPath
@@ -352,6 +355,15 @@ class ShellState(MutableModel):
         if outcome.is_active_desktop_changed:
             self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
         return outcome.is_active_desktop_changed
+
+    def set_client_entry_presentation(
+        self, client_id: ClientId, app: str, presentation: EntryPresentation
+    ) -> ClientRecord:
+        """Store how a recorded client shows one pinned entry and tell that client's windows; raises
+        ClientNotFoundError."""
+        record = self.clients.set_entry_presentation(client_id, app, presentation, datetime.now(timezone.utc))
+        self.broadcaster.broadcast_client_entries_changed(str(record.id), entries_wire_json(record.entries))
+        return record
 
     def active_desktop_of_client(self, client_id: str) -> DesktopId | None:
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
