@@ -480,15 +480,19 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function openAvatarChooser(current: DesktopStore): void {
-    avatarChooser = { designs: null, loadError: null };
+    const opened: AvatarChooserState = { designs: null, loadError: null };
+    avatarChooser = opened;
+    // The dialog can be closed (or opened again) while the catalog loads; the answer is only this opening's.
     void current
       .fetchAvatarDesigns()
       .then((designs) => {
-        avatarChooser = { designs, loadError: null };
+        if (avatarChooser === opened) avatarChooser = { designs, loadError: null };
       })
       .catch((error: unknown) => {
         console.warn("[si] could not list the avatar designs", error);
-        avatarChooser = { designs: null, loadError: `Could not list the designs: ${(error as Error).message}` };
+        if (avatarChooser === opened) {
+          avatarChooser = { designs: null, loadError: `Could not list the designs: ${(error as Error).message}` };
+        }
       })
       .finally(() => m.redraw());
   }
