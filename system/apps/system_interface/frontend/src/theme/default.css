@@ -2,8 +2,8 @@
 
    Every metric behaviour needs (title bar height, taskbar height, cell size, grid inset,
    minimum window size, minimum visible title width, the snap and drag thresholds, the touch
-   target) is read from these tokens once at boot and again when the render mode changes
-   (theme/metrics.ts), so no number lives in both CSS and TypeScript. The compact breakpoint is
+   target, the floating entry's size and insets) is read from these tokens once at boot and again
+   when the render mode changes (theme/metrics.ts), so no number lives in both CSS and TypeScript. The compact breakpoint is
    the one value that lives in TypeScript instead (COMPACT_MAX_WIDTH_PX), applied as a
    matchMedia query that sets data-compact on the root element; touch mode sets data-touch. */
 :root {
