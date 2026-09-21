@@ -143,7 +143,7 @@ The shell learns who is asking from the `X-Imbue-Identity` header every request 
 A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on.
 The owner, and any request without a `user_id`, land as before: the client's stored desktop, else the first.
 A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its settled windows, so they see what is open without touching the originals).
-The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on.
+The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on (one that last arrived as someone else, or anonymously, is not returning: it lands on the user's desktop).
 If the desktop was deleted meanwhile, the next arrival seeds another and the page shows a notice naming the deleted one once.
 Every desktop stays shared and visible to everyone in the switcher; the user's desktop is theirs by convention, not by access control.
 Visitors granted a single app never load the shell and are not concerned.

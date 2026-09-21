@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -39,6 +40,7 @@ from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -198,6 +200,18 @@ def resolve_active_desktop(record: ClientRecord | None, desktops: Sequence[Deskt
         if any(desktop.id == record.active_desktop for desktop in desktops):
             return record.active_desktop
     return desktops[0].id
+
+
+@pure
+def desktop_kept_by_returning_client(
+    record: ClientRecord | None, user_id: UserId, desktop_ids: AbstractSet[DesktopId]
+) -> DesktopId | None:
+    """The desktop a visiting user's client keeps on arrival (desktop plan section 3.10): the one it was on, when it
+    last arrived as this same user and that desktop still exists; None for a new client, for one that last arrived
+    as someone else (or anonymously), and for one whose desktop is gone."""
+    if record is None or record.user_id != user_id or record.active_desktop is None:
+        return None
+    return record.active_desktop if record.active_desktop in desktop_ids else None
 
 
 @pure
