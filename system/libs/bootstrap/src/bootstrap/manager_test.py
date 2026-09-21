@@ -15,12 +15,10 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
-    _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
-    WORKSPACE_LAYOUT_MIGRATION_SCRIPT,
     WORKSPACE_ROOT_DIR,
     TimezoneFetchError,
     _apply_container_timezone,
@@ -29,7 +27,6 @@ from bootstrap.manager import (
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
-    _migrate_workspace_layouts_best_effort,
     _parse_timezone_response,
     _read_host_name,
     _read_update_marker_dri_agent,
@@ -40,7 +37,7 @@ from bootstrap.manager import (
     main,
 )
 
-# --- _configure_git_global ---
+# _configure_git_global
 
 
 def test_configure_git_global_sets_insteadof_but_not_hookspath(
@@ -75,7 +72,7 @@ def test_configure_git_global_sets_insteadof_but_not_hookspath(
     assert hooks_path == ""
 
 
-# --- _read_host_name ---
+# _read_host_name
 
 
 def test_read_host_name_returns_value_from_data_json(
@@ -108,7 +105,7 @@ def test_read_host_name_returns_none_when_field_missing(
     assert _read_host_name() is None
 
 
-# --- the shared subprocess double (the recovery path, the DRI wake)
+# the shared subprocess double (the recovery path, the DRI wake)
 
 
 class _StubSubprocess:
@@ -142,7 +139,7 @@ class _StubSubprocess:
         )
 
 
-# --- _initialize_workspace_main_branch ---
+# _initialize_workspace_main_branch
 
 
 def _git_in(work_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -242,7 +239,7 @@ def test_initialize_workspace_main_branch_runs_once_per_workspace(
     )
 
 
-# --- _ensure_git_identity ---
+# _ensure_git_identity
 
 
 def test_ensure_git_identity_sets_one_when_absent(
@@ -299,7 +296,7 @@ def test_initialize_workspace_main_branch_no_longer_sets_an_identity(
     assert _git_in(work_dir, "config", "user.email").returncode != 0
 
 
-# --- _install_runtime_cron_entries ---
+# _install_runtime_cron_entries
 
 
 def test_install_runtime_cron_entries_copies_files_with_0644(
@@ -357,7 +354,7 @@ def test_install_runtime_cron_entries_tolerates_unwritable_target(
     _install_runtime_cron_entries(target_dir=tmp_path / "missing")
 
 
-# --- _write_update_recovery_cron_entry ---
+# _write_update_recovery_cron_entry
 
 
 def test_update_recovery_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
@@ -406,7 +403,7 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
 
 
-# --- _apply_container_timezone ---
+# _apply_container_timezone
 
 
 def _make_zoneinfo_tree(tmp_path: Path) -> Path:
@@ -515,7 +512,7 @@ def test_apply_container_timezone_tolerates_oserror(tmp_path: Path) -> None:
     )
 
 
-# --- _set_container_timezone ---
+# _set_container_timezone
 
 
 def _set_timezone_in(tmp_path: Path, fetched_tz_name: str) -> tuple[Path, Path]:
@@ -595,7 +592,7 @@ def test_set_container_timezone_applies_the_fetched_zone_when_the_cache_is_unwri
     assert Path(os.readlink(localtime)).name == "New_York"
 
 
-# --- _fetch_user_timezone ---
+# _fetch_user_timezone
 
 
 def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
@@ -606,7 +603,7 @@ def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
     assert _fetch_user_timezone() == ""
 
 
-# --- _parse_timezone_response ---
+# _parse_timezone_response
 
 
 def test_parse_timezone_response_returns_the_zone_name() -> None:
@@ -642,7 +639,7 @@ def test_parse_timezone_response_rejects_a_non_json_body() -> None:
         _parse_timezone_response(b"<html>bad gateway</html>")
 
 
-# --- _recover_interrupted_update ---
+# _recover_interrupted_update
 
 
 def _clear_marker_on_recover(cmd: list[str]) -> None:
@@ -894,58 +891,3 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
 
     assert len(stub.calls) == 1  # the recover invocation, and no mngr calls
     assert not UPDATE_APPLY_MARKER.exists()
-
-
-def test_main_migrates_workspace_layouts_after_the_rollback_and_before_supervisord(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The migration must see the restored tree (so it runs after the rollback)
-    # and must have written the shell's state files before supervisord starts
-    # the shell that reads them.
-    migration_argv = ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"]
-    order: list[str] = []
-
-    def _record_migration(argv: list[str]) -> None:
-        _clear_marker_on_recover(argv)
-        if argv == migration_argv:
-            order.append("migration")
-
-    stub = _prepare_boot(monkeypatch, tmp_path)
-    stub.on_command = _record_migration
-    monkeypatch.setattr(
-        "bootstrap.manager._exec_supervisord", lambda: order.append("supervisord")
-    )
-
-    main()
-
-    recover_index = next(
-        index for index, argv in enumerate(stub.calls) if "recover" in argv
-    )
-    migration_index = stub.calls.index(migration_argv)
-    assert recover_index < migration_index
-    assert order == ["migration", "supervisord"]
-
-
-def test_a_failing_layout_migration_never_blocks_boot(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    stub = _StubSubprocess(returncode=1)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    errors: list[str] = []
-    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
-    try:
-        _migrate_workspace_layouts_best_effort()
-        stub.raise_on = {"run": FileNotFoundError("python3: not found")}
-        _migrate_workspace_layouts_best_effort()
-    finally:
-        logger.remove(sink)
-
-    assert len(stub.calls) == 2
-    assert stub.kwargs[0]["timeout"] == _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS
-    assert any(
-        "Failed to migrate the workspace layouts (rc=1)" in line for line in errors
-    )
-    assert any(
-        "Failed to run the workspace layout migration" in line for line in errors
-    )
