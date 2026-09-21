@@ -30,6 +30,8 @@ from loguru import logger
 from pydantic import ValidationError
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.codex.account_models import AccountModelProbeError
+from imbue.chat.harnesses.codex.account_models import probe_codex_account_models
 from imbue.chat.harnesses.model import EffortChoice
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
@@ -113,9 +115,18 @@ def codex_models_to_options(models: tuple[CodexModel, ...]) -> tuple[ModelOption
 CODEX_MODEL_OPTIONS_FILENAME: str = "minds_codex_model_options.json"
 
 
+def codex_model_options_path(codex_home: Path) -> Path:
+    """The model-options sidecar under ``codex_home``, whichever codex that home belongs to.
+
+    An agent has one, and so does an ACCOUNT: the account folder is itself a ``CODEX_HOME``, so the
+    set a probe of the account read is kept the same way the set an agent was offered is.
+    """
+    return codex_home / CODEX_MODEL_OPTIONS_FILENAME
+
+
 def get_codex_model_options_path(agent_state_dir: Path) -> Path:
     """The agent's model-options sidecar: ``<CODEX_HOME>/minds_codex_model_options.json``."""
-    return get_codex_home(agent_state_dir) / CODEX_MODEL_OPTIONS_FILENAME
+    return codex_model_options_path(get_codex_home(agent_state_dir))
 
 
 def write_codex_model_options(model_options_path: Path, models: tuple[CodexModel, ...]) -> None:
@@ -307,9 +318,35 @@ class CodexModelResolver(HarnessModelResolver):
         )
         return self
 
-    def list_persisted_options(self) -> tuple[ModelOption, ...] | None:
-        """The sidecar's raw ``model/list``, mapped: the last set this agent was offered, or ``()`` with none."""
-        return codex_models_to_options(read_codex_model_options(get_codex_model_options_path(self._agent_state_dir)))
+    @classmethod
+    def list_account_options(
+        cls, account_dir: Path, probe: Callable[[Path], tuple[CodexModel, ...]] = probe_codex_account_models
+    ) -> tuple[ModelOption, ...]:
+        """The models ``account_dir`` offers, asked of that account's own codex.
+
+        Account-scoped, so it answers for an account no agent has ever run on -- which is the case
+        the switch dialog exists to serve, and the one an agent-by-agent search cannot answer at
+        all. A successful probe is written through to the account's sidecar; when the probe tells us
+        nothing usable the sidecar is the answer, and an account that has neither offers nothing
+        rather than guessing from some other account's models.
+
+        ``probe`` is injectable so the fall-back policy can be exercised without codex on PATH and
+        without a network round trip -- every arm below is a judgement about the probe's answer,
+        not about codex.
+        """
+        options_path = codex_model_options_path(account_dir)
+        try:
+            models = probe(account_dir)
+        except AccountModelProbeError as e:
+            logger.warning("Falling back to the sidecar for the models of account {}: {}", account_dir.name, e)
+            return codex_models_to_options(read_codex_model_options(options_path))
+        # A daemon that came up but listed nothing is not evidence that the account has no models, so
+        # that answer neither clobbers the sidecar nor is handed on in place of it.
+        if not models:
+            logger.info("The codex of account {} listed no models; falling back to the sidecar", account_dir.name)
+            return codex_models_to_options(read_codex_model_options(options_path))
+        write_codex_model_options(options_path, models)
+        return codex_models_to_options(models)
 
     def list_offered_options(self) -> tuple[ModelOption, ...] | None:
         """The per-agent picker options, fetched FRESH from ``model/list`` on every open (D2).
