@@ -1,9 +1,10 @@
 /**
  * The desktop's root: the backdrop with its windows and live pages, the taskbar, the launcher
- * overlay, the floating menus and the settings dialog, wired to one ``DesktopStore``. The App
- * owns the transient interface state no record holds (which menu is open, the launcher's query,
- * the selected shortcut), measures the backdrop for the store, binds the gesture source to the
- * document, and hosts the live-page layer, reconciling it after every redraw.
+ * overlay, the floating menus, the settings dialog, and the avatar chooser, wired to one
+ * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
+ * open, the launcher's query, the selected shortcut, the chooser and the designs it lists),
+ * measures the backdrop for the store, binds the gesture source to the document, and hosts the
+ * live-page layer, reconciling it after every redraw.
  */
 
 import m from "mithril";
