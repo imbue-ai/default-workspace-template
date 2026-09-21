@@ -264,7 +264,7 @@ def rollback_pending_update() -> ResponseReturnValue:
     return detail_response("The rollback has started.", HTTP_ACCEPTED)
 
 
-# ---------- the agent-facing op route (contracts.md section 12) ----------
+# Section 8: the agent-facing op route
 
 
 def layout_broadcast() -> ResponseReturnValue:
