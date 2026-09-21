@@ -1,5 +1,8 @@
-"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval."""
+"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, and the
+arrival."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,6 +14,7 @@ from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
@@ -114,3 +118,26 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
         (str(first), "work"),
         (str(second), "work"),
     ]
+
+
+def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com", display_name="Alice")
+    arrival_count = 6
+    ready = threading.Barrier(arrival_count)
+
+    def arrive(index: int) -> tuple[str | None, bool]:
+        ready.wait(timeout=5)
+        outcome = shell.arrive_client(ClientId(f"tab-{index}"), alice)
+        return outcome.desktop_id, outcome.created_desktop is not None
+
+    with ThreadPoolExecutor(max_workers=arrival_count) as executor:
+        outcomes = list(executor.map(arrive, range(arrival_count)))
+    assert [landing for landing, _ in outcomes] == ["alice"] * arrival_count
+    assert sum(1 for _, is_created in outcomes if is_created) == 1
+    assert [desktop.id for desktop in shell.list_desktops()] == ["home", "alice"]
