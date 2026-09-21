@@ -8,6 +8,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Final
 
+from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
@@ -207,32 +208,26 @@ class ShellState(MutableModel):
             )
         return saved
 
-    def open_window(self, desktop_id: str, request: WindowOpenRequest) -> WindowOpenOutcome:
+    def open_window(self, desktop_id: str, request: WindowOpenRequest, is_minimized: bool) -> WindowOpenOutcome:
         """Open a window of ``request.app`` at ``request.path`` on the desktop for everyone, placed at once in the
-        requesting client's layout; with ``if_present`` focus, a window of the app already at that exact path is
-        restored and raised there instead (desktop plan section 4.1)."""
+        requesting client's layout (shown, or minimized when asked); with ``if_present`` focus, a window of the app
+        already at that exact path is answered instead, restored and raised there unless the open asked for
+        minimized, in which case it is left as placed (desktop plan section 4.1)."""
         desktop = self.get_desktop(desktop_id)
-        entry = self.require_app_entry(str(request.app))
-        if request.launch is not None:
-            self.require_launch_path(entry, request.launch)
+        self._require_open_target(request.app, request.launch)
         if request.if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, request.app, request.path)
             if existing is not None:
-                self.edit_desktop_layout(
-                    desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
-                )
+                if not is_minimized:
+                    self.edit_desktop_layout(
+                        desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
+                    )
                 return WindowOpenOutcome(window=existing, is_new=False)
-        window = Window(
-            id=mint_window_id(),
-            app=request.app,
-            path=request.path,
-            title=WindowTitle(""),
-            opened_at=datetime.now(timezone.utc),
-            is_settling=request.launch is not None,
-        )
-        opened_on = self.desktops.open_window(desktop.id, window)
+        opened_on, window = self._append_window(desktop, request.app, request.path, request.launch)
         placed = self._edit_placements(
-            opened_on, request.client_id, lambda layout: with_window_placed_on_open(layout, window.id)
+            opened_on,
+            request.client_id,
+            lambda layout: with_window_placed_on_open(layout, window.id, is_minimized),
         )
         # The window is announced before the placement that arranges it, so no client reads the placement as one of
         # a window its desktop does not hold.
@@ -240,6 +235,42 @@ class ShellState(MutableModel):
         self._announce_placements_edit(opened_on, request.client_id, placed)
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
         return WindowOpenOutcome(window=window, is_new=True)
+
+    def open_window_unplaced(
+        self, desktop_id: str, app: AppName, path: WindowPath, launch: LaunchPathId | None, if_present: IfPresent
+    ) -> WindowOpenOutcome:
+        """An open with no client to place it for (an agent's, with nobody connected): the window exists on the
+        desktop for everyone and reads as minimized in every layout; with ``if_present`` focus, a window of the app
+        already at the path is answered as it stands."""
+        desktop = self.get_desktop(desktop_id)
+        self._require_open_target(app, launch)
+        if if_present is IfPresent.FOCUS:
+            existing = find_window_at(desktop, app, path)
+            if existing is not None:
+                return WindowOpenOutcome(window=existing, is_new=False)
+        _, window = self._append_window(desktop, app, path, launch)
+        self.broadcast_desktops_updated()
+        logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
+        return WindowOpenOutcome(window=window, is_new=True)
+
+    def _require_open_target(self, app: AppName, launch: LaunchPathId | None) -> None:
+        entry = self.require_app_entry(str(app))
+        if launch is not None:
+            self.require_launch_path(entry, launch)
+
+    def _append_window(
+        self, desktop: Desktop, app: AppName, path: WindowPath, launch: LaunchPathId | None
+    ) -> tuple[Desktop, Window]:
+        """Mint a window and write it onto the desktop; a window opened at a launch path settles until its page reports."""
+        window = Window(
+            id=mint_window_id(),
+            app=app,
+            path=path,
+            title=WindowTitle(""),
+            opened_at=datetime.now(timezone.utc),
+            is_settling=launch is not None,
+        )
+        return self.desktops.open_window(desktop.id, window), window
 
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
         """Close a window for everyone: off the desktop and out of every client's layout of it, and its app told;

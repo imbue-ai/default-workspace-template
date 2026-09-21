@@ -116,10 +116,17 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
     ]
 
 
-def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """With no client connected or recorded, there is nobody's placements to edit, and the script says so."""
-    result = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, _sandbox(tmp_path))
+def test_an_op_with_no_client_to_target_fails_with_412_but_an_open_lands_unplaced(
+    layout_server: PipelineHarness, tmp_path: Path
+) -> None:
+    """With no client connected or recorded, there is nobody's placements to edit, and the script says so; an
+    open still lands, unplaced, since a window is shared."""
+    opened = _run_layout_script(["open", PIPELINE_STUB_APP_NAME, "--minimized"], layout_server, _sandbox(tmp_path))
+    window_id = opened.stdout.strip()
+    result = _run_layout_script(["minimize", window_id], layout_server, _sandbox(tmp_path))
 
+    assert opened.returncode == 0, opened.stderr
+    assert window_id.startswith("win-") and "for no client" in opened.stderr
     assert result.returncode == 1
     assert "Could not tell which client" in result.stderr and "--client" in result.stderr
 

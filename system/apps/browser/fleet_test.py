@@ -141,7 +141,7 @@ def test_open_viewer_window_opens_the_browsers_page_as_a_window(monkeypatch: pyt
     calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     fleet._open_viewer_window("alex-smith")
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith")]
+    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
 
 
 def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(monkeypatch: pytest.MonkeyPatch) -> None:

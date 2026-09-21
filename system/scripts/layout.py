@@ -6,7 +6,7 @@ Subcommands:
     desktops                            List every desktop with its windows and shortcuts, and every client.
     list                                List every app (launch paths, running or not) with its windows, plus the desktops.
     load <desktop>                      Switch the target client onto a desktop.
-    open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new]
+    open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new] [--minimized]
                                         Open a window of an app (a bare https:// URL opens a new browser on that page).
     focus <window>                      Restore and raise a window.
     minimize <window>                   Put a window out of sight (its frame is kept).
@@ -422,7 +422,10 @@ def _describe_window(answer: dict[str, Any], window_id: str | None) -> str:
 
 
 def _describe_target(answer: dict[str, Any]) -> str:
-    return f"desktop {answer.get('desktop_id')} for client {answer.get('client_id')}"
+    client_id = answer.get("client_id")
+    if client_id is None:
+        return f"desktop {answer.get('desktop_id')} for no client (minimized everywhere)"
+    return f"desktop {answer.get('desktop_id')} for client {client_id}"
 
 
 def _run_desktop_op(
@@ -620,6 +623,8 @@ def _cmd_open(args: argparse.Namespace) -> int:
         return err
     if args.if_present:
         op_args["if_present"] = args.if_present
+    if args.minimized:
+        op_args["minimized"] = True
     op_args.update(_target_args(args.desktop, args.client))
     return _run_desktop_op(
         "open",
@@ -848,6 +853,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=_IF_PRESENT_CHOICES,
         default=None,
         help="What to do about a window of the app already at the path: focus it (the default) or open another.",
+    )
+    p_open.add_argument(
+        "--minimized",
+        action="store_true",
+        help="Place a window this open creates minimized, so it does not land over what the user is doing; "
+        "a window found already at the path is left as it is.",
     )
     _add_target_arguments(p_open)
     p_open.set_defaults(func=_cmd_open)
