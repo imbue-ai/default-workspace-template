@@ -38,7 +38,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 artifacts = [
-    "static/**",
+    "src/getting_started/static/**",
 ]
 
 [tool.hatch.build.targets.wheel]
