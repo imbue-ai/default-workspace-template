@@ -19,6 +19,7 @@ from flask import Flask
 from flask import Response
 from loguru import logger as _loguru_logger
 
+from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.models import ErrorResponse
 from imbue.chat.request_helpers import json_response
@@ -62,7 +63,7 @@ def _request_response(request: SecretRequest, is_notice_delivered: bool | None) 
     return json_response(body)
 
 
-def _deliver(request: SecretRequest, verdict: str) -> bool:
+def _deliver(request: SecretRequest, verdict: SecretResolutionVerdict) -> bool:
     """Put the resolution notice into the request's chat; False (and a warning) when the chat could not take it."""
     notice = format_secret_resolution_notice(
         verdict, request.request_id, request.env_path, request.variables, request.note
@@ -85,7 +86,7 @@ def _notify_superseded_in_other_chats(filed: FiledSecretRequest) -> None:
     """A superseded request in ANOTHER chat learns of it only through a notice; the same chat's transcript walk sees the newer request itself."""
     for superseded in filed.superseded:
         if superseded.chat_id != filed.request.chat_id:
-            _deliver(superseded, "superseded")
+            _deliver(superseded, SecretResolutionVerdict.SUPERSEDED)
 
 
 def file_request() -> Response:
@@ -143,7 +144,7 @@ def submit(request_id: str) -> Response:
         return _error_response(str(e))
     except SecretFileWriteError as e:
         return _error_response(str(e), 500)
-    return _request_response(stored, _deliver(stored, "stored"))
+    return _request_response(stored, _deliver(stored, SecretResolutionVerdict.STORED))
 
 
 def decline(request_id: str) -> Response:
@@ -161,7 +162,7 @@ def decline(request_id: str) -> Response:
         return _error_response(str(e), 409)
     except InvalidSecretRequestError as e:
         return _error_response(str(e))
-    return _request_response(declined, _deliver(declined, "declined"))
+    return _request_response(declined, _deliver(declined, SecretResolutionVerdict.DECLINED))
 
 
 def register_routes(application: Flask) -> None:

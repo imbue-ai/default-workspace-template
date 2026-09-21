@@ -24,12 +24,14 @@ Order of decision (:func:`classify_user_message`):
 """
 
 import re
+from enum import auto
 from typing import Any
+from typing import assert_never
 
 from pydantic import Field
 
 from imbue.chat.harnesses.events import DisplayKind
-from imbue.imbue_common.errors import SwitchError
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
@@ -126,10 +128,22 @@ _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be complet
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 
+class SecretResolutionVerdict(LowerCaseStrEnum):
+    """How a secret card was answered; the wire spelling the notice's tag carries.
+
+    A sibling of :class:`imbue.chat.secret_requests.SecretRequestStatus` rather than the
+    same enum: a request may be pending, a notice never is.
+    """
+
+    STORED = auto()
+    DECLINED = auto()
+    SUPERSEDED = auto()
+
+
 # The chat app's own notice when a secret card is answered (``secret_requests_endpoints``
 # builds it with ``format_secret_resolution_notice`` below), tagged the way the latchkey
 # notice is: "(secret: stored, request_id: <id>)". The tag is the classification contract.
-SECRET_RESOLUTION_VERDICTS = ("stored", "declined", "superseded")
+SECRET_RESOLUTION_VERDICTS = tuple(verdict.value for verdict in SecretResolutionVerdict)
 _SECRET_RESOLUTION_TAG_RE = re.compile(
     r"\(secret:\s*(" + "|".join(SECRET_RESOLUTION_VERDICTS) + r"),\s*request_id:\s*([^)\s]+)\)"
 )
@@ -138,7 +152,11 @@ _RESOLUTION_VALUES = ("granted", "denied", "error", *SECRET_RESOLUTION_VERDICTS)
 
 @pure
 def format_secret_resolution_notice(
-    verdict: str, request_id: str, env_path: str, variable_names: tuple[str, ...], note: str | None
+    verdict: SecretResolutionVerdict,
+    request_id: str,
+    env_path: str,
+    variable_names: tuple[str, ...],
+    note: str | None,
 ) -> str:
     """The user message the chat app sends the agent when a secret card is answered.
 
@@ -146,15 +164,16 @@ def format_secret_resolution_notice(
     :func:`_match_secret_resolution` reads, so the two cannot drift apart.
     """
     variables = ", ".join(variable_names)
-    tag = f"(secret: {verdict}, request_id: {request_id})"
-    if verdict == "stored":
-        body = f"Secret stored: {env_path} ({variables}) {tag}"
-    elif verdict == "declined":
-        body = f"Secret declined: {env_path} ({variables}) {tag}"
-    elif verdict == "superseded":
-        body = f"Secret request superseded by a newer request for {env_path} {tag}"
-    else:
-        raise SwitchError(f"Unknown secret resolution verdict: {verdict!r}")
+    tag = f"(secret: {verdict.value}, request_id: {request_id})"
+    match verdict:
+        case SecretResolutionVerdict.STORED:
+            body = f"Secret stored: {env_path} ({variables}) {tag}"
+        case SecretResolutionVerdict.DECLINED:
+            body = f"Secret declined: {env_path} ({variables}) {tag}"
+        case SecretResolutionVerdict.SUPERSEDED:
+            body = f"Secret request superseded by a newer request for {env_path} {tag}"
+        case _:
+            assert_never(verdict)
     return f"{body} {note}" if note else body
 
 
