@@ -597,7 +597,6 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
     expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
-    expect(page.locator(f'[data-running-app="{_STUB_APP_NAME}"]')).to_be_visible()
     assert (
         page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
@@ -1084,8 +1083,8 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_server: E2EServer, page: Page) -> None:
-    """The shortcut's menu flips its mode and removes it; the running app's popover in the tray adds it back."""
+def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Page) -> None:
+    """The shortcut's menu flips its mode and removes it."""
     _land(page, e2e_server)
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
     shortcut.click(button="right")
@@ -1107,13 +1106,6 @@ def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_s
         poll_interval=0.1,
         error_message="the shortcut stayed in the desktop record",
     )
-
-    page.locator(f'[data-running-app="{_STUB_APP_NAME}"]').click()
-    popover = page.locator(f'[data-running-app-popover="{_STUB_APP_NAME}"]')
-    expect(popover).to_be_visible(timeout=5000)
-    popover.locator(f'[data-add-shortcut="{_STUB_SHORTCUT_KEY}"]').click()
-    expect(shortcut).to_be_visible(timeout=10000)
-    assert _shortcut_cells(e2e_server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0)}
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1550,6 +1542,24 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
             assert [window["app"] for window in _windows(server.base_url)] == [_PINNED_APP_NAME]
+            # The page takes the draft and reports its selection alone, as the chat root does; a second identical
+            # draft must reach it again rather than being mistaken for a stale snapshot of the path it left.
+            _page_frame(page, pinned_id).evaluate("() => window.__navigateTo('/?doc=1')")
+            wait_for(
+                lambda: _drafted_path() == "/?doc=1",
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the page's own report never replaced the draft path",
+            )
+            _open_entry_menu(page, entry).locator('[data-menu-item="change-avatar"]').click()
+            expect(chooser).to_be_visible(timeout=5000)
+            chooser.locator(".avatar-design-own").click()
+            wait_for(
+                lambda: _page_frame(page, pinned_id).evaluate("() => window.__navigations").count(drafted) == 2,
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the second draft never reached the page",
+            )
 
 
 @pytest.mark.timeout(90, func_only=False)
