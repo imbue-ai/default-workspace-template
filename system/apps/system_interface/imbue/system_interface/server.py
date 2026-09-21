@@ -7,6 +7,8 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from flask import Flask
 from flask import Response
 from flask import request
@@ -36,13 +38,6 @@ from imbue.system_interface.template_catalog import TemplateCatalogAvailability
 from imbue.system_interface.template_catalog import catalog_wire_json
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
-
-# The browser-side contract module (desktop contracts.md section 7): built as its own library
-# entry into ``static/_static/``. Every app serves that one file from its own origin (a module
-# import is a fetch without cookies, which the forwarder refuses across origins); the shell's
-# copy, served with a permissive CORS header, is what the e2e stub pages import.
-APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
-APP_CONTRACT_PATH: Final[str] = f"/_static/{APP_CONTRACT_FILENAME}"
 
 # The terminal app's registered name: the not-built placeholder embeds it as the way out.
 _TERMINAL_APP_NAME: Final[str] = "terminal"
@@ -442,7 +437,7 @@ def _serve_app_contract() -> Response:
     cross-origin module import carries no cookie and the forwarder refuses it; this copy is what
     the e2e stub pages import.
     """
-    contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
+    contract_path = get_state().static_directory / "_static" / SHELL_APP_CONTRACT_PATH.name
     if not contract_path.is_file():
         return Response(status=404)
     response = send_file(contract_path, mimetype="text/javascript")
@@ -618,7 +613,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
-    application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
     register_shell_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
