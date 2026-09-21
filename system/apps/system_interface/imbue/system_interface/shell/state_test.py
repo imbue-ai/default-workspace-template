@@ -134,6 +134,7 @@ def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(
     def arrive(index: int) -> tuple[str | None, bool]:
         ready.wait(timeout=5)
         outcome = shell.arrive_client(ClientId(f"tab-{index}"), alice)
+        assert outcome is not None
         return outcome.desktop_id, outcome.created_desktop is not None
 
     with ThreadPoolExecutor(max_workers=arrival_count) as executor:

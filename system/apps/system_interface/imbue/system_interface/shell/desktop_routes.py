@@ -273,10 +273,13 @@ def save_placements(desktop_id: str) -> ResponseReturnValue:
 
 
 @pure
-def arrival_wire_json(outcome: ClientArrivalOutcome) -> dict[str, Any]:
-    """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5)."""
+def arrival_wire_json(outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
+    """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5); None (no desktop
+    yet) answers three nulls."""
+    if outcome is None:
+        return {"desktop_id": None, "created_desktop": None, "replaced_desktop_name": None}
     return {
-        "desktop_id": str(outcome.desktop_id) if outcome.desktop_id is not None else None,
+        "desktop_id": str(outcome.desktop_id),
         "created_desktop": desktop_wire_json(outcome.created_desktop) if outcome.created_desktop is not None else None,
         "replaced_desktop_name": outcome.replaced_desktop_name,
     }
