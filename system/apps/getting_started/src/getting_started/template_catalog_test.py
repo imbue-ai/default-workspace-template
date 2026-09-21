@@ -26,9 +26,7 @@ def _store(tmp_path: Path, fetcher: FakeTemplateCatalogFetcher, **overrides: Any
     )
 
 
-# ---------- the parse ----------
-
-
+# the parse
 def test_parse_reads_a_format_1_document_and_fills_the_optional_fields() -> None:
     catalog = parse_template_catalog(
         catalog_document(
@@ -97,9 +95,7 @@ def test_wire_json_carries_resolved_thumbnail_urls_and_the_shelves() -> None:
     assert wire["shelves"] == [{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}]
 
 
-# ---------- the store ----------
-
-
+# the store
 def test_store_is_disabled_without_a_url(tmp_path: Path) -> None:
     store = TemplateCatalogStore(
         catalog_url="", cache_path=tmp_path / CATALOG_CACHE_FILENAME, fetcher=FakeTemplateCatalogFetcher()
