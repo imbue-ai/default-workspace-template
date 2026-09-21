@@ -453,7 +453,7 @@ def _set_container_timezone(
         logger.warning("Could not read the cached timezone at {}: {}", cache_path, e)
         return
     if not cached_tz_name:
-        logger.info("No timezone applied or cached; container keeps the image's zone")
+        logger.info("No timezone applied or cached; container keeps its current zone")
         return
     logger.info("Falling back to the last applied timezone {}", cached_tz_name)
     _apply_container_timezone(
