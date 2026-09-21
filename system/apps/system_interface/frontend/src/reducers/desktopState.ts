@@ -2,8 +2,9 @@
  * The desktop's state and the reducers over it (desktop-interface plan section 6.2): one frozen
  * record of what this client knows (the apps, the desktops, the active desktop, this client's
  * layout of it, the render modes, this client's presentation of each pinned entry, the avatar),
- * and every verb of plan section 4 as a pure ``(state, event) -> state`` step. The store applies these, schedules redraws, and saves when a
- * step marked the layout dirty; nothing here reads the DOM or the network.
+ * and every verb of plan section 4 as a pure ``(state, event) -> state`` step. The store applies
+ * these, schedules redraws, and saves when a step marked the layout dirty; nothing here reads the
+ * DOM or the network.
  */
 
 import type {
