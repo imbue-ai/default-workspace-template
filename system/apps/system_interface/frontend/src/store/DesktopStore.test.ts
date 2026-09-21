@@ -757,6 +757,21 @@ describe("pinned entries", () => {
     expect(api.calls.filter((call) => call.startsWith("setEntryPresentation"))).toHaveLength(attempted);
   });
 
+  it("a refused write puts its own entry back and keeps one pushed meanwhile", async () => {
+    const store = await pinnedStore();
+    api.refusal = "no such client";
+    const writing = store.setEntryMode("buddy", "bar");
+    expect(store.getState().entries.buddy.mode).toBe("bar");
+    // Another window of this client wrote a second entry while the refused write was on its way.
+    const pal = { mode: "bar", style: "plain", position: null } as const;
+    socket.deliver().onClientEntriesChanged({
+      clientId: CLIENT,
+      entries: { buddy: { mode: "bar", style: "plain", position: null }, pal },
+    });
+    await writing;
+    expect(store.getState().entries).toEqual({ buddy: { mode: "floating", style: "plain", position: null }, pal });
+  });
+
   it("drags a floating entry, clamped inside the backdrop, and writes its position once on release", async () => {
     const store = await pinnedStore();
     // Grabbed 10 pixels inside the box at its default corner (928, 732).
