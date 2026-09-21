@@ -94,7 +94,7 @@ def test_an_invalid_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path
 
 
 def test_a_registration_carries_a_valid_design() -> None:
-    with pytest.raises(ValueError, match="unsupported design SVG element"):
+    with pytest.raises(ValidationError, match="unsupported design SVG element"):
         DesignRegistration(
             id=DesignId("mine"),
             label="Mine",
