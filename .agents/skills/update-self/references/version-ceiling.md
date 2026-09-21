@@ -62,9 +62,8 @@ silently, because the user never named the release Step 2 chose, or by the
 user's choice over their own override -- §2a must be re-run for it before
 dispatching: §2a staged the skill at the *old* `$REF`, and the staged copy
 supplies the worker guide, the `update_self.py` both agents run, and the prose
-the lead is reading -- leaving
-it in place would run the too-new release's flow against a target that is not
-it. `bootstrap-skill` re-stages destructively, so re-running it is safe, and
-2a's `differs` branch then decides which document to follow, as on the first
-pass. The capped ref is at or below the ceiling, so the second pass through 3a
-clears.
+the lead is reading -- leaving it in place would run the too-new release's flow
+against a target that is not it. `bootstrap-skill` re-stages destructively, so
+re-running it is safe, and 2a's `differs` branch then decides which document to
+follow, as on the first pass. The capped ref is at or below the ceiling, so the
+second pass through 3a clears.
