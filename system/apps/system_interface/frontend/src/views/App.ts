@@ -9,7 +9,7 @@
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
-import { launchPathOf } from "../model/launch";
+import { defaultShortcutMode, launchPathOf } from "../model/launch";
 import type { AppRecord, Desktop, DesktopShortcut, LaunchPath, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
@@ -44,7 +44,6 @@ import type { WindowControl } from "./TitleBar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import { taskbarEntryMenuEntries, windowMenuEntries } from "./WindowMenu";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
-import { shortcutLabel } from "./ShortcutIcon";
 
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string; readonly anchor: MenuAnchor }
@@ -323,7 +322,7 @@ export function App(): m.Component<AppAttrs> {
     entries.push(
       {
         key: "change-mode",
-        label: `Change shortcut to "${shortcutLabel({ ...shortcut, mode: otherMode }, app)}"`,
+        label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
         run: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       "divider",
@@ -434,7 +433,7 @@ export function App(): m.Component<AppAttrs> {
           void current.openLaunchPath(app.name, launchPath.id, {});
         },
         onAddShortcut: (launchPath: LaunchPath) => {
-          void current.addShortcut(app.name, launchPath.id, "focus");
+          void current.addShortcut(app.name, launchPath.id, defaultShortcutMode(app, launchPath));
         },
       }),
     );

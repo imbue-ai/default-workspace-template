@@ -9,7 +9,7 @@ launcher_rank = 40
 
 [default_shortcut]
 launch = "new"
-mode = "focus"
+mode = "new"
 
 [[launch_paths]]
 id = "new"

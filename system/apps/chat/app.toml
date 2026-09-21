@@ -7,11 +7,18 @@ critical = true
 priority = "chat"
 launcher_rank = 10
 
+# A desktop shortcut opens the chat list; a chat is created only from inside it (or by the
+# launcher's seeded prompts through ``new``).
 [default_shortcut]
-launch = "new"
+launch = "root"
 mode = "new"
 
 # The desktop interface opens a window at a launch path; the params ride as query parameters.
+[[launch_paths]]
+id = "root"
+label = "Chat"
+path = "/"
+
 [[launch_paths]]
 id = "new"
 label = "New Chat"

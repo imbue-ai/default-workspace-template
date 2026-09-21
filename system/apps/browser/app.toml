@@ -11,7 +11,7 @@ mode = "focus"
 
 [[launch_paths]]
 id = "new"
-label = "New Browser"
+label = "Open Browser"
 path = "/new"
 params = [{name = "url", label = "Start page", required = false}]
 
