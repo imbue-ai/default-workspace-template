@@ -284,7 +284,7 @@ New or changed routes:
 |---|---|
 | `POST /api/desktops/<id>/windows/<window>/close` | `409` for a pinned window |
 | `POST /api/desktops/<id>/windows/<window>/location` | body gains `client_id`; for an independent window the report is stored per client and the answer's `path` and `title` are the client's |
-| `GET /api/placements/<desktop>?client=` | the layout answer gains `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows; the save route ignores the field |
+| `GET /api/placements/<desktop>?client=` | the layout answer gains `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows; the save body carries no such field |
 | `POST /api/clients/<client>/entries/<app>` | new: `{mode, style, position}`; answers the client record |
 | `GET /api/avatars` | new: `{designs: [{id, label, source_path}], selected, default}` |
 | `POST /api/avatars` | new, loopback only: register a design |

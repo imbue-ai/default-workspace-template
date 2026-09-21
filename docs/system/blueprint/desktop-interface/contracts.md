@@ -178,7 +178,7 @@ A location that changes nothing writes and broadcasts nothing.
 | `POST /api/placements/<desktop_id>` | `{"client_id", "save_id", "base_updated_at", "placements"}` | `200 {"updated_at"}`; `null` when the body equalled the stored layout and nothing was written; `409` when the stored `updated_at` is newer than `base_updated_at` |
 
 `layout` is the object of section 4.2.
-A save whose placements name windows the desktop does not hold is accepted with those entries dropped; the save route ignores `window_paths`.
+A save whose placements name windows the desktop does not hold is accepted with those entries dropped; the save body carries no `window_paths` (the client's paths are written by the location route alone, and the save route refuses a body with a field it does not know).
 
 ### 5.5 Clients, inventory, wallpapers
 
