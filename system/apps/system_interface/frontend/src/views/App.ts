@@ -38,6 +38,7 @@ import {
 } from "../reducers/desktopState";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
+import { PINNED_ENTRY_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -147,6 +148,15 @@ export function App(): m.Component<AppAttrs> {
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
   }
 
+  /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
+   *  once more when the drag ends or is cancelled, for the same reason ``paintWindow`` exists. */
+  function paintFloatingEntry(current: DesktopStore, app: string): void {
+    const element = backdropArea?.querySelector<HTMLElement>(
+      `[${PINNED_ENTRY_ATTRIBUTE}="${CSS.escape(app)}"][data-entry-mode="floating"]`,
+    );
+    if (element !== undefined && element !== null) applyRectStyle(element, current.floatingEntryRectOf(app));
+  }
+
   /** The gesture source measures points against ``root`` (the whole layout, so the taskbar's long presses
    *  count too); the store wants the backdrop's pixels, which differ by whatever sits above the backdrop. */
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
@@ -215,6 +225,7 @@ export function App(): m.Component<AppAttrs> {
             return;
           case "floating-entry":
             current.updateFloatingEntryDrag(point);
+            paintFloatingEntry(current, binding.app);
             return;
           case "taskbar-entry":
             return;
@@ -236,6 +247,7 @@ export function App(): m.Component<AppAttrs> {
             break;
           case "floating-entry":
             current.endFloatingEntryDrag(point);
+            paintFloatingEntry(current, binding.app);
             break;
           case "taskbar-entry":
             break;
@@ -245,6 +257,7 @@ export function App(): m.Component<AppAttrs> {
       onCancel: (binding) => {
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
+        if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
         pages?.setGestureActive(false);
       },
       onLongPress: (binding, client) => {
