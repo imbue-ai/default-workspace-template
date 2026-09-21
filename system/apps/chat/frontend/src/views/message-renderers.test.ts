@@ -562,24 +562,35 @@ describe("thinking disclosure", () => {
   });
 });
 
-// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
-function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
-  if (node == null) return null;
+interface VnodeLike {
+  tag?: unknown;
+  text?: unknown;
+  children?: unknown;
+  attrs?: Record<string, unknown>;
+}
+
+// Walk a mithril vnode tree and return the first vnode `isMatch` accepts. A match is not
+// descended into, so the outermost of a nest of matches wins.
+function findVnode(node: unknown, isMatch: (vnode: VnodeLike) => boolean): VnodeLike | null {
+  if (node == null || typeof node !== "object") return null;
   if (Array.isArray(node)) {
     for (const child of node) {
-      const found = findByClass(child, name);
-      if (found) return found;
+      const found = findVnode(child, isMatch);
+      if (found !== null) return found;
     }
     return null;
   }
-  if (typeof node === "object") {
-    const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
-      return v as { attrs?: Record<string, unknown> };
-    }
-    return findByClass(v.children, name);
-  }
-  return null;
+  const v = node as VnodeLike;
+  if (isMatch(v)) return v;
+  return findVnode(v.children, isMatch);
+}
+
+// The first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  return findVnode(node, (v) => {
+    const className = v.attrs?.className;
+    return typeof className === "string" && className.split(" ").includes(name);
+  });
 }
 
 describe("expanded tool row payload states", () => {
@@ -639,17 +650,8 @@ describe("the auth-error note's switch link", () => {
   }
 
   function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
-    if (node == null || typeof node !== "object") return null;
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const found = findButton(child, label);
-        if (found !== null) return found;
-      }
-      return null;
-    }
-    const v = node as { tag?: unknown; text?: unknown; children?: unknown; attrs?: { onclick: () => void } };
-    if (v.tag === "button" && allText(v).trim() === label) return v as { attrs: { onclick: () => void } };
-    return findButton(v.children, label);
+    const found = findVnode(node, (v) => v.tag === "button" && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void } });
   }
 
   beforeEach(() => {
