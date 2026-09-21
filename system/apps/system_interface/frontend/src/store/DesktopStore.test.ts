@@ -243,14 +243,19 @@ describe("location reports", () => {
     expect(windows.find((window) => window.id === "win-3")?.is_settling).toBe(false);
   });
 
-  it("an independent window's report is this client's own: kept beside the layout, never on the shared record", async () => {
+  /** A started store whose home desktop holds one independent pinned window, ``win-1``. */
+  async function independentStore(): Promise<DesktopStore> {
     api.desktops = [
       desktopRecord("home", {
         windows: [windowRecord("win-1", "docs", "/", { is_pinned: true, scope: "independent" })],
       }),
       desktopRecord("work"),
     ];
-    const store = await startedStore();
+    return startedStore();
+  }
+
+  it("an independent window's report is this client's own: kept beside the layout, never on the shared record", async () => {
+    const store = await independentStore();
     expect(await store.reportLocation("win-1", "/?doc=2", "Second")).toBe(true);
     expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Second");
     expect(store.getState().desktops[0].windows[0].path).toBe("/");
@@ -268,14 +273,8 @@ describe("location reports", () => {
   });
 
   it("a stored path announced while a gesture waits to be saved does not throw the gesture away", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/", { is_pinned: true, scope: "independent" })],
-      }),
-      desktopRecord("work"),
-    ];
     api.writeLayout("home", CLIENT, { updated_at: null, placements: [] });
-    const store = await startedStore();
+    const store = await independentStore();
     // The entry click restores the window; its page then reports where it is before the debounce has saved.
     store.restoreWindow("win-1");
     expect(isLayoutDirty(store.getState())).toBe(true);
