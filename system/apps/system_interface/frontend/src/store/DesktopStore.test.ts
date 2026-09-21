@@ -16,6 +16,7 @@ const METRICS = themeMetricsRecord();
 const MODES = { isCompact: false, isTouch: false };
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
+const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
 
 function last<T>(items: readonly T[]): T | undefined {
   return items[items.length - 1];
@@ -757,19 +758,22 @@ describe("pinned entries", () => {
     expect(api.calls.filter((call) => call.startsWith("setEntryPresentation"))).toHaveLength(attempted);
   });
 
-  it("a refused write puts its own entry back and keeps one pushed meanwhile", async () => {
+  it("an entries push that lands while a write is answered stands over the answer and over a refusal's undo", async () => {
     const store = await pinnedStore();
-    api.refusal = "no such client";
+    // Another window of this client wrote after this one; its push arrives before this write's older answer.
+    const pushed = { buddy: { mode: "bar", style: "avatar", position: null }, pal: PLAIN_BAR } as const;
     const writing = store.setEntryMode("buddy", "bar");
-    expect(store.getState().entries.buddy.mode).toBe("bar");
-    // Another window of this client wrote a second entry while the refused write was on its way.
-    const pal = { mode: "bar", style: "plain", position: null } as const;
-    socket.deliver().onClientEntriesChanged({
-      clientId: CLIENT,
-      entries: { buddy: { mode: "bar", style: "plain", position: null }, pal },
-    });
+    socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: pushed });
     await writing;
-    expect(store.getState().entries).toEqual({ buddy: { mode: "floating", style: "plain", position: null }, pal });
+    expect(store.getState().entries).toEqual(pushed);
+    // A refused write does not put its old entry back over what a push meanwhile said of it.
+    api.refusal = "no such client";
+    const refused = store.setEntryMode("buddy", "floating");
+    expect(store.getState().entries.buddy.mode).toBe("floating");
+    socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: { buddy: PLAIN_BAR } });
+    await refused;
+    expect(notices).toEqual(["Could not change the entry: no such client"]);
+    expect(store.getState().entries).toEqual({ buddy: PLAIN_BAR });
   });
 
   it("drags a floating entry, clamped inside the backdrop, and writes its position once on release", async () => {

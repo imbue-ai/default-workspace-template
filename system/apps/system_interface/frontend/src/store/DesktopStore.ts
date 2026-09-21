@@ -501,22 +501,26 @@ export class DesktopStore {
   }
 
   /** Write how this client shows a pinned entry (its mode, style, and floating position). Applied at once, so a
-   *  released drag lands where it was dropped rather than at the old spot until the shell answers; the record
-   *  the shell answers is then taken, and a refusal puts that entry's old presentation back (another entry
-   *  written or pushed meanwhile is not undone with it). */
+   *  released drag lands where it was dropped rather than at the old spot until the shell answers. A push that
+   *  lands while the shell answers is its newer word (the shell announces every write, this one included, before
+   *  answering it) and stands: without one, the record the shell answers is taken, and a refusal puts that
+   *  entry's old presentation back (another entry written meanwhile is not undone with it). */
   async setEntryPresentation(app: string, presentation: EntryPresentation): Promise<void> {
     const previous = this.state.entries[app];
+    const entryPushesBefore = this.entryPushes;
     this.dispatch({ type: "entries_updated", entries: { ...this.state.entries, [app]: presentation } });
     try {
       const record = await this.deps.api.setEntryPresentation(this.deps.clientId, app, presentation);
+      if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
+      this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
+      if (this.entryPushes !== entryPushesBefore) return;
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
       this.dispatch({
         type: "entries_updated",
         entries: previous === undefined ? others : { ...others, [app]: previous },
       });
-      this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
     }
   }
 
