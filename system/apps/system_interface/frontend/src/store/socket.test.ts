@@ -5,6 +5,7 @@
  * frame), the client-state report, and the reconnect after a close.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WireShapeError } from "../model/records";
 import { ShellSocket } from "./socket";
 import type { SocketHandlers } from "./socket";
 
@@ -117,6 +118,9 @@ describe("ShellSocket", () => {
     expect(handlers.onAvatarStatus).toHaveBeenCalledWith({ mood: "working", is_stale: false });
     current().receive({ type: "avatar_selection_changed", design: "jelly-cat" });
     expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledWith("jelly-cat");
+    // A selection naming no design is refused like any other malformed message, not dropped in silence.
+    expect(() => current().receive({ type: "avatar_selection_changed", design: 7 })).toThrow(WireShapeError);
+    expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledTimes(1);
   });
 
   it("delivers a layout op for this client or for everyone, and drops another client's or an unknown op", () => {

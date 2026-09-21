@@ -11,7 +11,13 @@
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { parseAppRecords, parseAvatarStatus, parseDesktops, parseEntries } from "../model/records";
+import {
+  parseAppRecords,
+  parseAvatarSelectionChanged,
+  parseAvatarStatus,
+  parseDesktops,
+  parseEntries,
+} from "../model/records";
 import type { AppRecord, AvatarStatus, Desktop, EntryPresentation } from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
@@ -72,7 +78,6 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
-  design?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface"];
@@ -173,7 +178,7 @@ export class ShellSocket implements DesktopSocket {
         handlers.onAvatarStatus(parseAvatarStatus(event));
         return;
       case "avatar_selection_changed":
-        if (typeof event.design === "string") handlers.onAvatarSelectionChanged(event.design);
+        handlers.onAvatarSelectionChanged(parseAvatarSelectionChanged(event));
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

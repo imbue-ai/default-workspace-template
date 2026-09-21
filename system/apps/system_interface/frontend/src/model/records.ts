@@ -448,6 +448,12 @@ export function parseAvatarStatus(raw: unknown): AvatarStatus {
   };
 }
 
+/** The design an ``avatar_selection_changed`` message names. */
+export function parseAvatarSelectionChanged(raw: unknown): string {
+  const record = asObject(raw, "avatar selection");
+  return asString(record.design, "avatar selection.design");
+}
+
 export function parseAvatarDesign(raw: unknown): AvatarDesign {
   const record = asObject(raw, "avatar design");
   return {
