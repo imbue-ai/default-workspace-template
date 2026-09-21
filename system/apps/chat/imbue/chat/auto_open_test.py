@@ -1,23 +1,25 @@
-"""Tests for the reactor that surfaces an app-launched chat's tab: once, to the clients connected when it can."""
+"""Tests for the reactor that surfaces an app-launched chat's window: once, to the clients connected when it can."""
 
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import free_port
 from flask import Flask
 from flask import jsonify
+from flask import request
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
+from imbue.chat.auto_open import navigate_pinned_op_body
+from imbue.chat.auto_open import open_chat_op_body
+from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import serve_app
 
 _LABELED = {"assist": "true"}
 
@@ -26,7 +28,7 @@ def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> Aut
     return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
 
 
-def test_only_the_two_auto_open_labels_ask_for_a_tab() -> None:
+def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
     assert is_auto_open_labeled({"assist": "true"})
     assert is_auto_open_labeled({"auto_open": "true", "user_created": "true"})
     assert not is_auto_open_labeled({"assist": "false"})
@@ -86,7 +88,7 @@ def test_a_refused_open_keeps_the_chat_pending() -> None:
 
 
 def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
-    """The update run restarts this app; the tab it already surfaced must not pop again."""
+    """The update run restarts this app; the window it already surfaced must not pop again."""
     path = tmp_path / "ledger.json"
     first = _reactor(RecordingShell(client_ids=["c1"]), AutoOpenLedger(path=path))
     first.note_appeared(ChatId("chat-1"), _LABELED)
@@ -101,7 +103,7 @@ def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
 
 
 def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name() -> None:
-    """A labeled chat nobody was shown is still owed its tab after a restart, however long it has
+    """A labeled chat nobody was shown is still owed its window after a restart, however long it has
     waited; one the ledger names is left as the saved layout has it and never pops later."""
     ledger = AutoOpenLedger(path=None)
     ledger.mark_delivered(ChatId("delivered"))
@@ -119,11 +121,11 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     assert shell.opens == [("waiting", "c1")]
 
 
-def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_tab(
+def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_window(
     tmp_path: Path,
 ) -> None:
     """The first boot that keeps a ledger meets every chat the app ever labeled here, going back to
-    the workspace's first day, and cannot tell the one owed a tab from the rest -- so it opens none
+    the workspace's first day, and cannot tell the one owed a window from the rest -- so it opens none
     of them, and leaves the ledger the next boot reads for real."""
     path = tmp_path / "ledger.json"
     shell = RecordingShell(client_ids=["c1"])
@@ -173,7 +175,7 @@ def test_a_removed_chat_is_forgotten_everywhere() -> None:
 def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     tmp_path: Path, loguru_records: list[str]
 ) -> None:
-    """Reading it as an empty history rather than a lost one re-pops every tab it named."""
+    """Reading it as an empty history rather than a lost one re-pops every window it named."""
     path = tmp_path / "ledger.json"
     path.write_text(json.dumps(["chat-1"]))
 
@@ -182,6 +184,60 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     assert not ledger.is_delivered(ChatId("chat-1"))
     assert not ledger.is_history_known
     assert any("wrong shape" in record for record in loguru_records)
+
+
+def test_the_ops_name_the_pinned_window_for_the_chat_and_the_open_fallback_names_the_app() -> None:
+    """The desktop op route (desktop-interface contracts.md section 8): the pinned window is navigated to the chat
+    and restored under this app's requester; the fallback ``open`` names the app by name and a path, never the
+    tabbed shell's address form."""
+    assert navigate_pinned_op_body(ChatId("agent-1"), "c1") == {
+        "op": "navigate",
+        "args": {"window": "pinned", "path": "/?chat=agent-1", "client": "c1"},
+        "requester": {"app": "chat", "marker": ""},
+    }
+    assert restore_pinned_op_body("c1") == {
+        "op": "restore",
+        "args": {"window": "pinned", "client": "c1"},
+        "requester": {"app": "chat", "marker": ""},
+    }
+    assert open_chat_op_body(ChatId("agent-1"), "c1") == {
+        "op": "open",
+        "args": {"app": "chat", "path": "/?chat=agent-1", "client": "c1"},
+        "requester": None,
+    }
+
+
+def test_the_shell_client_navigates_and_restores_the_pinned_window_and_falls_back_to_an_open() -> None:
+    """A 2xx to the navigate shows the chat (the restore follows, its answer not consulted); a 404 for ``pinned``
+    means no pinned window on that desktop, so a root window is opened instead; a refusal (a 412 with no client,
+    say) is not a delivery."""
+    posted: list[Any] = []
+    application = Flask("stub-shell")
+
+    def _broadcast() -> Any:
+        body = request.get_json()
+        posted.append(body)
+        client_id = body["args"]["client"]
+        if client_id == "nobody":
+            return jsonify({"detail": "no client"}), 412
+        if client_id == "unpinned" and body["args"].get("window") == "pinned":
+            return jsonify({"detail": "no pinned window"}), 404
+        return jsonify({"ok": True})
+
+    application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
+    with serve_app(application) as served:
+        client = ShellLayoutClient(shell_url=served.http_url)
+        assert client.open_chat(ChatId("agent-1"), "c1") is True
+        assert client.open_chat(ChatId("agent-1"), "unpinned") is True
+        assert client.open_chat(ChatId("agent-1"), "nobody") is False
+
+    assert posted == [
+        navigate_pinned_op_body(ChatId("agent-1"), "c1"),
+        restore_pinned_op_body("c1"),
+        navigate_pinned_op_body(ChatId("agent-1"), "unpinned"),
+        open_chat_op_body(ChatId("agent-1"), "unpinned"),
+        navigate_pinned_op_body(ChatId("agent-1"), "nobody"),
+    ]
 
 
 def test_the_disconnected_shell_reaches_nobody() -> None:
@@ -207,10 +263,8 @@ def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_th
     body: Any, expected: list[str]
 ) -> None:
     """The flush thread's own catch does not cover a KeyError or TypeError from reading this, so an
-    answer the shell should never give would end the thread and silently stop surfacing every tab."""
+    answer the shell should never give would end the thread and silently stop surfacing every window."""
     application = Flask("stub-shell")
     application.add_url_rule("/api/clients", view_func=lambda: jsonify(body), endpoint="clients")
-    port = free_port()
-
-    with serve_in_background(LOOPBACK_HOST, port, application):
-        assert ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}").connected_client_ids() == expected
+    with serve_app(application) as served:
+        assert ShellLayoutClient(shell_url=served.http_url).connected_client_ids() == expected
