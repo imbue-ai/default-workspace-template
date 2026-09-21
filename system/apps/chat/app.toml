@@ -40,3 +40,5 @@ params = [
     {name = "account_id", label = "Provider account", required = false},
     {name = "message", label = "First message", required = false},
 ]
+# The launcher's primary free-text row: what is typed into the desktop's field becomes the first message.
+text_param = "message"

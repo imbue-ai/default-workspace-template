@@ -18,6 +18,7 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
+from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
@@ -85,7 +86,7 @@ class Pin(FrozenModel):
 class LaunchParam(FrozenModel):
     """One documented query parameter of a launch path."""
 
-    name: NonEmptyStr = Field(description="The query parameter's name")
+    name: LaunchParamName = Field(description="The query parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
     required: bool = Field(
         default=False, description="Whether the launch path refuses a request without it"
@@ -101,6 +102,20 @@ class LaunchPath(FrozenModel):
     params: tuple[LaunchParam, ...] = Field(
         default=(), description="The query parameters the shell may append, documented"
     )
+    text_param: LaunchParamName | None = Field(
+        default=None,
+        description="The declared param the launcher fills with typed text; a launch path with one is a free-text "
+        "row of the launcher (launcher-and-getting-started plan section 3.1)",
+    )
+
+    @model_validator(mode="after")
+    def _check_text_param_is_declared(self) -> Self:
+        if self.text_param is not None and self.text_param not in {param.name for param in self.params}:
+            raise InvalidManifestValueError(
+                f"text_param {str(self.text_param)!r} is not one of the launch path's params "
+                f"{[str(param.name) for param in self.params]}"
+            )
+        return self
 
 
 class AppReference(FrozenModel):

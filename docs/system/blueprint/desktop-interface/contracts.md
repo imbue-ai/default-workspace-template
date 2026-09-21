@@ -29,7 +29,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
-| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
+| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?, text_param?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append; `text_param` optionally names one of them as the param the launcher fills with typed text, which makes the launch path a free-text row of the launcher (launcher-and-getting-started plan section 3.1). |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
@@ -44,7 +44,8 @@ Built-in manifests:
 | App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
+| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional, `text_param = "message"`); `send` ("Send to chat...", `/send`, param `message` optional, `text_param = "message"`) |
+| `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | `open` ("Getting Started", `/`) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
@@ -55,7 +56,7 @@ The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "in
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?, text_param?}` with `params` as the array of names), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -196,7 +197,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...], "text_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` the declared param name or `null`.
 
 ## 6. The WebSocket
 
