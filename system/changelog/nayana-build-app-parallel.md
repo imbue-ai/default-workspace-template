@@ -16,6 +16,11 @@ files, the handoff is not a node), plus one rename: its reasoning block is
 by the API's `reasoning_extraction` safeguard -- which the recorder's own prompt
 still is.
 
+(On this branch that template is `[create_templates.worktree_worker]` and each
+worker gets a worktree of its own -- see
+`nayana-build-app-parallel-worktrees.md`. The paragraph below describes the
+shared-folder variant this one was branched from.)
+
 `[create_templates.shared_folder_worker]` in `.mngr/settings.toml` is the agent
 those workers run as: `transfer = "none"` (the orchestrator passes
 `--from :<folder>`), no per-worker provisioning, the stop hook off, and a prompt

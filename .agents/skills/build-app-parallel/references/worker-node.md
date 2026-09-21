@@ -1,10 +1,12 @@
 # Working as one node of an app build
 
 You are one node of a plan for building an app. An orchestrating agent launched
-you and several other workers into the same folder: a git checkout created for
-this one build. Your task file names your subtask and gives you the reports of
-the nodes you depend on, and its frontmatter names its own path and where your
-report goes. This document is the rest of your task.
+you and several other workers, each into a git worktree of its own, branched
+from the build's branch as it stood when you started -- so every node merged
+before you is already in your checkout, and the work you do is handed back by
+being committed to your branch. Your task file names your subtask and gives you
+the reports of the nodes you depend on, and its frontmatter names its own path
+and where your report goes. This document is the rest of your task.
 
 ## Do only your subtask
 
@@ -22,32 +24,40 @@ something the plan already assigns.
    together, verify the whole app, add tests, or tidy, refactor or restyle files
    you were not given.
 3. **If something you need is missing, report `stuck`.** An earlier node's output
-   that is not in the folder, or a contract its report does not give, is a
-   problem for the orchestrator. Do not build the missing piece yourself.
+   that is not in your checkout, or a contract its report does not give, is a
+   problem for the orchestrator -- it may not have merged that node yet, and it
+   is the one that can fix that. Do not build the missing piece yourself.
 4. **If the subtask looks wrong or incomplete, do it as written** and say in your
    report what you would change. Do not widen it.
 
-## The shared folder
+## Your worktree and your branch
 
-Other workers are editing this folder while you work, and nothing warns either of
-you when two of you touch the same file.
+The checkout is yours alone; the other workers have their own. What you commit
+to your branch is the only thing that reaches the build, and the orchestrator
+merges it the moment you report.
 
 1. **Edit only the files your subtask gives you.** Your subtask names what you
    own (a module, the page template, the static files). Create new files freely
    inside that boundary. If the work genuinely needs a change to a file outside
    it, do not make the change: describe it in your report and let the
-   orchestrator schedule it.
-2. **Leave git alone.** No `git commit`, `add`, `stash`, `checkout`, `reset`,
-   `merge` or anything else that changes git state. The orchestrator commits the
-   folder when no worker is running. Reading (`git status`, `git diff`,
-   `git log`) is fine.
+   orchestrator schedule it. A file two nodes both write becomes a merge
+   conflict for the orchestrator to sort out, which costs the build more than
+   the edit saved you.
+2. **Commit your own work, and touch no other git state.** `git add` and
+   `git commit` on your own branch, as many commits as you like, and everything
+   committed before you report. No `stash`, `checkout`, `switch`, `reset`,
+   `rebase`, `merge`, or any command naming another branch: the orchestrator
+   owns the build branch and every other node's. Reading (`git status`,
+   `git diff`, `git log`) is fine.
 3. **Leave the two shared files alone** -- the root `pyproject.toml` and
    `uv.lock` -- unless your subtask is the one that scaffolds the app or adds its
-   libraries. If it is, run `uv sync --all-packages` after changing them. The
-   app's own manifest and supervisord program file belong to the app, not to the
-   workspace, so they are yours if your subtask covers them.
+   libraries. If it is, run `uv sync --all-packages` after changing them. Every
+   node's branch carries these files, so a second node editing them is a
+   conflict at merge time. The app's own manifest and supervisord program file
+   belong to the app, not to the workspace, so they are yours if your subtask
+   covers them.
 4. **Do not touch the running workspace.** Apps run under supervisord from the
-   workspace's main checkout, not from this folder. Do not run `supervisorctl`,
+   workspace's main checkout, not from your worktree. Do not run `supervisorctl`,
    `system/scripts/forward_port.py` or `system/scripts/layout.py`, and do not
    open tabs. The orchestrator shows the user a preview and takes the app live
    after the build.
@@ -100,11 +110,12 @@ Both refusals cost you a turn, and both are easy to avoid:
 
 ## Reporting back
 
-Follow `.agents/shared/references/worker-reporting.md`: read your task file's
-stamped paths, write your report body to a file, and hand that file to the
-launcher's `report` subcommand, which delivers it to the orchestrator. Your
-flow's only report values are `--type status` with `--name done` or
-`--name stuck`.
+Commit before you report -- an uncommitted change is one the orchestrator cannot
+merge, and it will read as a node that did nothing. Then follow
+`.agents/shared/references/worker-reporting.md`: read your task file's stamped
+paths, write your report body to a file, and hand that file to the launcher's
+`report` subcommand, which delivers it to the orchestrator. Your flow's only
+report values are `--type status` with `--name done` or `--name stuck`.
 
 The body of a `done` report is the handoff the nodes after you read. Include:
 
@@ -115,7 +126,8 @@ The body of a `done` report is the handoff the nodes after you read. Include:
 4. **Decisions you made** that were not in your subtask.
 5. **What you left stubbed or undone**, and any change you need outside your
    boundary or would make to your subtask.
-6. **How to see it**: the command you used for your quick check.
+6. **How to see it**: the command you used for your quick check, and the branch
+   your work is on.
 
 Use `stuck` when you cannot finish the subtask: say why in one or two sentences
 and what you would need.
@@ -124,4 +136,5 @@ and what you would need.
 
 Stop your turn. If you built something the user reviews (the mock or the working
 site), the orchestrator may message you with changes the user asked for. Apply
-them inside your boundary, check them, and deliver a fresh report the same way.
+them inside your boundary, check them, **commit them on the same branch**, and
+deliver a fresh report the same way; the orchestrator merges your branch again.

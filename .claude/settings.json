@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${MNGR_AGENT_ROLE:-}\" = \"shared_folder_worker\" ] || uv sync --all-packages"
+            "command": "uv sync --all-packages"
           },
           {
             "type": "command",

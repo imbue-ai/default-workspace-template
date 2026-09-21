@@ -207,13 +207,17 @@ which owns modifying and removing an app.
 
 ### The access list
 
-The workers share one workspace, so whatever an earlier node wrote to disk is
-there for a later one to find. Up to 5 workers run at once.
+Each worker gets a checkout of its own, branched from the build as it stands
+when the worker starts, and the orchestrating agent merges a node's work the
+moment it finishes -- so whatever an earlier node wrote is there for a later one
+to find. Up to 5 workers run at once.
 
-Sharing one folder has a rule: two nodes that run at the same time must never
-edit the same file, because nothing detects it and the later write silently wins.
-So say in each subtask which files the node owns, and have nodes that run side by
-side own different ones. Exactly one node scaffolds the app, because scaffolding
+That has a rule: two nodes that run at the same time should not edit the same
+file. Nothing is lost if they do -- both versions are committed on their own
+branches -- but the orchestrating agent has to resolve a merge conflict in the
+middle of the build, and the build waits while it does. So say in each subtask
+which files the node owns, and have nodes that run side by side own different
+ones. Exactly one node scaffolds the app, because scaffolding
 edits the root `pyproject.toml` and `uv.lock` and picks a port; any library the
 app needs is added by that node, or by a later node that runs with no other node
 beside it. The app's own files -- its package, its manifest and its supervisord
@@ -223,7 +227,7 @@ A node's access list controls two things:
 
 - **Ordering.** A node waits on the nodes in its access list. Nodes that are not
   waiting on each other run in parallel: their workers are launched together,
-  into the same workspace.
+  each into a checkout of the build as it stands at that moment.
 - **Handoffs.** A node sees the subtask and the reply of each node it lists, and
   of those only. That is how one worker learns what another decided, named, or
   deliberately left alone -- the things the files themselves leave unsaid.

@@ -1,6 +1,6 @@
 ---
 name: build-app-parallel
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in a git worktree each, and you merge their work, handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
 metadata:
   author: imbue
 ---
@@ -13,12 +13,18 @@ You orchestrate. You do not build the app yourself:
   graph of nodes, each one piece of the build, with what each depends on. It is
   the offline plan recorder's planner, run in the foreground with the prompt
   `system/scripts/imbue_plan_extra/prompts/build-app-parallel.md`.
-- **Workers** build the nodes, several at once, all inside one git checkout made
-  for this build (the build folder). Each follows
-  `references/worker-node.md` and reports back.
+- **Workers** build the nodes, several at once, each in a git worktree of its
+  own, branched off the build branch as it stands when the worker starts. Each
+  follows `references/worker-node.md`, commits its piece and reports back.
 - **You** clarify the request, run the planner, launch workers as their
-  dependencies finish, run the interactive nodes (every contact with the user), merge the
-  result, and hand the app to hardening.
+  dependencies finish, **merge each finished node into the build branch** so the
+  nodes after it start from it, run the interactive nodes (every contact with the
+  user), and hand the app to hardening.
+
+Every node's work reaches the next one through the build branch: a worker starts
+from its tip and hands back a branch, and you merge that branch the moment the
+worker reports. A node launched before its dependency is merged would not see it
+at all.
 
 `.agents/shared/build-app/README.md` is the reference for how an app is built
 here. The planner and the workers read it; you open it to look something up, and
@@ -62,9 +68,10 @@ names everything below.
 | Thing | Value |
 |---|---|
 | Run folder (plan, tasks, reports) | `data/.tasks/build-app-parallel/$APP/` (call it `$RUN`) |
-| Build folder | `$HOME/worktrees/build-app-parallel-$APP` (call it `$BUILD`) |
-| Build branch | `build-app-parallel/$APP` |
-| Worker for node N | `$APP-node-N` |
+| Integration folder | `$HOME/worktrees/build-app-parallel-$APP` (call it `$BUILD`) |
+| Build branch | `build-app-parallel/$APP`, checked out in `$BUILD` |
+| Worker for node N | `$APP-node-N`, in a worktree mngr makes for it |
+| Branch of node N | `mngr/$APP-node-N`, branched from the build branch |
 | Progress record | `$RUN/progress.txt`, two lines: `done: <indices>` and `running: <indices>` |
 
 Keep `$RUN/progress.txt` current after every launch, report and conversation. It
@@ -118,11 +125,13 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-The build folder does not depend on the plan, and its `uv sync` takes about as
-long as the planner does, so start it first and let the two run together --
-otherwise nothing at all happens for the first four minutes of a build. Commit
-any pending changes in the main checkout (commit, never stash; the workers start
-from your last commit), then:
+The integration folder does not depend on the plan, and its `uv sync` takes
+about as long as the planner does, so start it first and let the two run
+together -- otherwise nothing at all happens for the first four minutes of a
+build. It is where every node's branch is merged and where the previews are
+served from, so it needs a working checkout of its own. Commit any pending
+changes in the main checkout (commit, never stash; the build branch starts from
+your last commit), then:
 
 ```bash
 git worktree add -b "build-app-parallel/$APP" "$BUILD" HEAD
@@ -153,11 +162,10 @@ fall back to building the app yourself without asking.
 Read `plan.json` yourself before starting. You will need each node's subtask to
 know what its report should contain and which nodes build what the user reviews.
 
-## Step 3: Finish the build folder
+## Step 3: Finish the integration folder
 
 The folder itself was made in Step 2, and its sync has been running since. Check
-it landed before any worker starts -- a worker that runs against a half-built
-`.venv` fails in ways that look like its own code:
+it landed before you serve any preview from it:
 
 ```bash
 (cd "$BUILD" && uv sync --all-packages)
@@ -168,17 +176,18 @@ blocks until the background sync lets go and then returns at once, having
 nothing left to do. If it reports an error, `$RUN/sync.log` has what the first
 one printed.
 
-Copy anything under `data/` the build needs (such as a handed-off `sample.json`)
-into `$BUILD` at the same relative path; `data/` is not part of the checkout.
+The workers do not wait on this. Each one gets a worktree of its own, and its
+`uv sync` runs as part of its create, so a worker can start before this
+finishes.
 
-**Known mngr bug:** if `mngr create` fails partway (for example on a Claude Code
-version mismatch), its cleanup runs `git worktree remove --force` on the folder
-it was given, which deletes `$BUILD` with every worker's uncommitted work. Until
-that is fixed, commit the build folder whenever no worker is running (Step 4),
-and if `$BUILD` disappears: run `git worktree prune`, recreate it with
-`git worktree add "$BUILD" "build-app-parallel/$APP"`, run the sync again, tell
-the user the build lost its most recent work, and relaunch the nodes that were
-running.
+Copy anything under `data/` the build needs (such as a handed-off `sample.json`)
+into `$BUILD` at the same relative path; `data/` is not part of the checkout. A
+worker that needs it gets it the same way, in its own worktree, once it exists.
+
+A failed `mngr create` (for example on a Claude Code version mismatch) cleans up
+by removing the worktree it made. Here that is the worker's own, empty, and
+nothing else is at risk: `$BUILD` is yours, no create was given it, and every
+finished node is a commit on the build branch. Relaunch the node.
 
 ## Step 4: Run the plan
 
@@ -204,10 +213,11 @@ Repeat until every node is done.
        --run-dir "$RUN" --node N
    uv run .agents/skills/launch-task/scripts/create_worker.py launch \
        --name "$APP-node-N" \
-       --template shared_folder_worker \
-       --work-folder "$BUILD" \
+       --template worktree_worker \
        --runtime-dir "$RUN/nodes/N/" \
        --task-file "$RUN/nodes/N/task.md" \
+       --create-arg=--branch \
+       --create-arg="build-app-parallel/$APP:mngr/$APP-node-N" \
        --create-arg=-S \
        --create-arg=agent_types.claude.settings_overrides.model=<model> \
        --message-with-mngr
@@ -216,8 +226,14 @@ Repeat until every node is done.
    Add N to `running` in `$RUN/progress.txt`, and launch every ready node before
    you wait for any of them -- that is what makes them run at once.
 
-   The last three options are what a shared-folder worker needs:
+   What these options are for:
 
+   - `--branch <build branch>:mngr/$APP-node-N` is the one that matters. It
+     branches the worker's worktree off the build branch **as it stands right
+     now**, which is how the node sees everything merged before it, and it names
+     the branch you will merge back. Without it mngr branches from your own
+     checkout's HEAD, and the node would start from a workspace where none of
+     the build has happened.
    - `--message-with-mngr` sends the task with `mngr message`, and you pass it to
      `reply` too. These workers are not chats anyone opens, and the chat app's
      send route knows an agent only once it has re-read mngr's agent list, so a
@@ -262,11 +278,24 @@ Repeat until every node is done.
    polling advice, which item 4 replaces. The reports dir is
    `$RUN/nodes/N/reports/`.
    - **`done`:** leave the report where it is -- later nodes' task files quote
-     it. Move N from `running` to `done`. If a later interactive node reviews
+     it. **Merge the node's branch before anything else**, because until you do,
+     a node launched after it starts from a build branch without its work:
+
+     ```bash
+     git -C "$BUILD" merge --no-ff "mngr/$APP-node-N" -m "$APP node N"
+     ```
+
+     A conflict here means two nodes that ran side by side wrote the same file,
+     which the plan is supposed to prevent -- see "When things go wrong". Resolve
+     it in `$BUILD` keeping both sides' work, or, if the two are genuinely
+     incompatible, stop launching and follow the same entry.
+
+     Then move N from `running` to `done`. If a later interactive node reviews
      what this node built, keep the worker running so it can apply the user's
-     changes. Otherwise destroy it:
+     changes -- and merge again after each change it reports. Otherwise destroy
+     it:
      `uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "$APP-node-N"`.
-     Destroying a worker leaves `$BUILD` intact.
+     Destroying a worker removes its worktree; the branch you merged stays.
    - **Exit 76 (the worker's agent is not running and no report arrived).** A
      worker that has not yet started its first turn reads the same way as one
      that stopped early, and the check gives up after about fifteen seconds, so
@@ -292,14 +321,12 @@ Repeat until every node is done.
      what the node could not do, in plain terms, and ask how to proceed. Do not
      retry silently.
 
-6. **Commit when no worker is running:**
-
-   ```bash
-   git -C "$BUILD" add -A
-   git -C "$BUILD" commit -m "build-app-parallel $APP: nodes <done indices>"
-   ```
-
-   Workers never commit, so this is the only history the build has.
+6. **Nothing to commit.** Each worker commits its own piece, and item 5 merges
+   it, so the build branch already holds every finished node. Check that is true
+   before a review or the final merge -- `git -C "$BUILD" log --oneline` should
+   name every node in `done`, and `git -C "$BUILD" status --porcelain` should be
+   empty. A node whose work is missing there is a worker that reported without
+   committing: message it to commit, and merge again.
 
 ## Step 5: The interactive nodes
 
@@ -317,9 +344,10 @@ anything. There are two kinds:
 
 For a review:
 
-1. **Serve a preview from the build folder.** The app is not live yet, so show
-   a throwaway instance wrapped in a labeled preview tab, with its own scratch
-   data folder:
+1. **Serve a preview from the integration folder.** It holds every node merged
+   so far, which is what the user is being shown; a node whose branch you have
+   not merged is not in it. The app is not live yet, so show a throwaway
+   instance wrapped in a labeled preview tab, with its own scratch data folder:
 
    ```bash
    python3 .agents/shared/scripts/serve_isolated_instance.py up \
@@ -346,9 +374,15 @@ For a review:
       Then wait on it again (Step 4, item 4). The `await` that printed the
       builder's last report already archived it, so its next report lands
       cleanly.
-   2. When its new report lands, run
-      `python3 system/scripts/layout.py refresh "$APP-preview"` and show the user
-      the change visibly applied.
+   2. When its new report lands, **merge its branch again** -- the change is a
+      new commit on the same branch, and the preview serves `$BUILD`:
+
+      ```bash
+      git -C "$BUILD" merge --no-ff "mngr/$APP-node-K" -m "$APP node K: revision"
+      ```
+
+      Then run `python3 system/scripts/layout.py refresh "$APP-preview"` and show
+      the user the change visibly applied.
 
    Nodes that do not depend on this conversation keep running meanwhile. If the
    user's answer changes something a running or finished node built against,
@@ -372,21 +406,25 @@ lock it in?"), and only an explicit confirmation ends it.
 
 After the working-site conversation is confirmed and every node is done:
 
-1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, then
-   commit the build folder (Step 4, item 6).
+1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, which
+   removes its worktree, and check the build branch has everything (Step 4,
+   item 6).
 2. **Merge into main** from the main checkout:
-   `git merge --no-ff "build-app-parallel/$APP"`. The plan keeps workers out of
-   each other's files, so a conflict here means main changed during the build --
-   usually another app added to the root `pyproject.toml`. Keep both sides, and
-   never hand-resolve by dropping either app's entry.
+   `git merge --no-ff "build-app-parallel/$APP"`. Every node was merged into that
+   branch as it finished, so this brings the whole build over in one commit. A
+   conflict here means main changed during the build -- usually another app added
+   to the root `pyproject.toml`. Keep both sides, and never hand-resolve by
+   dropping either app's entry.
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
    `.agents/shared/build-app/references/verify.md`, and open the tab with
    `python3 system/scripts/layout.py open "$APP"`.
-4. **Remove the build folder.** List it first (`git -C "$BUILD" status --porcelain`
-   must be empty, since everything was committed and merged), then
-   `git worktree remove "$BUILD"`.
+4. **Remove the folders.** List `$BUILD` first (`git -C "$BUILD" status
+   --porcelain` must be empty, since every node was committed and merged), then
+   `git worktree remove "$BUILD"` and `git worktree prune` to clear out the
+   worktrees of any workers already destroyed. The `mngr/$APP-node-*` branches
+   stay: they are the per-node history behind the merge.
 5. **Hand off to hardening** exactly as `build-app` Step 5 does: invoke the
    `crystallize-creation` skill with `type=app`, the slug `$APP`, and a task body
    naming the lib path, the app name, the URL segment, and what the app does.
@@ -398,12 +436,17 @@ After the working-site conversation is confirmed and every node is done:
 - **The planner or plan fails twice:** Step 2.
 - **A worker reports `stuck`, or its worker is gone while you are waiting on it:**
   Step 4, item 5.
-- **`$BUILD` disappears:** the mngr bug in Step 3.
-- **Two workers edited the same file** (a report says so, or the preview shows
-  one piece overwriting another): stop launching, tell the user, and have the
-  worker that owns the file redo its part once the other is done.
+- **A create fails:** Step 3's note -- the worker's own worktree is what gets
+  cleaned up, so relaunch the node.
+- **A merge conflicts** (Step 4, item 5): two nodes that ran side by side wrote
+  the same file, which the plan is meant to prevent. Nothing was lost -- both
+  versions are on their own branches. If the two changes are independent, keep
+  both sides and carry on. If they genuinely disagree, `git -C "$BUILD" merge
+  --abort`, stop launching, tell the user which piece is in question, and have
+  the worker that owns the file redo its part from the merged branch once the
+  other is in.
 - **A worker did more than its subtask** (its report lists files or work the
-  subtask did not name, or `git -C "$BUILD" status` at a commit point shows
-  changes no report accounts for): do not build on the extra work. Before the
-  next launch, have that worker revert what falls outside its subtask, and check
-  that no other node's files were changed.
+  subtask did not name, or `git -C "$BUILD" show --stat` for its merge names
+  files no report accounts for): do not build on the extra work. Before the next
+  launch, have that worker revert what falls outside its subtask on its own
+  branch and report again, then merge that.
