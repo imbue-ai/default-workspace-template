@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EntryLook } from "../reducers/desktopState";
 import { appRecord } from "../testing/records";
 import { MENU_DIVIDER } from "./Menu";
 import type { MenuEntry, MenuItem } from "./Menu";
@@ -78,20 +79,20 @@ describe("taskbarEntryMenuEntries", () => {
     const setMode = vi.fn();
     const setStyle = vi.fn();
     const changeAvatar = vi.fn();
-    const inBar = taskbarEntryMenuEntries(
-      {
-        ...actions,
-        close: null,
-        isMinimized: true,
-        isMaximized: false,
-        presentation: {
-          look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
-          setMode,
-          setStyle,
-          changeAvatar,
+    const pinnedEntries = (look: EntryLook, options: { isMinimized?: boolean; isCompact?: boolean } = {}) =>
+      taskbarEntryMenuEntries(
+        {
+          ...actions,
+          close: null,
+          isMinimized: options.isMinimized ?? false,
+          isMaximized: false,
+          presentation: { look, setMode, setStyle, changeAvatar },
         },
-      },
-      false,
+        options.isCompact ?? false,
+      );
+    const inBar = pinnedEntries(
+      { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
+      { isMinimized: true },
     );
     expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain", "change-avatar"]);
     expect(rowOf(inBar, "style-plain").label).toBe("Show as plain entry");
@@ -102,59 +103,17 @@ describe("taskbarEntryMenuEntries", () => {
     expect(setMode).toHaveBeenCalledWith("floating");
     rowOf(inBar, "style-plain").run();
     expect(setStyle).toHaveBeenCalledWith("plain");
-    const floating = taskbarEntryMenuEntries(
-      {
-        ...actions,
-        close: null,
-        isMinimized: false,
-        isMaximized: false,
-        presentation: {
-          look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: null },
-          setMode,
-          setStyle,
-          changeAvatar,
-        },
-      },
-      false,
-    );
+    const floating = pinnedEntries({ mode: "floating", style: "plain", declaredStyle: "avatar", position: null });
     expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "style-avatar"]);
     expect(rowOf(floating, "style-avatar").label).toBe("Show as avatar");
     // A pin declaring no style offers no style row; compact mode offers no float row either.
-    const plainPin = taskbarEntryMenuEntries(
-      {
-        ...actions,
-        close: null,
-        isMinimized: false,
-        isMaximized: false,
-        presentation: {
-          look: { mode: "bar", style: "plain", declaredStyle: "plain", position: null },
-          setMode,
-          setStyle,
-          changeAvatar,
-        },
-      },
-      false,
-    );
+    const plainPin = pinnedEntries({ mode: "bar", style: "plain", declaredStyle: "plain", position: null });
     expect(keysOf(plainPin)).toEqual(["minimize", "maximize", "|", "float"]);
-    expect(
-      keysOf(
-        taskbarEntryMenuEntries(
-          {
-            ...(plainPin.length > 0 ? actions : actions),
-            close: null,
-            isMinimized: false,
-            isMaximized: false,
-            presentation: {
-              look: { mode: "floating", style: "plain", declaredStyle: "plain", position: null },
-              setMode,
-              setStyle,
-              changeAvatar,
-            },
-          },
-          true,
-        ),
-      ),
-    ).toEqual(["minimize"]);
+    const compact = pinnedEntries(
+      { mode: "floating", style: "plain", declaredStyle: "plain", position: null },
+      { isCompact: true },
+    );
+    expect(keysOf(compact)).toEqual(["minimize"]);
   });
 
   it("offers Restore or Minimize, Maximize or Restore size, and Close", () => {
