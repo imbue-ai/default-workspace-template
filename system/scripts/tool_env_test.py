@@ -44,7 +44,7 @@ def _install_mngr_tool(home: Path, *, shebang_prefix: str = "#!") -> tuple[Path,
     env_dir = tool_env.tools_dir(home) / tool_env.MNGR_TOOL_NAME
     (env_dir / "bin").mkdir(parents=True)
     (env_dir / tool_env.RECEIPT).write_text("")
-    script = tool_env.bin_dir(home) / tool_env.MNGR_EXECUTABLE
+    script = tool_env.bin_dir(home) / "mngr"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(f"{shebang_prefix}{env_dir}/bin/python\n")
     return env_dir, script
@@ -72,18 +72,25 @@ def test_the_pin_installs_into_the_directory_it_puts_on_path() -> None:
 def test_the_shell_pin_and_the_module_agree_on_where_tools_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pin is shell and the sweep is Python, so they have to name the same directory;
-    otherwise the build installs into one place and cleans around another. Neither side is
-    overridden here, because what they hold separately -- and can therefore drift -- is the
-    default each falls back to when nothing sets TOOL_ENV_HOME, which is the production
-    case."""
+    """The pin is shell and the sweep is Python, so they have to name the same directories;
+    otherwise the build installs into one place and cleans around another. Both are checked:
+    the tool directory is where an environment lands, and the bin directory is the one the
+    pin puts on PATH -- and the one the update apply aims a last-resort install at. Neither
+    side is overridden here, because what they hold separately -- and can therefore drift --
+    is the default each falls back to when nothing sets TOOL_ENV_HOME, which is the
+    production case."""
     monkeypatch.delenv("TOOL_ENV_HOME", raising=False)
-    pinned = _run_shell(
-        'tool_env_pin\nprintf "%s\\n" "$UV_TOOL_DIR"',
-        home=Path("/home/user"),
-    ).strip()
+    pinned_tools, pinned_bin = (
+        _run_shell(
+            'tool_env_pin\nprintf "%s\\n%s\\n" "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"',
+            home=Path("/home/user"),
+        )
+        .strip()
+        .splitlines()
+    )
 
-    assert pinned == str(tool_env.tools_dir(tool_env.tool_home()))
+    assert pinned_tools == str(tool_env.tools_dir(tool_env.tool_home()))
+    assert pinned_bin == str(tool_env.bin_dir(tool_env.tool_home()))
 
 
 @pytest.mark.parametrize(
@@ -110,8 +117,10 @@ def test_an_install_under_another_home_goes_with_its_console_script(
         swept = tmp_path / "home-link"
         swept.symlink_to(runtime_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [swept]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [swept],
+        tool_env.MNGR_TOOL_NAME,
     )
 
     assert not shadow_env.exists()
@@ -136,8 +145,10 @@ def test_the_pinned_install_is_not_removed_when_reached_by_another_path(
     linked_home = tmp_path / "root-link"
     linked_home.symlink_to(pinned_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [linked_home, Path(f"{pinned_home}/")]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [linked_home, Path(f"{pinned_home}/")],
+        tool_env.MNGR_TOOL_NAME,
     )
 
     assert removed == []
@@ -156,12 +167,62 @@ def test_a_console_script_already_resolving_to_the_pinned_install_is_left_alone(
     pinned_env, _ = _install_mngr_tool(pinned_home)
     shim.write_text(f"#!{pinned_env}/bin/python\n")
 
-    tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [runtime_home]
+    tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [runtime_home],
+        tool_env.MNGR_TOOL_NAME,
     )
 
     assert not shadow_env.exists()
     assert shim.is_file()
+
+
+def test_every_console_script_into_a_removed_environment_goes_with_it(
+    tmp_path: Path,
+) -> None:
+    """A tool can install several console scripts (the browser app ships two). Removing
+    its environment while leaving any of them would put a script with a dead interpreter
+    first on a login shell's PATH; a script into another environment is not the sweep's."""
+    runtime_home = tmp_path / "home" / "user"
+    pinned_home = tmp_path / "root"
+    shadow_env, first_script = _install_mngr_tool(runtime_home)
+    _install_mngr_tool(pinned_home)
+    second_script = first_script.with_name("mngr-second")
+    second_script.write_text(f"#!{shadow_env}/bin/python\n")
+    other_env = tool_env.tools_dir(runtime_home) / "other-tool"
+    (other_env / "bin").mkdir(parents=True)
+    other_script = first_script.with_name("other")
+    other_script.write_text(f"#!{other_env}/bin/python\n")
+
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home), [runtime_home], tool_env.MNGR_TOOL_NAME
+    )
+
+    assert set(removed) == {shadow_env, first_script, second_script}
+    assert other_script.is_file()
+
+
+def test_a_console_script_uv_linked_into_the_bin_dir_goes_with_its_environment(
+    tmp_path: Path,
+) -> None:
+    """uv links a tool's console scripts into the bin dir as symlinks to the copies in the
+    environment's own bin/, so the sweep reads the shebang through the link and must
+    remove the link itself before deleting what it points at."""
+    runtime_home = tmp_path / "home" / "user"
+    pinned_home = tmp_path / "root"
+    shadow_env, planted_script = _install_mngr_tool(runtime_home)
+    _install_mngr_tool(pinned_home)
+    env_script = shadow_env / "bin" / planted_script.name
+    planted_script.rename(env_script)
+    planted_script.symlink_to(env_script)
+
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home), [runtime_home], tool_env.MNGR_TOOL_NAME
+    )
+
+    assert set(removed) == {shadow_env, planted_script}
+    assert not planted_script.is_symlink()
+    assert not shadow_env.exists()
 
 
 def test_nothing_is_removed_when_the_install_being_kept_is_missing(
@@ -172,8 +233,10 @@ def test_nothing_is_removed_when_the_install_being_kept_is_missing(
     runtime_home = tmp_path / "home" / "user"
     shadow_env, shadow_script = _install_mngr_tool(runtime_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(tmp_path / "root"), [runtime_home]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(tmp_path / "root"),
+        [runtime_home],
+        tool_env.MNGR_TOOL_NAME,
     )
 
     assert removed == []
@@ -185,8 +248,10 @@ def test_a_home_with_no_install_is_a_no_op(tmp_path: Path) -> None:
     pinned_home = tmp_path / "root"
     _install_mngr_tool(pinned_home)
 
-    removed = tool_env.remove_shadowing_mngr_installs(
-        tool_env.tools_dir(pinned_home), [tmp_path / "home" / "user"]
+    removed = tool_env.remove_shadowing_installs(
+        tool_env.tools_dir(pinned_home),
+        [tmp_path / "home" / "user"],
+        tool_env.MNGR_TOOL_NAME,
     )
 
     assert removed == []

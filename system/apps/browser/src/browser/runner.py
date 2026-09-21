@@ -10,11 +10,20 @@ input, resize, and attention (interact/hidden) in) and the control plane ``/brow
 (a random ~2-word english name like ``alex-smith``), not a sequential int; there is
 no default browser.
 
+The fleet holds ONE browser by default (``BROWSER_MAX_SESSIONS``): a second Chromium is
+what a small workspace cannot afford, and the one browser lives as long as some desktop
+window shows it (docs/system/specs/window-bound-resources.md). The shell posts every
+closed window of ours to ``POST /api/window-closed`` (the manifest's ``window_closed_path``)
+and the daemon sweeps the shell's windows every ``BROWSER_WINDOW_SWEEP_SECONDS`` regardless:
+a browser some window showed and none shows any more is STOPPED (its profile and tabs
+kept), never deleted.
+
 Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 
 * ``GET  /browsers``            -- list every browser, its owner, and its tabs.
-* ``POST /browsers``            -- start a new browser (body ``{"name": ...}`` optional;
-  returns ``{"name": ...}``). 400 invalid name, 409 duplicate name or fleet full.
+* ``POST /browsers``            -- the one browser (body ``{"name": ...}`` optional; returns
+  ``{"name": ...}``): with no name, the browser that exists (started again if it was stopped),
+  else a new one; with a name, a create (400 invalid name, 409 duplicate name or fleet full).
 * ``GET  /browsers/{name}/attach`` -- the gated CDP URL to point `playwright-cli` at.
 * ``POST /browsers/{name}/acquire`` -- reserve a browser (and get the exit code an agent
   branches on; see ``fleet._render_action``).
@@ -22,12 +31,10 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 * ``POST /browsers/{name}/stop`` / ``.../start`` -- end a browser's Chromium while keeping the
   browser, its profile, and its tabs; relaunch it on them (the viewer's Start button).
 
-The workspace shell reads the same fleet through the instances API of the workspace app
-model (``/_instances``; see ``browser.instances``), mounted on this app because the
-daemon serves its own origin: one instance per browser, ``working`` while an agent holds
-it, ``idle`` otherwise, ``error`` once crashed; ``new`` creates, delete closes, location
-navigates the active tab. Every fleet event nudges the shell through the nudger the manager
-in ``browser.session`` holds.
+The workspace shell opens a browser as a window at ``GET /new[?url=]``, the manifest's
+``new`` launch path (system/apps/browser/app.toml): the same answer as a nameless
+``POST /browsers``, as a redirect to the browser's viewer page ``/?session=<name>``; ``url``
+is opened as a new tab in a browser already up.
 
 The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
 gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
@@ -52,31 +59,33 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from app_instances.blueprint import build_instances_blueprint
-from app_instances.errors import InvalidInstanceValueError
-from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
-from app_instances.primitives import AbsoluteHttpUrl
-from flask import Flask, Response, jsonify, request
+from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
+from app_manifest.shell_windows import shell_base_url
+from flask import Flask, Response, jsonify, redirect, request, send_file
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
-from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
-from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.instances import FleetInstanceSource
+from browser.errors import (
+    BrowserNotDrivableError,
+    InvalidStartUrlError,
+    UnknownBrowserError,
+)
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import APP_NAME
+from browser.primitives import AbsoluteHttpUrl, BrowserName, browser_page_path
 from browser.session import (
+    _WINDOW_SWEEP_INTERVAL_SECONDS,
     BrowserSessionManager,
     BrowserStartupError,
     DuplicateBrowserNameError,
     FleetFullError,
     InvalidBrowserNameError,
     LiveBrowser,
+    closed_window_browser,
     deferred_install_ready,
     set_proxy_server,
 )
@@ -87,6 +96,15 @@ from browser.wsgi import make_threaded_server
 _PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+
+# The ``new`` launch path (system/apps/browser/app.toml).
+NEW_PATH = "/new"
+# Where the shell posts a closed window of ours (the manifest's ``window_closed_path``): a sweep runs at once.
+WINDOW_CLOSED_PATH = "/api/window-closed"
+HTTP_NO_CONTENT = 204
+# The launch path's one parameter (the manifest's ``params``): the start page.
+START_URL_PARAM = "url"
+HTTP_FOUND = 302
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -197,6 +215,7 @@ async def _startup() -> None:
         # chromium and restore-failed paths, where the fleet comes up lazily later;
         # otherwise tab-URL drift would never be persisted for the daemon's lifetime.
         manager.start_checkpointing()
+        manager.start_window_sweeping(shell_base_url(), _WINDOW_SWEEP_INTERVAL_SECONDS)
         # threading.Event.set is thread-safe: this runs on the loop thread, readers
         # are Flask threads.
         _init_done.set()
@@ -230,15 +249,83 @@ def _body() -> dict[str, Any]:
     return request.get_json(silent=True) or {}
 
 
-# --- read-only routes (no init gate) -----------------------------------------
+# read-only routes (no init gate)
 
 
 def index() -> Response:
-    return Response(_INDEX_HTML.read_text(), mimetype="text/html")
+    """The viewer page."""
+    response = Response(_INDEX_HTML.read_text(), mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def app_contract() -> Response:
+    """The shell's built app contract module, served from this origin (see ``SHELL_APP_CONTRACT_PATH`` for why)."""
+    if not SHELL_APP_CONTRACT_PATH.is_file():
+        return _error({"error": f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing"}, 404)
+    # Flask resolves a relative path against the package directory, not the repo root the path names.
+    return send_file(SHELL_APP_CONTRACT_PATH.absolute(), mimetype="text/javascript")
+
+
+def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Response":
+    """The browser a nameless request means (the one that exists, started again if stopped, else a new one),
+    or the named create; answered at once (a Chromium launch runs in the background), or the refusal.
+
+    What ``POST /browsers`` and the ``new`` launch path share: 503 while Chromium is still
+    installing, 400 for a start page that is not an absolute http(s) URL or a name the fleet
+    cannot take, 409 for a duplicate name or a full fleet, 503 when the launch cannot be
+    registered. A missing or empty ``raw_url`` opens the home page (or nothing new in a browser
+    already up).
+    """
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _error({"error": reason}, 503)
+    start_url: str | None = None
+    if raw_url:
+        try:
+            start_url = str(AbsoluteHttpUrl(raw_url))
+        except InvalidStartUrlError as e:
+            return _error({"error": f"url: {e}"}, 400)
+    try:
+        # Returns fast: registers init + spawns the serialized launch on the loop.
+        if name is None:
+            return bridge.run(manager.ensure_browser(start_url), timeout=_ROUTE_TIMEOUT)
+        return bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
+    except InvalidBrowserNameError as e:
+        return _error({"error": str(e)}, 400)
+    except (DuplicateBrowserNameError, FleetFullError) as e:
+        return _error({"error": str(e)}, 409)
+    except _STARTUP_ERRORS as e:
+        logger.error("failed to register browser: {}", e)
+        return _error({"error": f"Could not start browser: {e}"}, 503)
+
+
+def new_browser() -> Response:
+    """``GET /new[?url=]``, the ``new`` launch path: the browser, as a redirect to its viewer page.
+
+    The same answer as ``POST /browsers`` with no name, as a redirect so a window opened at
+    the launch path lands on the browser and reports that path as its own.
+    """
+    started = _start_browser(None, request.args.get(START_URL_PARAM))
+    if isinstance(started, Response):
+        return started
+    return redirect(browser_page_path(BrowserName(started.browser_id)), code=HTTP_FOUND)
 
 
 def health() -> Response:
     return jsonify({"status": "ok", "initializing": not _init_done.is_set()})
+
+
+def window_closed() -> Response:
+    """``POST /api/window-closed``: the shell says a window of ours closed; sweep now rather than at the interval.
+
+    The body's path is proof a window showed the browser it names, so that browser is marked window-seen first
+    (a window that opened and closed between two sweeps is otherwise never seen); what is shown now is still
+    read from the shell's desktops.
+    """
+    closed_name = closed_window_browser(request.get_json(silent=True))
+    bridge.submit(manager.sweep_after_window_closed(closed_name, shell_base_url()))
+    return Response("", status=HTTP_NO_CONTENT)
 
 
 def init_status() -> Response:
@@ -251,10 +338,10 @@ def list_browsers() -> Response:
     no default browser, so nothing is materialized here.
 
     Also reports whether 'New browser' can run right now (``can_create`` + ``create_reason``
-    + count/max) so the UI can gate its button -- mirroring what ``create_browser`` enforces.
-    ``can_create`` is NOT gated on ``_init_done``: create works DURING restore (it queues
-    behind the serialized relaunches), so the button must stay enabled during init. Only
-    a missing Chromium install or the cap disables it."""
+    + count/max). A nameless create always has a browser to answer (the one that exists, or a
+    new one), so only a missing Chromium install disables it; ``can_create`` is NOT gated on
+    ``_init_done`` either, since a create works DURING restore (it queues behind the
+    serialized relaunches)."""
     ready, install_reason = deferred_install_ready()
     # capacity() reads the manager's _browsers dict, which is mutated on the loop
     # thread; reading it directly from this Flask worker thread can KeyError mid
@@ -263,8 +350,6 @@ def list_browsers() -> Response:
     count, cap = bridge.run(manager.capacity_async(), timeout=_ROUTE_TIMEOUT)
     if not ready:
         can_create, create_reason = False, install_reason or "installing browser support"
-    elif count >= cap:
-        can_create, create_reason = False, f"{count}/{cap} browsers open -- close one first"
     else:
         can_create, create_reason = True, ""
     return jsonify(
@@ -278,7 +363,7 @@ def list_browsers() -> Response:
     )
 
 
-# --- state-changing routes (init-gated) --------------------------------------
+# state-changing routes (init-gated)
 
 
 def create_browser() -> Response:
@@ -300,29 +385,12 @@ def create_browser() -> Response:
     Response ``{"name": <chosen-name>}``. Errors: 400 invalid name or url, 409 duplicate name or
     fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
     still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _error({"error": reason}, 503)
     body = _body()
-    name = body.get("name")
     raw_url = body.get("url")
-    start_url: str | None = None
-    if raw_url is not None:
-        try:
-            start_url = str(AbsoluteHttpUrl(str(raw_url)))
-        except InvalidInstanceValueError as e:
-            return _error({"error": f"url: {e}"}, 400)
-    try:
-        # Returns fast: registers init + spawns the serialized launch on the loop.
-        session = bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
-    except InvalidBrowserNameError as e:
-        return _error({"error": str(e)}, 400)
-    except (DuplicateBrowserNameError, FleetFullError) as e:
-        return _error({"error": str(e)}, 409)
-    except _STARTUP_ERRORS as e:
-        logger.error("failed to register browser: {}", e)
-        return _error({"error": f"Could not start browser: {e}"}, 503)
-    return jsonify({"name": session.browser_id})
+    started = _start_browser(body.get("name"), None if raw_url is None else str(raw_url))
+    if isinstance(started, Response):
+        return started
+    return jsonify({"name": started.browser_id})
 
 
 def close_browser(browser_id: str) -> Response:
@@ -493,7 +561,7 @@ def cmd_clipboard_out(browser_id: str) -> Response:
     return mediastream.clipboard_out(browser_id)
 
 
-# --- control/ownership WebSocket (/cast) -------------------------------------
+# control/ownership WebSocket (/cast)
 
 
 def _cast_inbound_pump(
@@ -761,15 +829,18 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
         mediastream.telemetry_slots.release(browser_id)
 
 
-# --- app construction + lifecycle --------------------------------------------
+# app construction + lifecycle
 
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_ROUTE, view_func=app_contract, methods=["GET"])
+    application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["GET"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
     )
     application.add_url_rule("/health", view_func=health, methods=["GET"])
+    application.add_url_rule(WINDOW_CLOSED_PATH, view_func=window_closed, methods=["POST"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
     application.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
@@ -793,16 +864,6 @@ def _register_routes() -> None:
     sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
     # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
     application.before_request(mediastream.strip_websocket_compression)
-    # The instances API of the workspace app model (``/_instances``), which the shell reads at
-    # the app URL (the manifest names no instances_url): an adapter over the fleet, reaching
-    # it through the bridge like every route above. Its nudges and the fleet's own go
-    # through whatever nudger the manager has installed (``main`` installs the real one).
-    fleet = BridgedFleet(
-        bridge=bridge, manager=manager, ready_gate=_init_done, route_timeout_seconds=_ROUTE_TIMEOUT
-    )
-    application.register_blueprint(
-        build_instances_blueprint(FleetInstanceSource(fleet=fleet), ManagerNudger(manager=manager))
-    )
 
 
 _register_routes()
@@ -871,10 +932,6 @@ def main() -> None:
     Replaces ``uvicorn.run``. The service is reached at its own workspace origin;
     the viewer uses relative URLs, so no prefix or root-path awareness is needed.
     """
-    # Fleet events fire on the loop thread, so the shell is told from a daemon thread; a slow
-    # shell never stalls a browser. Installed here, not in create_app, for the same reason
-    # as the OOM sweep below: tests that build the app must not post to the workspace shell.
-    manager.set_nudger(ThreadedNudger(inner=ShellNudger(app_name=APP_NAME, shell_url=shell_base_url())))
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;
     # session.py reports every event that can spawn Chromium processes and this

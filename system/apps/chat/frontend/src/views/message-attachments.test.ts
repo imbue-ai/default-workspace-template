@@ -7,7 +7,7 @@ import { buildMessageWithAttachments } from "../models/attachments";
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 // message-renderers pulls in the shell connection (chat/shell.ts, and the agents store
 // behind it); stub it out.
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 // The bubble renders the attachment block through MarkdownContent, which sets
 // innerHTML imperatively in oncreate. Stub it with a marker component so the
 // vnode walk can read the content it was handed without needing a DOM.

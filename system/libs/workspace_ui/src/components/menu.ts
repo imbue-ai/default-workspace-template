@@ -1,9 +1,8 @@
 /* The floating-menu chrome: a card on the primary surface with a hairline
  * border, 8px radius and the overlay elevation shadow, holding 32px rows of
- * full-bleed hover highlight. Every floating menu composes this recipe --
- * the tab ⋮ menu, the rail's row menus, the launcher's filter menu, and the
- * model card with its flyouts (whose selected/locked row variants extend the
- * row shape in modelCardStyles.ts).
+ * full-bleed hover highlight. Every floating menu composes this recipe (the
+ * model card's selected/locked row variants extend the row shape in
+ * modelCardStyles.ts).
  *
  * Positioning is not part of the recipe -- callers say fixed/absolute in
  * `extra`, along with min-width and text size. The Tailwind scanner reads
@@ -27,7 +26,7 @@ export interface MenuRowOptions {
 
 /** The keyboard-focus treatment for a focusable row (a real <button>). Inset so
  *  the ring stays inside the card instead of the OS default halo overhanging it.
- *  Inert on a non-focusable row (the tab menu's divs), so it rides the base. */
+ *  Inert on a non-focusable row (a window menu's divs), so it rides the base. */
 const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 export function menuRowClass(options: MenuRowOptions = {}): string {

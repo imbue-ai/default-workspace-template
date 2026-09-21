@@ -8,7 +8,7 @@
  *     via the type-* roles, shared recipes via the component builders in
  *     this library's components/.
  *   - Hand-written CSS here is only for what utilities cannot reach: vendor
- *     DOM (dockview/xterm), markdown-rendered content, keyframes and
+ *     DOM (xterm), markdown-rendered content, keyframes and
  *     pseudo-element machines (the spinner), contextual rules over
  *     shared markup, and cascade-critical overrides. In those, `@apply` the
  *     semantic utilities where they cover the declarations; reference the

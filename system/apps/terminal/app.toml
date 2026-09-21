@@ -1,18 +1,21 @@
 name = "terminal"
 display_name = "Terminal"
 icon = "icon.svg"
-instances = true
-# The instances API port; ttyd serves the terminal pages on 7681.
-instances_url = "http://127.0.0.1:7682"
+# The terminal program serves the wrapper pages on 7681; ttyd runs on the terminal-pty origin
+# (system/apps/terminal_pty/app.toml, port 7683).
 critical = true
 priority = "terminal"
 launcher_rank = 40
+# A terminal lives as long as a window shows it: the shell posts every closed window here and
+# the app collects what no window shows (docs/system/specs/window-bound-resources.md).
+window_closed_path = "/api/window-closed"
 
 [default_shortcut]
-action = "new"
-mode = "focus"
+launch = "new"
+mode = "new"
 
-[[actions]]
+[[launch_paths]]
 id = "new"
 label = "New Terminal"
+path = "/new"
 params = [{name = "workdir", label = "Working directory", required = false}]

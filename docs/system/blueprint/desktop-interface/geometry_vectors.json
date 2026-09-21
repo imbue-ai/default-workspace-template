@@ -1,0 +1,141 @@
+{
+  "description": "Shared test vectors for the geometry rules of contracts.md section 10. Both editors (shell/desktop_document.py and frontend/src/geometry/) run every case here; a rule is changed by changing this file first. Frames and pointer fractions are fractions of the backdrop; pixel cases carry their backdrop and metrics.",
+  "cascade": [
+    {"placed_count": 0, "expected": {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}},
+    {"placed_count": 1, "expected": {"x": 0.08, "y": 0.1, "width": 0.6, "height": 0.7}},
+    {"placed_count": 5, "expected": {"x": 0.2, "y": 0.26, "width": 0.6, "height": 0.7}},
+    {"placed_count": 6, "expected": {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}},
+    {"placed_count": 13, "expected": {"x": 0.08, "y": 0.1, "width": 0.6, "height": 0.7}}
+  ],
+  "clamp_frame": [
+    {"frame": {"x": 0.5, "y": 0.5, "width": 0.6, "height": 0.7}, "expected": {"x": 0.4, "y": 0.3, "width": 0.6, "height": 0.7}},
+    {"frame": {"x": -0.2, "y": -0.1, "width": 0.5, "height": 0.5}, "expected": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 0.5}},
+    {"frame": {"x": 0.1, "y": 0.1, "width": 1.4, "height": 1.2}, "expected": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}},
+    {"frame": {"x": 0.2, "y": 0.3, "width": 0.4, "height": 0.4}, "expected": {"x": 0.2, "y": 0.3, "width": 0.4, "height": 0.4}}
+  ],
+  "snap_frames": {
+    "SNAPPED_LEFT": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+    "SNAPPED_RIGHT": {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0},
+    "MAXIMIZED": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+  },
+  "fit_metrics": {"window_min_width": 320, "window_min_height": 240, "title_min_visible": 120, "title_bar_height": 36},
+  "fit": [
+    {
+      "name": "a frame inside the backdrop scales to pixels",
+      "frame": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5},
+      "backdrop": {"width": 1000, "height": 800},
+      "expected": {"x": 100, "y": 160, "width": 500, "height": 400}
+    },
+    {
+      "name": "a small backdrop raises the window to the minimum size",
+      "frame": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 0.5},
+      "backdrop": {"width": 400, "height": 300},
+      "expected": {"x": 0, "y": 0, "width": 320, "height": 240}
+    },
+    {
+      "name": "a narrow window at the right edge grows to the minimum width and keeps the minimum visible title inside",
+      "frame": {"x": 0.9, "y": 0.1, "width": 0.1, "height": 0.4},
+      "backdrop": {"width": 1000, "height": 800},
+      "expected": {"x": 880, "y": 80, "width": 320, "height": 320}
+    },
+    {
+      "name": "a narrow backdrop raises the width past its edge and the title stays inside on the right",
+      "frame": {"x": 0.5, "y": 0.1, "width": 0.5, "height": 0.4},
+      "backdrop": {"width": 200, "height": 800},
+      "expected": {"x": 80, "y": 80, "width": 320, "height": 320}
+    },
+    {
+      "name": "a short window at the bottom grows to the minimum height and keeps its whole title bar inside",
+      "frame": {"x": 0.1, "y": 0.97, "width": 0.4, "height": 0.03},
+      "backdrop": {"width": 1000, "height": 800},
+      "expected": {"x": 100, "y": 764, "width": 400, "height": 240}
+    }
+  ],
+  "snap_threshold": 16,
+  "snap_zone": [
+    {"pointer": {"x": 5, "y": 400}, "backdrop": {"width": 1000, "height": 800}, "expected": "SNAPPED_LEFT"},
+    {"pointer": {"x": 990, "y": 400}, "backdrop": {"width": 1000, "height": 800}, "expected": "SNAPPED_RIGHT"},
+    {"pointer": {"x": 500, "y": 10}, "backdrop": {"width": 1000, "height": 800}, "expected": "MAXIMIZED"},
+    {"pointer": {"x": 5, "y": 5}, "backdrop": {"width": 1000, "height": 800}, "expected": "MAXIMIZED"},
+    {"pointer": {"x": 500, "y": 400}, "backdrop": {"width": 1000, "height": 800}, "expected": null},
+    {"pointer": {"x": 17, "y": 400}, "backdrop": {"width": 1000, "height": 800}, "expected": null}
+  ],
+  "unsnap": [
+    {
+      "name": "the pointer sits at the grab fraction across the kept width",
+      "kept_frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.6},
+      "pointer": {"x": 0.5, "y": 0.3},
+      "grab_fraction": 0.5,
+      "grab_offset_y": 0.02,
+      "expected": {"x": 0.25, "y": 0.28, "width": 0.5, "height": 0.6}
+    },
+    {
+      "name": "a release near the edge is clamped into the unit square",
+      "kept_frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.6},
+      "pointer": {"x": 0.95, "y": 0.9},
+      "grab_fraction": 0.1,
+      "grab_offset_y": 0.02,
+      "expected": {"x": 0.5, "y": 0.4, "width": 0.5, "height": 0.6}
+    }
+  ],
+  "grid_metrics": {"cell_width": 96, "cell_height": 112, "inset": 16},
+  "grid_dimensions": [
+    {"backdrop": {"width": 1000, "height": 800}, "expected": {"columns": 10, "rows": 7}},
+    {"backdrop": {"width": 100, "height": 100}, "expected": {"columns": 1, "rows": 1}},
+    {"backdrop": {"width": 400, "height": 700}, "expected": {"columns": 4, "rows": 6}}
+  ],
+  "reading_order": [
+    {"index": 0, "columns": 4, "expected": {"column": 0, "row": 0}},
+    {"index": 3, "columns": 4, "expected": {"column": 3, "row": 0}},
+    {"index": 4, "columns": 4, "expected": {"column": 0, "row": 1}},
+    {"index": 9, "columns": 4, "expected": {"column": 1, "row": 2}},
+    {"index": 2, "columns": 1, "expected": {"column": 0, "row": 2}}
+  ],
+  "nearest_free_cell": [
+    {
+      "name": "a free target is its own answer",
+      "target": {"column": 2, "row": 1}, "occupied": [], "grid": {"columns": 4, "rows": 4},
+      "expected": {"column": 2, "row": 1}
+    },
+    {
+      "name": "ties go to the lower column, then the lower row",
+      "target": {"column": 1, "row": 1},
+      "occupied": [{"column": 1, "row": 1}],
+      "grid": {"columns": 4, "rows": 4},
+      "expected": {"column": 0, "row": 1}
+    },
+    {
+      "name": "a target outside the grid is clamped before the search",
+      "target": {"column": 9, "row": 9}, "occupied": [], "grid": {"columns": 3, "rows": 3},
+      "expected": {"column": 2, "row": 2}
+    },
+    {
+      "name": "the four neighbours taken, a diagonal is next",
+      "target": {"column": 1, "row": 1},
+      "occupied": [{"column": 1, "row": 1}, {"column": 0, "row": 1}, {"column": 1, "row": 0}, {"column": 2, "row": 1}, {"column": 1, "row": 2}],
+      "grid": {"columns": 4, "rows": 4},
+      "expected": {"column": 0, "row": 0}
+    },
+    {
+      "name": "a full grid answers the clamped target",
+      "target": {"column": 0, "row": 0},
+      "occupied": [{"column": 0, "row": 0}, {"column": 1, "row": 0}, {"column": 0, "row": 1}, {"column": 1, "row": 1}],
+      "grid": {"columns": 2, "rows": 2},
+      "expected": {"column": 0, "row": 0}
+    }
+  ],
+  "shortcut_placement": [
+    {
+      "name": "stored cells inside the grid are kept, a collision moves the later one",
+      "grid": {"columns": 3, "rows": 3},
+      "cells": [{"column": 0, "row": 0}, {"column": 0, "row": 0}, {"column": 2, "row": 2}],
+      "expected": [{"column": 0, "row": 0}, {"column": 0, "row": 1}, {"column": 2, "row": 2}]
+    },
+    {
+      "name": "a cell off the grid is clamped, then moved to the nearest free cell, after every in-grid shortcut has claimed its cell",
+      "grid": {"columns": 2, "rows": 2},
+      "cells": [{"column": 5, "row": 0}, {"column": 1, "row": 0}],
+      "expected": [{"column": 0, "row": 0}, {"column": 1, "row": 0}]
+    }
+  ]
+}

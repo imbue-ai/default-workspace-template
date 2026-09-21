@@ -1,7 +1,6 @@
 from datetime import datetime
 from enum import auto
 
-from app_instances.data_types import InstanceStatus
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -15,9 +14,13 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
+from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
+from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 
 
 class AgentCreationError(ValueError):
@@ -82,10 +85,9 @@ class SendMessageRequest(FrozenModel):
         ),
     )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
-    active_layout: str = Field(
-        default="", description="The id of the view the sender was on at send time ('' for legacy callers)"
+    desktop_id: str = Field(
+        default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
-    device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
 
 
 class SendMessageResponse(FrozenModel):
@@ -508,7 +510,7 @@ class ChatSnapshot(FrozenModel):
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: InstanceStatus = Field(description="The chat's status, as its instance record reports it")
+    status: ChatStatus = Field(description="The chat's status: working, idle, attention, stopped, or error")
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(
@@ -519,6 +521,9 @@ class ChatSnapshot(FrozenModel):
         description="Sends a finished switch could not deliver, for the composer to take back and then ack",
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
+    last_messaged_at: float | None = Field(
+        description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
 
 
 class ChatSegmentInfo(FrozenModel):
@@ -578,8 +583,6 @@ class CreateChatRequest(FrozenModel):
 class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
-    # Minted with nothing signed in: the page shows the provider chooser, and the launch waits.
-    AWAITING_ACCOUNT = auto()
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
     # user's first send is what picks the account (the chooser opens then) and launches it.
     AWAITING_FIRST_SEND = auto()
@@ -592,14 +595,16 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
 class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
-    Listed as a referenced instance under its chat id (the id mngr will give its first agent),
-    and pushed to the chat pages verbatim as the ``provisional_chat_created`` message.
+    Keyed by its chat id (the id mngr will give its first agent), listed among the chats, and pushed
+    to the chat pages verbatim as the ``provisional_chat_created`` message.
     """
 
     chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")
     name: str = Field(description="The display name minted for it")
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
-    account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
+    account_id: str = Field(
+        default="", description="The account it launches on; empty for a seeded chat before its first send"
+    )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
@@ -630,6 +635,18 @@ class CreateChatResponse(FrozenModel):
     chat_id: str = Field(description="The chat's id (its first agent's id, minted before the create)")
     name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
+
+
+class RenameChatRequest(FrozenModel):
+    """The body of ``POST /api/chats/<chat_id>/rename``: the name the user typed."""
+
+    title: str = Field(min_length=1, max_length=256, description="The chat's new display name")
+
+
+class RenameChatResponse(FrozenModel):
+    """Response from ``POST /api/chats/<chat_id>/rename``."""
+
+    status: str = Field(description="Always 'ok'")
 
 
 class DestroyAgentResponse(FrozenModel):
@@ -746,3 +763,23 @@ class LatchkeyScopeInfo(FrozenModel):
     permissions: tuple[LatchkeyPermissionInfo, ...] = Field(
         default=(), description="Permissions grantable under the scope"
     )
+
+
+class SubagentKey(FrozenModel):
+    """The three parts of a subagent view's key, ``<chat-id>.<agent-id>.<session-id>``."""
+
+    chat_id: ChatId = Field(description="The chat the subagent view belongs to")
+    agent_id: str = Field(description="The agent whose harness session the subagent is a session of")
+    session_id: str = Field(description="The subagent's own session id")
+
+
+@pure
+def parse_subagent_key(key: str) -> SubagentKey | None:
+    """The three parts of a subagent key, or None for a key of any other shape (a chat's own key included)."""
+    parts = key.split(SUBAGENT_KEY_SEPARATOR)
+    if len(parts) != 3:
+        return None
+    chat_id, agent_id, session_id = parts
+    if not AGENT_ID_PATTERN.fullmatch(chat_id) or not AGENT_ID_PATTERN.fullmatch(agent_id) or not session_id:
+        return None
+    return SubagentKey(chat_id=ChatId(chat_id), agent_id=agent_id, session_id=session_id)

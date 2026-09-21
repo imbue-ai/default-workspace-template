@@ -1,17 +1,26 @@
 /**
- * Record factories for the frontend tests: an app as the inventory lists it, one of its
- * instances, a project, and a published template as the catalog lists it. Each takes
- * overrides so a test spells only what it is about.
+ * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
+ * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, and a
+ * published template as the catalog lists it. Each takes overrides so a test spells only what it
+ * is about.
  */
 
-import type { AppRecord, InstanceRecord, ProjectInfo } from "../models/Inventory";
-import type { CatalogTemplate } from "../models/TemplateCatalog";
+import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
+import type { CatalogTemplate } from "../model/TemplateCatalog";
+import { cascadeFrame } from "../geometry/frames";
+import type { ThemeMetrics } from "../theme/metrics";
+import type { AvatarState } from "../reducers/desktopState";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/** A running, non-critical app with instances, one ``new`` action, and no instances listed yet. */
+/** A launch path ``new`` at ``/new`` with no params. */
+export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
+  return { id: "new", label: "New", path: "/new", params: [], ...overrides };
+}
+
+/** A running, non-critical, supervised app with one ``new`` launch path at ``/new``. */
 export function appRecord(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
   return {
     name,
@@ -22,44 +31,80 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     internal: false,
     program: name,
     critical: false,
-    instances_url: "",
-    has_instances: true,
-    actions: [{ id: "new", label: `New ${name}`, params: [] }],
-    default_shortcut: null,
+    launch_paths: [launchPathRecord({ label: `New ${name}` })],
+    default_shortcut: { launch: "new", mode: "focus" },
     launcher_rank: null,
+    pin: null,
     is_running: true,
-    is_listed: true,
-    instances: [],
     ...overrides,
   };
 }
 
-/** An idle, renameable, referenced instance at the app's root. */
-export function instanceRecord(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
+/** A settled window of ``app`` at ``path`` with an empty title. */
+export function windowRecord(
+  id: string,
+  app: string,
+  path: string,
+  overrides: Partial<WindowRecord> = {},
+): WindowRecord {
   return {
-    key: "terminal-1",
-    url: "/",
-    title: "Terminal 1",
-    status: "idle",
-    lifetime: "referenced",
-    last_active: null,
-    renameable: true,
-    stoppable: false,
+    id,
+    app,
+    path,
+    title: "",
+    opened_at: "2026-09-19T00:00:00Z",
+    is_settling: false,
+    is_pinned: false,
+    scope: "linked",
     ...overrides,
   };
 }
 
-/** An empty project named after its id. */
-export function projectRecord(id: string, overrides: Partial<ProjectInfo> = {}): ProjectInfo {
+/** A shared desktop named after its id, with no wallpaper, shortcuts, or windows. */
+export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Desktop {
   return {
     id,
     name: capitalized(id),
-    color: "#123456",
+    color: "#2f6b4f",
     glyph: 0,
-    tabs: [],
+    sharing: "shared",
+    wallpaper: null,
     shortcuts: [],
+    windows: [],
     ...overrides,
   };
+}
+
+/** A connected client on no desktop yet, with no entry presentations. */
+export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}): ClientRecord {
+  return {
+    id,
+    active_desktop: null,
+    last_seen: "2026-09-19T00:00:00Z",
+    is_connected: true,
+    entries: {},
+    ...overrides,
+  };
+}
+
+/** The default design, idle and fresh. */
+export function avatarStateRecord(overrides: Partial<AvatarState> = {}): AvatarState {
+  return {
+    design: "gummy-seal",
+    defaultDesign: "gummy-seal",
+    status: { mood: "idle", is_stale: false },
+    ...overrides,
+  };
+}
+
+/** A layout of ``placements`` with the stamp ``updatedAt`` and no stored window paths. */
+export function layoutRecord(placements: readonly Placement[], updatedAt: string | null = null): Layout {
+  return { updated_at: updatedAt, placements, window_paths: {} };
+}
+
+/** A shown, normal placement at the first cascade frame. */
+export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
+  return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
 }
 
 /** A template titled after its slug, published by "someone" from a repository named after it, with a drawing and no requirements. */
@@ -79,6 +124,28 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
     needs_ai: false,
     apt_packages: [],
     choices: [],
+    ...overrides,
+  };
+}
+
+/** The theme metrics at the contract's default (non-compact) values. */
+export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
+  return {
+    titleBarHeight: 36,
+    taskbarHeight: 48,
+    cellWidth: 96,
+    cellHeight: 112,
+    gridInset: 16,
+    windowMinWidth: 320,
+    windowMinHeight: 240,
+    titleMinVisible: 120,
+    snapThreshold: 16,
+    unsnapDistance: 12,
+    dragThreshold: 4,
+    touchTarget: 32,
+    floatingEntrySize: 56,
+    floatingEntryInsetX: 16,
+    floatingEntryInsetY: 12,
     ...overrides,
   };
 }

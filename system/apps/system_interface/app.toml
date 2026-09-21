@@ -1,5 +1,5 @@
 # The workspace's own shell (window manager plus app management). Internal: it
-# hosts every other app's tabs, so it is never offered as a tab itself.
+# hosts every other app's windows, so it is never offered as a window itself.
 name = "system_interface"
 display_name = "Workspace"
 internal = true

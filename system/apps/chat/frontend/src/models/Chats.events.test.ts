@@ -79,8 +79,8 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("stores a pushed record and replaces it when the same chat is pushed in a new phase", () => {
-    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_account") });
-    expect(manager.getProvisionalChat("agent-1")?.phase).toBe("awaiting_account");
+    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_first_send") });
+    expect(manager.getProvisionalChat("agent-1")?.phase).toBe("awaiting_first_send");
 
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");

@@ -197,7 +197,7 @@ built.
 
 - **Scheduled tasks.** Recurring jobs run through cron drop-ins with a
   catch-up-and-retry runner (`system/scripts/run_job.sh`), and a **schedule agent**
-  can run any skill on a cadence in its own chat tab. See the
+  can run any skill on a cadence in its own chat. See the
   `manage-scheduled-tasks` skill. If the old workspace faked a schedule with a
   long-running loop in a supervisord program, this is where it should go instead.
 - **The Caretaker.** A weekly maintenance agent, **off by default**, woken only
@@ -207,9 +207,9 @@ built.
 - **Templates.** A publishable, bootable snapshot of what a mind has built, so
   another mind can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.
-- **Layout operations.** `system/scripts/layout.py` inspects and rearranges the
-  dockview tabs -- open, split, move, focus, rename, close, maximize, swap a URL.
-  See `manage-layout`.
+- **Desktop operations.** `system/scripts/layout.py` reads and arranges the
+  desktop's windows -- open, focus, place, minimize, maximize, close, navigate.
+  See `manage-desktop`.
 - **`data/.apps/` and `data/.skills/`.** Per-creation data has a declared home
   instead of sharing one `runtime/` directory, and the visible/hidden split under
   `data/` tells the user which folders are theirs to organize.

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-labelledby="pet7-title" data-mood="idle">
+<title id="pet7-title">7 — Jelly cat</title>
+<defs>
+<radialGradient id="pet7-body" cx="35%" cy="23%" r="85%"><stop stop-color="#ffe1eb" stop-opacity=".95"/><stop offset=".48" stop-color="#ffa2bf" stop-opacity=".8"/><stop offset=".82" stop-color="#ffa2bf" stop-opacity=".92"/><stop offset="1" stop-color="#e46d9f" stop-opacity=".96"/></radialGradient>
+<linearGradient id="pet7-milk" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f4ffff" stop-opacity=".92"/><stop offset=".28" stop-color="#bcebf0" stop-opacity=".68"/><stop offset=".56" stop-color="#e4cafa" stop-opacity=".7"/><stop offset=".78" stop-color="#fff0d6" stop-opacity=".8"/><stop offset="1" stop-color="#a6dce5" stop-opacity=".8"/></linearGradient>
+</defs><style>
+.jelly-body {transform-origin:50px 87px;animation:jelly-breathe 3.6s ease-in-out infinite}
+.jelly-eyes {transform-box:fill-box;transform-origin:center;animation:jelly-blink 5.2s infinite}
+.jelly-extra {transform-box:fill-box;transform-origin:center bottom;animation:jelly-sway 3.2s ease-in-out infinite}
+svg[data-mood="working"] .jelly-body,[data-mood="working"] svg .jelly-body {animation:jelly-work 1.3s ease-in-out infinite}
+svg[data-mood="attention"] .jelly-body,[data-mood="attention"] svg .jelly-body {animation:jelly-hop 1.2s ease-in-out infinite}
+@keyframes jelly-breathe {50%{transform:scale(1.035,.965)}}
+@keyframes jelly-blink {0%,91%,97%,100%{transform:scaleY(1)}94%{transform:scaleY(.08)}}
+@keyframes jelly-sway {50%{transform:rotate(5deg)}}
+@keyframes jelly-work {0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg) scale(1.02,.98)}}
+@keyframes jelly-hop {0%,65%,100%{transform:translateY(0)}18%{transform:translateY(1px) scale(1.07,.93)}38%{transform:translateY(-9px) scale(.96,1.04)}57%{transform:scale(1.06,.94)}}
+.jelly-listen {display:none}
+svg[data-mood="listening"] .jelly-body,[data-mood="listening"] svg .jelly-body {animation:jelly-listen 4s ease-in-out infinite;transform:translateY(-2px) scale(1.015,1.025)}
+svg[data-mood="listening"] .jelly-eyes,[data-mood="listening"] svg .jelly-eyes {animation:none;transform:translateY(-1px) scale(1.12)}
+svg[data-mood="listening"] .jelly-listen,[data-mood="listening"] svg .jelly-listen {display:inline}
+svg[data-mood="listening"]:has(.jelly-listen) .jelly-eyes,[data-mood="listening"] svg:has(.jelly-listen) .jelly-eyes {display:none}
+svg[data-mood="listening"] .jelly-extra,[data-mood="listening"] svg .jelly-extra {animation:none;transform:translateY(-2px) rotate(-3deg)}
+@keyframes jelly-listen {0%,100%{transform:translateY(-2px) scale(1.015,1.025)}50%{transform:translateY(-3px) scale(1.02,1.03)}}
+@media(prefers-reduced-motion:reduce){.jelly-body,.jelly-eyes,.jelly-extra{animation:none!important}}
+</style>
+<ellipse cx="50" cy="90" rx="29" ry="3" fill="#e46d9f" opacity=".13"/>
+<g class="jelly-body"><g class="jelly-extra"><path d="M76 77Q99 80 91 57Q87 49 84 54Q80 60 88 64" fill="none" stroke="#e46d9f" stroke-opacity=".8" stroke-width="9" stroke-linecap="round"/><path d="M78 75Q94 79 92 66" fill="none" stroke="#ffc2d7" stroke-width="4" stroke-linecap="round"/></g><path d="M23 43L22 21Q22 15 28 20L41 31Q51 28 60 32L74 20Q79 17 79 24L77 44Q89 62 80 78Q74 88 51 88Q25 89 20 77Q13 59 23 43Z" fill="url(#pet7-body)" stroke="#e46d9f" stroke-width="1.2"/><path d="M27 25L29 38L37 33ZM73 26L65 34L73 38Z" fill="#f789b3" opacity=".6"/>
+<path d="M27 48Q33 38 43 38" fill="none" stroke="white" stroke-opacity=".78" stroke-width="4.2" stroke-linecap="round"/>
+<ellipse cx="69" cy="79" rx="5" ry="2.3" fill="white" opacity=".35"/>
+<g fill="#382643"><g class="jelly-eyes"><path d="M37 59q4 6 8 0m10 0q4 6 8 0" fill="none" stroke="#382643" stroke-width="2.6" stroke-linecap="round"/></g></g><g fill="#ef7c99" opacity=".5"><ellipse cx="33" cy="66" rx="4.2" ry="2.5"/><ellipse cx="67" cy="66" rx="4.2" ry="2.5"/></g><path d="M47 68q3 4 6 0" fill="none" stroke="#593349" stroke-width="1.8" stroke-linecap="round"/><g class="jelly-listen"><ellipse cx="41" cy="58" rx="4.4" ry="5.5" fill="#ffe1eb" stroke="#382643" stroke-width="1.4"/><ellipse cx="41" cy="56.5" rx="2.5" ry="3.2" fill="#382643"/><circle cx="40.2" cy="55.2" r=".9" fill="white"/><ellipse cx="59" cy="58" rx="4.4" ry="5.5" fill="#ffe1eb" stroke="#382643" stroke-width="1.4"/><ellipse cx="59" cy="56.5" rx="2.5" ry="3.2" fill="#382643"/><circle cx="58.2" cy="55.2" r=".9" fill="white"/><path d="M36 49q4-2 8 0m10 0q4-2 8 0" fill="none" stroke="#382643" stroke-opacity=".7" stroke-width="1.3" stroke-linecap="round"/><path d="M28 26l3 8 4-2m37-5-3 7-3-2" fill="none" stroke="#fff0f5" stroke-width="2" stroke-linecap="round"/></g></g></svg>

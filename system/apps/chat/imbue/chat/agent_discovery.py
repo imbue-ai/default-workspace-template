@@ -266,7 +266,7 @@ def _first_failure(result: MessageResult) -> SendFailure:
 
     Each of ``result.failures`` carries the reason alone and mngr's classification of it, so
     nothing here parses prose or strips framing -- the notice supplies its own title and sits in
-    the failing agent's own tab. A send can fail with no entry at all (nothing matched the id),
+    the failing agent's own chat. A send can fail with no entry at all (nothing matched the id),
     which is its own answer.
     """
     for failure in result.failures:

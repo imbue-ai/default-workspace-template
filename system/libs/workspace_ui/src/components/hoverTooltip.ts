@@ -3,15 +3,14 @@
  * next to its target, positioned (fixed) under the target after a hover-intent
  * delay.
  *
- * Tab content in dockview can use neither of the usual tooltip mechanisms.
- * Native ``title`` is suppressed: dockview marks every tab ``draggable``
- * (tab.js sets ``element.draggable = true``, plus
- * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble is
- * clipped by the tab strip's overflow (``.dv-tabs-container`` is
- * ``overflow: auto`` and ``.dv-groupview`` is ``overflow: hidden``). A
- * body-level, fixed-position element driven by our own listeners avoids both:
- * it is not a native tooltip, and it is not inside the clipping container.
+ * The desktop's chrome can use neither of the usual tooltip mechanisms.
+ * Native ``title`` cannot be timed or styled, and much of the chrome it would
+ * sit on is dragged by pointer (a window's title bar, a shortcut icon), where a
+ * native tooltip surfacing mid-gesture is noise. A CSS ``::after`` bubble is
+ * clipped by the container its trigger sits in: a window's body is
+ * ``overflow: hidden`` and the taskbar's entries strip scrolls. A body-level,
+ * fixed-position element driven by our own listeners avoids both: it is not a
+ * native tooltip, and it is not inside the clipping container.
  *
  * That being the only mechanism that works everywhere in the workspace, it is
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
@@ -32,12 +31,11 @@
  * leaves the document takes the bubble with it. A trigger must be IN the
  * document to be heard -- a detached tree never reaches the listeners.
  *
- * The one deliberate exception is the project rail: a rail row sits directly
- * above the row it is being compared against (e.g. the shortcut a hover is
- * about to reveal versus the one below it), so a centered-below bubble covers
- * exactly the row the tooltip is meant to help someone choose. ``placeTooltip``
- * takes an optional ``placement`` for that one case, defaulting to the shared
- * centered-below behavior everywhere else.
+ * The one deliberate exception is the chat app's collapsed chat rail: a rail
+ * row sits directly above the next chat someone is choosing between, so a
+ * centered-below bubble covers exactly the row the tooltip is meant to help
+ * them choose. ``placeTooltip`` takes an optional ``placement`` for that one
+ * case, defaulting to the shared centered-below behavior everywhere else.
  */
 
 import type m from "mithril";
@@ -359,7 +357,7 @@ function wireListeners(): void {
 
 /**
  * Give an element a tooltip, or take it away with ``null``. For DOM this
- * workspace builds by hand (the lightbox, the dock's tab strip); mithril views
+ * workspace builds by hand (the lightbox); mithril views
  * spread ``hoverTooltipAttrs`` instead. Removing the element needs no cleanup:
  * nothing is attached to it.
  */

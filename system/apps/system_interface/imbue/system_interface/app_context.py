@@ -36,7 +36,7 @@ class SystemInterfaceState(MutableModel):
     config: Config
     # The shell's own collaborators (the inventory, the stores, the activity log).
     shell: ShellState
-    # The New Tab page's template catalog: fetched from its URL, cached under the shell's state.
+    # The launcher's template catalog: fetched from its URL, cached under the shell's state.
     template_catalog: TemplateCatalogStore
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).

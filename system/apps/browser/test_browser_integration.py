@@ -255,8 +255,8 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     assert client.get("/browsers").status_code == 200
     assert client.get("/health").get_json()["initializing"] is True
     assert client.get("/init-status").status_code == 200
-    # Create is NOT init-gated: it reaches manager.create (stubbed here to avoid a real
-    # launch) and returns 200, NOT 503.
+    # Create is NOT init-gated: a named create reaches manager.create (stubbed here to avoid a
+    # real launch) and returns 200, NOT 503; a nameless one answers the one browser that exists.
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
 
     async def fake_create(
@@ -267,8 +267,10 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
         return created
 
     monkeypatch.setattr(bsession.BrowserSessionManager, "create", fake_create)
-    create = client.post("/browsers")
+    create = client.post("/browsers", json={"name": "morgan-lee"})
     assert create.status_code == 200 and create.get_json()["name"] == "morgan-lee"
+    existing = client.post("/browsers")
+    assert existing.status_code == 200 and existing.get_json()["name"] == "alex-smith"
     # conftest re-sets _init_done on teardown.
 
 

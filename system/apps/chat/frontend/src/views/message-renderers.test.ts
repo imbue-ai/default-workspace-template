@@ -22,30 +22,25 @@ import { startChatOnAccount } from "../shell";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
-// needs openSubagentTab, and the card path never calls MarkdownContent.
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+// needs openSubagentView, and the card path never calls MarkdownContent.
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
 
 // The auth-error note moves the chat through the switch dialog's entry point and reads the chat
-// and its accounts from their models; the chooser's open/pick state is the real module's.
+// from its model; the chooser's open/pick state is the real module's.
 const switching = vi.hoisted(() => {
   // Opening the chooser redraws, and mithril schedules a redraw on an animation frame.
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
   return {
     chat: undefined as unknown,
-    accounts: [] as { id: string; harness: string; lane: string; label: string }[],
-    beginSwitchTo: vi.fn(),
+    beginSwitchToAccountId: vi.fn(),
   };
 });
-vi.mock("./SwitchDialog", () => ({ beginSwitchTo: switching.beginSwitchTo }));
+vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => switching.chat,
-}));
-vi.mock("../models/Providers", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../models/Providers")>()),
-  accountForAgent: (id?: string) => switching.accounts.find((account) => account.id === id) ?? null,
 }));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
@@ -568,24 +563,35 @@ describe("thinking disclosure", () => {
   });
 });
 
-// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
-function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
-  if (node == null) return null;
+interface VnodeLike {
+  tag?: unknown;
+  text?: unknown;
+  children?: unknown;
+  attrs?: Record<string, unknown>;
+}
+
+// Walk a mithril vnode tree and return the first vnode `isMatch` accepts. A match is not
+// descended into, so the outermost of a nest of matches wins.
+function findVnode(node: unknown, isMatch: (vnode: VnodeLike) => boolean): VnodeLike | null {
+  if (node == null || typeof node !== "object") return null;
   if (Array.isArray(node)) {
     for (const child of node) {
-      const found = findByClass(child, name);
-      if (found) return found;
+      const found = findVnode(child, isMatch);
+      if (found !== null) return found;
     }
     return null;
   }
-  if (typeof node === "object") {
-    const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
-      return v as { attrs?: Record<string, unknown> };
-    }
-    return findByClass(v.children, name);
-  }
-  return null;
+  const v = node as VnodeLike;
+  if (isMatch(v)) return v;
+  return findVnode(v.children, isMatch);
+}
+
+// The first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  return findVnode(node, (v) => {
+    const className = v.attrs?.className;
+    return typeof className === "string" && className.split(" ").includes(name);
+  });
 }
 
 describe("expanded tool row payload states", () => {
@@ -637,33 +643,23 @@ describe("expanded tool row payload states", () => {
 });
 
 describe("the auth-error note's switch link", () => {
-  const OPENAI = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
-  const ANTHROPIC = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
+  const OPENAI_ID = "acct-openai";
+  const ANTHROPIC_ID = "acct-anthropic";
 
   function authErrorEvent(): AssistantMessageEvent {
     return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
   }
 
   function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
-    if (node == null || typeof node !== "object") return null;
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const found = findButton(child, label);
-        if (found !== null) return found;
-      }
-      return null;
-    }
-    const v = node as { tag?: unknown; text?: unknown; children?: unknown; attrs?: { onclick: () => void } };
-    if (v.tag === "button" && allText(v).trim() === label) return v as { attrs: { onclick: () => void } };
-    return findButton(v.children, label);
+    const found = findVnode(node, (v) => v.tag === "button" && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void } });
   }
 
   beforeEach(() => {
     closeProviderChooser();
-    switching.beginSwitchTo.mockClear();
+    switching.beginSwitchToAccountId.mockClear();
     vi.mocked(startChatOnAccount).mockClear();
-    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI.id } });
-    switching.accounts = [OPENAI, ANTHROPIC];
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
   });
 
   it("switches the failed chat to the account picked, rather than starting a new chat", () => {
@@ -672,11 +668,11 @@ describe("the auth-error note's switch link", () => {
 
     expect(isProviderChooserOpen()).toBe(true);
     expect(isPickingAccount()).toBe(true);
-    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI.id, note: "Not working", isFailing: true });
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
 
-    pickAccount(ANTHROPIC.id);
+    pickAccount(ANTHROPIC_ID);
 
-    expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
     expect(startChatOnAccount).not.toHaveBeenCalled();
     expect(isProviderChooserOpen()).toBe(false);
   });
@@ -695,9 +691,9 @@ describe("the auth-error note's switch link", () => {
 
     expect(sessionLimit.is_auth_error).toBe(false);
     findButton(children, "switch to another provider")!.attrs.onclick();
-    pickAccount(ANTHROPIC.id);
+    pickAccount(ANTHROPIC_ID);
 
-    expect(switching.beginSwitchTo).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC);
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
   });
 
   it("offers the switch on an overloaded provider too", () => {

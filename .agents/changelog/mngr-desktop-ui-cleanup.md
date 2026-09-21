@@ -1,0 +1,1 @@
+- The `manage-desktop` skill says `layout.py desktops` and `list` print JSON (they no longer print YAML by default).

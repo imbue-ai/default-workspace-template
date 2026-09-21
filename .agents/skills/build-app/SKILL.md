@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -8,7 +8,7 @@ metadata:
 
 # How to build an app
 
-An "app" here is something the user can click on as a tab in
+An "app" here is something the user can open as a window in
 the desktop client and see render at its own browser origin --
 locally `http://<name>.<workspace-host>/` (e.g.
 `http://news.host-ab12.localhost:8421/`). The forwarder routes that
@@ -62,7 +62,7 @@ Map of the flow:
   service, put a mock UI in front of the user, loop to explicit confirmation of
   the look-and-feel. Hard gate.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
-  *after* confirmation): implement real routes, verify, surface the tab.
+  *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
   confirms the *working* site looks right, hand thorough testing + the review
   gates to a background worker. The main agent never runs those itself.
@@ -117,12 +117,12 @@ behavior. Use the escape hatch instead.
 
 Do not extend `system/apps/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new apps go in their own scaffolded lib
-under `system/apps/<your-package>/` so they get an isolated tab and origin.
+under `system/apps/<your-package>/` so they get an isolated window and origin.
 
 ## Pre-flight (both paths)
 
 - **Pick a kebab-case app name.** Becomes the service's hostname
-  label: the tab renders at `http://<name>.<workspace-host>/`, so the
+  label: the window renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
   prefixes are reserved for workspace hostname coordinates), and it must not
@@ -189,7 +189,7 @@ is taken, or the manifest check, the tool install or `uv sync` fails.
 What gets generated:
 
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
-  `name`, `display_name`, `icon`, `instances = false` (one tab),
+  `name`, `display_name`, `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
@@ -216,11 +216,10 @@ What gets generated:
   carries the **location beacon** one-liner -- a script that posts
   `{type: "shell:location", path: location.pathname + location.search}`
   to `window.parent` on page load. Keep that line on every page the app
-  serves: it is what lets the workspace shell reopen the app's tab at
+  serves: it is what lets the workspace shell reopen the app's window at
   the place it was showing (the shell validates the sender's origin and
-  relays the path to the app's own instances API, which stores it on the
-  instance's record). An app that drops it simply always reopens at its
-  origin.
+  stores the path on the window's record). An app that drops it simply
+  always reopens at its origin.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
@@ -290,7 +289,7 @@ Scaffolding the service is fine before confirmation -- it is cheap and reversibl
 **Building the real data layer or state architecture before the user confirms the
 look-and-feel is the tripwire: do not.** Instead, serve a *throwaway mock* of the
 proposed UI as a route inside the scaffolded service, so the user sees it as a
-real tab and reacts to the actual look-and-feel.
+real window and reacts to the actual look-and-feel.
 
 This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
@@ -302,7 +301,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--view` flag), then loop:
+- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -329,7 +328,7 @@ Everything from here runs **only after** the user has confirmed the mock. The
 goal of the foreground work is a *usable* site the user can actually try -- not a
 fully hardened one. Implement the real routes (replacing the mock), wire in the
 data/state architecture you recorded in Step 0, run the Step 3 smoke verify, and
-surface the tab (Step 4). Then **stop and hand the running site to the user** --
+surface the window (Step 4). Then **stop and hand the running site to the user** --
 the thorough testing and review gates happen in the background (Step 5), not here.
 
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
@@ -416,50 +415,48 @@ registered backend URL `http://127.0.0.1:<port>/` then a Playwright
 assertion on a unique-to-your-app marker.
 
 If verification surfaces something unexpected (connection refused,
-a tab stuck on the loading page, broken WebSockets), see
+a window stuck on the loading page, broken WebSockets), see
 [references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
 -- it's symptom-indexed.
 
 ## Step 4: Surface the view to the user
 
 Once verification passes, tell the workspace UI to actually open the
-new tab. Without this step the user would have to discover it via the
-"+" dropdown -- skip the surfacing step only for services with no UI
+new window. Without this step the user would have to discover it via the
+launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
 python3 system/scripts/layout.py open <name>
 ```
 
-With no `--view`, the op edits the view the target client is looking
-at, which is where the user expects the new tab. (Pass `--view <name>`
--- a project's name, or `Everything` -- to surface it in a different
-view instead; the op edits that view's arrangement and switches the
-client to it.)
-`layout.py` POSTs to a loopback-only shell endpoint that applies the op
-to that client's saved layout (no browser needs to be connected) and
-broadcasts `layout_updated`, so every window of the client docks the
-new tab beside the requesting chat, or brings the tab for `<name>` to
-the front when it is already open.
+With no `--desktop`, the op edits the desktop the target client is looking
+at, which is where the user expects the new window. (Pass `--desktop <name>`
+to surface it on a different desktop instead; the op edits that desktop and
+switches the client to it.)
+`layout.py` POSTs to a loopback-only shell endpoint that opens the window
+on the desktop and writes that client's placement of it (no browser needs
+to be connected) and broadcasts the change, so the client's screen shows the
+new window on top, or brings the window for `<name>` to the front when one is
+already open at that path. The new window's id is printed to stdout.
 The script briefly waits for the service to appear in
 `data/.state/apps.toml` so it's safe to run immediately after the
 `forward_port.py` call.
 
-To force a reload of an already-open tab (e.g. after redeploying the
+To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
 
-For anything beyond `open` / `refresh` -- splitting, moving, focusing,
-renaming, maximizing, replacing an iframe's URL, inspecting the live
-tree -- see the `manage-layout` skill. `layout.py list` is also useful
-when the user is asking about what tabs are available (it prints every
-app with its instances: address, title, status, and which clients have
-each docked).
+For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
+maximizing, navigating a window to another path, reading the desktops -- see
+the `manage-desktop` skill. `layout.py list` is also useful when the user is
+asking about what is open (it prints every app with its launch paths and
+its windows, and every desktop).
 
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
@@ -496,7 +493,7 @@ Reading the confirmation signal:
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
 task file (set `type: app`), launching the generic worker,
-polling, merging on `done`, and refreshing the tab after merge. Give it only:
+polling, merging on `done`, and refreshing the window after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker
 loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
@@ -517,7 +514,6 @@ it as `system/apps/<name>/app.toml` (like the `files` app):
 name = "<name>"
 display_name = "<What users see>"
 icon = "icon.svg"
-instances = false
 priority = "user"
 program = "<name>"
 ```
@@ -599,16 +595,22 @@ Flags:
 
 - `--manifest`: the app's `app.toml`. Its `name` (validated like
   `--name` below), the icon file it names (validated like `--icon-file`),
-  and its static fields (`display_name`, `instances`, `instances_url`,
-  `critical`, `priority`, `program`, `internal`, `default_shortcut`,
-  `actions`) are copied onto the registry row on every call, so a changed
-  manifest updates the row on the next start. This is the form every app
-  with a directory uses. `--name` may accompany it and must then equal the
-  manifest's name; `--icon-file`, `--program`, `--internal` and `--no-icon`
-  are for registrations with no app directory (previews, isolated test
-  servers) and cannot be combined with it.
+  and its static fields (`display_name`, `critical`, `priority`, `program`,
+  `internal`, `launcher_rank`, `default_shortcut`, `launch_paths`, `pin`) are
+  copied onto the registry row on every
+  call, so a changed manifest updates the row on the next start. This is
+  the form every app with a directory uses. A `[pin]` table (`path`, and
+  optionally `style = "plain" | "avatar"`, `scope = "linked" | "independent"`,
+  `default_mode = "bar" | "floating"`) gives the app one window at that path
+  on every desktop that is never closed and whose taskbar entry each client
+  may draw in the bar or floating above the windows; almost no app wants
+  one (the chat's root window is the case it exists for), so leave it out
+  unless the user asked for an always-present window. `--name` may accompany it and
+  must then equal the manifest's name; `--icon-file`, `--program`,
+  `--internal` and `--no-icon` are for registrations with no app directory
+  (previews, isolated test servers) and cannot be combined with it.
 - `--name`: app name. It becomes the service's hostname label (the
-  tab renders at `http://<name>.<workspace-host>/`), so it is
+  window renders at `http://<name>.<workspace-host>/`), so it is
   validated: lowercase letters/digits/underscores with single hyphens,
   and it must not be `localhost` or start with `host-` or `agent-`
   (reserved for workspace hostname coordinates). Registration fails
@@ -643,7 +645,7 @@ Flags:
   user explicitly asks for a colored icon.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
-  declines an icon, or for short-lived preview tabs.
+  declines an icon, or for short-lived preview windows.
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what

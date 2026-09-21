@@ -1,0 +1,3 @@
+The shared tool-environment sweep in `tool_env.py` takes the tool to sweep as a parameter instead of handling `mngr` only, so the update apply can reuse it for app tools, and it removes every console script that points into the environment it deletes rather than only the one named after the tool. The build's `drop-shadowing-mngr` still sweeps only `mngr`, but now also takes any other script left pointing into the stale copy.
+
+The safe-update-apply plan describes the environment snapshots the way the apply resolves them -- from the console script behind a tool, else the mngr tool's directory, else the build's pinned tool home -- instead of via `uv tool dir`, a command the apply no longer runs anywhere and never used to pick a snapshot target.
