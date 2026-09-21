@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
+import { placementOf } from "../geometry/stack";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
 import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
@@ -585,10 +586,14 @@ describe("gestures", () => {
     store.updateWindowMove({ x: 150, y: 90 });
     store.updateWindowMove({ x: 5, y: 400 });
     expect(store.gestureRectFor("win-1")).not.toBeNull();
+    expect(store.windowRect("win-1")).toEqual(store.gestureRectFor("win-1"));
     expect(store.snapPreviewRect()).not.toBeNull();
     expect(redraws).toBe(afterBegin);
     store.endWindowMove({ x: 200, y: 200 });
     expect(redraws).toBeGreaterThan(afterBegin);
+    // Once the gesture is over the window's rectangle is its placement's again.
+    expect(store.gestureRectFor("win-1")).toBeNull();
+    expect(store.windowRect("win-1")).toEqual(store.renderedRect(placementOf(store.getState().layout, "win-1")));
 
     const beforeResize = redraws;
     store.beginWindowResize("win-1", "se");
