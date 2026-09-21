@@ -27,14 +27,30 @@ background agent, which is its own chat -- or the human).
   always wins and pins the browser to the human. For direct control ownership is a
   sticky lease (acquired on the first command, re-checked before every command, and
   auto-released when idle); for `task` it is bound to the live request connection.
-- **Launch path** (`GET /new[?url=]`, the manifest's `new` launch path): the same
-  create as `POST /browsers` with no name, answered as a redirect to the new
-  browser's page `/?session=<name>` (an empty `url` opens the home page, like no
-  `url` at all; a `url` that is not an absolute `http(s)` URL is 400; 409 with the
-  reason while the fleet is full, 503 while Chromium is not installed). The shell
-  opens a browser window there (`layout.py open browser --launch new --param
-  url=<url>`); everything else about a browser it learns from the page itself through
-  the app contract. The `/browsers` routes serve the CLI and the viewer. Every browser
+- **One browser** (`BROWSER_MAX_SESSIONS`, default 1): a second Chromium is what a
+  small workspace cannot afford, so the fleet holds one browser, `browser-1`, and
+  it lives as long as some desktop window shows it
+  (`docs/system/specs/window-bound-resources.md`). The shell posts every closed
+  window of the browser to `POST /api/window-closed` (the manifest's
+  `window_closed_path`), and the daemon sweeps the shell's windows
+  (`GET /api/desktops`, through `app_manifest.shell_windows`) every
+  `BROWSER_WINDOW_SWEEP_SECONDS` (default 90) regardless: a browser some window
+  showed (recorded as `window_seen` in the manifest) and none shows any more is
+  stopped, never deleted, so its profile and tabs come back with its next window.
+  A browser no window ever showed (an agent's, with nobody watching) outlives every
+  sweep; a shell that cannot be read is a skipped sweep. Several windows can show
+  the one browser at once (each is a viewer of the same display). A workspace saved
+  under a larger cap restores its first browser and registers the rest stopped.
+- **Launch path** (`GET /new[?url=]`, the manifest's `new` launch path): the browser,
+  as a redirect to its page `/?session=<name>` -- created when there is none, started
+  again when it was stopped, and answered as it is when it runs, with `url` opened
+  as a new tab in front (an empty `url` opens nothing new, like no `url` at all; a
+  `url` that is not an absolute `http(s)` URL is 400; 503 while Chromium is not
+  installed). `POST /browsers` with no name answers the same browser; with a name
+  it is a create (409 for a duplicate or a full fleet). The shell opens a browser
+  window at the launch path (`layout.py open browser`); everything else about a
+  browser it learns from the page itself through the app contract. The `/browsers`
+  routes serve the CLI and the viewer. Every browser
   can be stopped: `POST /browsers/<name>/stop` ends its Chromium (refreshing its tab
   list first) but keeps the browser, its profile, and its tabs; `.../start` relaunches
   it on those tabs from the same profile (409 while it is still launching, or when
@@ -81,10 +97,11 @@ background agent, which is its own chat -- or the human).
   fleet is restored **eager-sequentially** (one browser at a time, no cold-boot
   memory spike) behind an **init gate**: state-changing commands return a 503
   "initializing" until restore finishes, while `ls`/`state` stay open. A fresh
-  workspace starts with an empty fleet (no default browser); the first `new`
-  creates one. `close <name>` retires a browser and forgets its profile; a
-  crashed browser is never restored as healthy; a stopped browser comes back
-  stopped, with its tabs, until it is started.
+  workspace starts with an empty fleet; the first `new` (or the first browser
+  window) creates the browser. `close <name>` retires a browser and forgets its
+  profile, which only the fleet CLI does; a crashed browser is never restored as
+  healthy; a stopped browser comes back stopped, with its tabs, until it is started
+  (its next window starts it).
   - The profile dir name contains the literal `browser-use-user-data-dir-` substring
     on purpose -- it makes browser_use's `_copy_profile()` use the dir in place
     instead of copying it to a temp dir (which would silently defeat persistence).

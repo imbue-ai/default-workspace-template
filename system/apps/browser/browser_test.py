@@ -691,6 +691,7 @@ def test_create_persists_the_init_browser_before_it_is_running(monkeypatch: pyte
     # (finding [5]): create() persists the manifest the moment the browser is registered in
     # `init`, not only after it reaches `running`. We stub the launch so it never comes up,
     # then assert the init browser is already in the on-disk manifest.
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 3)
     monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, session, **k: None)
     mgr = bsession.BrowserSessionManager()
 
@@ -928,6 +929,7 @@ def test_create_counts_manifest_entries_and_profiles_as_taken(monkeypatch: pytes
     # profile dir a crash orphaned, both hold their names: a minted name never
     # lands on either (which is what keeps a new browser from adopting an old
     # profile's cookies), and an explicit create naming one is refused.
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 3)
     monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
     manifest.write_manifest(manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-1", tabs=[])]))
@@ -945,6 +947,7 @@ def test_create_counts_manifest_entries_and_profiles_as_taken(monkeypatch: pytes
 
 
 def test_create_rejects_invalid_and_duplicate_user_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 3)
     monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
 
@@ -1071,7 +1074,7 @@ def test_snapshot_persists_init_running_and_crashed_topology_only() -> None:
     assert sorted(e.id for e in snap.browsers) == ["alex-smith", "morgan-lee", "riley-jones"]
     riley = next(e for e in snap.browsers if e.id == "riley-jones")
     assert riley.tabs == ["https://example.com"]  # carried forward from the prior checkpoint
-    assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab", "stopped"}
+    assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab", "stopped", "window_seen"}
 
 
 class _FailingTargetsCdpClient(NavigatingCdpClient):
@@ -1385,6 +1388,7 @@ def test_restore_keeps_a_flaked_browser_for_next_boot(monkeypatch: pytest.Monkey
     # A transient relaunch failure must NOT lose the saved browser: it stays in the
     # manifest (for a next-boot retry) and its profile is NOT swept. (Durability.)
     (bsession._PROFILE_ROOT / "browser-use-user-data-dir-riley-jones").mkdir(parents=True)
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 3)
     _stub_start(monkeypatch, fail_names={"riley-jones"})
     manifest.write_manifest(
         manifest.Manifest(
@@ -1843,3 +1847,142 @@ def test_message_agent_logs_a_messenger_that_exits_nonzero(monkeypatch: pytest.M
     [warning] = warnings
     assert "exited 7" in warning
     assert "riley" in warning
+
+
+# the one browser: ensure, the window sweep, and the cap on restore
+
+
+def test_ensure_browser_reuses_the_one_browser_and_relaunches_it_when_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 1)
+    calls = _stub_start(monkeypatch)
+    mgr = _manager()
+
+    # An empty fleet: a create, launched on the start page.
+    created = asyncio.run(mgr.ensure_browser("https://one.example"))
+    assert created.browser_id == "browser-1"
+    asyncio.run(_await_launch(created))
+    assert calls == [("browser-1", ["https://one.example"])]
+
+    # Up already: the same browser, and a start page becomes a new tab rather than a launch.
+    opened: list[str] = []
+
+    async def fake_open_tab(self: bsession.LiveBrowser, url: str) -> None:
+        opened.append(url)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "open_tab", fake_open_tab)
+    assert asyncio.run(mgr.ensure_browser("https://two.example")) is created
+    assert asyncio.run(mgr.ensure_browser(None)) is created
+    assert opened == ["https://two.example"]
+    assert calls == [("browser-1", ["https://one.example"])]
+
+    # Stopped: relaunched on its tabs plus the start page, which comes up in front.
+    created._lifecycle = "stopped"
+    created._last_known_tabs = ["https://one.example"]
+
+    async def ensure_and_await() -> bsession.LiveBrowser:
+        browser = await mgr.ensure_browser("https://three.example")
+        await _await_launch(browser)
+        return browser
+
+    assert asyncio.run(ensure_and_await()) is created
+    assert calls[-1] == ("browser-1", ["https://one.example", "https://three.example"])
+    assert created._last_known_active_tab == 1
+    assert created._lifecycle == "running"
+
+
+async def _await_launch(browser: bsession.LiveBrowser) -> None:
+    task = browser._launch_task
+    if task is not None:
+        await task
+
+
+def test_sweep_marks_browsers_a_window_shows_and_stops_the_ones_it_showed_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _manager()
+    shown_once = _running_browser("browser-1")
+    never_shown = _running_browser("browser-2")
+    mgr._browsers = {"browser-1": shown_once, "browser-2": never_shown}
+    stops: list[str] = []
+
+    async def fake_stop(self: bsession.LiveBrowser) -> None:
+        stops.append(self.browser_id)
+        self._lifecycle = "stopped"
+
+    monkeypatch.setattr(bsession.LiveBrowser, "stop", fake_stop)
+
+    # A window shows browser-1; one is still settling at the launch path and shows nothing.
+    assert asyncio.run(mgr.sweep_windows(["/?session=browser-1", "/new?url=https%3A%2F%2Fx"])) == []
+    assert (shown_once._is_window_seen, never_shown._is_window_seen) == (True, False)
+    assert stops == []
+
+    # Every window closed: the browser a window showed stops, the one nobody showed stays up.
+    assert asyncio.run(mgr.sweep_windows([])) == ["browser-1"]
+    assert stops == ["browser-1"]
+    assert shown_once._lifecycle == "stopped"
+    assert never_shown._lifecycle == "running"
+    # Stopped already: a later sweep stops nothing again.
+    assert asyncio.run(mgr.sweep_windows([])) == []
+    assert stops == ["browser-1"]
+
+
+def test_a_sweep_that_cannot_read_the_shell_does_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _manager()
+    browser = _running_browser("browser-1")
+    browser._is_window_seen = True
+    mgr._browsers["browser-1"] = browser
+    monkeypatch.setattr(bsession, "read_app_window_paths", lambda shell_url, app: None)
+
+    assert asyncio.run(mgr.sweep_from_shell("http://127.0.0.1:1")) is None
+    assert browser._lifecycle == "running"
+
+    monkeypatch.setattr(bsession, "read_app_window_paths", lambda shell_url, app: [])
+    monkeypatch.setattr(bsession.LiveBrowser, "stop", _stop_in_place)
+    assert asyncio.run(mgr.sweep_from_shell("http://127.0.0.1:1")) == ["browser-1"]
+    assert browser._lifecycle == "stopped"
+
+
+async def _stop_in_place(self: bsession.LiveBrowser) -> None:
+    self._lifecycle = "stopped"
+
+
+def test_window_seen_rides_the_manifest_through_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_start(monkeypatch)
+    manifest.write_manifest(
+        manifest.Manifest(
+            browsers=[
+                manifest.ManifestEntry(id="browser-1", tabs=["https://x"], window_seen=True),
+                manifest.ManifestEntry(id="browser-2", tabs=["https://y"], stopped=True, window_seen=True),
+            ]
+        )
+    )
+    mgr = _manager()
+
+    asyncio.run(mgr.restore())
+
+    assert calls == [("browser-1", ["https://x"])]
+    assert mgr.get("browser-1")._is_window_seen is True
+    assert mgr.get("browser-2")._is_window_seen is True
+    reconciled = manifest.read_manifest()
+    assert reconciled is not None
+    assert [(entry.id, entry.window_seen) for entry in reconciled.browsers] == [("browser-1", True), ("browser-2", True)]
+
+
+def test_restore_brings_saved_browsers_beyond_the_cap_back_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 1)
+    calls = _stub_start(monkeypatch)
+    manifest.write_manifest(
+        manifest.Manifest(
+            browsers=[
+                manifest.ManifestEntry(id="browser-1", tabs=["https://x"]),
+                manifest.ManifestEntry(id="browser-2", tabs=["https://y"]),
+            ]
+        )
+    )
+    mgr = _manager()
+
+    asyncio.run(mgr.restore())
+
+    assert calls == [("browser-1", ["https://x"])]
+    assert mgr.get("browser-1")._lifecycle == "running"
+    assert mgr.get("browser-2")._lifecycle == "stopped"
+    assert asyncio.run(mgr.get("browser-2").tab_urls()) == (["https://y"], 0)
+    assert mgr.the_browser() is mgr.get("browser-1")
