@@ -1442,7 +1442,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
-        expect(menu.locator('[data-menu-item="close"]')).to_have_count(0)
+        expect(menu.locator('[data-menu-item="close"]')).to_have_count(1)
         menu.locator('[data-menu-item="move-to-taskbar"]').click()
         expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
         expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
@@ -1564,14 +1564,14 @@ def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tm
             )
             phone_entry.tap()
             expect(_shown_windows(phone_page)).to_have_count(0)
-            # A long press (a touch press held still) opens the entry's menu, which offers no Float and no Close
+            # A long press (a touch press held still) opens the entry's menu, which offers no Float (its Close minimizes)
             # on a phone.
             phone_entry.dispatch_event(
                 "pointerdown", {"pointerType": "touch", "button": 0, "buttons": 1, "pointerId": 3, "bubbles": True}
             )
             expect(phone_page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
             expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="float"]')).to_have_count(0)
-            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
+            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(1)
             phone_page.keyboard.press("Escape")
             assert _client_entries(server.base_url, _client_id(phone_page)) == {}
         expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating")
