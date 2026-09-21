@@ -168,9 +168,15 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # Inbound copies of the gateway's identity headers are stripped before the
     # request reaches a backend, and only the verified /_auth/verify values are
     # injected -- so a client can never forge ownership or an email.
-    assert "request_header -X-Share-Owner" in rendered
-    assert "request_header -X-Share-Email" in rendered
-    assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Share-Owner X-Share-Email" in rendered
+    assert "request_header -X-Imbue-Identity" in rendered
+    assert "X-Share-Owner" not in rendered
+    assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Imbue-Identity" in rendered
+    # The strip precedes the forward_auth block, so no inbound copy can survive.
+    forward_auth_directive = "forward_auth 127.0.0.1:8791"
+    assert rendered.index("request_header -X-Imbue-Identity") < rendered.index(forward_auth_directive)
+    # The refresh route is served at every origin, ahead of the auth-gated handle.
+    assert "handle /_auth/refresh {" in rendered
+    assert rendered.index("handle /_auth/refresh {") < rendered.index(forward_auth_directive)
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so

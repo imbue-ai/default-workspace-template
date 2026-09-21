@@ -224,7 +224,7 @@ Adding a shortcut: the launcher's tiles offer "Add to desktop" for each launch p
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-The tray's one widget is Desktops (concepts.md 2.8); it is one component with one popover, and adding another is adding a component to a list.
+The tray's widgets are Presence (one avatar per connected user, drawn only when someone is recorded; the share identity spec) and Desktops (concepts.md 2.8); each is one component, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher

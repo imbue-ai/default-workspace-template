@@ -1,11 +1,13 @@
 """The gateway's HTTP surface: caddy's forward_auth backend + the login callback.
 
 Every request to a shared origin passes through ``/_auth/verify`` (session
-cookie verified, email re-checked against the grants file, Origin policy
-enforced, session cookie stripped from what the service sees). Visitors
-without a session are bounced to the accounts broker and land back on
-``/_auth/callback``, which verifies the broker's handoff token and sets the
-workspace session cookie.
+cookie verified, identity re-checked against the grants file, Origin policy
+enforced, session cookie stripped from what the service sees, the verified
+identity handed on as ``X-Imbue-Identity``). Visitors without a session are
+bounced to the accounts broker and land back on ``/_auth/callback``, which
+verifies the broker's handoff token and sets the workspace session cookie.
+``/_auth/refresh`` re-runs that handoff for a signed-in visitor whose profile
+changed, so their own requests carry the new record before the session expires.
 """
 
 import json
@@ -21,13 +23,18 @@ from flask import Flask
 from flask import Response
 from flask import request
 
+from share_gateway.grants import Grants
 from share_gateway.grants import GrantsError
 from share_gateway.grants import load_grants
+from share_gateway.grants import upgrade_invites_in_file
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.identity import IDENTITY_HEADER
+from share_gateway.identity import RequesterIdentity
+from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
@@ -37,14 +44,6 @@ from share_gateway.session_cookie import strip_session_cookie
 from share_gateway.session_cookie import verify_session_from_cookies
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
-
-# The identity headers the gateway stamps on a verified request for caddy to
-# copy to the backend. ``X-Share-Owner`` is always set (``true``/``false``);
-# ``X-Share-Email`` is set only for a non-owner (the owner's email is never
-# revealed per-request -- see the header contract in the share_gateway README).
-# caddy strips any inbound copy before forward_auth, so both are authoritative.
-_OWNER_HEADER = "X-Share-Owner"
-_EMAIL_HEADER = "X-Share-Email"
 
 # The workspace shell service name; used to report backend readiness in the
 # authenticated /_health detail.
@@ -240,22 +239,7 @@ def build_gateway_app(
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                nonce = pending_logins.mint()
-                # The broker delivers its post-login callback to the dedicated
-                # auth origin (the only label serving /_auth/*), then bounces to
-                # ``next`` (the origin the visitor was actually reaching).
-                authorize_query = urlencode(
-                    {
-                        "machine_domain": workspace_domain,
-                        "next": _requested_url(host, forwarded_uri),
-                        "callback_origin": auth_origin,
-                        "state": nonce,
-                    }
-                )
-                return Response(
-                    status=302,
-                    headers={"Location": f"{materials.broker_url}/share/authorize?{authorize_query}"},
-                )
+                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False)
             _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
@@ -269,23 +253,19 @@ def build_gateway_app(
             except GrantsError:
                 _log_denied("grants file is missing or malformed (failing closed)", host)
                 return _forbidden()
-            if not grants.allows(identity.email, service_name):
-                _log_denied("session email is not granted this service", host)
+            if not grants.allows(identity.user_id, identity.email, service_name):
+                _log_denied("session identity is not granted this service", host)
                 return _forbidden()
+            _upgrade_invite(grants, identity)
 
-        # Expose the caller's identity so caddy can copy it to the backend: the
-        # owner flag always, and the requester's email only when they are not
-        # the owner. Both are authoritative because the gateway sets them after
-        # verifying the signed session, and caddy strips any inbound copy before
-        # the forward_auth subrequest. The owner's own email is deliberately
-        # never sent per-request; apps that need it read the injected
-        # owner-email file that exists only while the workspace is shared.
+        # Expose the caller's identity so caddy can copy it to the backend. It is
+        # authoritative because the gateway sets it after verifying the signed
+        # session, and caddy strips any inbound copy before the forward_auth
+        # subrequest.
         response_headers = {
             "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
-            _OWNER_HEADER: "true" if identity.is_owner else "false",
+            IDENTITY_HEADER: render_identity_header(identity),
         }
-        if not identity.is_owner:
-            response_headers[_EMAIL_HEADER] = identity.email
         return Response(status=200, headers=response_headers)
 
     @app.get("/_auth/callback")
@@ -312,8 +292,9 @@ def build_gateway_app(
         # The owner always has access regardless of the grants file (the broker
         # vouched for ownership by user id, so an owner never needs an explicit
         # grant to reach their own workspace). Non-owners still need a grant.
-        if not handoff.is_owner and not grants.allows_any(handoff.email):
+        if not handoff.is_owner and not grants.allows_any(handoff.user_id, handoff.email):
             return _forbidden()
+        _upgrade_invite(grants, handoff)
 
         # Bounce onward to the origin the visitor was reaching, but only if it
         # is genuinely one of this workspace's own origins. The bare domain no
@@ -330,12 +311,57 @@ def build_gateway_app(
                 redirect_target = next_url
 
         response = Response(status=302, headers={"Location": redirect_target})
-        set_session_cookie(
-            response,
-            mint_session_cookie_value(signing_secret, handoff.email, workspace_domain, handoff.is_owner),
-            workspace_domain,
-        )
+        set_session_cookie(response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain)
         return response
+
+    @app.get("/_auth/refresh")
+    def refresh() -> Response:
+        # Re-run the broker handoff for whoever is asking, so a user who changed
+        # their name or avatar gets a session carrying the new record. No
+        # session is required: the broker resolves the visitor's own accounts
+        # session, and the callback re-checks the grants as on a first visit.
+        # ``confirmed=1`` skips the "Continue as" interstitial a visitor already
+        # passed once; it is a UX property only (the token still goes solely to
+        # this workspace's own auth origin).
+        requested_next = request.args.get("next", "")
+        return _redirect_to_broker(requested_next if _is_workspace_url(requested_next) else "", is_confirmed=True)
+
+    def _redirect_to_broker(next_url: str, is_confirmed: bool) -> Response:
+        nonce = pending_logins.mint()
+        # The broker delivers its post-login callback to the dedicated auth
+        # origin (the only label serving /_auth/callback), then bounces to
+        # ``next`` (the origin the visitor was actually reaching).
+        query: dict[str, str] = {
+            "machine_domain": workspace_domain,
+            "next": next_url,
+            "callback_origin": auth_origin,
+            "state": nonce,
+        }
+        if is_confirmed:
+            query["confirmed"] = "1"
+        return Response(status=302, headers={"Location": f"{materials.broker_url}/share/authorize?{urlencode(query)}"})
+
+    def _is_workspace_url(url: str) -> bool:
+        if not url.startswith("https://"):
+            return False
+        next_host = url.removeprefix("https://").split("/", 1)[0]
+        is_ours, _service = service_for_host(next_host, workspace_domain, get_label_to_name(), auth_label)
+        return is_ours
+
+    def _upgrade_invite(grants: Grants, identity: RequesterIdentity) -> None:
+        # An ``emails`` entry is an invitation; once its holder has visited, the
+        # grant is rewritten to their user id so a later email change on their
+        # account cannot revoke it. Best effort: a failed rewrite leaves the
+        # invitation in place, and the next visit tries again.
+        if identity.is_owner or not grants.has_email_invite(identity.email):
+            return
+        try:
+            is_upgraded = upgrade_invites_in_file(grants_path, identity.email, identity.user_id)
+        except (GrantsError, OSError) as exc:
+            log(f"Could not upgrade the invitation for {identity.email} to a user grant: {exc}")
+            return
+        if is_upgraded:
+            log(f"Upgraded the invitation for {identity.email} to a grant for user {identity.user_id}")
 
     return app
 

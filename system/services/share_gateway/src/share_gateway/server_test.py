@@ -5,12 +5,17 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
+import json
+
 import jwt
 from flask import Flask
 from flask.testing import FlaskClient
 
+from share_gateway.grants import load_grants
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.identity import IDENTITY_HEADER
+from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
@@ -44,6 +49,7 @@ _CHROME_ORIGIN = "https://minds.imbue.com"
 
 _GRANTS = """
 [workspace]
+users = ["user-erin-0001"]
 emails = ["bob@example.com"]
 email_domains = []
 
@@ -51,6 +57,8 @@ email_domains = []
 emails = ["carol@example.com"]
 email_domains = []
 """
+
+_BOB_USER_ID = "user-bob-4471"
 
 
 class _GatewayHarness:
@@ -92,8 +100,22 @@ def _cookie_value(set_cookie_header: str) -> str:
     return set_cookie_header.split("=", 1)[1].split(";", 1)[0]
 
 
-def _session_cookie_for(email: str, is_owner: bool = False) -> str:
-    return mint_session_cookie_value(_SIGNING_SECRET, email, _DOMAIN, is_owner=is_owner)
+def _session_cookie_for(
+    email: str,
+    is_owner: bool = False,
+    user_id: str = _BOB_USER_ID,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
+) -> str:
+    identity = RequesterIdentity(
+        user_id=user_id, email=email, is_owner=is_owner, display_name=display_name, avatar_url=avatar_url
+    )
+    return mint_session_cookie_value(_SIGNING_SECRET, identity, _DOMAIN)
+
+
+def _identity_header(response: object) -> dict[str, object]:
+    headers = getattr(response, "headers")
+    return json.loads(headers[IDENTITY_HEADER])
 
 
 def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, str] | None = None) -> None:
@@ -131,10 +153,13 @@ def _mint_handoff(
     audience: str = _DOMAIN,
     jti: str = "jti-1",
     is_owner: bool = False,
+    user_id: str = _BOB_USER_ID,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
-    payload = {
-        "sub": "user-1",
+    payload: dict[str, object] = {
+        "sub": user_id,
         "email": email,
         "owner": is_owner,
         "aud": audience,
@@ -143,6 +168,10 @@ def _mint_handoff(
         "iat": now,
         "exp": now + timedelta(seconds=60),
     }
+    if display_name is not None:
+        payload["display_name"] = display_name
+    if avatar_url is not None:
+        payload["avatar_url"] = avatar_url
     return jwt.encode(payload, _BROKER_KEY, algorithm="RS256", headers={"kid": _TEST_KID})
 
 
@@ -166,6 +195,7 @@ def test_unauthenticated_html_navigation_redirects_to_broker_with_callback_origi
     # The callback must land on the dedicated auth origin, not the service origin.
     assert query["callback_origin"] == [_AUTH_ORIGIN]
     assert query["state"][0]
+    assert "confirmed" not in query
 
 
 def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:
@@ -352,28 +382,162 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     assert "refresh" in loading.get_data(as_text=True)
 
 
-def test_verify_exposes_owner_header_and_never_the_owner_email(tmp_path: Path) -> None:
+def test_verify_hands_the_owner_the_full_identity_record(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
-    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com", is_owner=True))
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME,
+        _session_cookie_for(
+            "owner@example.com",
+            is_owner=True,
+            user_id="user-owner-9c21",
+            display_name="Owner Person",
+            avatar_url="https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
+        ),
+    )
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers())
 
     assert resp.status_code == 200
-    assert resp.headers["X-Share-Owner"] == "true"
-    # The owner's email is never revealed per-request -- apps read the injected
-    # owner-email file instead.
+    assert _identity_header(resp) == {
+        "owner": True,
+        "user_id": "user-owner-9c21",
+        "email": "owner@example.com",
+        "display_name": "Owner Person",
+        "avatar_url": "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
+    }
+    assert "X-Share-Owner" not in resp.headers
     assert "X-Share-Email" not in resp.headers
 
 
-def test_verify_sets_owner_false_and_the_requester_email_for_a_non_owner(tmp_path: Path) -> None:
+def test_verify_hands_a_visitor_their_record_and_omits_absent_profile_fields(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "bob@example.com")
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers())
 
     assert resp.status_code == 200
-    assert resp.headers["X-Share-Owner"] == "false"
-    assert resp.headers["X-Share-Email"] == "bob@example.com"
+    assert _identity_header(resp) == {"owner": False, "user_id": _BOB_USER_ID, "email": "bob@example.com"}
+
+
+def test_legacy_cookie_without_a_user_id_is_treated_as_no_session(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    now = datetime.now(timezone.utc)
+    legacy = jwt.encode(
+        {"email": "bob@example.com", "owner": False, "aud": _DOMAIN, "iat": now, "exp": now + timedelta(hours=1)},
+        _SIGNING_SECRET,
+        algorithm="HS256",
+    )
+    harness.client.set_cookie(SESSION_COOKIE_NAME, legacy)
+
+    navigation = harness.client.get("/_auth/verify", headers=_verify_headers())
+    fetch = harness.client.get("/_auth/verify", headers=_verify_headers(accept="application/json"))
+
+    # An HTML navigation silently re-runs the handoff; a fetch waits for it.
+    assert navigation.status_code == 302
+    assert navigation.headers["Location"].startswith(f"{_BROKER_URL}/share/authorize?")
+    assert fetch.status_code == 401
+
+
+def test_user_id_grant_admits_a_visitor_whose_email_changed(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "erin-renamed@elsewhere.dev")
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("erin-renamed@elsewhere.dev", user_id="user-erin-0001")
+    )
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
+
+    assert resp.status_code == 200
+    assert _identity_header(resp)["user_id"] == "user-erin-0001"
+
+
+def test_verify_upgrades_an_email_invitation_to_a_user_grant(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers())
+
+    assert resp.status_code == 200
+    grants = load_grants(harness.grants_path)
+    assert grants.workspace.users == {_BOB_USER_ID, "user-erin-0001"}
+    assert grants.workspace.emails == set()
+    # The per-service invitation for someone else is untouched.
+    assert grants.services["web"].emails == {"carol@example.com"}
+    # The upgraded grant is what admits the visitor from now on.
+    assert harness.client.get("/_auth/verify", headers=_verify_headers()).status_code == 200
+
+
+def test_owner_requests_never_rewrite_the_grants_file(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com", is_owner=True, user_id="user-owner-9c21")
+    )
+    before = harness.grants_path.read_text()
+
+    assert harness.client.get("/_auth/verify", headers=_verify_headers()).status_code == 200
+
+    assert harness.grants_path.read_text() == before
+
+
+def test_callback_upgrades_the_invitation_it_admitted(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    nonce = harness.pending_logins.mint()
+    token = _mint_handoff(nonce, email="carol@example.com", user_id="user-carol-7c02")
+
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}")
+
+    assert resp.status_code == 302
+    grants = load_grants(harness.grants_path)
+    assert grants.services["web"].users == {"user-carol-7c02"}
+    assert grants.services["web"].emails == set()
+    assert grants.workspace.emails == {"bob@example.com"}
+
+
+def test_callback_cookie_carries_the_profile_claims(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    nonce = harness.pending_logins.mint()
+    token = _mint_handoff(
+        nonce, display_name="Bob", avatar_url="https://accounts.example.com/users/user-bob-4471/avatar/1234"
+    )
+
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}")
+
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _cookie_value(set_cookies_by_name(resp)[SESSION_COOKIE_NAME]))
+    verified = harness.client.get("/_auth/verify", headers=_verify_headers())
+    assert _identity_header(verified) == {
+        "owner": False,
+        "user_id": _BOB_USER_ID,
+        "email": "bob@example.com",
+        "display_name": "Bob",
+        "avatar_url": "https://accounts.example.com/users/user-bob-4471/avatar/1234",
+    }
+
+
+def test_refresh_re_runs_the_handoff_with_confirmation_and_a_workspace_next(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(f"/_auth/refresh?next=https://{_WEB_HOST}/panel?tab=2")
+
+    assert resp.status_code == 302
+    location = resp.headers["Location"]
+    assert location.startswith(f"{_BROKER_URL}/share/authorize?")
+    query = parse_qs(urlsplit(location).query)
+    assert query["machine_domain"] == [_DOMAIN]
+    assert query["next"] == [f"https://{_WEB_HOST}/panel?tab=2"]
+    assert query["callback_origin"] == [_AUTH_ORIGIN]
+    assert query["confirmed"] == ["1"]
+    # The nonce it minted is the one the callback will consume.
+    assert harness.pending_logins.consume(query["state"][0]) is True
+
+
+def test_refresh_drops_a_foreign_next(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_auth/refresh?next=https://evil.example.com/")
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["Location"]).query, keep_blank_values=True)
+    assert query["next"] == [""]
 
 
 def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
@@ -390,7 +554,7 @@ def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
     harness.client.set_cookie(SESSION_COOKIE_NAME, _cookie_value(plain_header))
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
-    assert verified.headers["X-Share-Owner"] == "true"
+    assert _identity_header(verified)["owner"] is True
 
 
 def test_non_owner_without_grant_is_still_rejected_at_callback(tmp_path: Path) -> None:

@@ -168,6 +168,10 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
         self.broadcast({"type": "desktops_updated", "desktops": desktops})
 
+    def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
+        self.broadcast({"type": "presence_updated", "users": users})
+
     def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
         """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""
         self.broadcast(
