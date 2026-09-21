@@ -332,11 +332,6 @@ export function effectiveWindow(state: DesktopState, window: WindowRecord): Wind
   return stored === undefined ? window : { ...window, path: stored.path, title: stored.title };
 }
 
-/** The path this client's page of the window is at, or opens at. */
-export function effectiveWindowPath(state: DesktopState, window: WindowRecord): string {
-  return effectiveWindow(state, window).path;
-}
-
 /** The title this client shows for the window. */
 export function effectiveWindowTitle(state: DesktopState, window: WindowRecord, app: AppRecord | undefined): string {
   return windowTitle(effectiveWindow(state, window), app);
