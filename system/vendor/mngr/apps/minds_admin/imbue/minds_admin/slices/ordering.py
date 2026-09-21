@@ -105,6 +105,12 @@ _USER_SELECTED_OPTION_FAMILIES: Final[tuple[str, ...]] = ("memory", "storage")
 # match: only the public uplink is shaped.
 _BANDWIDTH_OPTION_CODE_RE: Final[re.Pattern[str]] = re.compile(r"^bandwidth-(\d+)-")
 
+# The physical port speed a delivered box must have. Fleet boxes sit on a 10G port shaped to a 1 Gbps
+# plan, and the workspace restore's parallel object fetch needs that headroom: its ranged streams
+# overrun a 1 Gbit/s port and collapse. OVH's catalog does not expose the port speed, so it is checked
+# from the delivered server's ``linkSpeed`` before the reinstall.
+MIN_BOX_LINK_SPEED_MBPS: Final[int] = 10000
+
 _DELIVERY_POLL_INTERVAL_SECONDS: Final[float] = 60.0
 _DELIVERY_TIMEOUT_SECONDS: Final[float] = 4 * 60 * 60.0
 # OVH assigns a serviceName on the ORDER before that service becomes queryable under
@@ -467,6 +473,29 @@ def get_dedicated_server_address(client: OvhVpsClient, service_name: str) -> str
     info = client.call_api("GET", f"/dedicated/server/{service_name}")
     address = info.get("ip")
     return str(address) if address else None
+
+
+def read_dedicated_server_link_speed_mbps(client: OvhVpsClient, service_name: str) -> int | None:
+    """The delivered server's physical port speed in Mbit/s (OVH's ``linkSpeed``), or None when unreported."""
+    info = client.call_api("GET", f"/dedicated/server/{service_name}")
+    link_speed = info.get("linkSpeed")
+    return int(link_speed) if isinstance(link_speed, int) else None
+
+
+@pure
+def assert_box_link_speed_sufficient(link_speed_mbps: int | None, service_name: str) -> None:
+    """Refuse a delivered box whose port is slower than the fleet needs (see ``MIN_BOX_LINK_SPEED_MBPS``)."""
+    if link_speed_mbps is None:
+        raise BareMetalConfigError(
+            f"OVH reports no linkSpeed for {service_name}, so its port speed cannot be verified against the "
+            f"{MIN_BOX_LINK_SPEED_MBPS} Mbit/s the slice fleet requires"
+        )
+    if link_speed_mbps < MIN_BOX_LINK_SPEED_MBPS:
+        raise BareMetalConfigError(
+            f"{service_name} was delivered on a {link_speed_mbps} Mbit/s port; the slice fleet requires at least "
+            f"{MIN_BOX_LINK_SPEED_MBPS} Mbit/s (a slower port collapses the workspace restore fetch), so this box "
+            "cannot be set up -- cancel its renewal and remove its row"
+        )
 
 
 def _read_address_tolerating_missing_service(

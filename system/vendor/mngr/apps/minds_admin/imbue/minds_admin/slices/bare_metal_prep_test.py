@@ -21,6 +21,7 @@ from imbue.minds_admin.slices.mirror_artifacts import UV_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import UV_VERSION
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_encryption_section
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_relocation_section
+from imbue.minds_admin.slices.storage_encryption import render_gen2_tpm_preflight_section
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN1_SLICE_SERVICE_USER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_CONFIG_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_LEASE_DIR
@@ -30,6 +31,7 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_UNIT_PAT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_USER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_HELPER_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_MAX_SLICE_COUNT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_OVMF_CODE_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SUDOERS_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_UNIT_PATH
 from imbue.mngr_imbue_cloud.slices.qemu_slice import render_slice_dhcp_config
@@ -569,6 +571,26 @@ def test_gen2_prep_script_encrypts_the_storage_partition_before_using_it() -> No
     assert encryption_idx < relocation_idx < script.index("transfer_tools_marker=")
     for package in ("cryptsetup", "systemd-cryptsetup", "tpm2-tools"):
         assert package in script
+
+
+def test_gen2_prep_script_checks_for_a_tpm_before_touching_the_storage_partition() -> None:
+    script = _gen2_script()
+    assert render_gen2_tpm_preflight_section() in script
+    preflight_idx = script.index("tpm_devices=$(systemd-cryptenroll --tpm2-device=list")
+    # After the package install (systemd-cryptenroll comes from systemd-cryptsetup)
+    # and the OVMF check, but before any account, key or the storage partition
+    # changes: a TPM-less box must be refused with nothing to undo.
+    assert script.index("apt-get install") < preflight_idx
+    assert script.index(GEN2_OVMF_CODE_PATH) < preflight_idx
+    for later_step in (
+        "useradd -m -s /bin/bash slicehost",
+        "TrustedUserCAKeys",
+        "cryptsetup luksFormat",
+        "systemd-cryptenroll --unlock-key-file",
+    ):
+        assert preflight_idx < script.index(later_step)
+    # The gen-1 (lima) prep has no encrypted volume and so no TPM requirement.
+    assert "tpm2-device=list" not in _script()
 
 
 def test_gen2_prep_script_refuses_without_the_xfs_storage_partition() -> None:

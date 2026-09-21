@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the desktop: its windows, taskbar, and launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / desktop.
 metadata:
   author: imbue
 ---
@@ -8,7 +8,7 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
+(the desktop: its windows, taskbar, and launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -153,23 +153,24 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
     --slug update-<slug> --work-dir "$WORK_DIR"
 ```
 
-This boots the worker's already-built instance on a free port with layout
-persistence neutered (it reads the same agents, so the user's real conversations
-render, but it cannot clobber the live `layout.json`), then boots a small wrapper
+This boots the worker's already-built instance on a free port from the worker's
+own checkout (it reads the same agents, so the user's real conversations render,
+but its desktops and window placements are written under that checkout, never
+into the live shell's state files), then boots a small wrapper
 page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
 service points at that wrapper (the inner instance is registered separately as
-`si-preview-app`), so the tab reads as a clearly-marked proposed change. It does
+`si-preview-app`), so the window reads as a clearly-marked proposed change. It does
 **not** merge, touch the served tree, or modify the worker's folder. Exit `0`
 means the preview is up; a non-zero exit means it failed to boot (or the
 work_dir was wrong / the worker was already destroyed) and tore itself down --
 diagnose before retrying. One boot-refusal case is deliberate: the `si-preview`
-tab can only show one pass at a time, so if another pass's preview is already
+window can only show one pass at a time, so if another pass's preview is already
 up, `preview` refuses rather than hijacking it -- surface that to the user and
 coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
-Open it as a tab and ask the user to explore. With no `--view`, the op goes
-to the view the connected client is looking at:
+Open it as a window and ask the user to explore. With no `--desktop`, the op
+goes to the desktop the connected client is looking at:
 
 ```bash
 python3 system/scripts/layout.py open si-preview
@@ -181,8 +182,9 @@ agent, not the motivating conversation -- so the real case isn't on screen by
 default. If a real conversation motivated the change:
 
 - Open the **motivating** conversation in the preview's inner app with Playwright
-  (`--no-sandbox`): use the tab bar's add-tab (`+`) dropdown and pick the real
-  agent (its `.dockview-add-tab-dropdown-item`), or otherwise navigate to it.
+  (`--no-sandbox`): type the chat's title into the taskbar's launcher field
+  (`[data-launcher-field] input`) and pick its row, or land on the preview with the
+  deep link `?open=chat:/?chat=<chat-id>`.
 - Look at it and **confirm the change actually fixed the real case**, comparing
   it against what looked wrong in the original complaint. A worker reporting
   `done` with passing tests is not proof the real case is fixed -- you have the
@@ -190,8 +192,8 @@ default. If a real conversation motivated the change:
   it still looks wrong, the fix missed the real DOM: re-brief the worker rather
   than merging.
 - Tell the user how to see the real case themselves (the preview opens on the
-  worker's empty agent; they switch via the `+` dropdown to the motivating
-  agent).
+  worker's empty agent; they reach the motivating agent by typing its chat's
+  title into the taskbar's launcher field, or with the same `?open=` deep link).
 
 Then confirm with the user: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
@@ -332,10 +334,10 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 `unpreview` is idempotent, so it is also the way to clean up after a `preview`
 that failed partway.
 
-`unpreview` only handles the *service* side; it does **not** touch the workspace
-layout. The `si-preview` tab you opened earlier with `layout.py open` is a
-separate concern (a layout panel, not a service), so you must close it yourself
--- otherwise the user is left with a stale tab pointing at a now-deregistered
+`unpreview` only handles the *service* side; it does **not** touch the desktop.
+The `si-preview` window you opened earlier with `layout.py open` is a
+separate concern (a window, not a service), so you must close it yourself
+-- otherwise the user is left with a stale window pointing at a now-deregistered
 service:
 
 ```bash
@@ -343,7 +345,7 @@ python3 system/scripts/layout.py close si-preview
 ```
 
 Do this on every one of those exits, not only the successful one. Once the
-preview is down and its tab is closed, destroy the worker (this flow does not
+preview is down and its window is closed, destroy the worker (this flow does not
 pass through `update-creation` Step 4, so the destroy is yours). After a `0`:
 
 ```bash
@@ -366,9 +368,9 @@ and can never be skipped -- even across a crash or a hard kill of the apply
 itself -- which is exactly what belongs in a deterministic script rather than
 agent prose.
 
-`system/scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
-reloads a single inner iframe/panel for arranging the workspace, not the
-top-level page, so it does **not** reveal a system-interface code change.
+`system/scripts/layout.py refresh` (the `manage-desktop` skill) is unrelated -- it only
+reloads an app window's inner page, not the top-level page, so it does **not**
+reveal a system-interface code change.
 
 ## Why this shape
 
