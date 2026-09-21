@@ -12,6 +12,7 @@ from imbue.system_interface.avatar.designs import bundled_design
 from imbue.system_interface.avatar.designs import bundled_design_source
 from imbue.system_interface.avatar.designs import parse_design_svg
 from imbue.system_interface.avatar.designs import render_design_svg
+from imbue.system_interface.avatar.designs import validate_design_source
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
 _MINIMAL = (
@@ -46,7 +47,10 @@ def test_a_minimal_design_parses() -> None:
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle onclick="1" r="1"/></svg>',
             "attribute",
         ),
-        ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>*{x:1}</style></svg>', "custom CSS"),
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style><a/></style></svg>',
+            "shared stylesheet",
+        ),
         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"/>', "viewBox"),
         (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="1" fill="url(http://x)"/></svg>',
@@ -63,9 +67,14 @@ def test_unsafe_or_off_contract_markup_is_refused(svg: str, reason: str) -> None
         parse_design_svg(svg)
 
 
-def test_the_shared_stylesheet_is_the_one_style_allowed() -> None:
-    svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>{ANIMATION_CSS}</style></svg>'
-    parse_design_svg(svg)
+def test_a_registration_may_embed_the_shared_stylesheet_and_nothing_else() -> None:
+    shared = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>{ANIMATION_CSS}</style></svg>'
+    validate_design_source(shared)
+    custom = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>*{x:1}</style></svg>'
+    with pytest.raises(InvalidShellValueError, match="custom CSS"):
+        validate_design_source(custom)
+    # A stored design whose sheet is not today's still parses and renders: the renderer draws today's sheet.
+    assert _styles(render_design_svg(custom, AvatarMood.IDLE, False, "mine")) == [ANIMATION_CSS]
 
 
 def _styles(rendered: str) -> list[str]:
