@@ -3,9 +3,10 @@
 Inside a workspace ``python3`` is the system interpreter, which has none of the root venv's
 packages: a script that imports one runs fine under ``uv run`` and in these tests, and fails
 with ``ModuleNotFoundError`` the moment an agent or a supervisord program line calls it as
-documented. The list below is every script the docs, skills, prompts, and program lines invoke
-that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``); a script may import a sibling
-script, which is then held to the same rule.
+documented. The list below is every script the docs, skills, prompts, program lines, and shell
+scripts invoke that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``, and the shell
+scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling); a script may import a
+sibling script, which is then held to the same rule.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "forward_port.py",
     "install_mngr.py",
     "layout.py",
+    "list_mngr_plugins.py",
     "message_chat.py",
     "provision_backups.py",
     "refresh_workspace_view.py",
