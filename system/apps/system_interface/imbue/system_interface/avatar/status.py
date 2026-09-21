@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -27,6 +28,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from watchdog.observers.api import BaseObserver
 
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -42,9 +44,6 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 ENV_MNGR_HOST_DIR: Final[str] = "MNGR_HOST_DIR"
 DEFAULT_MNGR_HOST_DIRNAME: Final[str] = ".mngr"
 AGENT_EVENTS_RELATIVE_PATH: Final[Path] = Path("events") / "mngr" / "agents" / "events.jsonl"
-FULL_STATE_EVENT_TYPE: Final[str] = "AGENTS_FULL_STATE"
-AGENT_STATE_EVENT_TYPE: Final[str] = "AGENT_STATE"
-AGENT_REMOVED_EVENT_TYPE: Final[str] = "AGENT_REMOVED"
 PRIMARY_LABEL_KEY: Final[str] = "is_primary"
 WORKING_AGENT_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
 # Twice the observer's snapshot interval.
@@ -61,6 +60,14 @@ STALE_CHECK_INTERVAL_SECONDS: Final[float] = 30.0
 _TIMESTAMP_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$"
 )
+
+
+class AgentEventType(UpperCaseStrEnum):
+    """The observer's event types the fold reads, under mngr's names."""
+
+    AGENTS_FULL_STATE = auto()
+    AGENT_STATE = auto()
+    AGENT_REMOVED = auto()
 
 
 class AvatarStatus(FrozenModel):
@@ -163,27 +170,32 @@ def fold_agent_events(lines: Sequence[str], now: datetime) -> AvatarStatus:
     primary agent dropped, working when any remaining agent runs; stale past the threshold or with no timestamp."""
     events = _parsed_events(lines)
     snapshot_index = next(
-        (index for index in range(len(events) - 1, -1, -1) if events[index].get("type") == FULL_STATE_EVENT_TYPE), None
+        (
+            index
+            for index in range(len(events) - 1, -1, -1)
+            if events[index].get("type") == AgentEventType.AGENTS_FULL_STATE
+        ),
+        None,
     )
     state_by_id: dict[str, str] = {}
     primary_ids: set[str] = set()
     for event in events[snapshot_index if snapshot_index is not None else 0 :]:
-        event_type = event.get("type")
-        if event_type == FULL_STATE_EVENT_TYPE:
-            state_by_id.clear()
-            primary_ids.clear()
-            agents = event.get("agents")
-            for agent in agents if isinstance(agents, list) else []:
-                _take_agent(state_by_id, primary_ids, agent)
-        elif event_type == AGENT_STATE_EVENT_TYPE:
-            _take_agent(state_by_id, primary_ids, event.get("agent"))
-        elif event_type == AGENT_REMOVED_EVENT_TYPE:
-            agent_id = event.get("agent_id")
-            if isinstance(agent_id, str):
-                state_by_id.pop(agent_id, None)
-                primary_ids.discard(agent_id)
-        else:
-            pass
+        match event.get("type"):
+            case AgentEventType.AGENTS_FULL_STATE:
+                state_by_id.clear()
+                primary_ids.clear()
+                agents = event.get("agents")
+                for agent in agents if isinstance(agents, list) else []:
+                    _take_agent(state_by_id, primary_ids, agent)
+            case AgentEventType.AGENT_STATE:
+                _take_agent(state_by_id, primary_ids, event.get("agent"))
+            case AgentEventType.AGENT_REMOVED:
+                agent_id = event.get("agent_id")
+                if isinstance(agent_id, str):
+                    state_by_id.pop(agent_id, None)
+                    primary_ids.discard(agent_id)
+            case _:
+                pass
     is_working = any(
         state in WORKING_AGENT_STATES for agent_id, state in state_by_id.items() if agent_id not in primary_ids
     )
@@ -204,7 +216,7 @@ def read_tail_lines_back_to_snapshot(path: Path) -> list[str]:
     blocks so a long-lived file is not read whole; an absent file is no lines."""
     if not path.is_file():
         return []
-    marker = f'"{FULL_STATE_EVENT_TYPE}"'.encode()
+    marker = f'"{AgentEventType.AGENTS_FULL_STATE.value}"'.encode()
     with path.open("rb") as stream:
         stream.seek(0, os.SEEK_END)
         position = stream.tell()
