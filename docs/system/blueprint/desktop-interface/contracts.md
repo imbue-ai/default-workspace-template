@@ -54,7 +54,7 @@ The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "in
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, and `pin` (inline table `{path, style, scope, default_mode}`) from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, and `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
