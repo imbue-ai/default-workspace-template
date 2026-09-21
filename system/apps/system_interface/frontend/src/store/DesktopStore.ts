@@ -510,7 +510,7 @@ export class DesktopStore {
 
   /** Where a floating entry's box is right now, in backdrop pixels: the drag's rectangle while one moves it,
    *  else its stored position (the default corner when it has none), clamped into the backdrop. */
-  floatingEntryRect(app: string, position: FloatingPosition | null): PixelRect {
+  renderedFloatingEntryRect(app: string, position: FloatingPosition | null): PixelRect {
     const gesture = this.gesture;
     if (gesture !== null && gesture.kind === "floating-entry" && gesture.app === app) return gesture.currentRect;
     return floatingEntryRect(
@@ -957,7 +957,7 @@ export class DesktopStore {
     position: FloatingPosition | null,
   ): void {
     if (this.state.modes.isCompact) return;
-    const start = this.floatingEntryRect(app, position);
+    const start = this.renderedFloatingEntryRect(app, position);
     this.gesture = { kind: "floating-entry", app, grabOffset, currentRect: start };
     this.updateFloatingEntryDrag(pointer);
   }
