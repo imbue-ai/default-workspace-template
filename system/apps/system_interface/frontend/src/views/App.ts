@@ -432,7 +432,7 @@ export function App(): m.Component<AppAttrs> {
     if (replaced === null) return null;
     return m(ReplacedDesktopNotice, {
       replacedDesktopName: replaced.replacedName,
-      currentDesktopName: replaced.seededName,
+      seededDesktopName: replaced.seededName,
       onDismiss: () => current.dismissReplacedDesktopNotice(),
     });
   }

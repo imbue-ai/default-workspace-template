@@ -10,8 +10,8 @@ import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/M
 export interface ReplacedDesktopNoticeAttrs {
   /** The name of the desktop that was deleted. */
   readonly replacedDesktopName: string;
-  /** The name of the desktop seeded in its place, where the user is now. */
-  readonly currentDesktopName: string;
+  /** The name of the desktop seeded in its place (not always where this client landed: a deep link wins). */
+  readonly seededDesktopName: string;
   readonly onDismiss: () => void;
 }
 
@@ -31,7 +31,7 @@ export const ReplacedDesktopNotice: m.Component<ReplacedDesktopNoticeAttrs> = {
         "Your desktop ",
         m("strong", attrs.replacedDesktopName),
         " was deleted since your last visit, so a fresh one, ",
-        m("strong", attrs.currentDesktopName),
+        m("strong", attrs.seededDesktopName),
         ", was set up for you from the workspace's first desktop.",
       ]),
     );
