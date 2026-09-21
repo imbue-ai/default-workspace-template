@@ -164,6 +164,11 @@ authoritative answer is the report's `failed` field either way.
 one slice is baked alone, builds the image inside its VM, and the box pulls it
 out with `docker save` into `~/.cache/mngr-slice-default-workspace-template/`;
 the rest then `docker load` it. The seed costs the most; fills are cheaper.
+A tag through `minds-v0.6.2` floats its `FROM python:3.12-slim-trixie`, so the
+seed builds it against the digest recorded for its apt snapshot (the dry-run's
+`image_build_args` shows the `--build-context` override; imbue-ai/mngr-internal#1143)
+rather than whatever Docker Hub serves under the tag today; a tag that pins its
+own base needs no override.
 
 Both scale with how loaded the box already is, and the spread is wide enough that
 a fill on a full box can cost what a seed costs on an empty one. Budget from the

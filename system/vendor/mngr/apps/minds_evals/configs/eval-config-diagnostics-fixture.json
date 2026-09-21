@@ -1,0 +1,106 @@
+{
+  "mngr_branch": "main",
+  "timeout_seconds": 1800,
+  "verification_timeout_seconds": 1800,
+  "personas": [
+    {
+      "id": "instrument",
+      "persona": "A client who only wants an acknowledgement.",
+      "steps": [
+        {
+          "name": "instrument",
+          "seed": {"app": {"source": "flow_lab_apps/todo", "name": "todo-fixture", "port": 8090}},
+          "prompts": [
+            "Reply with the single word: acknowledged. Do not do anything else.",
+            {"goal": "The assistant has replied with the word acknowledged.", "max_exchanges": 1}
+          ],
+          "expectations": {
+            "outcome": "The workspace serves the seeded to-do fixture unchanged.",
+            "deliverable": {
+              "kind": "minds-app",
+              "min_registered_apps": 0,
+              "http": [
+                {"target": "todo-fixture", "expect_status": 200, "expect_body_regex": "<title>Todo</title>"},
+                {"target": "todo-fixture", "expect_status": 200, "expect_body_regex": "DIAG-absent-7f3a"}
+              ],
+              "files": [
+                {"glob": "workspace/system/fixtures/todo-fixture/index.html", "min_count": 1},
+                {"glob": "workspace/system/fixtures/todo-fixture/absent-7f3a.html", "min_count": 1}
+              ]
+            },
+            "test_commands": [
+              "test -s system/fixtures/todo-fixture/index.html",
+              "test -e system/fixtures/todo-fixture/absent-7f3a.html"
+            ],
+            "timing": {"fast_seconds": 600, "slow_seconds": 1500, "requires_no_failures": ["http"]},
+            "ui_flows": [
+              {
+                "name": "plain",
+                "expect": "'walk dog' was added, completed and deleted; the seed tasks are untouched.",
+                "script": [
+                  {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Add"},
+                  {"kind": "click", "role": "checkbox", "target": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Delete \"walk dog\""},
+                  {"kind": "click", "role": "button", "target": "Refresh"},
+                  {"kind": "reload"}
+                ]
+              },
+              {
+                "name": "deferred",
+                "start_path": "?latency=300",
+                "expect": "'walk dog' is listed.",
+                "script": [
+                  {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Add"}
+                ]
+              },
+              {
+                "name": "armed-delete",
+                "start_path": "?arm_delete=1",
+                "expect": "'Buy milk' is gone.",
+                "script": [
+                  {"kind": "click", "role": "button", "target": "Delete \"Buy milk\""},
+                  {"kind": "click", "role": "button", "target": "Delete \"Buy milk\""}
+                ]
+              },
+              {
+                "name": "pending",
+                "start_path": "?pending=2000",
+                "expect": "'walk dog' is listed once saving finishes.",
+                "script": [
+                  {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Add"},
+                  {"kind": "wait"}
+                ]
+              },
+              {
+                "name": "ticker",
+                "start_path": "?ticker=1",
+                "expect": "Nothing but the clock changes.",
+                "script": [{"kind": "click", "role": "button", "target": "Refresh"}]
+              },
+              {
+                "name": "start-over",
+                "start_path": "?latency=300",
+                "expect": "The page reloads at its own root.",
+                "script": [{"kind": "click", "role": "link", "target": "Start over"}]
+              },
+              {
+                "name": "unnamed",
+                "start_path": "?unnamed=1",
+                "expect": "'walk dog' was added, completed through its nameless checkbox and deleted; the seed tasks are untouched.",
+                "script": [
+                  {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Add"},
+                  {"kind": "click", "role": "checkbox", "beside": "walk dog"},
+                  {"kind": "click", "role": "button", "target": "Delete \"walk dog\""}
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

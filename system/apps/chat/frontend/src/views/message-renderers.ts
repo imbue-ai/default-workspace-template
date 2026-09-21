@@ -8,9 +8,9 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { accountForAgent, openProviderChooser } from "../models/Providers";
-import { openSubagentTab } from "../shell";
-import { beginSwitchTo } from "./SwitchDialog";
+import { openProviderChooser } from "../models/Providers";
+import { openSubagentView } from "../shell";
+import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -179,6 +179,15 @@ function resolvedResultSignature(
     .join("|");
 }
 
+/** The Chats-store input the auth-error note renders from: whether the chat is known yet, and
+ *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
+ *  the chat list can land after the transcript, and the switch link is only offered once it has. */
+function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
+  if (!event.is_auth_error) return "";
+  const chat = getChatById(chatId);
+  return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
+}
+
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
@@ -188,6 +197,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
+  let renderedReauthSignature = "";
   let renderedDetailVersion = -1;
   return {
     onbeforeupdate(vnode) {
@@ -209,6 +219,7 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
+        reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion
       );
     },
@@ -220,6 +231,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
+      renderedReauthSignature = reauthNoteSignature(event, chatId);
       renderedDetailVersion = getEventDetailVersion(chatId);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
@@ -313,7 +325,7 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
               onclick(e: Event) {
                 e.preventDefault();
                 e.stopPropagation();
-                openSubagentTab(chatId, sessionId, description);
+                openSubagentView(chatId, sessionId);
               },
             },
             "View conversation",
@@ -413,12 +425,11 @@ export function renderToolCallBlock(
   });
 }
 
-/** The two ways out of a provider failure, under any turn rendered as one: sign in again, or
- * switch this chat to another provider.
+/** The two ways out under a provider failure: "Sign in again", and the switch link beside it.
  *
- * Resolves the chat's own account from its `account` label, so the chooser opens ON that
- * account and re-authenticates it in place -- every chat bound to it recovers. Without the
- * label (a chat from before accounts, say) it opens the chooser plainly, which is still the
+ * "Sign in again" resolves the chat's own account from its `account` label, so the chooser opens
+ * ON that account and re-authenticates it in place -- every chat bound to it recovers. Without
+ * the label (a chat from before accounts, say) it opens the chooser plainly, which is still the
  * right destination.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
@@ -452,11 +463,8 @@ function renderReauthAction(chatId: string): m.Children {
               class: REAUTH_ACTION_CLASS,
               onclick: () =>
                 openProviderChooser({
-                  onSignedIn: (chosen) => {
-                    const account = accountForAgent(chosen);
-                    if (account !== null) beginSwitchTo(chatId, account);
-                  },
-                  ...(accountId ? { unpickable: { accountId, note: "Not working", isFailing: true } } : {}),
+                  onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
+                  ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
                 }),
             },
             "switch to another provider",

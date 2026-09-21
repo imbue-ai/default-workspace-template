@@ -1,0 +1,94 @@
+==== minds_evals_probe:tickets
+==== minds_evals_probe:ticket data/.tickets/README.md
+# data/.tickets/
+
+Records from `tk`, the mind's internal task tracker: the per-turn progress
+steps you see in chat, and cross-agent work tickets. Managed entirely by the
+agents; the chat progress view is the friendly window onto it.
+
+==== minds_evals_probe:ticket data/.tickets/dw71-step-ibjs.md
+---
+closed: 2026-09-16T05:14:55.461768Z
+started: 2026-09-16T05:14:41.448026Z
+id: dw71-step-ibjs
+status: closed
+deps: []
+links: []
+created: 2026-09-16T05:14:37.581155Z
+type: task
+priority: 2
+agent: diag-worker-7f3a
+step: true
+---
+# Deliver the requested report
+
+
+## Summary
+
+Prepared the requested report for delivery.
+
+==== minds_evals_probe:ticket data/.tickets/wor-384u.md
+---
+id: wor-384u
+status: open
+deps: []
+links: []
+created: 2026-09-16T05:12:57.296036Z
+type: chore
+priority: 2
+agent: EVAL-behaviour-dqfv2cn-d4f365dc
+---
+# DIAG regular ticket 7f3a
+
+
+==== minds_evals_probe:ticket data/.tickets/wor-step-vbja.md
+---
+closed: 2026-09-16T05:12:54.489072Z
+started: 2026-09-16T05:12:47.682599Z
+id: wor-step-vbja
+status: closed
+deps: []
+links: []
+created: 2026-09-16T05:12:42.741664Z
+type: task
+priority: 2
+agent: EVAL-behaviour-dqfv2cn-d4f365dc
+step: true
+---
+# DIAG alpha 7f3a
+
+
+## Summary
+
+alpha done 7f3a
+
+==== minds_evals_probe:ticket data/.tickets/wor-step-yz0b.md
+---
+closed: 2026-09-16T05:13:18.196766Z
+started: 2026-09-16T05:12:59.706244Z
+id: wor-step-yz0b
+status: closed
+deps: []
+links: []
+created: 2026-09-16T05:12:45.162250Z
+type: task
+priority: 2
+agent: EVAL-behaviour-dqfv2cn-d4f365dc
+step: true
+---
+# DIAG beta 7f3a
+
+
+## Summary
+
+beta done 7f3a
+
+==== minds_evals_probe:agents
+{"name": "system-services", "type": "main", "labels": {"project": "behaviour", "remote": "/work/eval-base", "workspace_display_name": "EVAL-behaviour-dqfv2cn-d4f365dc", "user_created": "true", "is_primary": "true", "color": "#0b292b", "original_minds_version": "minds-v0.6.1"}}
+{"name": "EVAL-behaviour-dqfv2cn-d4f365dc", "type": "codex", "labels": {"project": "behaviour", "remote": "/work/eval-base", "account": "66b20c7130b7446cbed2dfd0ce668406", "first": "true", "user_created": "true", "display_name": "EVAL-behaviour-dqfv2cn-d4f365dc"}}
+{"name": "diag-worker-7f3a", "type": "codex", "labels": {"project": "workspace", "remote": "/work/eval-base", "account": "66b20c7130b7446cbed2dfd0ce668406", "agent_created": "true", "lead_agent": "agent-9ce3b222770e4c9b945aca469422672b", "runtime_dir": "data/.tasks/launch-task/diag-worker-7f3a"}}
+==== minds_evals_probe:reports
+data/.tasks/launch-task/diag-worker-7f3a/reports/report.md
+==== minds_evals_probe:uploads
+data/uploads/README.md
+==== minds_evals_probe:end

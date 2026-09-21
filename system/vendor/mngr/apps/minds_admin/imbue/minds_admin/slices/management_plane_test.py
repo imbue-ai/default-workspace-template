@@ -6,7 +6,9 @@ import pytest
 
 from imbue.minds.config.data_types import WireguardOperatorConfig
 from imbue.minds.config.data_types import management_overlay_for_tier
+from imbue.minds_admin.slices.management_plane import MANAGEMENT_LOCKDOWN_MARKER
 from imbue.minds_admin.slices.management_plane import build_operator_wireguard_client_config
+from imbue.minds_admin.slices.management_plane import is_management_lockdown_in_prep_output
 from imbue.minds_admin.slices.management_plane import next_free_box_wireguard_address
 from imbue.minds_admin.slices.management_plane import parse_wireguard_public_key_from_prep_output
 from imbue.minds_admin.slices.management_plane import render_management_lockdown_prep_section
@@ -206,3 +208,16 @@ def test_operator_client_config_refuses_an_unprepped_box() -> None:
         build_operator_wireguard_client_config(
             operator=_operators()[0], tier="dev", boxes=[unprepped], listen_port=51820
         )
+
+
+def test_lockdown_section_echoes_the_marker_only_when_it_installs_the_lockdown() -> None:
+    assert MANAGEMENT_LOCKDOWN_MARKER in render_management_lockdown_prep_section(("203.0.113.10",))
+    assert MANAGEMENT_LOCKDOWN_MARKER not in render_management_lockdown_prep_section(())
+
+
+def test_is_management_lockdown_in_prep_output_requires_the_exact_marker_line() -> None:
+    locked_down = f"MNGR_WIREGUARD_PUBLIC_KEY boxpub123=\n  {MANAGEMENT_LOCKDOWN_MARKER}  \nMNGR_BOX_PREP_DONE\n"
+    assert is_management_lockdown_in_prep_output(locked_down)
+    # The marker text inside another line (e.g. the echoed script) is not the marker.
+    assert not is_management_lockdown_in_prep_output(f'echo "{MANAGEMENT_LOCKDOWN_MARKER}"\nMNGR_BOX_PREP_DONE\n')
+    assert not is_management_lockdown_in_prep_output("MNGR_WIREGUARD_PUBLIC_KEY boxpub123=\nMNGR_BOX_PREP_DONE\n")

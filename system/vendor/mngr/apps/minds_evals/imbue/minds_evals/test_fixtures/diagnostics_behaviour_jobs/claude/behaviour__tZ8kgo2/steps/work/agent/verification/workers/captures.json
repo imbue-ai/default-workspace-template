@@ -1,0 +1,15 @@
+[
+  {
+    "name": "diag-worker-7f3a",
+    "agent_id": "agent-84c4d096de8d43e89ba6d4c66fab249d",
+    "agent_type": "claude",
+    "state": "stopped",
+    "depth": 0,
+    "lead_name": "",
+    "directory": "workers/diag-worker-7f3a",
+    "is_document_captured": true,
+    "is_stream_captured": true,
+    "is_report_captured": true,
+    "is_overflow": false
+  }
+]

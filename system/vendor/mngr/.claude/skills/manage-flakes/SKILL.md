@@ -26,6 +26,9 @@ All ticket reads and writes go through `uv run python scripts/flake_reconcile.py
 - `set-status --id <issue_id> --status ready|backlog`
 - `comment-ticket --id <issue_id> --body-file ...`
 - `close-ticket --id <issue_id>`
+- `sync-project` -- file every labelled ticket under the `CI Flake Reconciliation` project; idempotent, prints which tickets moved
+
+New tickets are filed under that project at creation. The label is what the sweep indexes on and the project is what people read, so the two must name the same set -- drift only appears when someone clears a ticket's project in the Linear UI, and `sync-project` repairs it.
 
 Write bodies and comments to temp files so multi-line markdown survives. Nothing is written until you run a write command -- and never before step 5's approval.
 
@@ -79,6 +82,8 @@ Summarize every intended CREATE / UPDATE / CLOSE / state change.
 
 **Interactively:** **get approval before the first write.** On approval, execute and report what changed (each command prints the affected ticket).
 
+Either way, finish by running `sync-project` and reporting any tickets it re-filed.
+
 **Autonomously (`--autonomous`):** do not pause -- but do not skip the narration either. Write the same plan you would have shown to `flake-sweep-summary.md` at the repo root, *then* apply it, *then* append what actually changed, including anything that failed. Stating the plan before acting is load-bearing rather than ceremony: it is the only record of intent if a write goes wrong, and narrating a plan first measurably improves how faithfully it gets followed. Every other rule still applies -- closes remain restricted to full-window sweeps (step 4), and a human's or agent's state move is still never clobbered.
 
 ## Run summary (autonomous runs)
@@ -88,7 +93,7 @@ for someone who sees nothing else. Markdown, in this order:
 
 - one line: the window swept, how many flaky tests, how many clusters;
 - the planned CREATE / UPDATE / CLOSE / state changes -- written *before* applying them;
-- what actually changed, with ticket identifiers, plus anything that failed;
+- what actually changed, with ticket identifiers, plus anything that failed, and any tickets `sync-project` re-filed under the project;
 - what a human should look at: unmarked flakes that can turn CI red, clusters you were unsure of,
   and open tickets you deliberately left alone.
 

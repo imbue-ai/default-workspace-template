@@ -1,0 +1,15 @@
+{
+  "repo_root": "/home/user/workspace",
+  "base_sha": "e3ed94c7d3253deb96bb90f25a5fdaf237d30026",
+  "dwt_tip_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+  "seed_commit_sha": "1894657c994c4023d516b4b02a57028c6f8c32fb",
+  "seeded_sha": "e3ed94c7d3253deb96bb90f25a5fdaf237d30026",
+  "head_sha": "cb9d72d64c9c8bae3a8433ea9a2513745ad7e39f",
+  "commit_count_beyond_base": "1",
+  "bootstrap_commit_count": 1,
+  "agent_commit_count": 0,
+  "bundle_byte_count": 355,
+  "is_seeded_sha_in_head": true,
+  "is_clean": true,
+  "status_porcelain": ""
+}

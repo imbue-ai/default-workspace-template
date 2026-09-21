@@ -201,15 +201,18 @@ Returns auth options, credentials status, and developer notes about the service.
 
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
-The user can do that from the Permissions tab of this machine's options in the
-Mind app (the key icon in the tabs along the top): "Add connection" lists the
-services that already have an account here under "Add another account", and the
-ones that do not under "Connect a new service".
 
-Another way is for you to send a permission request with an "account"
+To do that, send a permission request with an "account"
 in the payload as described above - approving the permission request will prompt
 the user to sign in. Just double-check the actual resulting account; it may be
 different than the one requested by you.
+
+Alternatively, the user can also do that from the Permissions tab of this machine's options in the
+Mind app (the key icon in the tabs along the top): "Add connection" lists the
+services that already have an account here under "Add another account", and the
+ones that do not under "Connect a new service". (When applicable, always prefer
+permission request sending over this option.)
+
 
 You can then reference it in curl calls:
 

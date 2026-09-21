@@ -92,6 +92,33 @@ def _shred_file(path: Path) -> None:
     path.unlink()
 
 
+@contextmanager
+def acquire_exclusive_flocks(lock_dir: Path, names: Sequence[str], *, refusal_hint: str) -> Iterator[None]:
+    """Hold one exclusive, non-blocking flock per name under ``lock_dir`` for the block.
+
+    A name already held by another invocation is refused (never waited for)
+    with ``refusal_hint`` naming the way out. Locks are advisory and
+    process-scoped, so a crashed invocation never leaves a stale lock behind.
+    """
+    handles: list[IO[str]] = []
+    try:
+        for name in names:
+            path = lock_dir / f"{name}.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("w")
+            handles.append(handle)
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise CutoverError(f"another invocation holds the {name} lock ({path}); {refusal_hint}") from exc
+        yield
+    finally:
+        # Closing a handle releases its flock; a partially acquired set
+        # unwinds the same way.
+        for handle in handles:
+            handle.close()
+
+
 class CutoverStateStore(MutableModel):
     """Reads and writes the cutover state dir for one env."""
 
@@ -113,26 +140,12 @@ class CutoverStateStore(MutableModel):
         process-scoped (flock), so a crashed invocation never leaves a stale
         lock behind.
         """
-        handles: list[IO[str]] = []
-        try:
-            for name in names:
-                path = self.root / _LOCKS_DIRNAME / f"{name}.lock"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                handle = path.open("w")
-                handles.append(handle)
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError as exc:
-                    raise CutoverError(
-                        f"another cutover invocation holds the {name} lock ({path}); "
-                        "run against a disjoint target box / workspace set, or wait for it"
-                    ) from exc
+        with acquire_exclusive_flocks(
+            self.root / _LOCKS_DIRNAME,
+            names,
+            refusal_hint="run against a disjoint target box / workspace set, or wait for it",
+        ):
             yield
-        finally:
-            # Closing a handle releases its flock; a partially acquired set
-            # unwinds the same way.
-            for handle in handles:
-                handle.close()
 
     def _workspace_path(self, host_db_id: str) -> Path:
         return self.root / _WORKSPACES_DIRNAME / f"{host_db_id}.json"
