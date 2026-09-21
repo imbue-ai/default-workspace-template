@@ -35,7 +35,7 @@ def test_the_catalog_lists_the_bundled_designs_then_the_registered_ones(tmp_path
     assert store.source("nobody") is None
 
 
-def test_registering_an_id_again_replaces_it_in_place(tmp_path: Path) -> None:
+def test_registering_an_id_again_replaces_it_and_moves_it_last(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     store.register(_registration("mine", "First"))
     store.register(_registration("other"))
