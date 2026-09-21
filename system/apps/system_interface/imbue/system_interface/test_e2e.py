@@ -552,6 +552,14 @@ def _open_desktops_menu(page: Page) -> None:
     expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
 
 
+def _open_entry_menu(page: Page, entry: Locator) -> Locator:
+    """Right-click a taskbar or floating entry, answering its open menu."""
+    entry.click(button="right")
+    menu = page.locator('[data-floating="entry-menu"]')
+    expect(menu).to_be_visible(timeout=5000)
+    return menu
+
+
 def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     """A second browser context: its own storage, so its own client id."""
     browser = page.context.browser
@@ -1230,9 +1238,7 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         expect(page.locator('[data-floating="window-menu"]')).to_be_visible(timeout=5000)
         expect(page.locator('[data-floating="window-menu"] [data-menu-item="close"]')).to_have_count(0)
         page.keyboard.press("Escape")
-        entry.click(button="right")
-        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-        expect(page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
+        expect(_open_entry_menu(page, entry).locator('[data-menu-item="close"]')).to_have_count(0)
         page.keyboard.press("Escape")
 
         # The close chord minimizes the pinned window rather than closing it; the entry click brings it back.
@@ -1353,6 +1359,19 @@ def _client_entries(base_url: str, client_id: str) -> dict[str, Any]:
     return record["entries"]
 
 
+def _wait_for_client_entry(
+    base_url: str, client_id: str, is_expected: Callable[[dict[str, Any]], bool], what: str
+) -> dict[str, Any]:
+    """Poll the client's presentation of the pinned entry until ``is_expected`` holds of it, answering it."""
+    wait_for(
+        lambda: is_expected(_client_entries(base_url, client_id).get(_PINNED_APP_NAME, {})),
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message=what,
+    )
+    return _client_entries(base_url, client_id)[_PINNED_APP_NAME]
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a_reload_and_returns_to_the_bar(
     tmp_path: Path, page: Page
@@ -1387,13 +1406,12 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         moved = _box(entry)
         _assert_close(moved["x"], before["x"] - 300, "dragged x")
         _assert_close(moved["y"], before["y"] - 200, "dragged y")
-        wait_for(
-            lambda: _client_entries(server.base_url, client_id).get(_PINNED_APP_NAME, {}).get("position") is not None,
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message="the drag never wrote the position",
+        stored = _wait_for_client_entry(
+            server.base_url,
+            client_id,
+            lambda entry: entry.get("position") is not None,
+            "the drag never wrote the position",
         )
-        stored = _client_entries(server.base_url, client_id)[_PINNED_APP_NAME]
         assert stored["mode"] == "floating" and stored["style"] == "plain"
         _assert_close(stored["position"]["x"] * backdrop["width"], moved["x"] - backdrop["x"], "stored x")
         _assert_close(stored["position"]["y"] * backdrop["height"], moved["y"] - backdrop["y"], "stored y")
@@ -1404,22 +1422,19 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(_pinned_entry(page)).to_be_visible(timeout=15000)
         _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
 
-        _pinned_entry(page).click(button="right")
-        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-        expect(page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(0)
-        page.locator('[data-menu-item="move-to-taskbar"]').click()
+        menu = _open_entry_menu(page, _pinned_entry(page))
+        expect(menu.locator('[data-menu-item="close"]')).to_have_count(0)
+        menu.locator('[data-menu-item="move-to-taskbar"]').click()
         expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
         expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
-        wait_for(
-            lambda: _client_entries(server.base_url, client_id)[_PINNED_APP_NAME]["mode"] == "bar",
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message="the mode never reached the client record",
+        _wait_for_client_entry(
+            server.base_url,
+            client_id,
+            lambda entry: entry.get("mode") == "bar",
+            "the mode never reached the client record",
         )
-        _taskbar_entry(page, pinned["id"]).click(button="right")
-        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="float"]').click()
+        _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-item="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
         _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
@@ -1469,30 +1484,24 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
 
         # The plain style shows the app's icon in place of the avatar; the pin's style brings the image back.
-        entry.click(button="right")
-        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="style-plain"]').click()
+        _open_entry_menu(page, entry).locator('[data-menu-item="style-plain"]').click()
         expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
         expect(entry.locator("svg")).to_have_count(1)
         expect(entry.locator("img")).to_have_count(0)
-        wait_for(
-            lambda: _client_entries(server.base_url, _client_id(page))[_PINNED_APP_NAME]["style"] == "plain",
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message="the style never reached the client record",
+        _wait_for_client_entry(
+            server.base_url,
+            _client_id(page),
+            lambda entry: entry.get("style") == "plain",
+            "the style never reached the client record",
         )
-        entry.click(button="right")
-        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="style-avatar"]').click()
+        _open_entry_menu(page, entry).locator('[data-menu-item="style-avatar"]').click()
         expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
         expect(entry.locator("img")).to_have_count(1)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)
             expect(other_entry).to_be_visible(timeout=15000)
-            entry.click(button="right")
-            expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-            page.locator('[data-menu-item="change-avatar"]').click()
+            _open_entry_menu(page, entry).locator('[data-menu-item="change-avatar"]').click()
             chooser = page.locator("[data-avatar-chooser]")
             expect(chooser).to_be_visible(timeout=5000)
             expect(chooser.locator('[data-avatar-design="gummy-seal"]')).to_have_attribute("aria-pressed", "true")
