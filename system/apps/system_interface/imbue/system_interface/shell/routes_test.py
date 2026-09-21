@@ -288,12 +288,16 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
 # Pinned windows (pinned-taskbar-entries plan sections 3.2 and 4.5)
 
 
-def _pinned_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, *extra_rows: str) -> Flask:
-    """The shell over the two-app registry plus a pinned ``buddy`` app at ``/`` and ``extra_rows``."""
+def _pinned_shell(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    *extra_rows: str,
+    pin: tuple[str, str, str, str] = ("/", "plain", "linked", "bar"),
+) -> Flask:
+    """The shell over the two-app registry plus a ``buddy`` app pinned as ``pin`` (path, style, scope, default
+    mode) and ``extra_rows``."""
     registry_path = write_two_app_registry(
-        tmp_path,
-        registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar")),
-        *extra_rows,
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=pin), *extra_rows
     )
     return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
 
@@ -376,10 +380,7 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     """A report on an independent window is stored for the reporting client alone, announced to that client with
     a shell-minted save id, and answered as that client sees the window; the shared record keeps the home path
     and an empty title, another client sees its own path (or the home path), and ``navigate`` moves one client."""
-    registry_path = write_two_app_registry(
-        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "independent", "bar"))
-    )
-    app = shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
     client = app.test_client()
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")
@@ -443,10 +444,7 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
 def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_checked_against_the_pin(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    registry_path = write_two_app_registry(
-        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "avatar", "linked", "floating"))
-    )
-    app = shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "avatar", "linked", "floating"))
     client = app.test_client()
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")
