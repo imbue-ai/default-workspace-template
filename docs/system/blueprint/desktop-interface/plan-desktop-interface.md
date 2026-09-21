@@ -189,7 +189,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 Nothing else happens to the app: the shell has no notion of stopping or deleting what the window showed.
-A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", its chrome and menus offer no Close, and the close chord minimizes it instead (pinned-taskbar-entries plan section 4.4).
+A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", its chrome and menus offer no Close, and the close chord minimizes it instead (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
 
