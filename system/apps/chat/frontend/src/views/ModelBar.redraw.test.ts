@@ -36,7 +36,10 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 const providerState: { accounts: unknown[] } = { accounts: [] };
-const chooserOpens: { unpickable?: { accountId: string; reason: string } }[] = [];
+const chooserOpens: {
+  unpickable?: { accountId: string; reason: string };
+  onSignedIn?: (accountId: string) => void;
+}[] = [];
 const deleted: string[] = [];
 const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
@@ -58,8 +61,10 @@ vi.mock("../models/Providers", () => ({
 
 vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentView: vi.fn() }));
 const begun: string[] = [];
+const begunByAccountId: [string, string][] = [];
 vi.mock("./SwitchDialog", () => ({
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  beginSwitchToAccountId: (chatId: string, accountId: string) => begunByAccountId.push([chatId, accountId]),
   openSwitchDialog: vi.fn(),
 }));
 
@@ -120,6 +125,8 @@ beforeEach(() => {
   if (previous !== null) m.mount(previous, null);
   document.body.innerHTML = '<div id="root"></div>';
   chooserOpens.length = 0;
+  begun.length = 0;
+  begunByAccountId.length = 0;
   deleted.length = 0;
   renamed.length = 0;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
@@ -309,6 +316,11 @@ describe("the card without a hand-cranked redraw", () => {
     ]);
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+
+    // Whatever the chooser ends up handing back -- a fresh sign-in or a pick -- this chat switches
+    // to it, rather than the account being added and left aside.
+    chooserOpens[0].onSignedIn?.("acct-2");
+    expect(begunByAccountId).toEqual([["a1", "acct-2"]]);
   });
 
   it("hands a press on another harness's account to the switch dialog and closes the whole stack", async () => {
