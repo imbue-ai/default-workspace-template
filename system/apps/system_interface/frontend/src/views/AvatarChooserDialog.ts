@@ -116,7 +116,8 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
             "data-avatar-source": "",
             href: avatarSourceUrl(attrs.selected),
             title: selected?.source_path ?? "The original artwork",
-            download: true,
+            // Present and empty: the route's Content-Disposition names the file.
+            download: "",
           },
           "Original SVG",
         ),
