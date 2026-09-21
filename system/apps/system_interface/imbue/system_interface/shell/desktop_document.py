@@ -403,10 +403,9 @@ def _as_pinned(window: Window, app_pin: AppPin) -> Window:
     )
 
 
-@pure
 def _with_pinned_window_ensured(desktop: Desktop, app_pin: AppPin, now: datetime) -> Desktop:
     """The desktop holding the app's pinned window: the one already marked, else the earliest-opened window of the
-    app at the home path adopted, else a new one."""
+    app at the home path adopted, else a new one (minted here, so not pure)."""
     home_path = WindowPath(str(app_pin.pin.path))
     marked = next((window for window in desktop.windows if window.app == app_pin.app and window.is_pinned), None)
     adoptable = marked if marked is not None else find_window_at(desktop, app_pin.app, home_path)
